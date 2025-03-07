@@ -1,0 +1,7 @@
+#pragma once
+
+#define CLI_APP_VERSION_MAJOR 0
+#define CLI_APP_VERSION_MINOR 1
+#define CLI_APP_VERSION_PATCH 0
+
+#define CLI_APP_VERSION_STRING "0.1.0"
