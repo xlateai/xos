@@ -1,0 +1,35 @@
+# Generated files
+/target/
+**/*.rs.bk
+
+# Debug artifacts
+*.pdb
+
+# Cargo.lock is recommended to be included for binaries and excluded for libraries
+# Uncomment this line if you're developing a library
+# Cargo.lock
+
+# IDE and editor specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Local environment configurations
+.env
+.env.local
+
+# Build artifacts
+/dist/
+/build/
+
+# Rust profiling and debugging files
+*.profraw
+flamegraph.svg
+perf.data
+perf.data.old

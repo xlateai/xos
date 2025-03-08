@@ -1,2 +1,2 @@
 # xos
-experimenting with the idea of an operating system built with C++/Python to replace docker.
+Xlate's operating system designed to run portably across all types of devices and circumstances.
