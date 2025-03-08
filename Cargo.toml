@@ -1,5 +1,5 @@
 [package]
-name = "xos"
+name = "xlate"
 version = "0.1.0"
 edition = "2021"
 description = "Experimental OS Windows Manager"
