@@ -1864,6 +1864,7 @@ name = "xos"
 version = "0.1.0"
 dependencies = [
  "pixels",
+ "winapi",
  "winit",
 ]
 
