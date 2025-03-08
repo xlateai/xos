@@ -4,7 +4,6 @@ use winit::{
     dpi::{LogicalPosition, LogicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    platform::windows::WindowBuilderExtWindows,
     window::{WindowBuilder},
 };
 
