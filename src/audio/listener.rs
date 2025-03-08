@@ -227,21 +227,14 @@ impl AudioListener {
     }
     
     /// Resume the audio stream
-    pub fn play(&self) -> Result<(), String> {
+    pub fn record(&self) -> Result<(), String> {
         self.stream.play().map_err(|e| format!("Failed to resume stream: {}", e))
     }
-    
-    /// Record for a specific duration and return the buffer
-    pub fn record_for(&self, duration: Duration) -> Vec<f32> {
-        // Clear the buffer
-        self.buffer.clear();
-        
-        // Sleep for the duration
-        std::thread::sleep(duration);
-        
-        // Get the samples
+
+    pub fn get_samples(&self) -> Vec<f32> {
         self.buffer.get_samples()
     }
+
 }
 
 /// Get a device by index

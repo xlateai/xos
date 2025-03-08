@@ -88,7 +88,14 @@ fn record_audio_sample() {
     println!("Recording started... Please make some noise!");
     
     // Record for 3 seconds
-    let samples = listener.record_for(Duration::from_secs(3));
+    // let samples = listener.record_for(Duration::from_secs(3));
+
+    // record for 3 seconds by sleeping for 3s in main thread
+    let _ = listener.record();
+    std::thread::sleep(Duration::from_secs(3));
+    let _ = listener.pause();
+
+    let samples = listener.get_samples();
     
     // Print stats
     println!("Recording complete!");
