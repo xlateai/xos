@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use xos::experiments;
+use xos::viewport;
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -17,6 +18,9 @@ enum Commands {
     
     /// Open four windows in quadrants with white pixels
     Quad,
+    
+    /// Open the XOS viewport with grid
+    View,
 }
 
 fn main() {
@@ -30,6 +34,10 @@ fn main() {
         Commands::Quad => {
             println!("Opening four windows...");
             experiments::open_four_windows();
+        }
+        Commands::View => {
+            println!("Opening viewport...");
+            viewport::open_viewport();
         }
     }
 }

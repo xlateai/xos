@@ -1,2 +1,5 @@
-// This exposes the experiments module to other crates
+// Export the experiments module
 pub mod experiments;
+
+// Export the viewport module
+pub mod viewport;
