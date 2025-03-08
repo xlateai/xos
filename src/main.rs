@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 // Import modules
 use xos::experiments;
 use xos::viewport;
+use xos::audio;  // Import the audio module
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -26,6 +27,10 @@ enum Commands {
 }
 
 fn main() {
+    // Print audio device information at startup
+    let audio_devices = audio::devices();
+    println!("XOS Audio: {} device(s) detected", audio_devices.len());
+    
     let cli = Cli::parse();
     
     // Execute the command
