@@ -30,6 +30,8 @@ fn main() {
     // Print audio device information at startup
     let audio_devices = audio::devices();
     println!("XOS Audio: {} device(s) detected", audio_devices.len());
+
+    audio::print_devices();
     
     let cli = Cli::parse();
     
