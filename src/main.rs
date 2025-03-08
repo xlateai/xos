@@ -4,6 +4,7 @@ use std::time::Duration;
 // Import modules
 use xos::experiments;
 use xos::viewport;
+use xos::waveform;
 use xos::audio;  // Import the audio module
 use cpal::traits::DeviceTrait;  // Import trait for device.name()
 
@@ -29,6 +30,8 @@ enum Commands {
     
     /// Record a 3-second audio clip from device 0 and print stats
     Record,
+
+    Waveform,
 }
 
 fn main() {
@@ -57,6 +60,10 @@ fn main() {
         Commands::Record => {
             println!("Recording 3-second audio clip from device 0...");
             record_audio_sample();
+        }
+        Commands::Waveform => {
+            println!("Opening audio waveform visualization...");
+            waveform::open_waveform();
         }
     }
 }
