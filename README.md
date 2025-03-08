@@ -11,3 +11,15 @@ Make sure you have rust installed. It should be super simple.
 cargo build --release
 cargo install --path .
 ```
+
+# Update/Develop the CLI
+To update and run the CLI, unfortunately Rust doesn't support the ability to automatically sync the CLI command with local changes (the equivalent of python's `pip install -e .` flag for `-e` which adds this feature). So, instead we have to make sure to rebuild the package and THEN run the CLI.
+
+So, after making changes in the repo, you should run:
+
+```
+cargo install --path .
+xos --help
+```
+
+Note: `xos` is our CLI command.
