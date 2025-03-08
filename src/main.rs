@@ -1,29 +1,35 @@
-// Import the crate (library) with our modules
+use clap::{Parser, Subcommand};
 use xos::experiments;
 
+#[derive(Parser)]
+#[command(name = "xos")]
+#[command(about = "Experimental OS Windows Manager", long_about = None)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Open a single window with a white pixel at center
+    Screen,
+    
+    /// Open four windows in quadrants with white pixels
+    Quad,
+}
+
 fn main() {
-    // Command line arguments to decide which demo to run
-    let args: Vec<String> = std::env::args().collect();
-    
-    if args.len() <= 1 {
-        println!("Usage: xos [single|four]");
-        println!("  single - open a single window with a white pixel");
-        println!("  four   - open four windows in quadrants with white pixels");
-        return;
-    }
-    
-    match args[1].as_str() {
-        "single" => {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Screen => {
             println!("Opening single window...");
             experiments::open_window();
-        },
-        "four" => {
+        }
+        Commands::Quad => {
             println!("Opening four windows...");
             experiments::open_four_windows();
-        },
-        _ => {
-            println!("Unknown option: {}", args[1]);
-            println!("Usage: xos [single|four]");
         }
     }
 }
