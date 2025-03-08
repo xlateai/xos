@@ -1,9 +1,6 @@
 pub mod device;
+pub mod listener;
 
-pub fn devices() -> Vec<device::AudioDevice> {
-    device::all()
-}
-
-pub fn print_devices() {
-    device::print_all()
-}
+// Re-export commonly used functions for easier access
+pub use device::{all as devices, print_all as print_devices};
+pub use listener::{AudioListener, get_device_by_index};
