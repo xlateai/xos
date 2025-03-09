@@ -1,8 +1,10 @@
 use cpal::traits::{DeviceTrait, StreamTrait};
-use cpal::{Device, SampleFormat, Stream};
+use cpal::{SampleFormat, Stream};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use std::time::Instant;
+
+use super::device::AudioDevice;
 
 /// Buffer to store audio samples
 #[derive(Clone)]
@@ -126,7 +128,9 @@ pub struct AudioListener {
 
 impl AudioListener {
     /// Create a new listener for the specified device
-    pub fn new(device: &Device, buffer_duration_secs: f32) -> Result<Self, String> {
+    pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
+        let device = &audio_device.device_cpal;
+
         // Get device name
         let device_name = match device.name() {
             Ok(name) => name,
@@ -134,11 +138,20 @@ impl AudioListener {
         };
         
         // Get default config for the device
-        let default_config = match device.default_input_config() {
+        let dic;
+        if audio_device.is_input {
+            dic = device.default_input_config();
+        } else if audio_device.is_output {
+            dic = device.default_output_config();
+        } else {
+            return Err("Device is neither input nor output".to_string());
+        }
+
+        let default_config = match dic {
             Ok(config) => config,
             Err(e) => return Err(format!("Failed to get default input config: {}", e)),
         };
-        
+
         // Calculate buffer capacity based on duration
         let sample_rate = default_config.sample_rate().0;
         let channels = default_config.channels();

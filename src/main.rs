@@ -72,7 +72,7 @@ fn record_audio_sample() {
     let device = devices.get(0).unwrap();
     
     // Create a new listener just for this recording
-    let listener = match audio::AudioListener::new(&device.device_cpal, 3.0) {
+    let listener = match audio::AudioListener::new(&device, 3.0) {
         Ok(listener) => listener,
         Err(e) => {
             println!("Error creating listener: {}", e);

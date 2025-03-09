@@ -28,7 +28,7 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        let device_index = 0;
+        let device_index = 1;
         let devices = audio::devices();
         let device = devices.get(device_index).unwrap();
         println!("Using device: {}", device.name);
@@ -36,7 +36,7 @@ impl AudioVisualizer {
         // Create a new listener with buffer large enough to display full window width
         // This ensures we have enough samples to fill the display
         let buffer_duration = (WIDTH as f32) / 44100.0; // Assuming typical 44.1kHz sample rate
-        let listener = match audio::AudioListener::new(&device.device_cpal, buffer_duration) {
+        let listener = match audio::AudioListener::new(&device, buffer_duration) {
             Ok(listener) => listener,
             Err(e) => return Err(format!("Error creating listener: {}", e)),
         };
