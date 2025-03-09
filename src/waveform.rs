@@ -28,7 +28,7 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        let device_index = 1;
+        let device_index = 7;
         let devices = audio::devices();
         let device = devices.get(device_index).unwrap();
         println!("Using device: {}", device.name);
