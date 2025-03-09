@@ -6,6 +6,7 @@ pub struct AudioDevice {
     pub name: String,
     pub is_input: bool,
     pub is_output: bool,
+    pub device_cpal: cpal::Device,
 }
 
 impl fmt::Display for AudioDevice {
@@ -33,6 +34,7 @@ pub fn all() -> Vec<AudioDevice> {
                     name,
                     is_input: true,
                     is_output: false,
+                    device_cpal: device,
                 });
             }
         }
@@ -54,6 +56,7 @@ pub fn all() -> Vec<AudioDevice> {
                         name,
                         is_input: false,
                         is_output: true,
+                        device_cpal: device,
                     });
                 }
             }
@@ -82,6 +85,7 @@ pub fn default_input() -> Option<AudioDevice> {
                 name,
                 is_input: true,
                 is_output: false,
+                device_cpal: device,
             }
         })
     })
@@ -96,6 +100,7 @@ pub fn default_output() -> Option<AudioDevice> {
                 name,
                 is_input: false,
                 is_output: true,
+                device_cpal: device,
             }
         })
     })

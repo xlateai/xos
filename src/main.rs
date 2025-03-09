@@ -1,12 +1,10 @@
 use clap::{Parser, Subcommand};
 use std::time::Duration;
 
-// Import modules
 use xos::experiments;
 use xos::viewport;
 use xos::waveform;
-use xos::audio;  // Import the audio module
-use cpal::traits::DeviceTrait;  // Import trait for device.name()
+use xos::audio;
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -70,21 +68,11 @@ fn main() {
 
 fn record_audio_sample() {
     // Get device with index 0 (first device)
-    let device = match audio::get_device_by_index(0) {
-        Some(device) => device,
-        None => {
-            println!("Could not find audio device with index 0");
-            return;
-        }
-    };
-    
-    // Print device name
-    if let Ok(name) = device.name() {
-        println!("Recording from device: {}", name);
-    }
+    let devices = audio::devices();
+    let device = devices.get(0).unwrap();
     
     // Create a new listener just for this recording
-    let listener = match audio::AudioListener::new(&device, 3.0) {
+    let listener = match audio::AudioListener::new(&device.device_cpal, 3.0) {
         Ok(listener) => listener,
         Err(e) => {
             println!("Error creating listener: {}", e);

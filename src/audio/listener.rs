@@ -1,4 +1,4 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
@@ -235,17 +235,4 @@ impl AudioListener {
         self.buffer.get_samples()
     }
 
-}
-
-/// Get a device by index
-pub fn get_device_by_index(index: usize) -> Option<Device> {
-    let host = cpal::default_host();
-    let devices = host.input_devices().ok()?;
-    let mut devices_vec: Vec<Device> = devices.collect();
-    
-    if index < devices_vec.len() {
-        Some(devices_vec.remove(index))
-    } else {
-        None
-    }
 }

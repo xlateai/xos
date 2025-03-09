@@ -6,7 +6,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-use cpal::traits::DeviceTrait;
 
 use crate::audio;
 
@@ -29,21 +28,15 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        // Get device with index 0 (first device)
-        let device = match audio::get_device_by_index(0) {
-            Some(device) => device,
-            None => return Err("Could not find audio device with index 0".to_string()),
-        };
-        
-        // Print device name
-        if let Ok(name) = device.name() {
-            println!("Listening to device: {}", name);
-        }
-        
+        let device_index = 0;
+        let devices = audio::devices();
+        let device = devices.get(device_index).unwrap();
+        println!("Using device: {}", device.name);
+
         // Create a new listener with buffer large enough to display full window width
         // This ensures we have enough samples to fill the display
         let buffer_duration = (WIDTH as f32) / 44100.0; // Assuming typical 44.1kHz sample rate
-        let listener = match audio::AudioListener::new(&device, buffer_duration) {
+        let listener = match audio::AudioListener::new(&device.device_cpal, buffer_duration) {
             Ok(listener) => listener,
             Err(e) => return Err(format!("Error creating listener: {}", e)),
         };
