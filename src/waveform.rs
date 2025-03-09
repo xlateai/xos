@@ -21,9 +21,9 @@ const WAVEFORM_AMPLITUDE: f32 = 0.8; // Scale factor for waveform height (percen
 struct AudioVisualizer {
     listener: audio::AudioListener,
     last_tick: Instant,
-    waveform_buffer: Vec<f32>,
-    // Space for future tensor/matrix integration
-    // matrix_data: Option<Matrix>,
+    // Store waveform buffers per channel
+    channel_waveforms: Vec<Vec<f32>>,
+    num_channels: usize,
 }
 
 impl AudioVisualizer {
@@ -34,7 +34,6 @@ impl AudioVisualizer {
         println!("Using device: {}", device.name);
 
         // Create a new listener with buffer large enough to display full window width
-        // This ensures we have enough samples to fill the display
         let buffer_duration = (WIDTH as f32) / 44100.0; // Assuming typical 44.1kHz sample rate
         let listener = match audio::AudioListener::new(&device, buffer_duration) {
             Ok(listener) => listener,
@@ -46,15 +45,22 @@ impl AudioVisualizer {
             return Err(format!("Failed to start recording: {}", e));
         }
         
+        let num_channels = listener.buffer().channels() as usize;
         println!("Audio capture started!");
         println!("Sample rate: {} Hz", listener.buffer().sample_rate());
-        println!("Channels: {}", listener.buffer().channels());
+        println!("Channels: {}", num_channels);
+        
+        // Initialize empty waveform buffers for each channel
+        let mut channel_waveforms = Vec::with_capacity(num_channels);
+        for _ in 0..num_channels {
+            channel_waveforms.push(Vec::with_capacity(WIDTH as usize));
+        }
         
         Ok(Self {
             listener,
             last_tick: Instant::now(),
-            waveform_buffer: Vec::with_capacity(WIDTH as usize),
-            // matrix_data: None,
+            channel_waveforms,
+            num_channels,
         })
     }
 
@@ -64,24 +70,51 @@ impl AudioVisualizer {
         self.last_tick = now;
 
         // Get the latest samples from the audio buffer
-        let samples = self.listener.buffer().get_samples();
+        // Since get_samples_by_channel doesn't exist, we'll have to work with single channel data
+        // and split it ourselves if needed
+        let raw_samples = self.listener.buffer().get_samples();
         
-        // Update our waveform buffer with the newest samples
-        self.waveform_buffer = samples;
-        
-        // If we have more samples than we can display, trim to fit
-        if self.waveform_buffer.len() > WIDTH as usize {
-            // Keep most recent samples (right side of the window)
-            self.waveform_buffer = self.waveform_buffer
-                .iter()
-                .skip(self.waveform_buffer.len() - WIDTH as usize)
-                .copied()
-                .collect();
+        // If we have no samples, there's nothing to update
+        if raw_samples.is_empty() {
+            return;
         }
         
-        // If we have fewer samples than our width, pad with zeros
-        while self.waveform_buffer.len() < WIDTH as usize {
-            self.waveform_buffer.insert(0, 0.0);
+        // Split the interleaved samples into separate channel data
+        // Assuming the format is [ch1, ch2, ch1, ch2, ...] for stereo
+        let mut all_samples: Vec<Vec<f32>> = vec![Vec::new(); self.num_channels];
+        
+        // Deinterleave the samples into channel buffers
+        if self.num_channels > 1 {
+            for (i, &sample) in raw_samples.iter().enumerate() {
+                let channel_idx = i % self.num_channels;
+                all_samples[channel_idx].push(sample);
+            }
+        } else {
+            // Single channel case - just use the samples directly
+            all_samples[0] = raw_samples.clone();
+        }
+        
+        // Update our waveform buffers by channel
+        for (channel_idx, samples) in all_samples.iter().enumerate() {
+            if channel_idx < self.num_channels {
+                // Update this channel's waveform buffer
+                self.channel_waveforms[channel_idx] = samples.clone();
+                
+                // If we have more samples than we can display, trim to fit
+                if self.channel_waveforms[channel_idx].len() > WIDTH as usize {
+                    // Keep most recent samples (right side of the window)
+                    self.channel_waveforms[channel_idx] = self.channel_waveforms[channel_idx]
+                        .iter()
+                        .skip(self.channel_waveforms[channel_idx].len() - WIDTH as usize)
+                        .copied()
+                        .collect();
+                }
+                
+                // If we have fewer samples than our width, pad with zeros
+                while self.channel_waveforms[channel_idx].len() < WIDTH as usize {
+                    self.channel_waveforms[channel_idx].insert(0, 0.0);
+                }
+            }
         }
     }
 
@@ -97,11 +130,11 @@ impl AudioVisualizer {
         // Draw grid lines for reference
         self.draw_grid(frame);
         
-        // Draw audio level indicator
-        self.draw_level_indicator(frame);
+        // Draw audio level indicators for each channel
+        self.draw_level_indicators(frame);
         
-        // Draw the waveform
-        self.draw_waveform(frame);
+        // Draw each channel's waveform with different shades of green
+        self.draw_channel_waveforms(frame);
         
         // Display audio stats
         self.draw_stats(frame);
@@ -156,24 +189,38 @@ impl AudioVisualizer {
         }
     }
     
-    fn draw_waveform(&self, frame: &mut [u8]) {
+    fn draw_channel_waveforms(&self, frame: &mut [u8]) {
         let center_y = HEIGHT as usize / 2;
         let half_height = HEIGHT as f32 / 2.0 * WAVEFORM_AMPLITUDE;
         
-        // Draw the waveform line connecting points
-        for i in 1..self.waveform_buffer.len() {
-            let x1 = i - 1;
-            let x2 = i;
+        // Draw each channel's waveform with a different shade of green
+        for (channel_idx, waveform) in self.channel_waveforms.iter().enumerate() {
+            if waveform.is_empty() {
+                continue;
+            }
             
-            let sample1 = self.waveform_buffer[x1];
-            let sample2 = self.waveform_buffer[x2];
+            // Calculate a unique shade of green for this channel
+            // Distribute from bright green (50, 255, 50) to lime green (0, 255, 0)
+            let base_green = 200; // Base green component
+            let red = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
+            let green = base_green + (channel_idx as f32 / self.num_channels as f32 * (255 - base_green) as f32) as u8;
+            let blue = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
             
-            // Calculate y positions (invert because screen coordinates go down)
-            let y1 = (center_y as f32 - sample1 * half_height) as isize;
-            let y2 = (center_y as f32 - sample2 * half_height) as isize;
-            
-            // Draw line between points using Bresenham's algorithm
-            self.draw_line(frame, x1 as isize, y1, x2 as isize, y2, 0x00, 0xCF, 0xFF);
+            // Draw the waveform line connecting points for this channel
+            for i in 1..waveform.len() {
+                let x1 = i - 1;
+                let x2 = i;
+                
+                let sample1 = waveform[x1];
+                let sample2 = waveform[x2];
+                
+                // Calculate y positions (invert because screen coordinates go down)
+                let y1 = (center_y as f32 - sample1 * half_height) as isize;
+                let y2 = (center_y as f32 - sample2 * half_height) as isize;
+                
+                // Draw line between points using Bresenham's algorithm
+                self.draw_line(frame, x1 as isize, y1, x2 as isize, y2, red, green, blue);
+            }
         }
     }
     
@@ -225,80 +272,125 @@ impl AudioVisualizer {
         }
     }
     
-    fn draw_level_indicator(&self, frame: &mut [u8]) {
-        // Get current audio levels
-        let rms = self.listener.buffer().get_rms();
-        let peak = self.listener.buffer().get_peak();
-        
-        // Draw level meters at the top
-        let meter_y = 20;
-        let meter_height = 10;
+    fn draw_level_indicators(&self, frame: &mut [u8]) {
         let max_width = WIDTH as usize - 20;
         
-        // RMS level (green)
-        let rms_width = (rms * max_width as f32) as usize;
-        for x in 0..rms_width {
-            for y in meter_y - meter_height/2..=meter_y + meter_height/2 {
-                let index = (y * WIDTH as usize + x + 10) * 4;
-                
-                // Green gradient
-                let intensity = 128 + (x * 127 / max_width);
-                frame[index] = 0x00;     // R
-                frame[index + 1] = intensity as u8; // G
-                frame[index + 2] = 0x00; // B
-                frame[index + 3] = 0xff; // A
+        // Draw level meters for each channel
+        for (channel_idx, waveform) in self.channel_waveforms.iter().enumerate() {
+            if waveform.is_empty() {
+                continue;
             }
-        }
-        
-        // Peak level (yellow/red dot)
-        let peak_x = (peak.abs() * max_width as f32) as usize;
-        if peak_x < max_width {
-            for y in (meter_y - meter_height/2 - 2)..=(meter_y + meter_height/2 + 2) {
-                for x_offset in -2..=2 {
-                    let x = peak_x as isize + x_offset + 10;
-                    if x >= 0 && x < WIDTH as isize {
-                        let index = (y * WIDTH as usize + x as usize) * 4;
+            
+            // Calculate RMS and peak for this channel
+            let rms = self.calculate_rms(waveform);
+            let peak = self.calculate_peak(waveform);
+            
+            // Position the meter vertically based on channel index
+            let meter_y = 20 + channel_idx * 15; // Stack meters vertically
+            let meter_height = 10;
+            
+            // Calculate green shade based on channel index (same logic as in draw_channel_waveforms)
+            let base_green = 200;
+            let red = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
+            let green = base_green + (channel_idx as f32 / self.num_channels as f32 * (255 - base_green) as f32) as u8;
+            let blue = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
+            
+            // Draw RMS level
+            let rms_width = (rms * max_width as f32) as usize;
+            for x in 0..rms_width {
+                for y in meter_y - meter_height/2..=meter_y + meter_height/2 {
+                    if y < HEIGHT as usize {
+                        let index = (y * WIDTH as usize + x + 10) * 4;
                         
-                        // Red for high peaks, yellow for lower
-                        if peak.abs() > 0.8 {
-                            frame[index] = 0xFF;     // R
-                            frame[index + 1] = 0x30; // G
-                            frame[index + 2] = 0x30; // B
-                        } else {
-                            frame[index] = 0xFF;     // R
-                            frame[index + 1] = 0xFF; // G
-                            frame[index + 2] = 0x00; // B
-                        }
+                        // Use the channel's color but darker
+                        frame[index] = red / 2;     // R
+                        frame[index + 1] = green / 2; // G
+                        frame[index + 2] = blue / 2; // B
                         frame[index + 3] = 0xff; // A
+                    }
+                }
+            }
+            
+            // Peak level indicator
+            let peak_x = (peak.abs() * max_width as f32) as usize;
+            if peak_x < max_width {
+                for y in (meter_y - meter_height/2 - 2)..=(meter_y + meter_height/2 + 2) {
+                    if y < HEIGHT as usize {
+                        for x_offset in -2..=2 {
+                            let x = peak_x as isize + x_offset + 10;
+                            if x >= 0 && x < WIDTH as isize {
+                                let index = (y * WIDTH as usize + x as usize) * 4;
+                                
+                                // Use slightly brighter version of the channel color for peak
+                                if peak.abs() > 0.8 {
+                                    // Peak warning (red tint)
+                                    frame[index] = 0xFF;     // R
+                                    frame[index + 1] = green / 2; // G
+                                    frame[index + 2] = blue / 2; // B
+                                } else {
+                                    // Normal peak
+                                    frame[index] = red * 2; // R
+                                    frame[index + 1] = green; // G
+                                    frame[index + 2] = blue * 2; // B
+                                }
+                                frame[index + 3] = 0xff; // A
+                            }
+                        }
                     }
                 }
             }
         }
     }
     
+    fn calculate_rms(&self, samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        
+        let sum_squared: f32 = samples.iter().map(|s| s * s).sum();
+        (sum_squared / samples.len() as f32).sqrt()
+    }
+    
+    fn calculate_peak(&self, samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        
+        samples.iter().fold(0.0, |max, &val| max.max(val.abs()))
+    }
+    
     fn draw_stats(&self, frame: &mut [u8]) {
-        // Display sample rate and buffer info at the bottom
-        let rms = self.listener.buffer().get_rms();
-        let peak = self.listener.buffer().get_peak();
+        // Display overall stats at the bottom
+        let overall_rms = self.channel_waveforms.iter()
+            .map(|samples| self.calculate_rms(samples))
+            .fold(0.0, |acc: f32, rms| acc.max(rms));
+            
+        let overall_peak = self.channel_waveforms.iter()
+            .map(|samples| self.calculate_peak(samples))
+            .fold(0.0, |acc: f32, peak| acc.max(peak));
         
         // Draw some stats text indicators as colored blocks
         let stats_y = HEIGHT as usize - 20;
         
+        // Draw channel count
+        let channels_text = format!("Channels: {}", self.num_channels);
+        self.draw_text_indicator(frame, 10, stats_y, &channels_text, 0x00, 0xC0, 0xC0);
+        
         // Draw a level indicator for RMS (0.0-1.0)
-        let rms_text = format!("RMS: {:.2}", rms);
-        self.draw_text_indicator(frame, 10, stats_y, &rms_text, 0x00, 0xA0, 0x00);
+        let rms_text = format!("RMS: {:.2}", overall_rms);
+        self.draw_text_indicator(frame, 200, stats_y, &rms_text, 0x00, 0xA0, 0x00);
         
         // Draw a level indicator for Peak (0.0-1.0)
-        let peak_text = format!("Peak: {:.2}", peak.abs());
-        self.draw_text_indicator(frame, 200, stats_y, &peak_text, 0xE0, 0x80, 0x00);
+        let peak_text = format!("Peak: {:.2}", overall_peak);
+        self.draw_text_indicator(frame, 400, stats_y, &peak_text, 0xE0, 0x80, 0x00);
         
         // Draw sample rate
         let rate_text = format!("Rate: {} Hz", self.listener.buffer().sample_rate());
-        self.draw_text_indicator(frame, 400, stats_y, &rate_text, 0x80, 0x80, 0xE0);
+        self.draw_text_indicator(frame, 600, stats_y, &rate_text, 0x80, 0x80, 0xE0);
         
         // Draw buffer size
         let buffer_text = format!("Buffer: {} samples", self.listener.buffer().len());
-        self.draw_text_indicator(frame, 600, stats_y, &buffer_text, 0x80, 0xC0, 0xC0);
+        self.draw_text_indicator(frame, 800, stats_y, &buffer_text, 0x80, 0xC0, 0xC0);
     }
     
     fn draw_text_indicator(&self, frame: &mut [u8], x: usize, y: usize, text: &str, r: u8, g: u8, b: u8) {
@@ -355,7 +447,7 @@ pub fn open_waveform() {
     // Create the event loop and window
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title("XOS High Fidelity Waveform")
+        .with_title(format!("XOS High Fidelity Waveform - {} channels", visualizer.num_channels))
         .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
         .with_resizable(false)
         .build(&event_loop)
