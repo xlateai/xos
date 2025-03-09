@@ -18,6 +18,25 @@ const TPS: f32 = 144.0;  // Higher refresh rate for more responsive visualizatio
 const LINE_THICKNESS: usize = 2;
 const WAVEFORM_AMPLITUDE: f32 = 0.8; // Scale factor for waveform height (percentage of half-height)
 
+// Channel colors - [R, G, B] format
+// These colors will be used in order for each channel
+// Default lime green will be used if there are more channels than colors
+const CHANNEL_COLORS: &[[u8; 3]] = &[
+    [0, 255, 0],     // Lime green (default for first channel)
+    [255, 0, 0],     // Red
+    [0, 150, 255],   // Sky blue
+    [255, 255, 0],   // Yellow
+    [255, 0, 255],   // Magenta
+    [0, 255, 255],   // Cyan
+    [255, 165, 0],   // Orange
+    [180, 0, 255],   // Purple
+    [0, 128, 0],     // Dark green
+    [128, 0, 0],     // Maroon
+];
+
+// Default color is lime green
+const DEFAULT_COLOR: [u8; 3] = [0, 255, 0];
+
 struct AudioVisualizer {
     listener: audio::AudioListener,
     last_tick: Instant,
@@ -28,7 +47,7 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        let device_index = 7;
+        let device_index = 6;
         let devices = audio::devices();
         let device = devices.get(device_index).unwrap();
         println!("Using device: {}", device.name);
@@ -199,12 +218,17 @@ impl AudioVisualizer {
                 continue;
             }
             
-            // Calculate a unique shade of green for this channel
-            // Distribute from bright green (50, 255, 50) to lime green (0, 255, 0)
-            let base_green = 200; // Base green component
-            let red = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
-            let green = base_green + (channel_idx as f32 / self.num_channels as f32 * (255 - base_green) as f32) as u8;
-            let blue = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
+            // Get color for this channel from the CHANNEL_COLORS array
+            // Use default color if channel index is out of bounds
+            let color = if channel_idx < CHANNEL_COLORS.len() {
+                CHANNEL_COLORS[channel_idx]
+            } else {
+                DEFAULT_COLOR
+            };
+            
+            let red = color[0];
+            let green = color[1];
+            let blue = color[2];
             
             // Draw the waveform line connecting points for this channel
             for i in 1..waveform.len() {
@@ -289,11 +313,16 @@ impl AudioVisualizer {
             let meter_y = 20 + channel_idx * 15; // Stack meters vertically
             let meter_height = 10;
             
-            // Calculate green shade based on channel index (same logic as in draw_channel_waveforms)
-            let base_green = 200;
-            let red = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
-            let green = base_green + (channel_idx as f32 / self.num_channels as f32 * (255 - base_green) as f32) as u8;
-            let blue = 50 - (channel_idx as f32 / self.num_channels as f32 * 50.0) as u8;
+            // Get color for this channel (same logic as in draw_channel_waveforms)
+            let color = if channel_idx < CHANNEL_COLORS.len() {
+                CHANNEL_COLORS[channel_idx]
+            } else {
+                DEFAULT_COLOR
+            };
+            
+            let red = color[0];
+            let green = color[1];
+            let blue = color[2];
             
             // Draw RMS level
             let rms_width = (rms * max_width as f32) as usize;
