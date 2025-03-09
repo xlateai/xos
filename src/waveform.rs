@@ -38,7 +38,7 @@ const CHANNEL_COLORS: &[[u8; 3]] = &[
 const DEFAULT_COLOR: [u8; 3] = [0, 255, 0];
 
 struct AudioVisualizer {
-    listener: audio::AudioListener,
+    listener: audio::MultiDeviceAudioListener,
     last_tick: Instant,
     // Store waveform buffers per channel
     channel_waveforms: Vec<Vec<f32>>,
@@ -47,14 +47,16 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        let device_index = 6;
+        // let device_index = 6;
         let devices = audio::devices();
-        let device = devices.get(device_index).unwrap();
-        println!("Using device: {}", device.name);
+        // let device = devices.get(device_index).unwrap();
+        // println!("Using device: {}", device.name);
+
+        let device_array = devices.as_slice();
 
         // Create a new listener with buffer large enough to display full window width
         let buffer_duration = (WIDTH as f32) / 44100.0; // Assuming typical 44.1kHz sample rate
-        let listener = match audio::AudioListener::new(&device, buffer_duration) {
+        let listener = match audio::MultiDeviceAudioListener::new(device_array, buffer_duration) {
             Ok(listener) => listener,
             Err(e) => return Err(format!("Error creating listener: {}", e)),
         };

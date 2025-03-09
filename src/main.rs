@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::time::Duration;
 
 use xos::experiments;
 use xos::viewport;
