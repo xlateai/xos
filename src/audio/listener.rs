@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Buffer to store audio samples
 #[derive(Clone)]

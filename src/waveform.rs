@@ -184,7 +184,7 @@ impl AudioVisualizer {
         }
     }
     
-    fn draw_line(&self, frame: &mut [u8], mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize, r: u8, g: u8, b: u8) {
+    fn draw_line(&self, frame: &mut [u8], mut x1: isize, mut y1: isize, x2: isize, y2: isize, r: u8, g: u8, b: u8) {
         // Bresenham's line algorithm
         let dx = (x2 - x1).abs();
         let dy = -(y2 - y1).abs();
