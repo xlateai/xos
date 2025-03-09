@@ -76,35 +76,6 @@ impl AudioBuffer {
             .collect()
     }
     
-    /// Get all samples interleaved (for backward compatibility)
-    pub fn get_samples(&self) -> Vec<f32> {
-        let channel_buffers = self.channel_samples.lock().unwrap();
-        
-        // If we have no samples, return empty vector
-        if channel_buffers.is_empty() || channel_buffers[0].is_empty() {
-            return Vec::new();
-        }
-        
-        // Get the length of the first channel (assume all channels have same length)
-        let samples_per_channel = channel_buffers[0].len();
-        
-        // Create result vector with enough capacity
-        let total_samples = samples_per_channel * self.channels as usize;
-        let mut result = Vec::with_capacity(total_samples);
-        
-        // Interleave the samples
-        for sample_idx in 0..samples_per_channel {
-            for channel_idx in 0..self.channels as usize {
-                // Check if this channel has this sample index (safety check)
-                if sample_idx < channel_buffers[channel_idx].len() {
-                    result.push(channel_buffers[channel_idx][sample_idx]);
-                }
-            }
-        }
-        
-        result
-    }
-    
     /// Get average value for each channel
     pub fn get_average_by_channel(&self) -> Vec<f32> {
         let channel_buffers = self.channel_samples.lock().unwrap();
@@ -119,16 +90,6 @@ impl AudioBuffer {
                 }
             })
             .collect()
-    }
-    
-    /// Get average across all channels (for backward compatibility)
-    pub fn get_average(&self) -> f32 {
-        let averages = self.get_average_by_channel();
-        if averages.is_empty() {
-            0.0
-        } else {
-            averages.iter().sum::<f32>() / averages.len() as f32
-        }
     }
     
     /// Get the RMS (root mean square) value for each channel
@@ -147,17 +108,6 @@ impl AudioBuffer {
             .collect()
     }
     
-    /// Get RMS across all channels (for backward compatibility)
-    pub fn get_rms(&self) -> f32 {
-        let all_rms = self.get_rms_by_channel();
-        if all_rms.is_empty() {
-            0.0
-        } else {
-            // Return the maximum RMS value across all channels
-            *all_rms.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0)
-        }
-    }
-    
     /// Get peak value (maximum absolute value) for each channel
     pub fn get_peak_by_channel(&self) -> Vec<f32> {
         let channel_buffers = self.channel_samples.lock().unwrap();
@@ -167,17 +117,6 @@ impl AudioBuffer {
                 buffer.iter().map(|s| s.abs()).fold(0.0, f32::max)
             })
             .collect()
-    }
-    
-    /// Get peak across all channels (for backward compatibility)
-    pub fn get_peak(&self) -> f32 {
-        let all_peaks = self.get_peak_by_channel();
-        if all_peaks.is_empty() {
-            0.0
-        } else {
-            // Return the maximum peak value across all channels
-            *all_peaks.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0)
-        }
     }
     
     /// Clear all samples from all channels
@@ -376,11 +315,6 @@ impl AudioListener {
     /// Resume the audio stream
     pub fn record(&self) -> Result<(), String> {
         self.stream.play().map_err(|e| format!("Failed to resume stream: {}", e))
-    }
-
-    /// Get all samples interleaved (for backward compatibility)
-    pub fn get_samples(&self) -> Vec<f32> {
-        self.buffer.get_samples()
     }
     
     /// Get samples separated by channel

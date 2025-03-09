@@ -88,29 +88,12 @@ impl AudioVisualizer {
         let _delta_time = now.duration_since(self.last_tick).as_secs_f32();
         self.last_tick = now;
 
-        // Get the latest samples from the audio buffer
-        // Since get_samples_by_channel doesn't exist, we'll have to work with single channel data
-        // and split it ourselves if needed
-        let raw_samples = self.listener.buffer().get_samples();
+        // Get the latest samples from the audio buffer - now using the channel-split method
+        let all_samples = self.listener.get_samples_by_channel();
         
-        // If we have no samples, there's nothing to update
-        if raw_samples.is_empty() {
+        // If we have no channels or samples, there's nothing to update
+        if all_samples.is_empty() {
             return;
-        }
-        
-        // Split the interleaved samples into separate channel data
-        // Assuming the format is [ch1, ch2, ch1, ch2, ...] for stereo
-        let mut all_samples: Vec<Vec<f32>> = vec![Vec::new(); self.num_channels];
-        
-        // Deinterleave the samples into channel buffers
-        if self.num_channels > 1 {
-            for (i, &sample) in raw_samples.iter().enumerate() {
-                let channel_idx = i % self.num_channels;
-                all_samples[channel_idx].push(sample);
-            }
-        } else {
-            // Single channel case - just use the samples directly
-            all_samples[0] = raw_samples.clone();
         }
         
         // Update our waveform buffers by channel
@@ -389,14 +372,22 @@ impl AudioVisualizer {
     }
     
     fn draw_stats(&self, frame: &mut [u8]) {
-        // Display overall stats at the bottom
-        let overall_rms = self.channel_waveforms.iter()
-            .map(|samples| self.calculate_rms(samples))
-            .fold(0.0, |acc: f32, rms| acc.max(rms));
-            
-        let overall_peak = self.channel_waveforms.iter()
-            .map(|samples| self.calculate_peak(samples))
-            .fold(0.0, |acc: f32, peak| acc.max(peak));
+        // Use RMS and peak values directly from the AudioBuffer's by_channel methods
+        let channel_rms = self.listener.buffer().get_rms_by_channel();
+        let channel_peaks = self.listener.buffer().get_peak_by_channel();
+        
+        // Calculate overall (max) metrics
+        let overall_rms = if channel_rms.is_empty() {
+            0.0
+        } else {
+            *channel_rms.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0)
+        };
+        
+        let overall_peak = if channel_peaks.is_empty() {
+            0.0
+        } else {
+            *channel_peaks.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0)
+        };
         
         // Draw some stats text indicators as colored blocks
         let stats_y = HEIGHT as usize - 20;
