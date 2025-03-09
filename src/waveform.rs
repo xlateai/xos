@@ -19,7 +19,8 @@ const LINE_THICKNESS: usize = 2;
 const WAVEFORM_AMPLITUDE: f32 = 0.8; // Scale factor for waveform height (percentage of half-height)
 
 struct AudioVisualizer {
-    listener: audio::AudioListener,
+    // listener: audio::AudioListener,
+    listener: audio::CompositeAudioListener,
     last_tick: Instant,
     waveform_buffer: Vec<f32>,
     // Space for future tensor/matrix integration
@@ -28,18 +29,19 @@ struct AudioVisualizer {
 
 impl AudioVisualizer {
     fn new() -> Result<Self, String> {
-        let device_index = 7;
-        let devices = audio::devices();
-        let device = devices.get(device_index).unwrap();
-        println!("Using device: {}", device.name);
+        // let device_index = 7;
+        // let devices = audio::devices();
+        // let device = devices.get(device_index).unwrap();
+        // println!("Using device: {}", device.name);
 
         // Create a new listener with buffer large enough to display full window width
         // This ensures we have enough samples to fill the display
         let buffer_duration = (WIDTH as f32) / 44100.0; // Assuming typical 44.1kHz sample rate
-        let listener = match audio::AudioListener::new(&device, buffer_duration) {
-            Ok(listener) => listener,
-            Err(e) => return Err(format!("Error creating listener: {}", e)),
-        };
+        // let listener = match audio::AudioListener::new(&device, buffer_duration) {
+        //     Ok(listener) => listener,
+        //     Err(e) => return Err(format!("Error creating listener: {}", e)),
+        // };
+        let listener = audio::get_all_system_audio_composite_listener(buffer_duration);
         
         // Start recording
         if let Err(e) = listener.record() {
@@ -47,8 +49,8 @@ impl AudioVisualizer {
         }
         
         println!("Audio capture started!");
-        println!("Sample rate: {} Hz", listener.buffer().sample_rate());
-        println!("Channels: {}", listener.buffer().channels());
+        // println!("Sample rate: {} Hz", listener.buffer().sample_rate());
+        // println!("Channels: {}", listener.buffer().channels());
         
         Ok(Self {
             listener,
@@ -64,7 +66,7 @@ impl AudioVisualizer {
         self.last_tick = now;
 
         // Get the latest samples from the audio buffer
-        let samples = self.listener.buffer().get_samples();
+        let samples = self.listener.get_samples();
         
         // Update our waveform buffer with the newest samples
         self.waveform_buffer = samples;
@@ -227,8 +229,8 @@ impl AudioVisualizer {
     
     fn draw_level_indicator(&self, frame: &mut [u8]) {
         // Get current audio levels
-        let rms = self.listener.buffer().get_rms();
-        let peak = self.listener.buffer().get_peak();
+        let rms = self.listener.get_rms();
+        let peak = self.listener.get_peak();
         
         // Draw level meters at the top
         let meter_y = 20;
@@ -278,8 +280,8 @@ impl AudioVisualizer {
     
     fn draw_stats(&self, frame: &mut [u8]) {
         // Display sample rate and buffer info at the bottom
-        let rms = self.listener.buffer().get_rms();
-        let peak = self.listener.buffer().get_peak();
+        let rms = self.listener.get_rms();
+        let peak = self.listener.get_peak();
         
         // Draw some stats text indicators as colored blocks
         let stats_y = HEIGHT as usize - 20;
@@ -293,12 +295,12 @@ impl AudioVisualizer {
         self.draw_text_indicator(frame, 200, stats_y, &peak_text, 0xE0, 0x80, 0x00);
         
         // Draw sample rate
-        let rate_text = format!("Rate: {} Hz", self.listener.buffer().sample_rate());
-        self.draw_text_indicator(frame, 400, stats_y, &rate_text, 0x80, 0x80, 0xE0);
+        // let rate_text = format!("Rate: {} Hz", self.listener.buffer().sample_rate());
+        // self.draw_text_indicator(frame, 400, stats_y, &rate_text, 0x80, 0x80, 0xE0);
         
         // Draw buffer size
-        let buffer_text = format!("Buffer: {} samples", self.listener.buffer().len());
-        self.draw_text_indicator(frame, 600, stats_y, &buffer_text, 0x80, 0xC0, 0xC0);
+        // let buffer_text = format!("Buffer: {} samples", self.listener.buffer().len());
+        // self.draw_text_indicator(frame, 600, stats_y, &buffer_text, 0x80, 0xC0, 0xC0);
     }
     
     fn draw_text_indicator(&self, frame: &mut [u8], x: usize, y: usize, text: &str, r: u8, g: u8, b: u8) {

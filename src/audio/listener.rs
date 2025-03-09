@@ -249,3 +249,75 @@ impl AudioListener {
     }
 
 }
+
+
+pub struct CompositeAudioListener {
+    listeners: Vec<AudioListener>,
+}
+
+impl CompositeAudioListener {
+    pub fn new(listeners: Vec<AudioListener>) -> Self {
+        Self { listeners }
+    }
+
+    pub fn get_samples(&self) -> Vec<f32> {
+        let mut all_samples = Vec::new();
+        for listener in &self.listeners {
+            let samples = listener.get_samples();
+            all_samples.extend(samples);
+        }
+        all_samples
+    }
+
+    pub fn record(&self) -> Result<(), String> {
+        for listener in &self.listeners {
+            listener.record()?;
+        }
+        Ok(())
+    }
+
+    pub fn pause(&self) -> Result<(), String> {
+        for listener in &self.listeners {
+            listener.pause()?;
+        }
+        Ok(())
+    }
+
+    pub fn get_rms(&self) -> f32 {
+        let mut total_rms = 0.0;
+        for listener in &self.listeners {
+            total_rms += listener.buffer().get_rms();
+        }
+        total_rms / self.listeners.len() as f32
+    }
+    
+    pub fn get_peak(&self) -> f32 {
+        let mut total_peak = 0.0;
+        for listener in &self.listeners {
+            total_peak += listener.buffer().get_peak();
+        }
+        total_peak / self.listeners.len() as f32
+    }
+
+
+}
+
+pub fn get_all_listeners(buffer_duration_secs: f32) -> Vec<AudioListener> {
+    let devices = super::device::all();
+    let mut listeners = Vec::new();
+
+    for device in devices {
+        if device.is_input {
+            if let Ok(listener) = AudioListener::new(&device, buffer_duration_secs) {
+                listeners.push(listener);
+            }
+        }
+    }
+
+    listeners
+}
+
+pub fn get_all_system_audio_composite_listener(buffer_duration_secs: f32) -> CompositeAudioListener {
+    let listeners = get_all_listeners(buffer_duration_secs);
+    CompositeAudioListener::new(listeners)
+}
