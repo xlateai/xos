@@ -1,5 +1,5 @@
 use cpal::{
-    traits::DeviceTrait,
+    traits::{DeviceTrait, StreamTrait},
     Device as CpalDevice, StreamConfig,
 };
 use std::sync::{Arc, Mutex};
@@ -13,6 +13,8 @@ pub(crate) struct AudioDevice {
     sample_rate: u32,
     cpal_device: CpalDevice,
     active: bool,
+    // Store the stream handle
+    stream: Option<cpal::Stream>,
 }
 
 impl AudioDevice {
@@ -43,6 +45,7 @@ impl AudioDevice {
             sample_rate,
             cpal_device,
             active: false,
+            stream: None,
         })
     }
 
@@ -87,12 +90,18 @@ impl AudioDevice {
     }
 
     pub(crate) fn stop(&mut self) {
-        // Implementation would depend on how we manage stream handles
+        if let Some(stream) = &self.stream {
+            stream.pause().unwrap_or_else(|e| {
+                eprintln!("Error stopping stream: {}", e);
+            });
+            self.stream = None;
+        }
+
         self.active = false;
     }
 
     fn start_input_stream<E>(
-        &self, 
+        &mut self, 
         buffer: Arc<Mutex<MultiChannelBuffer>>, 
         err_fn: E
     ) -> Result<(), String> 
@@ -105,7 +114,7 @@ impl AudioDevice {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let stream = self.cpal_device(
+        let stream = self.cpal_device.build_input_stream(
             &config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 if let Ok(mut buffer) = buffer.lock() {
@@ -116,18 +125,17 @@ impl AudioDevice {
             None,
         ).map_err(|e| format!("Error building input stream: {}", e))?;
 
-        // Start the stream
+        // Start the stream using the StreamTrait
         stream.play().map_err(|e| format!("Error starting input stream: {}", e))?;
 
-        // Store the stream somewhere (you'll need to modify the struct to hold this)
-        // For now, we'll just forget it which keeps it alive but we can't stop it later
-        std::mem::forget(stream);
+        // Store the stream in our struct
+        self.stream = Some(stream);
 
         Ok(())
     }
 
     fn start_output_stream<E>(
-        &self, 
+        &mut self, 
         buffer: Arc<Mutex<MultiChannelBuffer>>, 
         err_fn: E
     ) -> Result<(), String> 
@@ -139,35 +147,25 @@ impl AudioDevice {
             sample_rate: cpal::SampleRate(self.sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
-
-        // For output devices, we might want to capture the audio that's being played
-        // This is more complex and might require hooking into the audio system at a lower level
-        // For simplicity, we'll just create a stream that captures silence for now
         
         let stream = self.cpal_device.build_output_stream(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                // Fill output buffer with silence for now
+                // In a real implementation, we'd fill the output buffer with actual audio data
+                // For now, we'll just fill with silence
                 for sample in data.iter_mut() {
                     *sample = 0.0;
-                }
-                
-                // In a real implementation, we might copy data from our buffer to the output
-                // and/or capture what's being sent to the output
-                if let Ok(buffer) = buffer.lock() {
-                    // Just reading samples here, not modifying the buffer
-                    let _samples = buffer.get_samples();
                 }
             },
             err_fn,
             None,
         ).map_err(|e| format!("Error building output stream: {}", e))?;
 
-        // Start the stream
+        // Start the stream using the StreamTrait
         stream.play().map_err(|e| format!("Error starting output stream: {}", e))?;
 
-        // Store the stream somewhere
-        std::mem::forget(stream);
+        // Store the stream in our struct
+        self.stream = Some(stream);
 
         Ok(())
     }
