@@ -23,3 +23,8 @@ xos --help
 ```
 
 Note: `xos` is our CLI command.
+
+# Wasm
+
+To compile into wasm, run:
+1. `cargo build --lib --target wasm32-unknown-unknown --release` this will build/compile for wasm
