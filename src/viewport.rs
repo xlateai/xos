@@ -19,7 +19,7 @@ pub fn open_viewport() {
     });
 
     // Limit to ~60 fps
-    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+    // window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
     // Main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -41,8 +41,4 @@ pub fn open_viewport() {
                 panic!("Failed to update window: {}", e);
             });
     }
-}
-
-fn main() {
-    open_viewport();
 }
