@@ -1,9 +1,7 @@
 use clap::{Parser, Subcommand};
-use std::time::Duration;
 
-use xos::experiments;
 use xos::viewport;
-use xos::waveform;
+// use xos::waveform;
 use xos::audio;
 
 #[derive(Parser)]
@@ -17,16 +15,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Open a single window with a white pixel at center
-    Screen,
-    
-    /// Open four windows in quadrants with white pixels
-    // Quad,
-    
-    /// Open the XOS viewport with grid
     View,
-    
-    Waveform,
+    // Waveform,
 }
 
 fn main() {
@@ -40,26 +30,14 @@ fn main() {
     
     // Execute the command
     match cli.command {
-        Commands::Screen => {
-            println!("Opening single window...");
-            experiments::open_window();
-        }
-        // Commands::Quad => {
-        //     println!("Opening four windows...");
-        //     experiments::open_four_windows();
-        // }
         Commands::View => {
             println!("Opening viewport...");
             viewport::open_viewport();
         }
-        // Commands::Record => {
-        //     println!("Recording 3-second audio clip from device 0...");
-        //     record_audio_sample();
+        // Commands::Waveform => {
+        //     println!("Opening audio waveform visualization...");
+        //     waveform::open_waveform();
         // }
-        Commands::Waveform => {
-            println!("Opening audio waveform visualization...");
-            waveform::open_waveform();
-        }
     }
 }
 

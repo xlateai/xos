@@ -1,12 +1,8 @@
 // Export the experiments module
-pub mod experiments;
-
 pub mod audio;
 
 // Export the viewport module
 pub mod viewport;
-
-pub mod waveform;
 
 // Add WebAssembly bindings
 #[cfg(target_arch = "wasm32")]
