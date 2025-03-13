@@ -21,7 +21,7 @@ enum Commands {
     Screen,
     
     /// Open four windows in quadrants with white pixels
-    Quad,
+    // Quad,
     
     /// Open the XOS viewport with grid
     View,
@@ -44,10 +44,10 @@ fn main() {
             println!("Opening single window...");
             experiments::open_window();
         }
-        Commands::Quad => {
-            println!("Opening four windows...");
-            experiments::open_four_windows();
-        }
+        // Commands::Quad => {
+        //     println!("Opening four windows...");
+        //     experiments::open_four_windows();
+        // }
         Commands::View => {
             println!("Opening viewport...");
             viewport::open_viewport();
