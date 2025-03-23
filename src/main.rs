@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::time::Duration;
 
 use xos::experiments;
 use xos::viewport;
@@ -19,9 +18,6 @@ struct Cli {
 enum Commands {
     /// Open a single window with a white pixel at center
     Screen,
-    
-    /// Open four windows in quadrants with white pixels
-    Quad,
     
     /// Open the XOS viewport with grid
     View,
@@ -43,10 +39,6 @@ fn main() {
         Commands::Screen => {
             println!("Opening single window...");
             experiments::open_window();
-        }
-        Commands::Quad => {
-            println!("Opening four windows...");
-            experiments::open_four_windows();
         }
         Commands::View => {
             println!("Opening viewport...");
