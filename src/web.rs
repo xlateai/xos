@@ -1,8 +1,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
-// Constants for the canvas
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 256;
 
@@ -18,26 +17,61 @@ pub fn run() -> Result<(), JsValue> {
         .unwrap()
         .dyn_into::<HtmlCanvasElement>()?;
 
+    canvas.set_width(WIDTH);
+    canvas.set_height(HEIGHT);
+
     let context = canvas
         .get_context("2d")?
         .unwrap()
         .dyn_into::<CanvasRenderingContext2d>()?;
 
-    // Black background
-    context.set_fill_style(&"#000".into());
-    context.fill_rect(0.0, 0.0, WIDTH as f64, HEIGHT as f64);
+    // Allocate pixel buffer (RGBA)
+    let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
 
-    // Draw green circle
-    let cx = WIDTH as f64 / 2.0;
-    let cy = HEIGHT as f64 / 2.0;
-    let radius = 20.0;
+    // Draw a green circle on black background
+    draw_circle(&mut pixels, WIDTH, HEIGHT);
 
-    context.begin_path();
-    context
-        .arc(cx, cy, radius, 0.0, std::f64::consts::PI * 2.0)
-        .unwrap();
-    context.set_fill_style(&"#00ff00".into());
-    context.fill();
+    // Convert Vec<u8> to ImageData
+    let data = wasm_bindgen::Clamped(&pixels[..]);
+    let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+        data,
+        WIDTH,
+        HEIGHT,
+    )?;
+
+    // Render to canvas
+    context.put_image_data(&image_data, 0.0, 0.0)?;
 
     Ok(())
+}
+
+fn draw_circle(pixels: &mut [u8], width: u32, height: u32) {
+    let center_x = width as f32 / 2.0;
+    let center_y = height as f32 / 2.0;
+    let radius = 20.0;
+    let radius_squared = radius * radius;
+
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - center_x;
+            let dy = y as f32 - center_y;
+            let distance_squared = dx * dx + dy * dy;
+
+            let i = ((y * width + x) * 4) as usize;
+
+            if distance_squared <= radius_squared {
+                // Green circle
+                pixels[i + 0] = 0x00; // R
+                pixels[i + 1] = 0xff; // G
+                pixels[i + 2] = 0x00; // B
+                pixels[i + 3] = 0xff; // A
+            } else {
+                // Black background
+                pixels[i + 0] = 0x00;
+                pixels[i + 1] = 0x00;
+                pixels[i + 2] = 0x00;
+                pixels[i + 3] = 0xff;
+            }
+        }
+    }
 }
