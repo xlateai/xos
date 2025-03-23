@@ -6,10 +6,10 @@ use std::net::TcpListener;
 use tiny_http::{Server, Response};
 use webbrowser;
 
-use xos::experiments;
-use xos::viewport;
-use xos::waveform;
-use xos::audio;
+// use xos::experiments;
+// use xos::viewport;
+// use xos::waveform;
+// use xos::audio;
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -22,34 +22,34 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Screen,
-    View,
-    Waveform,
+    // Screen,
+    // View,
+    // Waveform,
     Web,
 }
 
 fn main() {
-    // Print audio device information at startup
-    let audio_devices = audio::devices();
-    println!("XOS Audio: {} device(s) detected", audio_devices.len());
+    // // Print audio device information at startup
+    // let audio_devices = audio::devices();
+    // println!("XOS Audio: {} device(s) detected", audio_devices.len());
 
-    audio::print_devices();
+    // audio::print_devices();
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Screen => {
-            println!("Opening single window...");
-            experiments::open_window();
-        }
-        Commands::View => {
-            println!("Opening viewport...");
-            viewport::open_viewport();
-        }
-        Commands::Waveform => {
-            println!("Opening audio waveform visualization...");
-            waveform::open_waveform();
-        }
+        // Commands::Screen => {
+        //     println!("Opening single window...");
+        //     experiments::open_window();
+        // }
+        // Commands::View => {
+        //     println!("Opening viewport...");
+        //     viewport::open_viewport();
+        // }
+        // Commands::Waveform => {
+        //     println!("Opening audio waveform visualization...");
+        //     waveform::open_waveform();
+        // }
         Commands::Web => {
             println!("Compiling to WebAssembly and launching browser...");
             build_wasm();
