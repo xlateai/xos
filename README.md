@@ -23,3 +23,6 @@ xos --help
 ```
 
 Note: `xos` is our CLI command.
+
+# Native Bridge
+Don't forget to use the `--tunnel` in `npx expo start --tunnel`, otherwise weird things occur (you'll just see a JSON payload).
