@@ -114,7 +114,7 @@ fn start_web_server() {
 
 fn copy_web_assets_to_mobile() {
     let src_dir = "static";
-    let dst_dir = "mobile-app/assets/web";
+    let dst_dir = "native-bridge/assets/web";
 
     if std::path::Path::new(dst_dir).exists() {
         fs::remove_dir_all(dst_dir).expect("Failed to clear old assets");
@@ -132,14 +132,14 @@ fn copy_web_assets_to_mobile() {
         }
     }
 
-    println!("📦 Copied WASM assets to mobile-app/assets/web");
+    println!("📦 Copied WASM assets to native-bridge/assets/web");
 }
 
 
 fn launch_expo() {
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
-    cmd.current_dir("mobile-app");
+    cmd.current_dir("native-bridge");
 
     let status = cmd
         .status()
