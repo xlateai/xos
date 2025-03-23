@@ -82,39 +82,45 @@ fn launch_browser() {
     });
 }
 
-/// Start a simple static file server on localhost:8080
+fn mime_type(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        "text/html"
+    } else if path.ends_with(".js") {
+        "application/javascript"
+    } else if path.ends_with(".wasm") {
+        "application/wasm"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 fn start_web_server() {
-    // Ensure static/index.html exists
-    if !fs::metadata("static/index.html").is_ok() {
-        eprintln!("Error: static/index.html not found!");
-        return;
-    }
-
-    // Check if port is free
     let port = 8080;
-    if TcpListener::bind(("127.0.0.1", port)).is_err() {
-        eprintln!("Port {} is already in use.", port);
-        return;
-    }
-
     let server = Server::http(format!("0.0.0.0:{}", port)).unwrap();
     println!("🚀 Serving at http://localhost:{}", port);
 
     for request in server.incoming_requests() {
-        let path = match request.url() {
-            "/" => "static/index.html".to_string(),
-            path => format!("static{}", path),
+        let url = request.url();
+        let path = if url == "/" {
+            "static/index.html".to_string()
+        } else {
+            format!("static{}", url)
         };
 
         match fs::read(&path) {
             Ok(data) => {
-                let _ = request.respond(Response::from_data(data));
+                let content_type = mime_type(&path);
+                let response = Response::from_data(data)
+                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap());
+                let _ = request.respond(response);
             }
             Err(_) => {
-                let _ = request.respond(
-                    Response::from_string("404 Not Found").with_status_code(404),
-                );
+                let response = Response::from_string("404 Not Found").with_status_code(404);
+                let _ = request.respond(response);
             }
         }
     }
 }
+

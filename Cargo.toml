@@ -16,6 +16,9 @@ clap = { version = "4.4.10", features = ["derive"] }
 cpal = "0.15.2"
 tiny_http = "0.12"
 webbrowser = "0.8"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "HtmlCanvasElement", "Document", "Window"] }
+console_error_panic_hook = "0.1"
 
 
 [lib]
