@@ -21,6 +21,7 @@ webbrowser = "0.8"
 [lib]
 name = "xos"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "xos"
