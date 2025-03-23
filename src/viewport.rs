@@ -91,7 +91,8 @@ pub fn open_viewport() {
         .unwrap();
 
     // Create the pixel buffer
-    let surface_texture = SurfaceTexture::new(WIDTH, HEIGHT, &window);
+    let size = window.inner_size(); // This gives you the physical pixel size (needed for macos)
+    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(WIDTH, HEIGHT, surface_texture).unwrap();
 
     // Create game state
