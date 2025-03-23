@@ -1,20 +1,20 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { WebView } from 'react-native-webview';
+import { Asset } from 'expo-asset';
+import { Platform } from 'react-native';
+
+const assetUri = Asset.fromModule(require('./assets/web/index.html')).uri;
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <WebView
+      originWhitelist={['*']}
+      source={
+        Platform.OS === 'web'
+          ? { uri: '/assets/web/index.html' } // optional for Expo web
+          : { uri: assetUri }
+      }
+      javaScriptEnabled
+      allowsInlineMediaPlayback
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
