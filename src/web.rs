@@ -1,69 +1,67 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
-
-const WIDTH: u32 = 256;
-const HEIGHT: u32 = 256;
-const RADIUS: f32 = 20.0;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
 
-    let window = web_sys::window().unwrap();
-    let document = window.document().unwrap();
+    let window = web_sys::window().expect("No global window");
+    let document = window.document().expect("No document on window");
 
-    let canvas = document
+    let canvas: HtmlCanvasElement = document
         .get_element_by_id("xos-canvas")
-        .unwrap()
-        .dyn_into::<HtmlCanvasElement>()?;
+        .expect("No canvas with id 'xos-canvas'")
+        .dyn_into()
+        .expect("Element is not a canvas");
 
-    canvas.set_width(WIDTH);
-    canvas.set_height(HEIGHT);
+    // Match canvas size to viewport
+    let width = window.inner_width()?.as_f64().unwrap() as u32;
+    let height = window.inner_height()?.as_f64().unwrap() as u32;
+    canvas.set_width(width);
+    canvas.set_height(height);
 
-    let context = canvas
+    let context: CanvasRenderingContext2d = canvas
         .get_context("2d")?
         .unwrap()
-        .dyn_into::<CanvasRenderingContext2d>()?;
+        .dyn_into()
+        .expect("Failed to get 2d context");
 
-    let state = BallState::new(WIDTH, HEIGHT, RADIUS);
-    animate(context, state);
+    let state = BallState::new(width, height, 30.0);
+    animate(canvas, context, state);
 
     Ok(())
 }
 
-fn animate(context: CanvasRenderingContext2d, mut state: BallState) {
+fn animate(canvas: HtmlCanvasElement, context: CanvasRenderingContext2d, mut state: BallState) {
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let g = f.clone();
 
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-        // Create new pixel buffer
-        let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+        let width = canvas.width();
+        let height = canvas.height();
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
 
-        // Update ball position
-        state.update();
+        state.update(width as f32, height as f32);
+        draw_circle(&mut pixels, width, height, state.x, state.y, state.radius);
 
-        // Draw the ball
-        draw_circle(&mut pixels, WIDTH, HEIGHT, state.x, state.y, RADIUS);
-
-        // Convert to ImageData and blit
         let data = wasm_bindgen::Clamped(&pixels[..]);
-        let image_data =
-            ImageData::new_with_u8_clamped_array_and_sh(data, WIDTH, HEIGHT).unwrap();
-        context.put_image_data(&image_data, 0.0, 0.0).unwrap();
+        let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
+            .expect("Failed to create ImageData");
+        context.put_image_data(&image_data, 0.0, 0.0).expect("put_image_data failed");
 
-        // Schedule next frame
         web_sys::window()
             .unwrap()
             .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
-            .unwrap();
+            .expect("requestAnimationFrame failed");
     }) as Box<dyn FnMut()>));
 
-    // Start the loop
     web_sys::window()
         .unwrap()
         .request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref())
-        .unwrap();
+        .expect("Initial requestAnimationFrame failed");
 }
 
 fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, radius: f32) {
@@ -92,17 +90,15 @@ fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad
     }
 }
 
-use std::cell::RefCell;
-use std::rc::Rc;
+// -------------------------------------
+// Ball Physics State
+// -------------------------------------
 
-// Ball physics state
 struct BallState {
     x: f32,
     y: f32,
     vx: f32,
     vy: f32,
-    width: f32,
-    height: f32,
     radius: f32,
 }
 
@@ -113,20 +109,18 @@ impl BallState {
             y: height as f32 / 2.0,
             vx: 1.5,
             vy: 1.0,
-            width: width as f32,
-            height: height as f32,
             radius,
         }
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, width: f32, height: f32) {
         self.x += self.vx;
         self.y += self.vy;
 
-        if self.x - self.radius < 0.0 || self.x + self.radius > self.width {
+        if self.x - self.radius < 0.0 || self.x + self.radius > width {
             self.vx *= -1.0;
         }
-        if self.y - self.radius < 0.0 || self.y + self.radius > self.height {
+        if self.y - self.radius < 0.0 || self.y + self.radius > height {
             self.vy *= -1.0;
         }
     }
