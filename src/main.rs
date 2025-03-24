@@ -6,11 +6,6 @@ use std::net::TcpListener;
 use tiny_http::{Server, Response};
 use webbrowser;
 
-// use xos::experiments;
-// use xos::viewport;
-// use xos::waveform;
-// use xos::audio;
-
 #[derive(Parser)]
 #[command(name = "xos")]
 #[command(about = "Experimental OS Windows Manager", long_about = None)]
@@ -22,43 +17,54 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Web,
-    Native,
+    #[command(about = "Launch web version")]
+    Web {
+        #[arg(short, long, default_value = "ball")]
+        game: String,
+    },
+    
+    #[command(about = "Launch native version")]
+    Native {
+        #[arg(short, long, default_value = "ball")]
+        game: String,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Web => {
-            println!("Compiling to WebAssembly and launching browser...");
-            build_wasm();
+        Commands::Web { game } => {
+            println!("Compiling to WebAssembly with game '{}' and launching browser...", game);
+            
+            // Pass the selected game as an environment variable to the build process
+            build_wasm(&game);
             launch_browser();
             start_web_server();
         }
 
-        Commands::Native => {
-            println!("Building WASM and launching Expo...");
-            build_wasm();
+        Commands::Native { game } => {
+            println!("Building WASM with game '{}' and launching Expo...", game);
+            build_wasm(&game);
         
             println!("Starting web server for native bridge...");
             // Run the server in the background
             thread::spawn(start_web_server);
-            // Optional: if your WebView points to localhost, no need to copy
-            // copy_web_assets_to_mobile();
-        
+            
             println!("Launching Expo...");
             launch_expo();
         }
-        
     }
 }
 
-
-/// Run `wasm-pack` to build the WASM frontend
-fn build_wasm() {
-    let status = Command::new("wasm-pack")
-        .args(["build", "--target", "web", "--out-dir", "static/pkg"])
+/// Run `wasm-pack` to build the WASM frontend with the selected game
+fn build_wasm(game: &str) {
+    // Set environment variable to select the game
+    let mut command = Command::new("wasm-pack");
+    command.env("GAME_SELECTION", game)
+        .args(["build", "--target", "web", "--out-dir", "static/pkg"]);
+    
+    let status = command
         .status()
         .expect("Failed to run wasm-pack. Make sure it's installed.");
 
@@ -66,7 +72,7 @@ fn build_wasm() {
         panic!("WASM build failed");
     }
 
-    println!("✅ WASM built to static/pkg/");
+    println!("✅ WASM built to static/pkg/ with game: {}", game);
 }
 
 /// Launch default browser to http://localhost:8080
