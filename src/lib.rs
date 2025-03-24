@@ -1,15 +1,11 @@
-// Export the experiments module
-// pub mod experiments;
+pub mod engine;
+pub mod ball_game;
 
-// pub mod audio;
+use wasm_bindgen::prelude::*;
 
-// Export the viewport module
-// pub mod viewport;
-
-// pub mod waveform;
-
-#[cfg(target_arch = "wasm32")]
-pub mod web;
-
-#[cfg(not(target_arch = "wasm32"))]
-pub mod viewport;
+// Re-export start function for the JavaScript/WASM interface
+#[wasm_bindgen(start)]
+pub fn start() -> Result<(), JsValue> {
+    // Call the engine's start function with our chosen game
+    engine::start_engine()
+}
