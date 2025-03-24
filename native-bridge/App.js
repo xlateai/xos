@@ -6,7 +6,7 @@ export default function App() {
   if (Platform.OS === "web") {
     return (
       <iframe
-        src="http://localhost:8080"
+        src="https://solid-spork-4q6v7564xx53qgqw-8080.app.github.dev/"
         style={{ flex: 1, width: "100%", height: "100%", border: "none" }}
       />
     );
@@ -15,7 +15,7 @@ export default function App() {
   return (
     <View style={{ flex: 1 }}>
       <WebView
-        source={{ uri: "http://localhost:8080" }}
+        source={{ uri: "https://solid-spork-4q6v7564xx53qgqw-8080.app.github.dev/" }}
         originWhitelist={["*"]}
         javaScriptEnabled
         allowFileAccess
