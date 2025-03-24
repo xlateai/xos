@@ -4,6 +4,11 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+
+// change background color as needed of course
+const BACKGROUND_COLOR: (u8, u8, u8) = (64, 0, 64);
+
+
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
@@ -81,9 +86,10 @@ fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad
                 pixels[i + 2] = 0x00; // B
                 pixels[i + 3] = 0xff; // A
             } else {
-                pixels[i + 0] = 0x00;
-                pixels[i + 1] = 0x00;
-                pixels[i + 2] = 0x00;
+                // background pixels
+                pixels[i + 0] = BACKGROUND_COLOR.0;
+                pixels[i + 1] = BACKGROUND_COLOR.1;
+                pixels[i + 2] = BACKGROUND_COLOR.2;
                 pixels[i + 3] = 0xff;
             }
         }

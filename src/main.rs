@@ -22,42 +22,38 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    // Screen,
-    // View,
-    // Waveform,
     Web,
+    Native,
 }
 
 fn main() {
-    // // Print audio device information at startup
-    // let audio_devices = audio::devices();
-    // println!("XOS Audio: {} device(s) detected", audio_devices.len());
-
-    // audio::print_devices();
-
     let cli = Cli::parse();
 
     match cli.command {
-        // Commands::Screen => {
-        //     println!("Opening single window...");
-        //     experiments::open_window();
-        // }
-        // Commands::View => {
-        //     println!("Opening viewport...");
-        //     viewport::open_viewport();
-        // }
-        // Commands::Waveform => {
-        //     println!("Opening audio waveform visualization...");
-        //     waveform::open_waveform();
-        // }
         Commands::Web => {
             println!("Compiling to WebAssembly and launching browser...");
             build_wasm();
             launch_browser();
             start_web_server();
         }
+
+        Commands::Native => {
+            println!("Building WASM and launching Expo...");
+            build_wasm();
+        
+            println!("Starting web server for native bridge...");
+            // Run the server in the background
+            thread::spawn(start_web_server);
+            // Optional: if your WebView points to localhost, no need to copy
+            // copy_web_assets_to_mobile();
+        
+            println!("Launching Expo...");
+            launch_expo();
+        }
+        
     }
 }
+
 
 /// Run `wasm-pack` to build the WASM frontend
 fn build_wasm() {
@@ -124,3 +120,40 @@ fn start_web_server() {
     }
 }
 
+// fn copy_web_assets_to_mobile() {
+//     let src_dir = "static";
+//     let dst_dir = "native-bridge/assets/web";
+
+//     if std::path::Path::new(dst_dir).exists() {
+//         fs::remove_dir_all(dst_dir).expect("Failed to clear old assets");
+//     }
+
+//     fs::create_dir_all(dst_dir).expect("Failed to create target asset folder");
+
+//     for entry in fs::read_dir(src_dir).expect("Failed to read static dir") {
+//         let entry = entry.expect("Failed to read entry");
+//         let path = entry.path();
+//         if path.is_file() {
+//             let filename = path.file_name().unwrap();
+//             fs::copy(&path, format!("{}/{}", dst_dir, filename.to_string_lossy()))
+//                 .expect("Failed to copy asset");
+//         }
+//     }
+
+//     println!("📦 Copied WASM assets to native-bridge/assets/web");
+// }
+
+
+fn launch_expo() {
+    let mut cmd = Command::new("npx");
+    cmd.arg("expo").arg("start").arg("--tunnel");
+    cmd.current_dir("native-bridge");
+
+    let status = cmd
+        .status()
+        .expect("Failed to launch Expo. Is it installed?");
+
+    if !status.success() {
+        panic!("Expo failed to launch.");
+    }
+}
