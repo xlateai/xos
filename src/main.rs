@@ -120,34 +120,11 @@ fn start_web_server() {
     }
 }
 
-// fn copy_web_assets_to_mobile() {
-//     let src_dir = "static";
-//     let dst_dir = "native-bridge/assets/web";
-
-//     if std::path::Path::new(dst_dir).exists() {
-//         fs::remove_dir_all(dst_dir).expect("Failed to clear old assets");
-//     }
-
-//     fs::create_dir_all(dst_dir).expect("Failed to create target asset folder");
-
-//     for entry in fs::read_dir(src_dir).expect("Failed to read static dir") {
-//         let entry = entry.expect("Failed to read entry");
-//         let path = entry.path();
-//         if path.is_file() {
-//             let filename = path.file_name().unwrap();
-//             fs::copy(&path, format!("{}/{}", dst_dir, filename.to_string_lossy()))
-//                 .expect("Failed to copy asset");
-//         }
-//     }
-
-//     println!("📦 Copied WASM assets to native-bridge/assets/web");
-// }
-
 
 fn launch_expo() {
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
-    cmd.current_dir("native-bridge");
+    cmd.current_dir("src/native-bridge");
 
     let status = cmd
         .status()
