@@ -2656,6 +2656,7 @@ dependencies = [
  "clap",
  "console_error_panic_hook",
  "cpal",
+ "js-sys",
  "pixels",
  "tiny_http",
  "wasm-bindgen",
