@@ -47,6 +47,9 @@ pub fn start_engine() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::error::Error>> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("XOS Game")
@@ -57,6 +60,8 @@ fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
     app.setup(size.width, size.height)?;
+
+    let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -73,15 +78,25 @@ fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                WindowEvent::MouseInput { state, .. } if state == ElementState::Pressed => {
-                    app.on_mouse_down(100.0, 100.0); // TODO: get real cursor pos
+
+                WindowEvent::CursorMoved { position, .. } => {
+                    *cursor_position.borrow_mut() = (position.x as f32, position.y as f32);
                 }
+
+                WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
+                    if state == ElementState::Pressed =>
+                {
+                    let (x, y) = *cursor_position.borrow();
+                    app.on_mouse_down(x, y);
+                }
+
                 _ => {}
             },
             _ => {}
         }
     });
 }
+
 
 //
 // --- WebAssembly Backend
