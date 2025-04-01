@@ -1,15 +1,13 @@
-// Export the experiments module
-// pub mod experiments;
-
-// pub mod audio;
-
-// Export the viewport module
-// pub mod viewport;
-
-// pub mod waveform;
+pub mod engine;
+pub mod ball_game;
 
 #[cfg(target_arch = "wasm32")]
-pub mod web;
+use wasm_bindgen::prelude::wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub mod viewport;
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn start() -> Result<(), JsValue> {
+    crate::engine::start_web()
+}
