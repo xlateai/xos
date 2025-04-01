@@ -13,9 +13,9 @@ cargo install --path .
 ```
 
 After that, you can now run the `xos` CLI, which can be executed in one of a few methods:
-1. Standard mode `xos dev` - this will launch the dev showcase app locally on your machine (windows/mac native app windows).
-2. Web/wasm mode `xos dev --web` - this will compile the code into WASM and open within your browser.
-3. React-native/wasm mode `xos dev --react-native` - this will compile into WASM and launch react-native so you can open the app in the browser OR scan the QR code using expo go to launch the native IOS application!
+1. `xos dev` - (standard) this will launch the dev showcase app locally on your machine (windows/mac native app windows).
+2. `xos dev --web` (web/wasm) - this will compile the code into WASM and open within your browser.
+3. `xos dev --react-native` (react-native/wasm) - this will compile into WASM and launch react-native so you can open the app in the browser OR scan the QR code using expo go to launch the native IOS application!
 
 Since XOS is designed to run anywhere and on any device, it's crucial that all apps developed on xlate are always buildable/runnable through both standard runtimes (compiled for the current target machine) as well as WASM that allows us to launch the exact same app on the browser and on mobile devices like IOS through react native web views.
 
