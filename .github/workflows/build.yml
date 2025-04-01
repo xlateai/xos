@@ -1,4 +1,4 @@
-name: Build Check
+name: rust build
 
 on:
   push:
@@ -7,12 +7,15 @@ on:
     branches: [main]
 
 jobs:
-  build-native:
-    name: 🛠️ Native Build
+  build-standard:
+    name: standard / ubuntu
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
+
+      - name: Install ALSA system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -25,7 +28,7 @@ jobs:
         run: cargo build --release
 
   build-wasm:
-    name: 🌐 WASM Build
+    name: wasm / ubuntu
     runs-on: ubuntu-latest
 
     steps:
