@@ -110,7 +110,7 @@ pub fn start_web() -> Result<(), JsValue> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn run_web(mut app: impl Application + 'static) -> Result<(), JsValue> {
+fn run_web(app: impl Application + 'static) -> Result<(), JsValue> {
     use std::cell::RefCell;
     use std::rc::Rc;
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
