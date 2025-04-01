@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-standard:
-    name: standard / ubuntu
+    name: standard
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +28,7 @@ jobs:
         run: cargo build --release
 
   build-wasm:
-    name: wasm / ubuntu
+    name: wasm
     runs-on: ubuntu-latest
 
     steps:
