@@ -1,6 +1,3 @@
-use wasm_bindgen::prelude::*;
-use js_sys;
-
 use crate::engine::Application;
 
 // Common background color
@@ -137,8 +134,17 @@ impl BallState {
     }
 }
 
-// Simple random number generator for velocity
 fn rand_float(min: f32, max: f32) -> f32 {
-    let random = js_sys::Math::random() as f32;
-    min + random * (max - min)
+    #[cfg(target_arch = "wasm32")]
+    {
+        let random = js_sys::Math::random() as f32;
+        min + random * (max - min)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        rng.gen_range(min..max)
+    }
 }
