@@ -66,7 +66,7 @@ impl BallGame {
 }
 
 impl Application for BallGame {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
         // Add initial ball at center
         self.balls.push(BallState::new(width as f32, height as f32, 30.0));
         Ok(())

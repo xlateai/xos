@@ -2,29 +2,33 @@ use clap::{Parser, Subcommand};
 use std::process::Command;
 use std::{fs, thread};
 use std::time::Duration;
-use std::net::TcpListener;
 use tiny_http::{Server, Response};
 use webbrowser;
+use xos::engine;
 
+/// CLI structure
 #[derive(Parser)]
 #[command(name = "xos")]
 #[command(about = "Experimental OS Windows Manager", long_about = None)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "Launch web version")]
-    Web {
-        #[arg(short, long, default_value = "ball")]
-        game: String,
-    },
-    
-    #[command(about = "Launch native version")]
-    Native {
+    #[command(about = "Development mode (native by default)")]
+    Dev {
+        /// Force web mode
+        #[arg(long)]
+        web: bool,
+
+        /// Force React Native mode
+        #[arg(long = "react-native")]
+        react_native: bool,
+
+        /// Game name (default = ball)
         #[arg(short, long, default_value = "ball")]
         game: String,
     },
@@ -34,36 +38,34 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Web { game } => {
-            println!("Compiling to WebAssembly with game '{}' and launching browser...", game);
-            
-            // Pass the selected game as an environment variable to the build process
-            build_wasm(&game);
-            launch_browser();
-            start_web_server();
+        Some(Commands::Dev { web, react_native, game }) => {
+            if web {
+                println!("🌐 Launching in web mode...");
+                build_wasm(&game);
+                launch_browser();
+                start_web_server();
+            } else if react_native {
+                println!("📱 Launching in React Native mode...");
+                build_wasm(&game);
+                thread::spawn(start_web_server);
+                launch_expo();
+            } else {
+                println!("🖥️  Launching in native mode...");
+                engine::start_engine().unwrap();
+            }
         }
-
-        Commands::Native { game } => {
-            println!("Building WASM with game '{}' and launching Expo...", game);
-            build_wasm(&game);
-        
-            println!("Starting web server for native bridge...");
-            // Run the server in the background
-            thread::spawn(start_web_server);
-            
-            println!("Launching Expo...");
-            launch_expo();
+        None => {
+            eprintln!("❗ Use `xos dev [--web|--react-native]`");
         }
     }
 }
 
-/// Run `wasm-pack` to build the WASM frontend with the selected game
+/// Compile WASM for selected game
 fn build_wasm(game: &str) {
-    // Set environment variable to select the game
     let mut command = Command::new("wasm-pack");
     command.env("GAME_SELECTION", game)
         .args(["build", "--target", "web", "--out-dir", "static/pkg"]);
-    
+
     let status = command
         .status()
         .expect("Failed to run wasm-pack. Make sure it's installed.");
@@ -75,15 +77,15 @@ fn build_wasm(game: &str) {
     println!("✅ WASM built to static/pkg/ with game: {}", game);
 }
 
-/// Launch default browser to http://localhost:8080
+/// Launch browser to local dev server
 fn launch_browser() {
     thread::spawn(|| {
-        // wait a bit for server to start
         thread::sleep(Duration::from_millis(500));
         let _ = webbrowser::open("http://localhost:8080");
     });
 }
 
+/// Determine MIME type from file extension
 fn mime_type(path: &str) -> &'static str {
     if path.ends_with(".html") {
         "text/html"
@@ -98,6 +100,7 @@ fn mime_type(path: &str) -> &'static str {
     }
 }
 
+/// Serve static files for the web version
 fn start_web_server() {
     let port = 8080;
     let server = Server::http(format!("0.0.0.0:{}", port)).unwrap();
@@ -126,7 +129,7 @@ fn start_web_server() {
     }
 }
 
-
+/// Launch Expo for React Native integration
 fn launch_expo() {
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
