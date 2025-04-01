@@ -13,7 +13,7 @@ cargo install --path .
 ```
 
 After that, you can now run the `xos` CLI, which can be executed in one of a few methods:
-1. `xos dev` - (standard) this will launch the dev showcase app locally on your machine (windows/mac native app windows).
+1. `xos dev` (standard) - this will launch the dev showcase app locally on your machine (windows/mac native app windows).
 2. `xos dev --web` (web/wasm) - this will compile the code into WASM and open within your browser.
 3. `xos dev --react-native` (react-native/wasm) - this will compile into WASM and launch react-native so you can open the app in the browser OR scan the QR code using expo go to launch the native IOS application!
 
