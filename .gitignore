@@ -33,3 +33,6 @@ Thumbs.db
 flamegraph.svg
 perf.data
 perf.data.old
+
+# Web slop
+node_modules/**
