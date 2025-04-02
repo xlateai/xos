@@ -12,6 +12,19 @@ cargo build --release
 cargo install --path .
 ```
 
+Advanced Linux Sound Architecture library is needed if you do not have it
+```
+sudo apt-get install libasound2-dev
+sudo dnf install alsa-lib-devel
+sudo pacman -S alsa-lib
+```
+
+To run the react native, expo & its dependencies are required
+```
+cd src/native-bridge/
+npm i -g
+```
+
 After that, you can now run the `xos` CLI, which can be executed in one of a few methods:
 1. `xos dev` (standard) - this will launch the dev showcase app locally on your machine (windows/mac native app windows).
 2. `xos dev --web` (web/wasm) - this will compile the code into WASM and open within your browser.
