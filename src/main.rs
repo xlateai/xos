@@ -37,6 +37,14 @@ enum Commands {
         react_native: bool,
     },
 
+    Whiteboard {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
+
     /// Launch the Ball game
     Ball {
         #[arg(long)]
@@ -66,6 +74,10 @@ fn main() {
 
         Some(Commands::Camera { web, react_native }) => {
             run_game("camera", web, react_native);
+        }
+
+        Some(Commands::Whiteboard { web, react_native }) => {
+            run_game("whiteboard", web, react_native);
         }
 
         Some(Commands::Ball { web, react_native }) => {
