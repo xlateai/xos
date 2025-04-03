@@ -126,8 +126,18 @@ pub fn run_game(game: &str, web: bool, react_native: bool) {
         launch_expo();
     } else {
         println!("🖥️  Launching '{game}' in native mode...");
-        start(game).unwrap();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            start(game).unwrap();
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            start().unwrap();
+        }
     }
+
 }
 
 // --- Python bindings only if feature is enabled ---
