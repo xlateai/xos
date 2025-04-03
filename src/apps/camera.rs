@@ -1,37 +1,21 @@
 use crate::engine::Application;
-use nokhwa::{
-    pixel_format::RgbFormat,
-    utils::{CameraIndex, RequestedFormat, RequestedFormatType},
-    Camera,
-};
+use crate::video::webcam;
 
-pub struct CameraApp {
-    cam: Camera,
-}
+pub struct CameraApp;
 
 impl CameraApp {
     pub fn new() -> Self {
-        let index = CameraIndex::Index(0);
-        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestResolution);
-        let cam = Camera::new(index, requested).expect("Failed to open camera");
-        Self { cam }
+        Self
     }
 
-    fn capture_frame(&mut self, width: u32, height: u32) -> Vec<u8> {
-        match self.cam.frame() {
-            Ok(frame) => {
-                let decoded = frame.decode_image::<RgbFormat>().unwrap();
-                let (w, h) = (decoded.width(), decoded.height());
-                let buffer = decoded.into_vec();
+    fn capture_frame(&self, width: u32, height: u32) -> Vec<u8> {
+        let (native_w, native_h) = webcam::get_resolution();
+        let frame = webcam::get_frame();
 
-                // Resize if needed
-                if w == width && h == height {
-                    buffer
-                } else {
-                    Self::resize_rgb(&buffer, w, h, width, height)
-                }
-            }
-            Err(_) => vec![0; (width * height * 3) as usize],
+        if native_w == width && native_h == height {
+            frame
+        } else {
+            Self::resize_rgb(&frame, native_w, native_h, width, height)
         }
     }
 
@@ -50,13 +34,10 @@ impl CameraApp {
     }
 
     fn to_rgba(pixels: Vec<u8>) -> Vec<u8> {
-        // Convert RGB to RGBA (adding alpha)
+        // Convert RGB -> RGBA (adding full alpha channel)
         let mut rgba = Vec::with_capacity(pixels.len() / 3 * 4);
         for chunk in pixels.chunks(3) {
-            rgba.push(chunk[0]);
-            rgba.push(chunk[1]);
-            rgba.push(chunk[2]);
-            rgba.push(0xFF);
+            rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 0xFF]);
         }
         rgba
     }
@@ -64,7 +45,8 @@ impl CameraApp {
 
 impl Application for CameraApp {
     fn setup(&mut self, _width: u32, _height: u32) -> Result<(), String> {
-        self.cam.open_stream().map_err(|e| e.to_string())?;
+        webcam::init_camera();
+
         Ok(())
     }
 

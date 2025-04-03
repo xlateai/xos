@@ -3670,6 +3670,7 @@ dependencies = [
  "image",
  "js-sys",
  "nokhwa",
+ "once_cell",
  "pixels",
  "rand",
  "tiny_http",
