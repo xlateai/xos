@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 #[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,13 +21,27 @@ pub trait Application {
     fn on_mouse_down(&mut self, x: f32, y: f32);
 }
 
-//
-// --- Native Backend
-//
+/// Shared function to validate frame buffer size
+fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]) {
+    let expected = (width * height * 4) as usize;
+    let actual = buffer.len();
+    if expected != actual {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::error_1(&format!(
+            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+            expected, width, height, actual
+        ).into());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!(
+            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+            expected, width, height, actual
+        );
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     let event_loop = EventLoop::new();
@@ -48,6 +64,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             Event::RedrawRequested(_) => {
                 let frame = pixels.frame_mut();
                 let buffer = app.tick(size.width, size.height);
+                validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
                 pixels.render().unwrap();
             }
@@ -77,13 +94,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     });
 }
 
-//
-// --- WebAssembly Backend
-//
-
 #[cfg(target_arch = "wasm32")]
 pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
-    use std::cell::RefCell;
     use std::rc::Rc;
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
@@ -135,6 +147,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             let width = canvas_clone.width();
             let height = canvas_clone.height();
             let pixels = app_clone.borrow_mut().tick(width, height);
+
+            validate_frame_dimensions("wasm tick", width, height, &pixels);
 
             let data = wasm_bindgen::Clamped(&pixels[..]);
             let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)

@@ -100,19 +100,29 @@ pub fn get_frame() -> Vec<u8> {
     CANVAS_CONTEXT.with(|ctx| {
         VIDEO_ELEMENT.with(|video_opt| {
             if let (Some(context), Some(video)) = (&*ctx.borrow(), &*video_opt.borrow()) {
-                // Draw current video frame to canvas
-                context.draw_image_with_html_video_element(video, 0.0, 0.0).unwrap();
+                let canvas = context.canvas().expect("Context has no canvas");
 
-                // Get the pixel data from the canvas
+                // Ensure canvas dimensions match the actual video dimensions
+                if canvas.width() != width || canvas.height() != height {
+                    canvas.set_width(width);
+                    canvas.set_height(height);
+                }
+
+                // Draw the current video frame to the (correctly sized) canvas
+                context
+                    .draw_image_with_html_video_element(video, 0.0, 0.0)
+                    .expect("Failed to draw video to canvas");
+
+                // Read pixel data
                 let image_data: ImageData = context
                     .get_image_data(0.0, 0.0, width as f64, height as f64)
                     .expect("Failed to get image data");
 
-                let data = image_data.data();
-                data.to_vec() // Converts Uint8ClampedArray into Vec<u8>
+                image_data.data().to_vec()
             } else {
                 vec![]
             }
         })
     })
 }
+
