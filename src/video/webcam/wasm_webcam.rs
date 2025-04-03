@@ -12,7 +12,7 @@ pub fn init_camera() {
     let navigator: Navigator = window.navigator();
     let media_devices: MediaDevices = navigator.media_devices().expect("no media devices");
 
-    let mut constraints = MediaStreamConstraints::new();
+    let constraints = MediaStreamConstraints::new();
     // constraints.video(&JsValue::TRUE);
     constraints.set_video(&JsValue::TRUE);
 
@@ -64,7 +64,6 @@ pub fn get_frame() -> Vec<u8> {
                 let height = video.video_height();
 
                 if width == 0 || height == 0 {
-                    // Video hasn't started streaming yet
                     return;
                 }
 
@@ -82,7 +81,13 @@ pub fn get_frame() -> Vec<u8> {
                     .unwrap()
                     .data();
 
-                pixel_data = image_data.to_vec(); // RGBA format
+                // Convert RGBA to RGB
+                let raw = image_data.to_vec();
+                pixel_data = raw
+                    .chunks(4)
+                    .flat_map(|chunk| chunk.iter().take(3)) // keep only R, G, B
+                    .cloned()
+                    .collect();
             }
         });
     });
