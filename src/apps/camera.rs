@@ -1,11 +1,17 @@
 use crate::engine::Application;
 use crate::video::webcam;
 
-pub struct CameraApp;
+pub struct CameraApp {
+    last_width: u32,
+    last_height: u32,
+}
 
 impl CameraApp {
     pub fn new() -> Self {
-        Self
+        Self {
+            last_width: 0,
+            last_height: 0,
+        }
     }
 
     fn capture_frame(&self, width: u32, height: u32) -> Vec<u8> {
@@ -122,12 +128,20 @@ impl CameraApp {
 }
 
 impl Application for CameraApp {
-    fn setup(&mut self, _width: u32, _height: u32) -> Result<(), String> {
+    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
+        self.last_width = width;
+        self.last_height = height;
         webcam::init_camera();
         Ok(())
     }
 
     fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
+        // Update stored dimensions if they've changed
+        if width != self.last_width || height != self.last_height {
+            self.last_width = width;
+            self.last_height = height;
+        }
+        
         let rgb = self.capture_frame(width, height);
         Self::to_rgba(rgb)
     }
