@@ -6,8 +6,8 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const BALL_COLOR: (u8, u8, u8) = (200, 200, 200);
 // Reduced ball radius
 const BALL_RADIUS: f32 = 15.0;
-// Increased ball speed multiplier
-const SPEED_MULTIPLIER: f32 = 3.0;
+// Increased ball speed multiplier (3.0 * 1.15 = 3.45)
+const SPEED_MULTIPLIER: f32 = 3.45;
 
 // The application that handles the balls
 pub struct BallGame {
@@ -132,21 +132,35 @@ impl BallState {
         self.x += self.vx;
         self.y += self.vy;
 
-        // Handle collision with walls
-        if self.x - self.radius < 0.0 {
-            self.x = self.radius; // Prevent getting stuck in wall
-            self.vx = self.vx.abs(); // Ensure velocity is positive
-        } else if self.x + self.radius > width {
-            self.x = width - self.radius; // Prevent getting stuck in wall
-            self.vx = -self.vx.abs(); // Ensure velocity is negative
-        }
-        
-        if self.y - self.radius < 0.0 {
-            self.y = self.radius; // Prevent getting stuck in wall
-            self.vy = self.vy.abs(); // Ensure velocity is positive
-        } else if self.y + self.radius > height {
-            self.y = height - self.radius; // Prevent getting stuck in wall
-            self.vy = -self.vy.abs(); // Ensure velocity is negative
+        // Check if ball is completely off screen (rather than just touching the edge)
+        let is_off_screen = 
+            self.x + self.radius < 0.0 || 
+            self.x - self.radius > width || 
+            self.y + self.radius < 0.0 || 
+            self.y - self.radius > height;
+
+        if is_off_screen {
+            // Respawn at center with the same heading
+            self.x = width / 2.0;
+            self.y = height / 2.0;
+            // Keep the same direction by preserving velocity signs and magnitude
+        } else {
+            // Normal bounce logic for when ball is just touching the edge
+            if self.x - self.radius < 0.0 {
+                self.x = self.radius;
+                self.vx = self.vx.abs();
+            } else if self.x + self.radius > width {
+                self.x = width - self.radius;
+                self.vx = -self.vx.abs();
+            }
+            
+            if self.y - self.radius < 0.0 {
+                self.y = self.radius;
+                self.vy = self.vy.abs();
+            } else if self.y + self.radius > height {
+                self.y = height - self.radius;
+                self.vy = -self.vy.abs();
+            }
         }
     }
 }
