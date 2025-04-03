@@ -4,13 +4,15 @@ use std::{fs, thread};
 use std::time::Duration;
 use tiny_http::{Server, Response};
 use webbrowser;
-use xos::engine;
+use clap::CommandFactory;
 
-/// CLI structure
+//
+// --- CLI
+//
+
 #[derive(Parser)]
 #[command(name = "xos")]
-#[command(about = "Experimental OS Windows Manager", long_about = None)]
-#[command(version)]
+#[command(about = "Experimental OS Window Manager", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -18,19 +20,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "Development mode (native by default)")]
+    /// Alias for `xos ball`
     Dev {
-        /// Force web mode
         #[arg(long)]
         web: bool,
 
-        /// Force React Native mode
         #[arg(long = "react-native")]
         react_native: bool,
+    },
 
-        /// Game name (default = ball)
-        #[arg(short, long, default_value = "ball")]
-        game: String,
+    /// Launch the Ball game
+    Ball {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
+
+    /// Launch the Blank app
+    Blank {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
     },
 }
 
@@ -38,38 +52,57 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Dev { web, react_native, game }) => {
-            if web {
-                println!("🌐 Launching in web mode...");
-                build_wasm(&game);
-                launch_browser();
-                start_web_server();
-            } else if react_native {
-                println!("📱 Launching in React Native mode...");
-                build_wasm(&game);
-                thread::spawn(start_web_server);
-                launch_expo();
-            } else {
-                println!("🖥️  Launching in native mode...");
-                engine::start_engine().unwrap();
-            }
+        Some(Commands::Dev { web, react_native }) => {
+            run_game("ball", web, react_native);
         }
+
+        Some(Commands::Ball { web, react_native }) => {
+            run_game("ball", web, react_native);
+        }
+
+        Some(Commands::Blank { web, react_native }) => {
+            run_game("blank", web, react_native);
+        }
+
         None => {
-            eprintln!("❗ Use `xos dev [--web|--react-native]`");
+            eprintln!("❗ No command provided.\n");
+            Cli::command().print_help().unwrap();
         }
     }
 }
 
-/// Compile WASM for selected game
+//
+// --- Game Launcher
+//
+
+fn run_game(game: &str, web: bool, react_native: bool) {
+    if web {
+        println!("🌐 Launching '{game}' in web mode...");
+        build_wasm(game);
+        launch_browser();
+        start_web_server();
+    } else if react_native {
+        println!("📱 Launching '{game}' in React Native mode...");
+        build_wasm(game);
+        thread::spawn(start_web_server);
+        launch_expo();
+    } else {
+        println!("🖥️  Launching '{game}' in native mode...");
+        xos::start(game).unwrap();
+    }
+}
+
+//
+// --- Tooling
+//
+
 fn build_wasm(game: &str) {
     let mut command = Command::new("wasm-pack");
-    command.env("GAME_SELECTION", game)
+    command
+        .env("GAME_SELECTION", game)
         .args(["build", "--target", "web", "--out-dir", "static/pkg"]);
 
-    let status = command
-        .status()
-        .expect("Failed to run wasm-pack. Make sure it's installed.");
-
+    let status = command.status().expect("Failed to run wasm-pack");
     if !status.success() {
         panic!("WASM build failed");
     }
@@ -77,7 +110,6 @@ fn build_wasm(game: &str) {
     println!("✅ WASM built to static/pkg/ with game: {}", game);
 }
 
-/// Launch browser to local dev server
 fn launch_browser() {
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(500));
@@ -85,7 +117,6 @@ fn launch_browser() {
     });
 }
 
-/// Determine MIME type from file extension
 fn mime_type(path: &str) -> &'static str {
     if path.ends_with(".html") {
         "text/html"
@@ -100,11 +131,9 @@ fn mime_type(path: &str) -> &'static str {
     }
 }
 
-/// Serve static files for the web version
 fn start_web_server() {
-    let port = 8080;
-    let server = Server::http(format!("0.0.0.0:{}", port)).unwrap();
-    println!("🚀 Serving at http://localhost:{}", port);
+    let server = Server::http("0.0.0.0:8080").unwrap();
+    println!("🚀 Serving at http://localhost:8080");
 
     for request in server.incoming_requests() {
         let url = request.url();
@@ -129,16 +158,12 @@ fn start_web_server() {
     }
 }
 
-/// Launch Expo for React Native integration
 fn launch_expo() {
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
     cmd.current_dir("src/native-bridge");
 
-    let status = cmd
-        .status()
-        .expect("Failed to launch Expo. Is it installed?");
-
+    let status = cmd.status().expect("Failed to launch Expo. Is it installed?");
     if !status.success() {
         panic!("Expo failed to launch.");
     }

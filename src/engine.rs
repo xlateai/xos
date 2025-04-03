@@ -1,5 +1,3 @@
-use crate::ball_game::BallGame;
-
 #[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,10 +12,7 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-//
-// --- Application Trait
-//
-
+/// Trait that all XOS apps must implement
 pub trait Application {
     fn setup(&mut self, width: u32, height: u32) -> Result<(), String>;
     fn tick(&mut self, width: u32, height: u32) -> Vec<u8>;
@@ -25,28 +20,11 @@ pub trait Application {
 }
 
 //
-// --- Entrypoint (platform-neutral)
-//
-
-pub fn start_engine() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let app = BallGame::new();
-        return start_native(app);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        return start_web().map_err(|e| format!("{:?}", e).into());
-    }
-}
-
-//
 // --- Native Backend
 //
 
 #[cfg(not(target_arch = "wasm32"))]
-fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -83,9 +61,11 @@ fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::
                     *cursor_position.borrow_mut() = (position.x as f32, position.y as f32);
                 }
 
-                WindowEvent::MouseInput { state, button: MouseButton::Left, .. }
-                    if state == ElementState::Pressed =>
-                {
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Left,
+                    ..
+                } if state == ElementState::Pressed => {
                     let (x, y) = *cursor_position.borrow();
                     app.on_mouse_down(x, y);
                 }
@@ -97,27 +77,19 @@ fn start_native(mut app: impl Application + 'static) -> Result<(), Box<dyn std::
     });
 }
 
-
 //
 // --- WebAssembly Backend
 //
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-pub fn start_web() -> Result<(), JsValue> {
-    let app = BallGame::new();
-    run_web(app)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn run_web(app: impl Application + 'static) -> Result<(), JsValue> {
+pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     use std::cell::RefCell;
     use std::rc::Rc;
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
     console_error_panic_hook::set_once();
 
-    let window = web_sys::window().expect("no global `window` exists");
+    let window = web_sys::window().expect("no global window exists");
     let document = window.document().expect("should have a document");
 
     let canvas: HtmlCanvasElement = document
