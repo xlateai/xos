@@ -68,15 +68,15 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
                 if current_size != size {
                     size = current_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    let _ = pixels.resize_buffer(size.width, size.height);
                 }
 
                 let frame = pixels.frame_mut();
                 let buffer = app.tick(size.width, size.height);
                 validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
-                pixels.render();
+                let _ = pixels.render();
             }
 
             Event::MainEventsCleared => {
@@ -88,15 +88,15 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
                 WindowEvent::Resized(new_size) => {
                     size = new_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    let _ = pixels.resize_buffer(size.width, size.height);
                     window.request_redraw();
                 },
 
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     size = *new_inner_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    let _ = pixels.resize_buffer(size.width, size.height);
                     window.request_redraw();
                 },
 
@@ -129,8 +129,6 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             _ => {}
         }
     });
-
-    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
