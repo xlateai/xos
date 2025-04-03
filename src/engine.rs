@@ -7,6 +7,7 @@ use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
+    dpi::PhysicalSize,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -49,10 +50,14 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
         .with_title("XOS Game")
         .build(&event_loop)?;
 
-    let size = window.inner_size();
+    // Get initial size
+    let mut size = window.inner_size();
+    
+    // Create surface texture with initial size
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
+    // Initial setup with starting dimensions
     app.setup(size.width, size.height)?;
 
     let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
@@ -62,17 +67,46 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
         match event {
             Event::RedrawRequested(_) => {
+                // Get current size in case it has changed
+                let current_size = window.inner_size();
+                
+                // Check if size has changed and update pixels if needed
+                if current_size != size {
+                    size = current_size;
+                    pixels.resize_surface(size.width, size.height);
+                    pixels.resize_buffer(size.width, size.height);
+                }
+                
+                // Always use current size for tick
                 let frame = pixels.frame_mut();
                 let buffer = app.tick(size.width, size.height);
                 validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
                 pixels.render().unwrap();
             }
+            
             Event::MainEventsCleared => {
                 window.request_redraw();
             }
+            
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                
+                // Handle window resize events
+                WindowEvent::Resized(new_size) => {
+                    size = new_size;
+                    pixels.resize_surface(size.width, size.height);
+                    pixels.resize_buffer(size.width, size.height);
+                    window.request_redraw();
+                },
+                
+                // Handle high DPI factor changes (particularly important for macOS)
+                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    size = *new_inner_size;
+                    pixels.resize_surface(size.width, size.height);
+                    pixels.resize_buffer(size.width, size.height);
+                    window.request_redraw();
+                },
 
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_position.borrow_mut() = (position.x as f32, position.y as f32);
@@ -123,6 +157,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
 
     let app = Rc::new(RefCell::new(app));
     app.borrow_mut().setup(width, height).map_err(|e| JsValue::from_str(&e))?;
+    
+    // Handle resize events for web
+    {
+        let canvas_clone = canvas.clone();
+        let resize_callback = Closure::wrap(Box::new(move || {
+            let window = web_sys::window().expect("no global window exists");
+            let width = window.inner_width().unwrap().as_f64().unwrap() as u32;
+            let height = window.inner_height().unwrap().as_f64().unwrap() as u32;
+            canvas_clone.set_width(width);
+            canvas_clone.set_height(height);
+        }) as Box<dyn FnMut()>);
+        window.add_event_listener_with_callback("resize", resize_callback.as_ref().unchecked_ref())?;
+        resize_callback.forget();
+    }
 
     {
         let app_clone = app.clone();
@@ -144,6 +192,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let g = f.clone();
 
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+            // Get current canvas dimensions each frame
             let width = canvas_clone.width();
             let height = canvas_clone.height();
             let pixels = app_clone.borrow_mut().tick(width, height);
