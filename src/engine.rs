@@ -7,7 +7,6 @@ use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
-    dpi::PhysicalSize,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -73,8 +72,12 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 // Check if size has changed and update pixels if needed
                 if current_size != size {
                     size = current_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
                 }
                 
                 // Always use current size for tick
@@ -95,16 +98,24 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 // Handle window resize events
                 WindowEvent::Resized(new_size) => {
                     size = new_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
                     window.request_redraw();
                 },
                 
                 // Handle high DPI factor changes (particularly important for macOS)
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     size = *new_inner_size;
-                    pixels.resize_surface(size.width, size.height);
-                    pixels.resize_buffer(size.width, size.height);
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
                     window.request_redraw();
                 },
 
