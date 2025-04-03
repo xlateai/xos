@@ -1,8 +1,8 @@
-#[cfg(not(target_arch = "wasm32"))]
+// --- Optional Python Bindings ---
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "python")]
 use pyo3::{pyfunction, pymodule, wrap_pyfunction};
-
 
 use std::process::Command;
 use std::{fs, thread};
@@ -14,6 +14,7 @@ pub mod apps;
 pub mod engine;
 pub mod video;
 
+// --- Native startup ---
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(app) = apps::get_app(game) {
@@ -23,6 +24,7 @@ pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+// --- WASM startup ---
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -36,6 +38,7 @@ pub fn start() -> Result<(), JsValue> {
     engine::run_web(app)
 }
 
+// --- Tooling helpers ---
 fn build_wasm(game: &str) {
     let mut command = Command::new("wasm-pack");
     command
@@ -109,11 +112,8 @@ fn launch_expo() {
     }
 }
 
-
-
-#[cfg(not(target_arch = "wasm32"))]
-#[pyfunction]
-fn run_game(game: &str, web: bool, react_native: bool) {
+// --- Always-available logic ---
+pub fn run_game(game: &str, web: bool, react_native: bool) {
     if web {
         println!("🌐 Launching '{game}' in web mode...");
         build_wasm(game);
@@ -122,7 +122,7 @@ fn run_game(game: &str, web: bool, react_native: bool) {
     } else if react_native {
         println!("📱 Launching '{game}' in React Native mode...");
         build_wasm(game);
-        std::thread::spawn(start_web_server);
+        thread::spawn(start_web_server);
         launch_expo();
     } else {
         println!("🖥️  Launching '{game}' in native mode...");
@@ -130,9 +130,16 @@ fn run_game(game: &str, web: bool, react_native: bool) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// --- Python bindings only if feature is enabled ---
+#[cfg(feature = "python")]
+#[pyfunction]
+fn run_game_py(game: &str, web: bool, react_native: bool) {
+    run_game(game, web, react_native);
+}
+
+#[cfg(feature = "python")]
 #[pymodule]
 fn xos(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(run_game, m)?)?;
+    m.add_function(wrap_pyfunction!(run_game_py, m)?)?;
     Ok(())
 }

@@ -1,10 +1,6 @@
 use clap::{Parser, Subcommand};
-use std::process::Command;
-use std::{fs, thread};
-use std::time::Duration;
-use tiny_http::{Server, Response};
-use webbrowser;
 use clap::CommandFactory;
+use xos::run_game;
 
 //
 // --- CLI
@@ -107,8 +103,4 @@ fn main() {
         }
     }
 }
-
-//
-// --- Tooling
-//
 
