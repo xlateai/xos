@@ -37,8 +37,25 @@ enum Commands {
         react_native: bool,
     },
 
+    Whiteboard {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
+
     /// Launch the Ball game
     Ball {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
+
+    /// Launch the Tracers game
+    Tracers {
         #[arg(long)]
         web: bool,
 
@@ -68,8 +85,16 @@ fn main() {
             run_game("camera", web, react_native);
         }
 
+        Some(Commands::Whiteboard { web, react_native }) => {
+            run_game("whiteboard", web, react_native);
+        }
+
         Some(Commands::Ball { web, react_native }) => {
             run_game("ball", web, react_native);
+        }
+
+        Some(Commands::Tracers { web, react_native }) => {
+            run_game("tracers", web, react_native);
         }
 
         Some(Commands::Blank { web, react_native }) => {
