@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{
-    Document, HtmlCanvasElement, HtmlVideoElement, MediaDevices, MediaStream,
+    Document, HtmlVideoElement, MediaDevices, MediaStream,
     MediaStreamConstraints, Navigator, Window,
 };
 
@@ -27,8 +27,8 @@ pub fn init_camera() {
     video_element.set_muted(true);
     video_element.set_attribute("playsinline", "").unwrap(); // Required for iOS
 
-    let mut constraints = MediaStreamConstraints::new();
-    constraints.video(&JsValue::TRUE);
+    let constraints = MediaStreamConstraints::new();
+    constraints.set_video(&JsValue::TRUE); // ✅ updated method
 
     let video_clone = video_element.clone();
     let success_closure = Closure::wrap(Box::new(move |stream: JsValue| {
@@ -36,7 +36,7 @@ pub fn init_camera() {
         video_clone.set_src_object(Some(&media_stream));
     }) as Box<dyn FnMut(JsValue)>);
 
-    media_devices
+    let _ = media_devices // ✅ suppress unused Promise warning
         .get_user_media_with_constraints(&constraints)
         .unwrap()
         .then(&success_closure);
@@ -61,7 +61,6 @@ pub fn get_resolution() -> (u32, u32) {
 }
 
 pub fn get_frame() -> Vec<u8> {
-    use wasm_bindgen::Clamped;
     use web_sys::{ImageData, HtmlCanvasElement, CanvasRenderingContext2d};
 
     VIDEO_ELEMENT.with(|video_ref| {
@@ -107,5 +106,3 @@ pub fn get_frame() -> Vec<u8> {
         rgb
     })
 }
-
-
