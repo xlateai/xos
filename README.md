@@ -58,7 +58,8 @@ To run python you need to run these commands.
 
 ```
 pip install maturin
-maturin develop
+maturin develop --release
 ```
 
 Warning: Do `maturin develop` instead of `cargo install --path .`
+Additional warning: Running `maturin develop` without `--release` leads to incredibly slow speeds (for some reason). ChatGPT thinks it's because of debug mode in winit being too slow, so we'll have to look into that.
