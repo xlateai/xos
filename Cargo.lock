@@ -3675,6 +3675,7 @@ dependencies = [
  "rand",
  "tiny_http",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "webbrowser",
  "winapi",
