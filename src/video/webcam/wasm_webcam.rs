@@ -61,5 +61,51 @@ pub fn get_resolution() -> (u32, u32) {
 }
 
 pub fn get_frame() -> Vec<u8> {
-    panic!("get_frame not implemented yet — will require a canvas copy from video element")
+    use wasm_bindgen::Clamped;
+    use web_sys::{ImageData, HtmlCanvasElement, CanvasRenderingContext2d};
+
+    VIDEO_ELEMENT.with(|video_ref| {
+        let video = video_ref.borrow();
+        let video = video.as_ref().expect("Video not initialized");
+
+        let width = video.video_width();
+        let height = video.video_height();
+
+        // Early-out if the video hasn't loaded yet
+        if width == 0 || height == 0 {
+            return vec![0; (640 * 480 * 3) as usize]; // black placeholder frame
+        }
+
+        let document = web_sys::window().unwrap().document().unwrap();
+        let canvas = document
+            .create_element("canvas").unwrap()
+            .dyn_into::<HtmlCanvasElement>().unwrap();
+        canvas.set_width(width);
+        canvas.set_height(height);
+
+        let context = canvas
+            .get_context("2d").unwrap()
+            .unwrap()
+            .dyn_into::<CanvasRenderingContext2d>().unwrap();
+
+        context.draw_image_with_html_video_element(video, 0.0, 0.0).unwrap();
+
+        let image_data: ImageData = context
+            .get_image_data(0.0, 0.0, width.into(), height.into())
+            .expect("get_image_data failed");
+
+        let raw = image_data.data(); // This is a Clamped<Vec<u8>> in RGBA format
+
+        // Convert RGBA to RGB
+        let mut rgb = Vec::with_capacity((width * height * 3) as usize);
+        for chunk in raw.iter().collect::<Vec<_>>().chunks(4) {
+            rgb.push(*chunk[0]);
+            rgb.push(*chunk[1]);
+            rgb.push(*chunk[2]);
+        }
+
+        rgb
+    })
 }
+
+
