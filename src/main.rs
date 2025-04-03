@@ -54,6 +54,15 @@ enum Commands {
         react_native: bool,
     },
 
+    /// Launch the Tracers game
+    Tracers {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
+
     /// Launch the Blank app
     Blank {
         #[arg(long)]
@@ -82,6 +91,10 @@ fn main() {
 
         Some(Commands::Ball { web, react_native }) => {
             run_game("ball", web, react_native);
+        }
+
+        Some(Commands::Tracers { web, react_native }) => {
+            run_game("tracers", web, react_native);
         }
 
         Some(Commands::Blank { web, react_native }) => {
