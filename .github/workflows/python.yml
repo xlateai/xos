@@ -1,4 +1,4 @@
-name: python tests
+name: python
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   test-python:
-    name: python / pytest xos package
+    name: xos pytests
     runs-on: ubuntu-latest
 
     steps:
@@ -25,14 +25,24 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Set up virtualenv and install Python deps
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
           pip install maturin pytest
 
       - name: Build Python extension with maturin
-        run: maturin develop --release --features python
+        run: |
+          source .venv/bin/activate
+          maturin develop --release --features python
 
       - name: Run tests
-        run: pytest .
+        run: |
+          source .venv/bin/activate
+          pytest .
