@@ -9,7 +9,7 @@ jobs:
     name: publish
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed for git tagging
+      contents: write # needed for git tagging 
       packages: write
 
     steps:
