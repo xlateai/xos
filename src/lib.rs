@@ -139,7 +139,17 @@ pub fn run_game(game: &str, web: bool, react_native: bool) {
     }
 }
 
-// --- Python wrappers ---
+
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[cfg(feature = "python")]
+#[pyfunction(name = "version")]
+fn version_py() -> &'static str {
+    version()
+}
+
 #[cfg(feature = "python")]
 #[pyfunction(name = "run_game")]
 fn run_game_py(game: &str, web: bool, react_native: bool) {
@@ -150,5 +160,6 @@ fn run_game_py(game: &str, web: bool, react_native: bool) {
 #[pymodule]
 fn xos(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_game_py, m)?)?;
+    m.add_function(wrap_pyfunction!(version_py, m)?)?;
     Ok(())
 }
