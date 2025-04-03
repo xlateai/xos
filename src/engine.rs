@@ -18,9 +18,9 @@ use wasm_bindgen::JsCast;
 pub trait Application {
     fn setup(&mut self, width: u32, height: u32) -> Result<(), String>;
     fn tick(&mut self, width: u32, height: u32) -> Vec<u8>;
-    fn on_mouse_down(&mut self, x: f32, y: f32) {}
-    fn on_mouse_up(&mut self, x: f32, y: f32) {}
-    fn on_mouse_move(&mut self, x: f32, y: f32) {}
+    fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
+    fn on_mouse_up(&mut self, _x: f32, _y: f32) {}
+    fn on_mouse_move(&mut self, _x: f32, _y: f32) {}
 }
 
 /// Shared function to validate frame buffer size
