@@ -1,7 +1,7 @@
 [package]
 name = "xos"
 version = "0.1.1"
-edition = "2025"
+edition = "2021"
 description = "Experimental OS Windows Manager"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
 license = "MIT"
@@ -17,6 +17,7 @@ cpal = "0.15.2"
 tiny_http = "0.12"
 webbrowser = "0.8"
 once_cell = "1.19"
+pyo3 = { version = "0.21", features = ["extension-module"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rand = "0.8"

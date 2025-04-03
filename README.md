@@ -52,3 +52,13 @@ TODO: make it so that xos automatically builds itself (for the standard/native v
 
 # Native Bridge
 Don't forget to use the `--tunnel` in `npx expo start --tunnel`, otherwise weird things occur (you'll just see a JSON payload).
+
+# Python (EXPERIMENTAL)
+To run python you need to run these commands.
+
+```
+pip install maturin
+maturin develop
+```
+
+Warning: Do `maturin develop` instead of `cargo install --path .`
