@@ -9,7 +9,7 @@ jobs:
     name: publish
     runs-on: ubuntu-latest
     permissions:
-      contents: write # needed for git tagging 
+      contents: write # for git tagging
       packages: write
 
     steps:
@@ -22,37 +22,31 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Get current version from Cargo.toml
+      - name: Get version from Cargo.toml
         id: get-version
         run: |
           version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
           echo "version=$version" >> $GITHUB_OUTPUT
 
-      - name: Check if tag already exists
-        id: check-tag
+      - name: Check if version exists on crates.io
+        id: version-check
         run: |
-          version="v${{ steps.get-version.outputs.version }}"
-          if git tag --list | grep -q "$version"; then
-            echo "Tag $version already exists. Skipping publish."
+          crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          version="${{ steps.get-version.outputs.version }}"
+          echo "Checking if $crate_name@$version exists on crates.io..."
+          
+          if cargo search "$crate_name" | grep -E "^$crate_name = \"$version\""; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Tag $version does not exist. Proceeding."
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish to crates.io
-        if: steps.check-tag.outputs.exists == 'false'
+        if: steps.version-check.outputs.exists == 'false'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish --no-verify
+        run: cargo publish --no-verify
 
-      - name: Tag commit with version
-        if: steps.check-tag.outputs.exists == 'false'
-        run: |
-          version="v${{ steps.get-version.outputs.version }}"
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git tag "$version"
-          git push origin "$version"
-
+      - name: Log skipped publish
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "Version already exists on crates.io. Skipping publish."
