@@ -18,9 +18,16 @@ use wasm_bindgen::JsCast;
 pub trait Application {
     fn setup(&mut self, width: u32, height: u32) -> Result<(), String>;
     fn tick(&mut self, width: u32, height: u32) -> Vec<u8>;
+
+    /// Events
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_up(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_move(&mut self, _x: f32, _y: f32) {}
+
+    /// Called by engine during tick for stable polling
+    fn mouse_position(&self) -> Option<(f32, f32)> {
+        None
+    }
 }
 
 /// Shared function to validate frame buffer size
@@ -43,7 +50,41 @@ fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+struct MouseTrackedApp {
+    app: Box<dyn Application>,
+    cursor: std::rc::Rc<RefCell<(f32, f32)>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Application for MouseTrackedApp {
+    fn setup(&mut self, w: u32, h: u32) -> Result<(), String> {
+        self.app.setup(w, h)
+    }
+
+    fn tick(&mut self, w: u32, h: u32) -> Vec<u8> {
+        self.app.tick(w, h)
+    }
+
+    fn on_mouse_down(&mut self, x: f32, y: f32) {
+        self.app.on_mouse_down(x, y);
+    }
+
+    fn on_mouse_up(&mut self, x: f32, y: f32) {
+        self.app.on_mouse_up(x, y);
+    }
+
+    fn on_mouse_move(&mut self, x: f32, y: f32) {
+        *self.cursor.borrow_mut() = (x, y);
+        self.app.on_mouse_move(x, y);
+    }
+
+    fn mouse_position(&self) -> Option<(f32, f32)> {
+        Some(*self.cursor.borrow())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
     use std::rc::Rc;
 
     let event_loop = EventLoop::new();
@@ -55,9 +96,13 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
-    app.setup(size.width, size.height)?;
-
     let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
+    let mut app = Box::new(MouseTrackedApp {
+        app,
+        cursor: cursor_position.clone(),
+    });
+
+    app.setup(size.width, size.height)?;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
