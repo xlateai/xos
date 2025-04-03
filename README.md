@@ -58,7 +58,13 @@ To run python you need to run these commands.
 
 ```
 pip install maturin
-maturin develop --release
+maturin develop --release --features python
+```
+
+If you see something about cffi when running maturin, you probably need to install it:
+
+```
+conda install cffi
 ```
 
 Warning: Do `maturin develop` instead of `cargo install --path .`

@@ -112,7 +112,7 @@ fn launch_expo() {
     }
 }
 
-// --- Always-available logic ---
+// --- Main logic ---
 pub fn run_game(game: &str, web: bool, react_native: bool) {
     if web {
         println!("🌐 Launching '{game}' in web mode...");
@@ -137,12 +137,11 @@ pub fn run_game(game: &str, web: bool, react_native: bool) {
             start().unwrap();
         }
     }
-
 }
 
-// --- Python bindings only if feature is enabled ---
+// --- Python wrappers ---
 #[cfg(feature = "python")]
-#[pyfunction]
+#[pyfunction(name = "run_game")]
 fn run_game_py(game: &str, web: bool, react_native: bool) {
     run_game(game, web, react_native);
 }
