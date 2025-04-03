@@ -63,6 +63,11 @@ pub fn get_frame() -> Vec<u8> {
                 let width = video.video_width();
                 let height = video.video_height();
 
+                if width == 0 || height == 0 {
+                    // Video hasn't started streaming yet
+                    return;
+                }
+
                 canvas.set_width(width);
                 canvas.set_height(height);
 
