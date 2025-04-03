@@ -1,7 +1,13 @@
 use crate::engine::Application;
 
-// Common background color
-const BACKGROUND_COLOR: (u8, u8, u8) = (64, 0, 64);
+// Common background color - now black
+const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
+// Light gray ball color
+const BALL_COLOR: (u8, u8, u8) = (200, 200, 200);
+// Reduced ball radius
+const BALL_RADIUS: f32 = 15.0;
+// Increased ball speed multiplier (3.0 * 1.15 = 3.45)
+const SPEED_MULTIPLIER: f32 = 3.45;
 
 // The application that handles the balls
 pub struct BallGame {
@@ -18,7 +24,7 @@ impl BallGame {
     fn draw_frame(&self, width: u32, height: u32) -> Vec<u8> {
         let mut pixels = vec![0u8; (width * height * 4) as usize];
 
-        // Fill background first
+        // Fill background first (black)
         for i in (0..pixels.len()).step_by(4) {
             pixels[i + 0] = BACKGROUND_COLOR.0;
             pixels[i + 1] = BACKGROUND_COLOR.1;
@@ -52,9 +58,10 @@ impl BallGame {
                 let i = ((y * width + x) * 4) as usize;
 
                 if distance_squared <= radius_squared {
-                    pixels[i + 0] = 0x00; // R
-                    pixels[i + 1] = 0xff; // G
-                    pixels[i + 2] = 0x00; // B
+                    // Light gray ball color
+                    pixels[i + 0] = BALL_COLOR.0; // R
+                    pixels[i + 1] = BALL_COLOR.1; // G
+                    pixels[i + 2] = BALL_COLOR.2; // B
                     pixels[i + 3] = 0xff; // A
                 }
             }
@@ -64,8 +71,8 @@ impl BallGame {
 
 impl Application for BallGame {
     fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
-        // Add initial ball at center
-        self.balls.push(BallState::new(width as f32, height as f32, 30.0));
+        // Add initial ball at center with half the radius
+        self.balls.push(BallState::new(width as f32, height as f32, BALL_RADIUS));
         Ok(())
     }
 
@@ -80,8 +87,8 @@ impl Application for BallGame {
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {
-        // Add a new ball where the user clicked
-        self.balls.push(BallState::new_at_position(x, y, 30.0));
+        // Add a new ball where the user clicked with half the radius
+        self.balls.push(BallState::new_at_position(x, y, BALL_RADIUS));
     }
 }
 
@@ -102,15 +109,15 @@ impl BallState {
         Self {
             x: width / 2.0,
             y: height / 2.0,
-            vx: 1.5,
-            vy: 1.0,
+            vx: 1.5 * SPEED_MULTIPLIER,
+            vy: 1.0 * SPEED_MULTIPLIER,
             radius,
         }
     }
 
     fn new_at_position(x: f32, y: f32, radius: f32) -> Self {
-        let vx = rand_float(-2.0, 2.0);
-        let vy = rand_float(-2.0, 2.0);
+        let vx = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
+        let vy = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
         
         Self {
             x,
@@ -125,11 +132,35 @@ impl BallState {
         self.x += self.vx;
         self.y += self.vy;
 
-        if self.x - self.radius < 0.0 || self.x + self.radius > width {
-            self.vx *= -1.0;
-        }
-        if self.y - self.radius < 0.0 || self.y + self.radius > height {
-            self.vy *= -1.0;
+        // Check if ball is completely off screen (rather than just touching the edge)
+        let is_off_screen = 
+            self.x + self.radius < 0.0 || 
+            self.x - self.radius > width || 
+            self.y + self.radius < 0.0 || 
+            self.y - self.radius > height;
+
+        if is_off_screen {
+            // Respawn at center with the same heading
+            self.x = width / 2.0;
+            self.y = height / 2.0;
+            // Keep the same direction by preserving velocity signs and magnitude
+        } else {
+            // Normal bounce logic for when ball is just touching the edge
+            if self.x - self.radius < 0.0 {
+                self.x = self.radius;
+                self.vx = self.vx.abs();
+            } else if self.x + self.radius > width {
+                self.x = width - self.radius;
+                self.vx = -self.vx.abs();
+            }
+            
+            if self.y - self.radius < 0.0 {
+                self.y = self.radius;
+                self.vy = self.vy.abs();
+            } else if self.y + self.radius > height {
+                self.y = height - self.radius;
+                self.vy = -self.vy.abs();
+            }
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 #[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,13 +21,27 @@ pub trait Application {
     fn on_mouse_down(&mut self, x: f32, y: f32);
 }
 
-//
-// --- Native Backend
-//
+/// Shared function to validate frame buffer size
+fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]) {
+    let expected = (width * height * 4) as usize;
+    let actual = buffer.len();
+    if expected != actual {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::error_1(&format!(
+            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+            expected, width, height, actual
+        ).into());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!(
+            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+            expected, width, height, actual
+        );
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     let event_loop = EventLoop::new();
@@ -33,10 +49,14 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
         .with_title("XOS Game")
         .build(&event_loop)?;
 
-    let size = window.inner_size();
+    // Get initial size
+    let mut size = window.inner_size();
+    
+    // Create surface texture with initial size
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
+    // Initial setup with starting dimensions
     app.setup(size.width, size.height)?;
 
     let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
@@ -46,16 +66,58 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
         match event {
             Event::RedrawRequested(_) => {
+                // Get current size in case it has changed
+                let current_size = window.inner_size();
+                
+                // Check if size has changed and update pixels if needed
+                if current_size != size {
+                    size = current_size;
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
+                }
+                
+                // Always use current size for tick
                 let frame = pixels.frame_mut();
                 let buffer = app.tick(size.width, size.height);
+                validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
                 pixels.render().unwrap();
             }
+            
             Event::MainEventsCleared => {
                 window.request_redraw();
             }
+            
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                
+                // Handle window resize events
+                WindowEvent::Resized(new_size) => {
+                    size = new_size;
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
+                    window.request_redraw();
+                },
+                
+                // Handle high DPI factor changes (particularly important for macOS)
+                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                    size = *new_inner_size;
+                    if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                        eprintln!("Failed to resize surface: {}", e);
+                    }
+                    if let Err(e) = pixels.resize_buffer(size.width, size.height) {
+                        eprintln!("Failed to resize buffer: {}", e);
+                    }
+                    window.request_redraw();
+                },
 
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_position.borrow_mut() = (position.x as f32, position.y as f32);
@@ -77,13 +139,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     });
 }
 
-//
-// --- WebAssembly Backend
-//
-
 #[cfg(target_arch = "wasm32")]
 pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
-    use std::cell::RefCell;
     use std::rc::Rc;
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
@@ -111,6 +168,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
 
     let app = Rc::new(RefCell::new(app));
     app.borrow_mut().setup(width, height).map_err(|e| JsValue::from_str(&e))?;
+    
+    // Handle resize events for web
+    {
+        let canvas_clone = canvas.clone();
+        let resize_callback = Closure::wrap(Box::new(move || {
+            let window = web_sys::window().expect("no global window exists");
+            let width = window.inner_width().unwrap().as_f64().unwrap() as u32;
+            let height = window.inner_height().unwrap().as_f64().unwrap() as u32;
+            canvas_clone.set_width(width);
+            canvas_clone.set_height(height);
+        }) as Box<dyn FnMut()>);
+        window.add_event_listener_with_callback("resize", resize_callback.as_ref().unchecked_ref())?;
+        resize_callback.forget();
+    }
 
     {
         let app_clone = app.clone();
@@ -132,9 +203,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let g = f.clone();
 
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+            // Get current canvas dimensions each frame
             let width = canvas_clone.width();
             let height = canvas_clone.height();
             let pixels = app_clone.borrow_mut().tick(width, height);
+
+            validate_frame_dimensions("wasm tick", width, height, &pixels);
 
             let data = wasm_bindgen::Clamped(&pixels[..]);
             let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)

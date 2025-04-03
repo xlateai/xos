@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod engine;
+pub mod video;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
