@@ -17,12 +17,12 @@ cpal = "0.15.2"
 tiny_http = "0.12"
 webbrowser = "0.8"
 once_cell = "1.19"
-pyo3 = { version = "0.21", features = ["extension-module"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rand = "0.8"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 image = { version = "0.25", features = ["default-formats"] }
+pyo3 = { version = "0.21", features = ["extension-module"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

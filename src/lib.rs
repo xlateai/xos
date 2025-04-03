@@ -1,7 +1,8 @@
+#[cfg(not(target_arch = "wasm32"))]
 use pyo3::prelude::*;
-use pyo3::pyfunction;
-use pyo3::pymodule;
-use pyo3::wrap_pyfunction;
+#[cfg(not(target_arch = "wasm32"))]
+use pyo3::{pyfunction, pymodule, wrap_pyfunction};
+
 
 use std::process::Command;
 use std::{fs, thread};
@@ -110,6 +111,7 @@ fn launch_expo() {
 
 
 
+#[cfg(not(target_arch = "wasm32"))]
 #[pyfunction]
 fn run_game(game: &str, web: bool, react_native: bool) {
     if web {
@@ -120,7 +122,7 @@ fn run_game(game: &str, web: bool, react_native: bool) {
     } else if react_native {
         println!("📱 Launching '{game}' in React Native mode...");
         build_wasm(game);
-        thread::spawn(start_web_server);
+        std::thread::spawn(start_web_server);
         launch_expo();
     } else {
         println!("🖥️  Launching '{game}' in native mode...");
@@ -128,8 +130,9 @@ fn run_game(game: &str, web: bool, react_native: bool) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[pymodule]
-fn xos(py: Python, m: &PyModule) -> PyResult<()> {
+fn xos(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_game, m)?)?;
     Ok(())
 }
