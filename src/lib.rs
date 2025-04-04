@@ -167,7 +167,7 @@ fn run_game_py(py_app: PyObject, web: bool, react_native: bool) {
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn xos(_py: Python, m: &PyModule) -> PyResult<()> {
+fn xospy(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<py_engine::ApplicationBase>()?;
     m.add_function(wrap_pyfunction!(run_game_py, m)?)?;
     m.add_function(wrap_pyfunction!(version_py, m)?)?;

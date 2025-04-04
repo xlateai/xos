@@ -63,5 +63,5 @@ pip install maturin
 Then, from the root of the repo, you can run:
 
 ```
-maturin build --release -m Cargo.toml
+maturin build --release
 ```
