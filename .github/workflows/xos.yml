@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify-versions:
-    name: Check Rust & Python versions match
+    name: Verify Versions Match
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
