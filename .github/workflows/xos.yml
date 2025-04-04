@@ -7,9 +7,21 @@ on:
     branches: [main]
 
 jobs:
+  verify-versions:
+    name: Check Rust & Python versions match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          RUST_VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          PYTHON_VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          echo "Rust: $RUST_VERSION, Python: $PYTHON_VERSION"
+          [ "$RUST_VERSION" = "$PYTHON_VERSION" ] || (echo "Version mismatch!" && exit 1)
+
   rust-native:
     name: Rust Native Build
     runs-on: ubuntu-latest
+    needs: verify-versions
     steps:
       - uses: actions/checkout@v3
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
@@ -23,6 +35,7 @@ jobs:
   rust-wasm:
     name: Rust WASM Build
     runs-on: ubuntu-latest
+    needs: verify-versions
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
@@ -60,22 +73,10 @@ jobs:
           source .venv/bin/activate
           pytest .
 
-  verify-versions:
-    name: Check Rust & Python versions match
-    runs-on: ubuntu-latest
-    needs: python-test
-    steps:
-      - uses: actions/checkout@v3
-      - run: |
-          RUST_VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
-          PYTHON_VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
-          echo "Rust: $RUST_VERSION, Python: $PYTHON_VERSION"
-          [ "$RUST_VERSION" = "$PYTHON_VERSION" ] || (echo "Version mismatch!" && exit 1)
-
   publish-rust:
     name: Publish Rust crate
     runs-on: ubuntu-latest
-    needs: verify-versions
+    needs: python-test
     if: github.ref == 'refs/heads/main'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -111,7 +112,7 @@ jobs:
   publish-python:
     name: Publish Python package
     runs-on: ubuntu-latest
-    needs: verify-versions
+    needs: python-test
     if: github.ref == 'refs/heads/main'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -150,7 +151,8 @@ jobs:
     name: Tag v{version} if published
     runs-on: ubuntu-latest
     needs: [publish-rust, publish-python]
-    if: needs.publish-rust.outputs.published == 'true' || needs.publish-python.outputs.published == 'true'
+    if: github.ref == 'refs/heads/main' && 
+        (needs.publish-rust.outputs.published == 'true' || needs.publish-python.outputs.published == 'true')
     permissions:
       contents: write
     steps:
