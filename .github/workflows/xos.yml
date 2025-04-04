@@ -39,6 +39,15 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt
+      - name: Cache Rust build
+        uses: actions/cache@v3
+        with:
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-native-${{ hashFiles('Cargo.lock', 'src/**') }}
+          restore-keys: rust-native-
       - run: cargo build --release
 
   rust-wasm:
@@ -54,6 +63,15 @@ jobs:
           components: rustfmt
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo install wasm-pack
+      - name: Cache Rust WASM build
+        uses: actions/cache@v3
+        with:
+          path: |
+            target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-wasm-${{ hashFiles('Cargo.lock', 'src/**') }}
+          restore-keys: rust-wasm-
       - run: wasm-pack build --target web --out-dir static/pkg
 
   python-test:
@@ -70,6 +88,12 @@ jobs:
           toolchain: stable
           override: true
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Cache Python virtualenv
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: python-venv-${{ hashFiles('pyproject.toml', 'Cargo.lock', 'src/**') }}
+          restore-keys: python-venv-
       - run: |
           python -m venv .venv
           source .venv/bin/activate
