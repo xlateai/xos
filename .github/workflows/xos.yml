@@ -19,7 +19,7 @@ jobs:
           [ "$RUST_VERSION" = "$PYTHON_VERSION" ] || (echo "Version mismatch!" && exit 1)
 
   rust-native:
-    name: Rust Native Build
+    name: Build Native (Rust)
     runs-on: ubuntu-latest
     needs: verify-versions
     steps:
@@ -33,7 +33,7 @@ jobs:
       - run: cargo build --release
 
   rust-wasm:
-    name: Rust WASM Build
+    name: Build WASM (Rust)
     runs-on: ubuntu-latest
     needs: verify-versions
     steps:
@@ -48,7 +48,7 @@ jobs:
       - run: wasm-pack build --target web --out-dir static/pkg
 
   python-test:
-    name: Python Build & Test
+    name: Build/Test Python
     runs-on: ubuntu-latest
     needs: [rust-native, rust-wasm]
     steps:
@@ -74,7 +74,7 @@ jobs:
           pytest .
 
   publish-rust:
-    name: Publish Rust crate
+    name: Publish Rust Crate
     runs-on: ubuntu-latest
     needs: python-test
     if: github.ref == 'refs/heads/main'
@@ -110,7 +110,7 @@ jobs:
         if: steps.version-check.outputs.exists != 'true'
 
   publish-python:
-    name: Publish Python package
+    name: Publish Python Package
     runs-on: ubuntu-latest
     needs: python-test
     if: github.ref == 'refs/heads/main'
@@ -148,7 +148,7 @@ jobs:
         if: steps.version-check.outputs.exists != 'true'
 
   tag-release:
-    name: Tag v{version} if published
+    name: Tag Commit w/ Version
     runs-on: ubuntu-latest
     needs: [publish-rust, publish-python]
     if: github.ref == 'refs/heads/main' && 
