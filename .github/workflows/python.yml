@@ -95,7 +95,7 @@ jobs:
         env:
           MATURIN_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          maturin publish --release -m pyproject.toml -u __token__ -p $MATURIN_PASSWORD
+          maturin publish -u __token__ -p $MATURIN_PASSWORD
 
       - name: Log skipped publish
         if: steps.version-check.outputs.exists == 'true'
