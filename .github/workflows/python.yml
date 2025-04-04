@@ -92,10 +92,8 @@ jobs:
       - name: Publish with maturin
         if: steps.version-check.outputs.exists != 'true'
         working-directory: ./python
-        env:
-          MATURIN_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          maturin publish -u __token__ -p $MATURIN_PASSWORD
+          maturin publish -u __token__ -p "${{ secrets.PYPI_API_TOKEN }}"
 
       - name: Log skipped publish
         if: steps.version-check.outputs.exists == 'true'
