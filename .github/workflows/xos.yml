@@ -7,12 +7,21 @@ on:
     branches: [main]
 
 jobs:
-  verify-versions:
+    verify-versions:
     name: Check Rust & Python versions match
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - run: |
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install toml module
+        run: pip install toml
+
+      - name: Compare versions
+        run: |
           RUST_VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
           PYTHON_VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
           echo "Rust: $RUST_VERSION, Python: $PYTHON_VERSION"
