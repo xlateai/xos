@@ -73,13 +73,13 @@ jobs:
       - name: Get version from pyproject.toml
         id: get-version
         run: |
-          version=$(python -c "import toml; print(toml.load('python/pyproject.toml')['project']['version'])")
+          version=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
           echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Check if version exists on PyPI
         id: version-check
         run: |
-          package_name=$(python -c "import toml; print(toml.load('python/pyproject.toml')['project']['name'])")
+          package_name=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['name'])")
           version="${{ steps.get-version.outputs.version }}"
           echo "Checking if $package_name==$version exists on PyPI..."
 
