@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "xospy"
-version = "0.1.1"
+version = "0.0.2"
 description = "Control the XOS operating system from Python."
 authors = [
   { name = "Dyllan McCreary", email = "dyllan@xlate.ai" }

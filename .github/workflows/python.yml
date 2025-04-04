@@ -35,7 +35,7 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install --upgrade pip
-          pip install maturin pytest
+          pip install maturin pytest toml
 
       - name: Build Python extension with maturin
         run: |
@@ -46,3 +46,57 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest .
+
+  publish-python:
+    name: Publish to PyPI
+    needs: test-python
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust (for maturin)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install dependencies
+        run: pip install maturin toml jq
+
+      - name: Get version from pyproject.toml
+        id: get-version
+        run: |
+          version=$(python -c "import toml; print(toml.load('python/pyproject.toml')['project']['version'])")
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Check if version exists on PyPI
+        id: version-check
+        run: |
+          package_name=$(python -c "import toml; print(toml.load('python/pyproject.toml')['project']['name'])")
+          version="${{ steps.get-version.outputs.version }}"
+          echo "Checking if $package_name==$version exists on PyPI..."
+
+          if curl -sSf "https://pypi.org/pypi/${package_name}/json" | jq -e ".releases[\"$version\"]" > /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish with maturin
+        if: steps.version-check.outputs.exists != 'true'
+        working-directory: ./python
+        env:
+          MATURIN_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          maturin publish --release -m pyproject.toml -u __token__ -p $MATURIN_PASSWORD
+
+      - name: Log skipped publish
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "Version already exists on PyPI. Skipping publish."
