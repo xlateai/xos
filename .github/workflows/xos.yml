@@ -76,6 +76,7 @@ jobs:
     name: Publish Rust crate
     runs-on: ubuntu-latest
     needs: verify-versions
+    if: github.ref == 'refs/heads/main'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
     steps:
@@ -111,6 +112,7 @@ jobs:
     name: Publish Python package
     runs-on: ubuntu-latest
     needs: verify-versions
+    if: github.ref == 'refs/heads/main'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
     steps:
