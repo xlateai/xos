@@ -1,0 +1,161 @@
+name: xos pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-native:
+    name: Rust Native Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt
+      - run: cargo build --release
+
+  rust-wasm:
+    name: Rust WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo install wasm-pack
+      - run: wasm-pack build --target web --out-dir static/pkg
+
+  python-test:
+    name: Python Build & Test
+    runs-on: ubuntu-latest
+    needs: [rust-native, rust-wasm]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install maturin pytest toml
+      - run: |
+          source .venv/bin/activate
+          maturin develop --release --features python
+      - run: |
+          source .venv/bin/activate
+          pytest .
+
+  verify-versions:
+    name: Check Rust & Python versions match
+    runs-on: ubuntu-latest
+    needs: python-test
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          RUST_VERSION=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          PYTHON_VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          echo "Rust: $RUST_VERSION, Python: $PYTHON_VERSION"
+          [ "$RUST_VERSION" = "$PYTHON_VERSION" ] || (echo "Version mismatch!" && exit 1)
+
+  publish-rust:
+    name: Publish Rust crate
+    runs-on: ubuntu-latest
+    needs: verify-versions
+    outputs:
+      published: ${{ steps.set-output.outputs.published }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - id: get-version
+        run: |
+          version=$(grep '^version =' Cargo.toml | cut -d '"' -f2)
+          echo "version=$version" >> $GITHUB_OUTPUT
+      - id: version-check
+        run: |
+          crate_name=$(grep '^name =' Cargo.toml | cut -d '"' -f2)
+          version="${{ steps.get-version.outputs.version }}"
+          echo "Checking if $crate_name@$version exists..."
+          if cargo search "$crate_name" | grep -E "^$crate_name = \"$version\""; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Publish
+        if: steps.version-check.outputs.exists != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --no-verify
+      - id: set-output
+        run: echo "published=true" >> $GITHUB_OUTPUT
+        if: steps.version-check.outputs.exists != 'true'
+
+  publish-python:
+    name: Publish Python package
+    runs-on: ubuntu-latest
+    needs: verify-versions
+    outputs:
+      published: ${{ steps.set-output.outputs.published }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - run: pip install maturin toml jq
+      - id: get-version
+        run: |
+          version=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          echo "version=$version" >> $GITHUB_OUTPUT
+      - id: version-check
+        run: |
+          name=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['name'])")
+          version="${{ steps.get-version.outputs.version }}"
+          if curl -sSf "https://pypi.org/pypi/${name}/json" | jq -e ".releases[\"$version\"]" > /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Publish
+        if: steps.version-check.outputs.exists != 'true'
+        run: |
+          maturin publish -u __token__ -p "${{ secrets.PYPI_API_TOKEN }}"
+      - id: set-output
+        run: echo "published=true" >> $GITHUB_OUTPUT
+        if: steps.version-check.outputs.exists != 'true'
+
+  tag-release:
+    name: Tag v{version} if published
+    runs-on: ubuntu-latest
+    needs: [publish-rust, publish-python]
+    if: needs.publish-rust.outputs.published == 'true' || needs.publish-python.outputs.published == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - run: |
+          version=$(grep '^version =' Cargo.toml | cut -d '"' -f2)
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag "v$version"
+          git push origin "v$version"

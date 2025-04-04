@@ -91,7 +91,7 @@ jobs:
 
       - name: Publish with maturin
         if: steps.version-check.outputs.exists != 'true'
-        working-directory: ./python
+        working-directory: ./
         run: |
           maturin publish -u __token__ -p "${{ secrets.PYPI_API_TOKEN }}"
 
