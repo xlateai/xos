@@ -1,5 +1,5 @@
-import xos
+import xospy
 
 
 def test_binding_works():
-    assert isinstance(xos.version(), str)
+    assert isinstance(xospy.version(), str)

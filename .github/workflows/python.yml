@@ -8,7 +8,7 @@ on:
 
 jobs:
   test-python:
-    name: xos pytests
+    name: xos test / publish (if version updated)
     runs-on: ubuntu-latest
 
     steps:
