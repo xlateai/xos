@@ -1,7 +1,7 @@
 import xospy
 
 # run a rust compiled game with the game name here
-xospy.run_game("ball", web=False, react_native=False)
+xospy.run_game("tracers", web=False, react_native=False)
 
 # class PyApp(xospy.ApplicationBase):
 #     def setup(self, width: int, height: int):
