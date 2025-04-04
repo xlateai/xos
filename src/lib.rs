@@ -14,6 +14,7 @@ pub mod apps;
 pub mod engine;
 pub mod video;
 
+#[cfg(feature = "python")]
 mod py_engine;
 
 // --- Native startup ---
