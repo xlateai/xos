@@ -1,13 +1,13 @@
 import xospy
 
 # run a rust compiled game with the game name here
-# xos.run_game("ball", web=False, react_native=False)
+xospy.run_game("ball", web=False, react_native=False)
 
-class PyApp(xospy.ApplicationBase):
-    def setup(self, width: int, height: int):
-        pass
+# class PyApp(xospy.ApplicationBase):
+#     def setup(self, width: int, height: int):
+#         pass
 
-    def tick(self, width: int, height: int):
-        return [0, 100, 100, 255] * (width * height)  # RGBA black pixels
+#     def tick(self, width: int, height: int):
+#         return [0, 100, 100, 255] * (width * height)  # RGBA black pixels
 
-xospy.run_game(PyApp(), web=False, react_native=False)
+# xospy.run_game(PyApp(), web=False, react_native=False)

@@ -63,5 +63,7 @@ pip install maturin
 Then, from the root of the repo, you can run:
 
 ```
-maturin build --release
+maturin develop --release
 ```
+
+Note: `--release` is really important for performance, even if you're just developing.
