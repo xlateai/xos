@@ -154,10 +154,15 @@ fn version_py() -> &'static str {
 }
 
 #[cfg(feature = "python")]
-#[pyfunction(name="run_game")]
-fn run_game_py(py_app: PyObject, web: bool, react_native: bool) {
+#[pyfunction(name = "run_game")]
+fn run_native_game(game: String, web: bool, react_native: bool) {
+    crate::run_game(&game, web, react_native);
+}
+
+#[cfg(feature = "python")]
+#[pyfunction(name = "run_py_game")]
+fn run_py_game(py_app: PyObject, web: bool, react_native: bool) {
     if web || react_native {
-        // Optionally add support later
         unimplemented!("Python apps currently only supported in native mode.");
     } else {
         let app = Box::new(py_engine::PyApplicationWrapper::new(py_app));
@@ -169,7 +174,9 @@ fn run_game_py(py_app: PyObject, web: bool, react_native: bool) {
 #[pymodule]
 fn xospy(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<py_engine::ApplicationBase>()?;
-    m.add_function(wrap_pyfunction!(run_game_py, m)?)?;
+    m.add_function(wrap_pyfunction!(run_native_game, m)?)?;
+    m.add_function(wrap_pyfunction!(run_py_game, m)?)?;
     m.add_function(wrap_pyfunction!(version_py, m)?)?;
     Ok(())
 }
+

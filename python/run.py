@@ -10,4 +10,4 @@ xospy.run_game("ball", web=False, react_native=False)
 #     def tick(self, width: int, height: int):
 #         return [0, 100, 100, 255] * (width * height)  # RGBA black pixels
 
-# xospy.run_game(PyApp(), web=False, react_native=False)
+# xospy.run_py_game(PyApp(), web=False, react_native=False)
