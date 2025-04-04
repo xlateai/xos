@@ -14,6 +14,8 @@ pub mod apps;
 pub mod engine;
 pub mod video;
 
+mod py_engine;
+
 // --- Native startup ---
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -151,14 +153,21 @@ fn version_py() -> &'static str {
 }
 
 #[cfg(feature = "python")]
-#[pyfunction(name = "run_game")]
-fn run_game_py(game: &str, web: bool, react_native: bool) {
-    run_game(game, web, react_native);
+#[pyfunction(name="run_game")]
+fn run_game_py(py_app: PyObject, web: bool, react_native: bool) {
+    if web || react_native {
+        // Optionally add support later
+        unimplemented!("Python apps currently only supported in native mode.");
+    } else {
+        let app = Box::new(py_engine::PyApplicationWrapper::new(py_app));
+        crate::engine::start_native(app).unwrap();
+    }
 }
 
 #[cfg(feature = "python")]
 #[pymodule]
 fn xos(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<py_engine::ApplicationBase>()?;
     m.add_function(wrap_pyfunction!(run_game_py, m)?)?;
     m.add_function(wrap_pyfunction!(version_py, m)?)?;
     Ok(())
