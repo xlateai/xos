@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-    verify-versions:
+  verify-versions:
     name: Check Rust & Python versions match
     runs-on: ubuntu-latest
     steps:
