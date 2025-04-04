@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.0"]
+build-backend = "maturin"
+
+[project]
+name = "xospy"
+version = "0.1.1"
+description = "Control the XOS operating system from Python."
+authors = [
+  { name = "Dyllan McCreary", email = "dyllan@xlate.ai" }
+]
+license = "MIT"
+readme = "../README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: OS Independent"
+]
+dependencies = ["cffi"]
+
+[tool.maturin]
+bindings = "pyo3"
+features = ["python"]  # enables the `[features] python = [...]` in Cargo.toml
+module-name = "xospy"  # what `import xospy` will load

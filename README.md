@@ -54,18 +54,14 @@ TODO: make it so that xos automatically builds itself (for the standard/native v
 Don't forget to use the `--tunnel` in `npx expo start --tunnel`, otherwise weird things occur (you'll just see a JSON payload).
 
 # Python (EXPERIMENTAL)
-To run python you need to run these commands.
+First, you'll need to have python installed on your machine, also preferably inside of a venv (I prefer conda).
 
 ```
 pip install maturin
-maturin develop --release --features python
 ```
 
-If you see something about cffi when running maturin, you probably need to install it:
+Then, from the root of the repo, you can run:
 
 ```
-conda install cffi
+maturin build --release -m Cargo.toml
 ```
-
-Warning: Do `maturin develop` instead of `cargo install --path .`
-Additional warning: Running `maturin develop` without `--release` leads to incredibly slow speeds (for some reason). ChatGPT thinks it's because of debug mode in winit being too slow, so we'll have to look into that.

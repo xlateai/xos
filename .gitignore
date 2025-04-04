@@ -2,6 +2,10 @@
 /target/
 **/*.rs.bk
 
+*.pyc
+*.pyo
+*.pyd
+
 # Debug artifacts
 *.pdb
 
