@@ -29,41 +29,48 @@ impl Application for PyApplicationWrapper {
             let app = self.py_app.bind(py);
             let state_obj = PyEngineState::new(py, state);
             let _ = app.call_method1("tick", (state_obj,));
+            
+            // Print a debug message to show buffer is being accessed
+            println!("Tick completed, buffer address: {:p}", state.frame.buffer.as_ptr());
+            
             // Force garbage collection to ensure no stale references
             let _ = py.run_bound("import gc; gc.collect()", None, None);
         });
     }
 
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {
-        // Empty implementation
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        Python::with_gil(|py| {
+            let app = self.py_app.bind(py);
+            let state_obj = PyEngineState::new(py, state);
+            let _ = app.call_method1("on_mouse_down", (state_obj,));
+        });
     }
 
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        // Empty implementation
+    fn on_mouse_up(&mut self, state: &mut EngineState) {
+        Python::with_gil(|py| {
+            let app = self.py_app.bind(py);
+            let state_obj = PyEngineState::new(py, state);
+            let _ = app.call_method1("on_mouse_up", (state_obj,));
+        });
     }
 
-    fn on_mouse_move(&mut self, _state: &mut EngineState) {
-        // Empty implementation
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        Python::with_gil(|py| {
+            let app = self.py_app.bind(py);
+            let state_obj = PyEngineState::new(py, state);
+            let _ = app.call_method1("on_mouse_move", (state_obj,));
+        });
     }
 }
 
-// Add the unsendable marker to allow non-thread-safe raw pointers
 #[pyclass(unsendable)]
 pub struct PyFrameState {
     #[pyo3(get)]
     pub width: u32,
     #[pyo3(get)]
     pub height: u32,
-    // Store a reference to the buffer directly
-    buffer_ptr: *mut [u8],
-    buffer_len: usize,
-}
-
-// Make PyFrameState safe to use from Python
-unsafe impl pyo3::AsPyPointer for PyFrameState {
-    fn as_ptr(&self) -> *mut pyo3::ffi::PyObject {
-        self as *const _ as *mut _
-    }
+    // Store a direct pointer to the Vec<u8>
+    rust_buffer: *mut Vec<u8>,
 }
 
 #[pymethods]
@@ -71,17 +78,35 @@ impl PyFrameState {
     #[getter]
     fn buffer<'py>(&self, py: Python<'py>) -> PyResult<Py<PyByteArray>> {
         unsafe {
-            // Create a slice from our raw pointer
-            let slice = std::slice::from_raw_parts_mut(
-                self.buffer_ptr as *mut u8,
-                self.buffer_len
-            );
+            // Get direct access to the Vec<u8>
+            let buffer = &mut *self.rust_buffer;
             
-            // Create a PyByteArray directly referencing our buffer
-            // This achieves true zero-copy
-            let byte_array = PyByteArray::new_bound(py, slice);
+            // Create a Python bytearray with the memory
+            let byte_array = PyByteArray::new_bound(py, buffer.as_mut_slice());
+            
+            // Return the PyByteArray directly - Python will have direct access to modify it
             Ok(byte_array.unbind())
         }
+    }
+    
+    // Debug method that can be called from Python
+    fn debug_print(&self) -> PyResult<()> {
+        unsafe {
+            let buffer = &*self.rust_buffer;
+            println!("Buffer pointer: {:p}, len: {}", buffer.as_ptr(), buffer.len());
+            println!("First few bytes: {:?}", &buffer[..buffer.len().min(16)]);
+        }
+        Ok(())
+    }
+    
+    // Helper to fill the buffer with a specific value (useful for testing)
+    fn fill(&self, value: u8) -> PyResult<()> {
+        unsafe {
+            let buffer = &mut *self.rust_buffer;
+            buffer.fill(value);
+            println!("Buffer filled with {}", value);
+        }
+        Ok(())
     }
 }
 
@@ -95,7 +120,6 @@ pub struct PyMouseState {
     pub is_down: bool,
 }
 
-// Also mark this as unsendable since it contains the frame state
 #[pyclass(unsendable)]
 pub struct PyEngineState {
     #[pyo3(get)]
@@ -105,32 +129,25 @@ pub struct PyEngineState {
 }
 
 impl PyEngineState {
-    // Create a new PyEngineState that has direct access to the original state
     fn new(py: Python, state: &mut EngineState) -> Py<Self> {
-        // Get a pointer to the buffer
-        let buffer_ptr = state.frame.buffer.as_mut_slice() as *mut [u8];
-        let buffer_len = state.frame.buffer.len();
+        // Store a pointer to the actual Vec<u8>
+        let buffer_ptr = &mut state.frame.buffer as *mut Vec<u8>;
         
-        // Create the frame state with direct pointer to the buffer
         let frame_state = PyFrameState {
             width: state.frame.width,
             height: state.frame.height,
-            buffer_ptr,
-            buffer_len,
+            rust_buffer: buffer_ptr,
         };
         
-        // Create the mouse state
         let mouse_state = PyMouseState {
             x: state.mouse.x,
             y: state.mouse.y,
             is_down: state.mouse.is_down,
         };
         
-        // Create Python objects for each component
         let frame = Py::new(py, frame_state).unwrap();
         let mouse = Py::new(py, mouse_state).unwrap();
         
-        // Create the engine state
         Py::new(py, Self { 
             frame, 
             mouse,
@@ -148,11 +165,35 @@ impl ApplicationBase {
         ApplicationBase
     }
 
-    fn setup(&mut self, _state: &PyEngineState) -> PyResult<()> {
+    fn setup(&self, state: Bound<'_, PyEngineState>) -> PyResult<()> {
+        // Get buffer for debugging
+        Python::with_gil(|py| {
+            if let Ok(frame) = state.getattr("frame") {
+                let _ = frame.call_method0("debug_print");
+            }
+        });
         Ok(())
     }
     
-    fn tick(&mut self, _state: &PyEngineState) -> PyResult<()> {
+    fn tick(&self, state: Bound<'_, PyEngineState>) -> PyResult<()> {
+        // Default implementation just debug prints
+        Python::with_gil(|py| {
+            if let Ok(frame) = state.getattr("frame") {
+                let _ = frame.call_method0("debug_print");
+            }
+        });
+        Ok(())
+    }
+    
+    fn on_mouse_down(&self, _state: Bound<'_, PyEngineState>) -> PyResult<()> {
+        Ok(())
+    }
+    
+    fn on_mouse_up(&self, _state: Bound<'_, PyEngineState>) -> PyResult<()> {
+        Ok(())
+    }
+    
+    fn on_mouse_move(&self, _state: Bound<'_, PyEngineState>) -> PyResult<()> {
         Ok(())
     }
 }
