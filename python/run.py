@@ -2,6 +2,7 @@ import xospy
 import numpy as np
 import math
 import random
+import time
 
 class PyApp(xospy.ApplicationBase):
     def setup(self, state):
@@ -20,24 +21,34 @@ class PyApp(xospy.ApplicationBase):
                 'color': color
             })
 
-        self.center_x = state.frame.width // 2
-        self.center_y = state.frame.height // 2
+        self.last_time = time.time()
+        self.tick_count = 0
 
     def tick(self, state):
+        # --- TPS counter ---
+        self.tick_count += 1
+        now = time.time()
+        if now - self.last_time >= 1.0:
+            print(f"TPS: {self.tick_count}")
+            self.tick_count = 0
+            self.last_time = now
+
+        # --- Particle rendering ---
         width = state.frame.width
         height = state.frame.height
+        center_x = width // 2
+        center_y = height // 2
+
         mv = memoryview(state.frame.buffer)
         frame = np.frombuffer(mv, dtype=np.uint8).reshape((height, width, 4))
 
-        # Fade old pixels
         frame[:, :, :3] = (frame[:, :, :3] * 0.85).astype(np.uint8)
 
         for p in self.particles:
             p['angle'] += p['speed']
-            x = int(self.center_x + math.cos(p['angle']) * p['radius'])
-            y = int(self.center_y + math.sin(p['angle']) * p['radius'])
+            x = int(center_x + math.cos(p['angle']) * p['radius'])
+            y = int(center_y + math.sin(p['angle']) * p['radius'])
 
-            # Draw a small 3x3 pixel "blob" for visibility
             for dy in range(-1, 2):
                 for dx in range(-1, 2):
                     px = x + dx
