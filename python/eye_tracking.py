@@ -44,11 +44,10 @@ class Ball:
     def __init__(self, width, height):
         self.pos = np.array([width / 2, height / 2], dtype=float)
         self.angle = random.uniform(0, 2 * math.pi)
-        self.velocity = 100  # base velocity in pixels/sec
-        self.radius = 30
+        self.velocity = 180  # increased base velocity
+        self.radius = 30 * 0.85  # 15% smaller
         self.elapsed_time = 0.0
 
-        # Heading management
         self.target_angle = self._pick_new_angle()
         self.angle_lerp_speed = 0.5  # radians per second
 
@@ -58,8 +57,8 @@ class Ball:
     def update(self, dt, width, height):
         self.elapsed_time += dt
 
-        # Smooth velocity modulation (sinusoidal)
-        velocity_mod = 0.5 + 0.5 * math.sin(self.elapsed_time * 0.5)
+        # Velocity oscillates from 0.7x to 1.3x the base speed
+        velocity_mod = 1.0 + 0.3 * math.sin(self.elapsed_time * 0.5)
         current_speed = self.velocity * velocity_mod
 
         # Smoothly rotate toward target_angle
@@ -89,15 +88,13 @@ class Ball:
             self.pos[1] = height - self.radius
             self.angle = -self.angle
 
-        # Normalize angle
         self.angle %= 2 * math.pi
 
     def draw(self, frame):
-        # Draw a neon green ball
         y, x = np.ogrid[:frame.shape[0], :frame.shape[1]]
         dist = np.sqrt((x - self.pos[0])**2 + (y - self.pos[1])**2)
         mask = dist <= self.radius
-        frame[mask] = [0, 255, 0, 255]  # neon green with full alpha
+        frame[mask] = [0, 255, 0, 255]  # neon green
 
 
 class PyApp(xospy.ApplicationBase):
@@ -116,7 +113,7 @@ class PyApp(xospy.ApplicationBase):
         width, height = state.frame.width, state.frame.height
         mv = memoryview(state.frame.buffer)
         frame = np.frombuffer(mv, dtype=np.uint8).reshape((height, width, 4))
-        frame[:] = 0  # clear to black
+        frame[:] = 0  # black background
 
         self.ball.update(dt, width, height)
         self.ball.draw(frame)
