@@ -117,12 +117,25 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
     let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
+    let (x, y) = *cursor_position.borrow();
+    let initial_state = EngineState {
+        frame: FrameState {
+            width: size.width,
+            height: size.height,
+        },
+        mouse: MouseState {
+            x,
+            y,
+            is_down: false,
+        },
+    };
+
     let mut app = Box::new(MouseTrackedApp {
         app,
         cursor: cursor_position.clone(),
     });
 
-    app.setup(size.width, size.height)?;
+    app.setup(&initial_state)?;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
