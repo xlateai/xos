@@ -11,12 +11,15 @@ impl BlankApp {
 }
 
 impl Application for BlankApp {
-    fn setup(&mut self, _state: &EngineState) -> Result<(), String> {
+    fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         Ok(())
     }
 
-    fn tick(&mut self, state: &EngineState) {
-        let mut buffer = state.frame.buffer.borrow_mut();
+    fn tick(&mut self, state: &mut EngineState) {
+        // Change this line:
+        // From: let mut buffer = &state.frame.buffer;
+        // To: let buffer = &mut state.frame.buffer;
+        let buffer = &mut state.frame.buffer;
         let len = buffer.len();
 
         for i in (0..len).step_by(4) {
@@ -27,7 +30,15 @@ impl Application for BlankApp {
         }
     }
 
-    fn on_mouse_down(&mut self, _x: f32, _y: f32) {
+    fn on_mouse_down(&mut self, _state: &mut EngineState) {
+        // No interaction
+    }
+    
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        // No interaction
+    }
+    
+    fn on_mouse_move(&mut self, _state: &mut EngineState) {
         // No interaction
     }
 }
