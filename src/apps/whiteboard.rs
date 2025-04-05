@@ -1,6 +1,5 @@
 use crate::engine::{Application, EngineState};
 
-const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const DRAW_COLOR: (u8, u8, u8) = (255, 255, 255);
 const STROKE_WIDTH: f32 = 2.0;
 

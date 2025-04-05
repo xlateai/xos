@@ -11,7 +11,7 @@ impl BlankApp {
 }
 
 impl Application for BlankApp {
-    fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
+    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         Ok(())
     }
 

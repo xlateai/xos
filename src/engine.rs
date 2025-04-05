@@ -43,23 +43,23 @@ pub trait Application {
 }
 
 /// Shared function to validate frame buffer size
-fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]) {
-    let expected = (width * height * 4) as usize;
-    let actual = buffer.len();
-    if expected != actual {
-        #[cfg(target_arch = "wasm32")]
-        web_sys::console::error_1(&format!(
-            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
-            expected, width, height, actual
-        ).into());
+// fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]) {
+//     let expected = (width * height * 4) as usize;
+//     let actual = buffer.len();
+//     if expected != actual {
+//         #[cfg(target_arch = "wasm32")]
+//         web_sys::console::error_1(&format!(
+//             "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+//             expected, width, height, actual
+//         ).into());
 
-        #[cfg(not(target_arch = "wasm32"))]
-        eprintln!(
-            "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
-            expected, width, height, actual
-        );
-    }
-}
+//         #[cfg(not(target_arch = "wasm32"))]
+//         eprintln!(
+//             "[{label}] Frame size mismatch: expected {} ({}x{}x4), got {}",
+//             expected, width, height, actual
+//         );
+//     }
+// }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
@@ -332,12 +332,12 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.app.tick(&mut state.engine_state);
                 
                 // Render to canvas
-                validate_frame_dimensions(
-                    "wasm tick", 
-                    width, 
-                    height, 
-                    &state.engine_state.frame.buffer
-                );
+                // validate_frame_dimensions(
+                //     "wasm tick", 
+                //     width, 
+                //     height, 
+                //     &state.engine_state.frame.buffer
+                // );
                 
                 let data = wasm_bindgen::Clamped(&state.engine_state.frame.buffer[..]);
                 let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)

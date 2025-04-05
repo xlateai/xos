@@ -10,6 +10,7 @@ class PyApp(xospy.ApplicationBase):
         width = state.frame.width
         height = state.frame.height
 
+        print(self.counter)
         # Get the buffer as a memoryview (shared)
         mv = memoryview(state.frame.buffer)
 

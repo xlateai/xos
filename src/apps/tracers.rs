@@ -1,7 +1,6 @@
 use crate::engine::{Application, EngineState};
 use std::collections::VecDeque;
 
-const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const PARTICLE_COLOR: (u8, u8, u8) = (200, 200, 200);
 const PARTICLE_RADIUS: f32 = 4.0;
 const SPEED_MULTIPLIER: f32 = 3.45;
