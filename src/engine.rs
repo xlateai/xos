@@ -109,7 +109,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 }
             
                 // Clear the buffer
-                engine_state.frame.buffer.fill(0);
+                // engine_state.frame.buffer.fill(0);
                 
                 // Update the game state
                 app.tick(&mut engine_state);
@@ -193,6 +193,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     });
 }
 
+
+
 #[cfg(target_arch = "wasm32")]
 pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
@@ -255,9 +257,7 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.app.on_mouse_move(
-                    &mut state.engine_state,
-                );
+                state.app.on_mouse_move(&mut state.engine_state);
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", move_callback.as_ref().unchecked_ref())?;
@@ -273,9 +273,7 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
                 state.engine_state.mouse.is_down = true;
-                state.app.on_mouse_down(
-                    &mut state.engine_state,
-                );
+                state.app.on_mouse_down(&mut state.engine_state);
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", down_callback.as_ref().unchecked_ref())?;
@@ -291,30 +289,38 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
                 state.engine_state.mouse.is_down = false;
-                state.app.on_mouse_up(
-                    &mut state.engine_state,
-                );
+                state.app.on_mouse_up(&mut state.engine_state);
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", up_callback.as_ref().unchecked_ref())?;
         up_callback.forget();
     }
 
-    // Animation loop
+    // Animation loop - use a different approach without Rc/RefCell
     {
-        let state_ptr_clone = state_ptr;
-        let canvas_clone = canvas.clone();
-        let context_clone = context.clone();
-
-        let f = Rc::new(RefCell::new(None));
-        let g = f.clone();
-
-        *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-            let width = canvas_clone.width();
-            let height = canvas_clone.height();
-
+        // Store the callback in a static location
+        // Use *mut for direct pointer access instead of Rc/RefCell
+        struct AnimationState {
+            callback: Option<Closure<dyn FnMut()>>,
+            state_ptr: *mut WasmState,
+            canvas: HtmlCanvasElement,
+            context: CanvasRenderingContext2d,
+        }
+        
+        let anim_state_ptr = Box::into_raw(Box::new(AnimationState {
+            callback: None,
+            state_ptr,
+            canvas: canvas.clone(),
+            context: context.clone(),
+        }));
+        
+        // Create the animation frame callback
+        let callback = Closure::wrap(Box::new(move || {
             unsafe {
-                let state = &mut *state_ptr_clone;
+                let anim_state = &mut *anim_state_ptr;
+                let state = &mut *anim_state.state_ptr;
+                let width = anim_state.canvas.width();
+                let height = anim_state.canvas.height();
                 
                 // Update dimensions if canvas size changed
                 if state.engine_state.frame.width != width || state.engine_state.frame.height != height {
@@ -338,23 +344,31 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
                     .expect("Failed to create ImageData");
                     
-                context_clone
+                anim_state.context
                     .put_image_data(&image_data, 0.0, 0.0)
                     .expect("put_image_data failed");
+                
+                // Request next animation frame
+                web_sys::window()
+                    .unwrap()
+                    .request_animation_frame(anim_state.callback.as_ref().unwrap().as_ref().unchecked_ref())
+                    .expect("requestAnimationFrame failed");
             }
-
-            // Schedule next frame
+        }) as Box<dyn FnMut()>);
+        
+        // Store the callback in our state
+        unsafe {
+            (*anim_state_ptr).callback = Some(callback);
+            
+            // Start the animation loop
             web_sys::window()
                 .unwrap()
-                .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
-                .expect("requestAnimationFrame failed");
-        }) as Box<dyn FnMut()>));
-
-        // Start animation loop
-        web_sys::window()
-            .unwrap()
-            .request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref())
-            .expect("Initial requestAnimationFrame failed");
+                .request_animation_frame((*anim_state_ptr).callback.as_ref().unwrap().as_ref().unchecked_ref())
+                .expect("Initial requestAnimationFrame failed");
+        }
+        
+        // Intentionally leak the animation state - it will live for the lifetime of the application
+        // (this is typical for WASM web applications that don't have a clear shutdown path)
     }
 
     Ok(())
