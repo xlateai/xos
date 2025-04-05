@@ -8,19 +8,6 @@ impl BlankApp {
     pub fn new() -> Self {
         Self
     }
-
-    fn draw_blank_frame(&self, width: u32, height: u32) -> Vec<u8> {
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
-
-        for i in (0..pixels.len()).step_by(4) {
-            pixels[i + 0] = BACKGROUND_COLOR.0;
-            pixels[i + 1] = BACKGROUND_COLOR.1;
-            pixels[i + 2] = BACKGROUND_COLOR.2;
-            pixels[i + 3] = 0xff;
-        }
-
-        pixels
-    }
 }
 
 impl Application for BlankApp {
@@ -28,8 +15,16 @@ impl Application for BlankApp {
         Ok(())
     }
 
-    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
-        self.draw_blank_frame(state.frame.width, state.frame.height)
+    fn tick(&mut self, state: &EngineState) {
+        let mut buffer = state.frame.buffer.borrow_mut();
+        let len = buffer.len();
+
+        for i in (0..len).step_by(4) {
+            buffer[i + 0] = BACKGROUND_COLOR.0;
+            buffer[i + 1] = BACKGROUND_COLOR.1;
+            buffer[i + 2] = BACKGROUND_COLOR.2;
+            buffer[i + 3] = 0xff;
+        }
     }
 
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {

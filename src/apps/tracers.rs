@@ -1,6 +1,6 @@
-// A new version of the BallGame, renamed to TracersApp, simulates 256 particles with tracer tails
 use crate::engine::{Application, EngineState};
 use std::collections::VecDeque;
+use std::cell::RefCell;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const PARTICLE_COLOR: (u8, u8, u8) = (200, 200, 200);
@@ -10,6 +10,42 @@ const PARTICLE_COUNT: usize = 256;
 const TRAIL_DURATION_SECONDS: f32 = 2.0;
 const FRAME_RATE: f32 = 60.0;
 const TRAIL_LENGTH: usize = (TRAIL_DURATION_SECONDS * FRAME_RATE) as usize;
+
+
+fn draw_circle(
+    buffer: &RefCell<Vec<u8>>,
+    width: u32,
+    height: u32,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    alpha: u8,
+) {
+    let radius_squared = radius * radius;
+    let mut pixels = buffer.borrow_mut();
+
+    let start_x = (cx - radius).max(0.0) as u32;
+    let end_x = (cx + radius + 1.0).min(width as f32) as u32;
+    let start_y = (cy - radius).max(0.0) as u32;
+    let end_y = (cy + radius + 1.0).min(height as f32) as u32;
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            if dx * dx + dy * dy <= radius_squared {
+                let i = ((y * width + x) * 4) as usize;
+                if i + 3 < pixels.len() {
+                    pixels[i + 0] = PARTICLE_COLOR.0;
+                    pixels[i + 1] = PARTICLE_COLOR.1;
+                    pixels[i + 2] = PARTICLE_COLOR.2;
+                    pixels[i + 3] = alpha;
+                }
+            }
+        }
+    }
+}
+
 
 pub struct TracersApp {
     particles: Vec<Particle>,
@@ -21,65 +57,35 @@ impl TracersApp {
             particles: Vec::new(),
         }
     }
-
-    fn draw_frame(&self, width: u32, height: u32) -> Vec<u8> {
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
-
-        for i in (0..pixels.len()).step_by(4) {
-            pixels[i + 0] = BACKGROUND_COLOR.0;
-            pixels[i + 1] = BACKGROUND_COLOR.1;
-            pixels[i + 2] = BACKGROUND_COLOR.2;
-            pixels[i + 3] = 0xff;
-        }
-
-        for particle in &self.particles {
-            let trail = &particle.trail;
-            for (i, &(tx, ty)) in trail.iter().enumerate() {
-                let alpha = ((i + 1) as f32 / trail.len() as f32 * 255.0) as u8;
-                self.draw_circle(&mut pixels, width, height, tx, ty, PARTICLE_RADIUS, alpha);
-            }
-        }
-
-        pixels
-    }
-
-    fn draw_circle(&self, pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, radius: f32, alpha: u8) {
-        let radius_squared = radius * radius;
-
-        let start_x = (cx - radius).max(0.0) as u32;
-        let end_x = (cx + radius + 1.0).min(width as f32) as u32;
-        let start_y = (cy - radius).max(0.0) as u32;
-        let end_y = (cy + radius + 1.0).min(height as f32) as u32;
-
-        for y in start_y..end_y {
-            for x in start_x..end_x {
-                let dx = x as f32 - cx;
-                let dy = y as f32 - cy;
-                if dx * dx + dy * dy <= radius_squared {
-                    let i = ((y * width + x) * 4) as usize;
-                    pixels[i + 0] = PARTICLE_COLOR.0;
-                    pixels[i + 1] = PARTICLE_COLOR.1;
-                    pixels[i + 2] = PARTICLE_COLOR.2;
-                    pixels[i + 3] = alpha;
-                }
-            }
-        }
-    }
 }
 
 impl Application for TracersApp {
     fn setup(&mut self, state: &EngineState) -> Result<(), String> {
         for _ in 0..PARTICLE_COUNT {
-            self.particles.push(Particle::new(state.frame.width as f32, state.frame.height as f32));
+            self.particles.push(Particle::new(
+                state.frame.width as f32,
+                state.frame.height as f32,
+            ));
         }
         Ok(())
     }
 
-    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) {
+        let width = state.frame.width;
+        let height = state.frame.height;
+        let buffer = &state.frame.buffer;
+
+        // Clear the buffer to black
+        buffer.borrow_mut().fill(0);
+
         for particle in &mut self.particles {
-            particle.update(state.frame.width as f32, state.frame.height as f32);
+            particle.update(width as f32, height as f32);
+
+            for (i, &(x, y)) in particle.trail.iter().enumerate() {
+                let alpha = ((i + 1) as f32 / particle.trail.len() as f32 * 255.0) as u8;
+                draw_circle(buffer, width, height, x, y, PARTICLE_RADIUS, alpha);
+            }
         }
-        self.draw_frame(state.frame.width, state.frame.height)
     }
 
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
