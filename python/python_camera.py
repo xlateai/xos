@@ -19,35 +19,37 @@ class PyApp(xospy.ApplicationBase):
         width, height = state.frame.width, state.frame.height
         mv = memoryview(state.frame.buffer)
         frame = np.frombuffer(mv, dtype=np.uint8).reshape((height, width, 4))
-        frame[:] = 0  # fill with black initially
+        frame[:] = 0  # clear to black
 
-        # Get webcam frame as RGB and shape
+        # === Webcam frame ===
+        cam_w, _ = xospy.video.webcam.get_resolution()  # only trust width
         cam_bytes = xospy.video.webcam.get_frame()
-        cam_array = np.frombuffer(cam_bytes, dtype=np.uint8)
-        cam_array = cam_array.reshape((-1, 3))  # RGB
+        bytes_per_pixel = 3
+        total_pixels = len(cam_bytes) // bytes_per_pixel
+        cam_h = total_pixels // cam_w
+        print(f"Webcam: {cam_w}x{cam_h}, Bytes: {len(cam_bytes)}, Pixels: {total_pixels}")
 
-        # Infer webcam resolution (you can also get this from get_resolution())
-        cam_h = int((len(cam_array) / 3) ** 0.5)
-        cam_w = len(cam_array) // cam_h
-        cam_array = cam_array[:cam_h * cam_w].reshape((cam_h, cam_w, 3))
+        if cam_w * cam_h * bytes_per_pixel != len(cam_bytes):
+            print("[WARNING] Webcam resolution doesn't match buffer size. Skipping.")
+            return frame
 
-        # Resize webcam frame to fit inside main frame, maintaining aspect ratio
+        cam_array = np.frombuffer(cam_bytes, dtype=np.uint8).reshape((cam_h, cam_w, 3))
+
+        # === Resize ===
         scale = min(width / cam_w, height / cam_h)
         new_w = int(cam_w * scale)
         new_h = int(cam_h * scale)
+        print(f"Resized: {new_w}x{new_h} (scale {scale:.2f})")
 
-        # Downscale or upscale with nearest neighbor manually (no PIL)
         y_indices = (np.linspace(0, cam_h - 1, new_h)).astype(int)
         x_indices = (np.linspace(0, cam_w - 1, new_w)).astype(int)
-        resized_cam = cam_array[y_indices[:, None], x_indices]  # shape (new_h, new_w, 3)
+        resized_cam = cam_array[y_indices[:, None], x_indices]
 
-        # Compute offsets to center
-        y_off = (height - new_h) // 2
+        # === Paste into frame ===
         x_off = (width - new_w) // 2
-
-        # Paste resized camera image into the center of the frame
+        y_off = (height - new_h) // 2
         frame[y_off:y_off+new_h, x_off:x_off+new_w, :3] = resized_cam
-        frame[y_off:y_off+new_h, x_off:x_off+new_w, 3] = 255  # set alpha
+        frame[y_off:y_off+new_h, x_off:x_off+new_w, 3] = 255  # alpha
 
         return frame
 
