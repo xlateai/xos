@@ -26,7 +26,7 @@ def impose_frame(cam_frame: np.ndarray, frame: np.ndarray) -> np.ndarray:
     scale = min(frame.shape[1] / cam_frame.shape[1], frame.shape[0] / cam_frame.shape[0])
     new_w = int(cam_frame.shape[1] * scale)
     new_h = int(cam_frame.shape[0] * scale)
-    print(f"Resized: {new_w}x{new_h} (scale {scale:.2f})")
+    # print(f"Resized: {new_w}x{new_h} (scale {scale:.2f})")
 
     y_indices = (np.linspace(0, cam_frame.shape[0] - 1, new_h)).astype(int)
     x_indices = (np.linspace(0, cam_frame.shape[1] - 1, new_w)).astype(int)
@@ -38,6 +38,22 @@ def impose_frame(cam_frame: np.ndarray, frame: np.ndarray) -> np.ndarray:
     frame[y_off:y_off+new_h, x_off:x_off+new_w, 3] = 255  # alpha
 
     return frame
+
+
+def draw_cross(frame: np.ndarray, x: float, y: float, size: int = 10, color=(255, 0, 0, 255)):
+    """Draw a cross centered at (x, y) in the RGBA frame."""
+    height, width, _ = frame.shape
+    x, y = int(x), int(y)
+
+    for dx in range(-size, size + 1):
+        xi = x + dx
+        if 0 <= xi < width and 0 <= y < height:
+            frame[y, xi] = color
+
+    for dy in range(-size, size + 1):
+        yi = y + dy
+        if 0 <= x < width and 0 <= yi < height:
+            frame[yi, x] = color
 
 
 import torch
@@ -63,9 +79,9 @@ class EyeTracker(torch.nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        print(f"Conv output shape: {x.shape}")
+        # print(f"Conv output shape: {x.shape}")
         x = self.decoder(x)
-        print(f"Decoder output shape: {x.shape}")
+        # print(f"Decoder output shape: {x.shape}")
         return x
 
 
@@ -151,11 +167,17 @@ class PyApp(xospy.ApplicationBase):
         self.ball.draw(frame)
 
         cam_frame = get_webcam_frame()
-        print(cam_frame.shape)
         x = torch.from_numpy(cam_frame).permute(2, 0, 1).unsqueeze(0).float() / 255.0
         pred = model(x)
-        print(pred.shape)
-        # print(pred)
+        # Convert normalized [0,1] prediction to pixel coordinates
+        pred_x = math.floor(float(pred[0, 0].item()) * width)
+        pred_y = math.floor(float(pred[0, 1].item()) * height)
+
+        print(pred_x, pred_y)
+
+        # Draw red cross at prediction
+        draw_cross(frame, pred_x, pred_y)
+
 
         # if RENDER_VIDEO:
         #     frame = impose_frame(cam_frame, frame)
