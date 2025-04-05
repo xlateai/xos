@@ -40,6 +40,39 @@ def impose_frame(cam_frame: np.ndarray, frame: np.ndarray) -> np.ndarray:
     return frame
 
 
+import torch
+
+
+class EyeTracker(torch.nn.Module):
+    def __init__(self):
+        super(EyeTracker, self).__init__()
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(3, 8, kernel_size=16, stride=1, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(8, 16, kernel_size=16, stride=1, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(16, 8, kernel_size=16, stride=1, padding=1),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(8, 1, kernel_size=16, stride=1, padding=1),
+            torch.nn.ReLU(),
+        )
+
+        self.decoder = torch.nn.Sequential(
+            # adaptive avg pool to a fixed (2,) output variables
+            torch.nn.AdaptiveAvgPool2d((16,)),
+            torch.nn.Flatten(),
+            torch.nn.Linear(16, 2),
+            torch.nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        print(f"Conv output shape: {x.shape}")
+        x = self.decoder(x)
+        return x
+
+
+
 class Ball:
     def __init__(self, width, height):
         self.pos = np.array([width / 2, height / 2], dtype=float)
@@ -96,6 +129,9 @@ class Ball:
         frame[mask] = [0, 255, 0, 255]  # neon green
 
 
+model = EyeTracker()
+
+
 class PyApp(xospy.ApplicationBase):
     def setup(self, state):
         xospy.video.webcam.init_camera()
@@ -117,8 +153,12 @@ class PyApp(xospy.ApplicationBase):
         self.ball.update(dt, width, height)
         self.ball.draw(frame)
 
+
+        cam_frame = get_webcam_frame()
+        pred = model(torch.from_numpy(cam_frame).permute(2, 0, 1).unsqueeze(0).float() / 255.0)
+        print(pred)
+
         if RENDER_VIDEO:
-            cam_frame = get_webcam_frame()
             frame = impose_frame(cam_frame, frame)
 
         return frame
