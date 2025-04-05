@@ -3,6 +3,7 @@ import numpy as np
 import time
 import math
 import random
+from PIL import Image
 
 
 RENDER_VIDEO = False
@@ -19,6 +20,19 @@ def get_webcam_frame() -> np.ndarray:
         raise Exception("Webcam resolution doesn't match buffer size. Skipping.")
 
     cam_array = np.frombuffer(cam_bytes, dtype=np.uint8).reshape((cam_h, cam_w, 3))
+
+    # let's force downscale to 256 height (keep aspect ratio though)
+    scale = cam_h / 256
+    new_w = int(cam_w / scale)
+    new_h = 256
+
+    # lets do it using PIL
+    cam_array = np.array(Image.fromarray(cam_array).resize((new_w, new_h), Image.LANCZOS))
+
+    # convert to grayscale
+    cam_array = np.average(cam_array, axis=2).astype(np.uint8)
+    cam_array = np.expand_dims(cam_array, axis=2)
+
     return cam_array
 
 
@@ -62,24 +76,30 @@ import torch
 class EyeTracker(torch.nn.Module):
     def __init__(self):
         super(EyeTracker, self).__init__()
+
         self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 2, kernel_size=16, stride=11, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(2, 1, kernel_size=16, stride=11, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.AdaptiveAvgPool2d((3, 3)),
+            torch.nn.Conv2d(1, 1, kernel_size=16, stride=4),
+            torch.nn.Sigmoid(),
+            torch.nn.Conv2d(1, 1, kernel_size=7, stride=2),
+            torch.nn.Sigmoid(),
+            torch.nn.Conv2d(1, 1, kernel_size=3, stride=1),
+            torch.nn.Sigmoid(),
+            torch.nn.Conv2d(1, 1, kernel_size=3, stride=1),
+            torch.nn.Sigmoid(),
         )
 
         self.decoder = torch.nn.Sequential(
             # adaptive avg pool to a fixed (2,) output variables
+            torch.nn.AdaptiveAvgPool2d((3, 3)),
             torch.nn.Flatten(),
             torch.nn.Linear(9, 2),
             torch.nn.Sigmoid(),
         )
 
     def forward(self, x):
+        print(x.shape)
         x = self.conv(x)
-        # print(f"Conv output shape: {x.shape}")
+        print(f"Conv output shape: {x.shape}")
         x = self.decoder(x)
         # print(f"Decoder output shape: {x.shape}")
         return x
@@ -154,8 +174,8 @@ class PyApp(xospy.ApplicationBase):
 
         # --- ML setup ---
         self.model = model
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
-        self.loss_fn = torch.nn.L1Loss()  # MAE
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-1)
+        self.loss_fn = torch.nn.MSELoss()  # MAE
         self.step_count = 0
 
     def tick(self, state):
