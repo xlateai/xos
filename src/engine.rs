@@ -107,9 +107,6 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     engine_state.frame.height = size.height;
                     engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
                 }
-            
-                // Clear the buffer
-                // engine_state.frame.buffer.fill(0);
                 
                 // Update the game state
                 app.tick(&mut engine_state);

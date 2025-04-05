@@ -108,7 +108,8 @@ impl BallGame {
         cy: f32,
         radius: f32,
     ) {
-        let mut buffer = &mut state.frame.buffer;
+        let buffer = &mut state.frame.buffer;
+        
         let width = state.frame.width;
         let height = state.frame.height;
         let radius_squared = radius * radius;
@@ -144,6 +145,9 @@ impl Application for BallGame {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        // clear the screen
+        state.frame.buffer.fill(0);
+
         for ball in &mut self.balls {
             ball.update(state.frame.width as f32, state.frame.height as f32);
         }
