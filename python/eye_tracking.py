@@ -152,6 +152,12 @@ class PyApp(xospy.ApplicationBase):
         self.tick_count = 0
         self.ball = Ball(state.frame.width, state.frame.height)
 
+        # --- ML setup ---
+        self.model = model
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        self.loss_fn = torch.nn.L1Loss()  # MAE
+        self.step_count = 0
+
     def tick(self, state):
         self.tick_count += 1
         now = time.time()
@@ -166,21 +172,32 @@ class PyApp(xospy.ApplicationBase):
         self.ball.update(dt, width, height)
         self.ball.draw(frame)
 
+        # --- Get webcam input ---
         cam_frame = get_webcam_frame()
         x = torch.from_numpy(cam_frame).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-        pred = model(x)
-        # Convert normalized [0,1] prediction to pixel coordinates
-        pred_x = math.floor(float(pred[0, 0].item()) * width)
-        pred_y = math.floor(float(pred[0, 1].item()) * height)
 
-        print(pred_x, pred_y)
+        # --- Predict ---
+        pred = self.model(x)
 
-        # Draw red cross at prediction
+        # --- Ground truth target from ball position ---
+        target_x = torch.tensor([self.ball.pos[0] / width], dtype=torch.float32)
+        target_y = torch.tensor([self.ball.pos[1] / height], dtype=torch.float32)
+        target = torch.stack([target_x, target_y]).unsqueeze(0)  # shape (1, 2)
+
+        # --- Train step ---
+        loss = self.loss_fn(pred, target)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        self.step_count += 1
+        if self.step_count % 30 == 0:
+            print(f"[step {self.step_count}] loss: {loss.item():.6f}")
+
+        # --- Render cross at prediction ---
+        pred_x = float(pred[0, 0].item()) * width
+        pred_y = float(pred[0, 1].item()) * height
         draw_cross(frame, pred_x, pred_y)
-
-
-        # if RENDER_VIDEO:
-        #     frame = impose_frame(cam_frame, frame)
 
         return frame
 
