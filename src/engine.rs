@@ -14,21 +14,41 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
+
+#[derive(Debug, Clone)]
+pub struct EngineState {
+    pub frame: FrameState,
+    pub mouse: MouseState,
+}
+
+#[derive(Debug, Clone)]
+pub struct FrameState {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MouseState {
+    pub x: f32,
+    pub y: f32,
+    pub is_down: bool,
+}
+
+
 /// Trait that all XOS apps must implement
 pub trait Application {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), String>;
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8>;
+    fn setup(&mut self, state: &EngineState) -> Result<(), String>;
+    fn tick(&mut self, state: &EngineState) -> Vec<u8>;
 
-    /// Events
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_up(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_move(&mut self, _x: f32, _y: f32) {}
 
-    /// Called by engine during tick for stable polling
     fn mouse_position(&self) -> Option<(f32, f32)> {
         None
     }
 }
+
 
 /// Shared function to validate frame buffer size
 fn validate_frame_dimensions(label: &str, width: u32, height: u32, buffer: &[u8]) {
@@ -57,12 +77,12 @@ struct MouseTrackedApp {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Application for MouseTrackedApp {
-    fn setup(&mut self, w: u32, h: u32) -> Result<(), String> {
-        self.app.setup(w, h)
+    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
+        self.app.setup(state)
     }
-
-    fn tick(&mut self, w: u32, h: u32) -> Vec<u8> {
-        self.app.tick(w, h)
+    
+    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
+        self.app.tick(state)
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {
@@ -118,7 +138,22 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
                 }
 
                 let frame = pixels.frame_mut();
-                let buffer = app.tick(size.width, size.height);
+                let (x, y) = *cursor_position.borrow();
+                let mouse_state = MouseState {
+                    x,
+                    y,
+                    is_down: false, // TODO: wire this properly from mouse events
+                };
+
+                let engine_state = EngineState {
+                    frame: FrameState {
+                        width: size.width,
+                        height: size.height,
+                    },
+                    mouse: mouse_state,
+                };
+
+                let buffer = app.tick(&engine_state);
                 validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
                 let _ = pixels.render();
