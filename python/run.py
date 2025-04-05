@@ -6,6 +6,8 @@ class PyApp(xospy.ApplicationBase):
         self.counter = 0
 
     def tick(self, state):
+        print(state.frame.height, state.frame.width, state.mouse.x, state.mouse.y, state.mouse.is_down)
+
         self.counter += 1
         width = state.frame.width
         height = state.frame.height
