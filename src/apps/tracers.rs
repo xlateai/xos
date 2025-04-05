@@ -69,13 +69,8 @@ impl Application for TracersApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.buffer.fill(0);
-
         let width = state.frame.width;
         let height = state.frame.height;
-
-        // Clear the buffer to black
-        state.frame.buffer.fill(0);
 
         for particle in &mut self.particles {
             particle.update(width as f32, height as f32);

@@ -150,8 +150,6 @@ impl Application for CameraApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.buffer.fill(0);
-
         let width = state.frame.width;
         let height = state.frame.height;
 

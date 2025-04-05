@@ -116,8 +116,6 @@ impl Application for Whiteboard {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.buffer.fill(0);
-
         let width = state.frame.width;
         let height = state.frame.height;
 
@@ -128,8 +126,6 @@ impl Application for Whiteboard {
         }
 
         if self.is_cache_dirty {
-            // Redraw all stored strokes
-            state.frame.buffer.fill(0);
             for stroke in &self.strokes {
                 self.draw_smooth_stroke(&mut state.frame.buffer, width, height, stroke);
             }

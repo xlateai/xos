@@ -109,6 +109,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 }
                 
                 // Update the game state
+                engine_state.frame.buffer.fill(0);
                 app.tick(&mut engine_state);
             
                 // Ensure sizes match before copying
@@ -327,6 +328,7 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
                 }
                 
                 // Update game state
+                state.engine_state.frame.buffer.fill(0);
                 state.app.tick(&mut state.engine_state);
                 
                 // Render to canvas

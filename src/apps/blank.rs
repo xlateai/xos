@@ -16,8 +16,6 @@ impl Application for BlankApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.buffer.fill(0);
-
         // Change this line:
         // From: let mut buffer = &state.frame.buffer;
         // To: let buffer = &mut state.frame.buffer;

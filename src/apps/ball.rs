@@ -145,9 +145,6 @@ impl Application for BallGame {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        // clear the screen
-        state.frame.buffer.fill(0);
-
         for ball in &mut self.balls {
             ball.update(state.frame.width as f32, state.frame.height as f32);
         }
