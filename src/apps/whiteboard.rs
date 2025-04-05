@@ -1,4 +1,4 @@
-use crate::engine::Application;
+use crate::engine::{Application, EngineState};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const DRAW_COLOR: (u8, u8, u8) = (255, 255, 255);
@@ -142,12 +142,12 @@ impl Whiteboard {
 }
 
 impl Application for Whiteboard {
-    fn setup(&mut self, _width: u32, _height: u32) -> Result<(), String> {
+    fn setup(&mut self, _state: &EngineState) -> Result<(), String> {
         Ok(())
     }
 
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
-        self.draw_frame(width, height)
+    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
+        self.draw_frame(state.frame.width, state.frame.height)
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {

@@ -1,4 +1,4 @@
-use crate::engine::Application;
+use crate::engine::{Application, EngineState};
 
 // Common background color - now black
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -70,20 +70,20 @@ impl BallGame {
 }
 
 impl Application for BallGame {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
+    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
         // Add initial ball at center with half the radius
-        self.balls.push(BallState::new(width as f32, height as f32, BALL_RADIUS));
+        self.balls.push(BallState::new(state.frame.width as f32, state.frame.height as f32, BALL_RADIUS));
         Ok(())
     }
 
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
         // Update all balls
         for ball in &mut self.balls {
-            ball.update(width as f32, height as f32);
+            ball.update(state.frame.width as f32, state.frame.height as f32);
         }
 
         // Draw the frame
-        self.draw_frame(width, height)
+        self.draw_frame(state.frame.width, state.frame.height)
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {

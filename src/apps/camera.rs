@@ -1,4 +1,4 @@
-use crate::engine::Application;
+use crate::engine::{Application, EngineState};
 use crate::video::webcam;
 
 pub struct CameraApp {
@@ -128,14 +128,21 @@ impl CameraApp {
 }
 
 impl Application for CameraApp {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
+    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
+        let width = state.frame.width;
+        let height = state.frame.height;
+
         self.last_width = width;
         self.last_height = height;
+
         webcam::init_camera();
         Ok(())
     }
 
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
+        let width = state.frame.width;
+        let height = state.frame.height;
+
         // Update stored dimensions if they've changed
         if width != self.last_width || height != self.last_height {
             self.last_width = width;

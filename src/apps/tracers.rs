@@ -1,5 +1,5 @@
 // A new version of the BallGame, renamed to TracersApp, simulates 256 particles with tracer tails
-use crate::engine::Application;
+use crate::engine::{Application, EngineState};
 use std::collections::VecDeque;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -68,18 +68,18 @@ impl TracersApp {
 }
 
 impl Application for TracersApp {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
+    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
         for _ in 0..PARTICLE_COUNT {
-            self.particles.push(Particle::new(width as f32, height as f32));
+            self.particles.push(Particle::new(state.frame.width as f32, state.frame.height as f32));
         }
         Ok(())
     }
 
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
         for particle in &mut self.particles {
-            particle.update(width as f32, height as f32);
+            particle.update(state.frame.width as f32, state.frame.height as f32);
         }
-        self.draw_frame(width, height)
+        self.draw_frame(state.frame.width, state.frame.height)
     }
 
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
