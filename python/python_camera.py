@@ -60,8 +60,6 @@ class PyApp(xospy.ApplicationBase):
         frame[:] = 0  # clear to black
 
         cam_frame = get_webcam_frame()
-        cam_w, cam_h = cam_frame.shape[1], cam_frame.shape[0]
-
         frame = impose_frame(cam_frame, frame)
 
         return frame
