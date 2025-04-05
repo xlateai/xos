@@ -20,6 +20,26 @@ def get_webcam_frame() -> np.ndarray:
     return cam_array
 
 
+def impose_frame(cam_frame: np.ndarray, frame: np.ndarray) -> np.ndarray:
+    # === Resize ===
+    scale = min(frame.shape[1] / cam_frame.shape[1], frame.shape[0] / cam_frame.shape[0])
+    new_w = int(cam_frame.shape[1] * scale)
+    new_h = int(cam_frame.shape[0] * scale)
+    print(f"Resized: {new_w}x{new_h} (scale {scale:.2f})")
+
+    y_indices = (np.linspace(0, cam_frame.shape[0] - 1, new_h)).astype(int)
+    x_indices = (np.linspace(0, cam_frame.shape[1] - 1, new_w)).astype(int)
+    resized_cam = cam_frame[y_indices[:, None], x_indices]
+
+    # === Paste into frame ===
+    x_off = (frame.shape[1] - new_w) // 2
+    y_off = (frame.shape[0] - new_h) // 2
+    frame[y_off:y_off+new_h, x_off:x_off+new_w, :3] = resized_cam
+    frame[y_off:y_off+new_h, x_off:x_off+new_w, 3] = 255  # alpha
+
+    return frame
+
+
 class PyApp(xospy.ApplicationBase):
     def setup(self, state):
         xospy.video.webcam.init_camera()
@@ -42,21 +62,7 @@ class PyApp(xospy.ApplicationBase):
         cam_frame = get_webcam_frame()
         cam_w, cam_h = cam_frame.shape[1], cam_frame.shape[0]
 
-        # === Resize ===
-        scale = min(width / cam_w, height / cam_h)
-        new_w = int(cam_w * scale)
-        new_h = int(cam_h * scale)
-        print(f"Resized: {new_w}x{new_h} (scale {scale:.2f})")
-
-        y_indices = (np.linspace(0, cam_h - 1, new_h)).astype(int)
-        x_indices = (np.linspace(0, cam_w - 1, new_w)).astype(int)
-        resized_cam = cam_frame[y_indices[:, None], x_indices]
-
-        # === Paste into frame ===
-        x_off = (width - new_w) // 2
-        y_off = (height - new_h) // 2
-        frame[y_off:y_off+new_h, x_off:x_off+new_w, :3] = resized_cam
-        frame[y_off:y_off+new_h, x_off:x_off+new_w, 3] = 255  # alpha
+        frame = impose_frame(cam_frame, frame)
 
         return frame
 
