@@ -1,54 +1,50 @@
 import xospy
 import numpy as np
+import math
+import random
 
 class PyApp(xospy.ApplicationBase):
     def setup(self, state):
-        self.ball_y = 0.0
-        self.vy = 0.0
-        self.radius = 50
-        self.gravity = 2.0
+        self.num_particles = 256
+        self.particles = []
+
+        for _ in range(self.num_particles):
+            angle = random.uniform(0, 2 * math.pi)
+            radius = random.uniform(20, min(state.frame.width, state.frame.height) // 2 - 10)
+            speed = random.uniform(0.001, 0.01)
+            color = [random.randint(150, 255) for _ in range(3)] + [255]
+            self.particles.append({
+                'angle': angle,
+                'radius': radius,
+                'speed': speed,
+                'color': color
+            })
+
+        self.center_x = state.frame.width // 2
+        self.center_y = state.frame.height // 2
 
     def tick(self, state):
         width = state.frame.width
         height = state.frame.height
-
-        # Update velocity and position
-        self.vy += self.gravity
-        self.ball_y += self.vy
-
-        # Bounce off bottom
-        if self.ball_y >= height - self.radius:
-            self.ball_y = height - self.radius
-            self.vy *= -1
-
-        # Bounce off top
-        if self.ball_y <= self.radius:
-            self.ball_y = self.radius
-            self.vy *= -1
-
-        # Get and clear frame
         mv = memoryview(state.frame.buffer)
         frame = np.frombuffer(mv, dtype=np.uint8).reshape((height, width, 4))
-        frame[:, :, :] = 0  # black background
 
-        # Draw ball
-        cx = width // 2
-        cy = int(self.ball_y)
-        r = self.radius
+        # Fade old pixels
+        frame[:, :, :3] = (frame[:, :, :3] * 0.85).astype(np.uint8)
 
-        y0 = max(cy - r, 0)
-        y1 = min(cy + r, height)
-        x0 = max(cx - r, 0)
-        x1 = min(cx + r, width)
+        for p in self.particles:
+            p['angle'] += p['speed']
+            x = int(self.center_x + math.cos(p['angle']) * p['radius'])
+            y = int(self.center_y + math.sin(p['angle']) * p['radius'])
 
-        for y in range(y0, y1):
-            for x in range(x0, x1):
-                if (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2:
-                    frame[y, x, 0] = 255  # R
-                    frame[y, x, 1] = 0    # G
-                    frame[y, x, 2] = 0    # B
-                    frame[y, x, 3] = 255  # A
+            # Draw a small 3x3 pixel "blob" for visibility
+            for dy in range(-1, 2):
+                for dx in range(-1, 2):
+                    px = x + dx
+                    py = y + dy
+                    if 0 <= px < width and 0 <= py < height:
+                        frame[py, px] = p['color']
 
-        return frame  # yes, returning the damn frame
+        return frame
 
 xospy.run_py_game(PyApp(), web=False, react_native=False)
