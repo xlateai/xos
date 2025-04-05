@@ -39,7 +39,7 @@ pub struct MouseState {
 /// Trait that all XOS apps must implement
 pub trait Application {
     fn setup(&mut self, state: &EngineState) -> Result<(), String>;
-    fn tick(&mut self, state: &EngineState) -> Vec<u8>;
+    fn tick(&mut self, state: &EngineState);
 
     fn on_mouse_down(&mut self, _x: f32, _y: f32) {}
     fn on_mouse_up(&mut self, _x: f32, _y: f32) {}
@@ -82,7 +82,7 @@ impl Application for MouseTrackedApp {
         self.app.setup(state)
     }
     
-    fn tick(&mut self, state: &EngineState) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) {
         self.app.tick(state)
     }
 
