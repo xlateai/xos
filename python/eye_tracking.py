@@ -6,7 +6,7 @@ import random
 
 
 RENDER_VIDEO = False
-
+VELOCITY = 512
 
 def get_webcam_frame() -> np.ndarray:
     cam_w, _ = xospy.video.webcam.get_resolution()
@@ -44,7 +44,6 @@ class Ball:
     def __init__(self, width, height):
         self.pos = np.array([width / 2, height / 2], dtype=float)
         self.angle = random.uniform(0, 2 * math.pi)
-        self.velocity = 180  # increased base velocity
         self.radius = 30 * 0.85  # 15% smaller
         self.elapsed_time = 0.0
 
@@ -59,7 +58,7 @@ class Ball:
 
         # Velocity oscillates from 0.7x to 1.3x the base speed
         velocity_mod = 1.0 + 0.3 * math.sin(self.elapsed_time * 0.5)
-        current_speed = self.velocity * velocity_mod
+        current_speed = VELOCITY * velocity_mod
 
         # Smoothly rotate toward target_angle
         angle_diff = (self.target_angle - self.angle + math.pi) % (2 * math.pi) - math.pi
