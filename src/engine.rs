@@ -239,43 +239,64 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         .expect("Failed to get 2d context");
 
     let app = Rc::new(RefCell::new(app));
-    app.borrow_mut().setup(width, height).map_err(|e| JsValue::from_str(&e))?;
 
+    let engine_state = Rc::new(RefCell::new(EngineState {
+        frame: FrameState { width, height },
+        mouse: MouseState { x: 0.0, y: 0.0, is_down: false },
+    }));
+
+    app.borrow_mut()
+        .setup(&engine_state.borrow())
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    // Mouse move
     {
+        let state = engine_state.clone();
         let app_clone = app.clone();
         let move_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f32;
-            let y = event.offset_y() as f32;
-            app_clone.borrow_mut().on_mouse_move(x, y);
-        }) as Box<dyn FnMut(MouseEvent)>);
+            let mut s = state.borrow_mut();
+            s.mouse.x = event.offset_x() as f32;
+            s.mouse.y = event.offset_y() as f32;
+            app_clone.borrow_mut().on_mouse_move(s.mouse.x, s.mouse.y);
+        }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", move_callback.as_ref().unchecked_ref())?;
         move_callback.forget();
     }
 
+    // Mouse down
     {
+        let state = engine_state.clone();
         let app_clone = app.clone();
         let down_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f32;
-            let y = event.offset_y() as f32;
-            app_clone.borrow_mut().on_mouse_down(x, y);
-        }) as Box<dyn FnMut(MouseEvent)>);
+            let mut s = state.borrow_mut();
+            s.mouse.x = event.offset_x() as f32;
+            s.mouse.y = event.offset_y() as f32;
+            s.mouse.is_down = true;
+            app_clone.borrow_mut().on_mouse_down(s.mouse.x, s.mouse.y);
+        }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", down_callback.as_ref().unchecked_ref())?;
         down_callback.forget();
     }
 
+    // Mouse up
     {
+        let state = engine_state.clone();
         let app_clone = app.clone();
         let up_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let x = event.offset_x() as f32;
-            let y = event.offset_y() as f32;
-            app_clone.borrow_mut().on_mouse_up(x, y);
-        }) as Box<dyn FnMut(MouseEvent)>);
+            let mut s = state.borrow_mut();
+            s.mouse.x = event.offset_x() as f32;
+            s.mouse.y = event.offset_y() as f32;
+            s.mouse.is_down = false;
+            app_clone.borrow_mut().on_mouse_up(s.mouse.x, s.mouse.y);
+        }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", up_callback.as_ref().unchecked_ref())?;
         up_callback.forget();
     }
 
+    // Animation loop
     {
         let app_clone = app.clone();
+        let state = engine_state.clone();
         let canvas_clone = canvas.clone();
         let context_clone = context.clone();
 
@@ -285,14 +306,23 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
             let width = canvas_clone.width();
             let height = canvas_clone.height();
-            let pixels = app_clone.borrow_mut().tick(width, height);
+
+            {
+                let mut s = state.borrow_mut();
+                s.frame.width = width;
+                s.frame.height = height;
+            }
+
+            let pixels = app_clone.borrow_mut().tick(&state.borrow());
 
             validate_frame_dimensions("wasm tick", width, height, &pixels);
 
             let data = wasm_bindgen::Clamped(&pixels[..]);
             let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
                 .expect("Failed to create ImageData");
-            context_clone.put_image_data(&image_data, 0.0, 0.0).expect("put_image_data failed");
+            context_clone
+                .put_image_data(&image_data, 0.0, 0.0)
+                .expect("put_image_data failed");
 
             web_sys::window()
                 .unwrap()
