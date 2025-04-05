@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
-use pyo3::types::PyType;
+use pyo3::types::PyByteArray;
 
-use crate::engine::Application;
+use crate::engine::{Application, EngineState};
 
 pub struct PyApplicationWrapper {
     py_app: PyObject,
@@ -14,27 +14,81 @@ impl PyApplicationWrapper {
 }
 
 impl Application for PyApplicationWrapper {
-    fn setup(&mut self, width: u32, height: u32) -> Result<(), String> {
+    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
         Python::with_gil(|py| {
-            let app = self.py_app.as_ref(py);
-            app.call_method("setup", (width, height), None)
+            let app = self.py_app.bind(py);
+            let state_obj = Py::new(py, PyEngineState::from(state)).unwrap();
+            app.call_method("setup", (state_obj,), None)
                 .map(|_| ())
                 .map_err(|e| format!("setup error: {:?}", e))
         })
     }
 
-    fn tick(&mut self, width: u32, height: u32) -> Vec<u8> {
+    fn tick(&mut self, state: &EngineState) {
         Python::with_gil(|py| {
-            let app = self.py_app.as_ref(py);
-            match app.call_method("tick", (width, height), None) {
-                Ok(result) => result.extract::<Vec<u8>>().unwrap_or_default(),
-                Err(_) => vec![],
-            }
-        })
+            let app = self.py_app.bind(py);
+            let state_obj = Py::new(py, PyEngineState::from(state)).unwrap();
+            let _ = app.call_method("tick", (state_obj,), None);
+        });
     }
 }
 
-// Optional ergonomic base class
+#[pyclass]
+#[derive(Clone)]
+pub struct PyFrameState {
+    #[pyo3(get)]
+    pub width: u32,
+    #[pyo3(get)]
+    pub height: u32,
+    buffer: Vec<u8>,
+}
+
+#[pymethods]
+impl PyFrameState {
+    #[getter]
+    fn buffer<'py>(&self, py: Python<'py>) -> &'py PyAny {
+        PyByteArray::new(py, &self.buffer).into()
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PyMouseState {
+    #[pyo3(get)]
+    pub x: f32,
+    #[pyo3(get)]
+    pub y: f32,
+    #[pyo3(get)]
+    pub is_down: bool,
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PyEngineState {
+    #[pyo3(get)]
+    pub frame: PyFrameState,
+    #[pyo3(get)]
+    pub mouse: PyMouseState,
+}
+
+
+impl From<&EngineState> for PyEngineState {
+    fn from(state: &EngineState) -> Self {
+        PyEngineState {
+            frame: PyFrameState {
+                width: state.frame.width,
+                height: state.frame.height,
+                buffer: state.frame.buffer.borrow().clone(),
+            },
+            mouse: PyMouseState {
+                x: state.mouse.x,
+                y: state.mouse.y,
+                is_down: state.mouse.is_down,
+            },
+        }
+    }
+}
+
 #[pyclass(subclass)]
 pub struct ApplicationBase;
 
@@ -45,8 +99,6 @@ impl ApplicationBase {
         ApplicationBase
     }
 
-    fn setup(&mut self, _width: u32, _height: u32) {}
-    fn tick(&mut self, _width: u32, _height: u32) -> Vec<u8> {
-        vec![]
-    }
+    fn setup(&mut self, _state: &PyEngineState) {}
+    fn tick(&mut self, _state: &PyEngineState) {}
 }
