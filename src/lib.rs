@@ -172,11 +172,21 @@ fn run_py_game(py_app: PyObject, web: bool, react_native: bool) {
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn xospy(_py: Python, m: &PyModule) -> PyResult<()> {
+fn xospy(py: Python, m: &PyModule) -> PyResult<()> {
+    // Core Python classes/functions
     m.add_class::<py_engine::ApplicationBase>()?;
     m.add_function(wrap_pyfunction!(run_native_game, m)?)?;
     m.add_function(wrap_pyfunction!(run_py_game, m)?)?;
     m.add_function(wrap_pyfunction!(version_py, m)?)?;
+
+    // ─── Add video.webcam ───────────────────────────────────────────────────────
+    let video_module = PyModule::new(py, "video")?;
+    let webcam_module = PyModule::new(py, "webcam")?;
+    crate::video::webcam::py_webcam::webcam(py, webcam_module)?;
+    video_module.add_submodule(webcam_module)?;
+    m.add_submodule(video_module)?;
+    // ───────────────────────────────────────────────────────────────────────────
+
     Ok(())
 }
 
