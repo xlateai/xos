@@ -47,13 +47,9 @@ class EyeTracker(torch.nn.Module):
     def __init__(self):
         super(EyeTracker, self).__init__()
         self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 8, kernel_size=16, stride=1, padding=1),
+            torch.nn.Conv2d(3, 3, kernel_size=16, stride=1, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(8, 16, kernel_size=16, stride=1, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(16, 8, kernel_size=16, stride=1, padding=1),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(8, 1, kernel_size=16, stride=1, padding=1),
+            torch.nn.Conv2d(3, 1, kernel_size=16, stride=1, padding=1),
             torch.nn.ReLU(),
         )
 
@@ -155,11 +151,14 @@ class PyApp(xospy.ApplicationBase):
 
 
         cam_frame = get_webcam_frame()
-        pred = model(torch.from_numpy(cam_frame).permute(2, 0, 1).unsqueeze(0).float() / 255.0)
-        print(pred)
+        print(cam_frame.shape)
+        x = torch.from_numpy(cam_frame).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        pred = model(x)
+        print(pred.shape)
+        # print(pred)
 
-        if RENDER_VIDEO:
-            frame = impose_frame(cam_frame, frame)
+        # if RENDER_VIDEO:
+        #     frame = impose_frame(cam_frame, frame)
 
         return frame
 
