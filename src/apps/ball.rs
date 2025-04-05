@@ -1,8 +1,5 @@
 use crate::engine::{Application, EngineState};
-use std::cell::RefCell;
 
-// Common background color - now black
-const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 // Light gray ball color
 const BALL_COLOR: (u8, u8, u8) = (200, 200, 200);
 const BALL_RADIUS: f32 = 15.0;
