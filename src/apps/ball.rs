@@ -103,14 +103,14 @@ impl BallGame {
 
     fn draw_circle(
         &self,
-        pixels: &RefCell<Vec<u8>>,
-        width: u32,
-        height: u32,
+        state: &mut EngineState,
         cx: f32,
         cy: f32,
         radius: f32,
     ) {
-        let mut buffer = pixels.borrow_mut();
+        let mut buffer = &mut state.frame.buffer;
+        let width = state.frame.width;
+        let height = state.frame.height;
         let radius_squared = radius * radius;
 
         let start_x = (cx - radius).max(0.0) as u32;
@@ -137,22 +137,20 @@ impl BallGame {
 }
 
 impl Application for BallGame {
-    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
+    fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.balls
             .push(BallState::new(state.frame.width as f32, state.frame.height as f32, BALL_RADIUS));
         Ok(())
     }
 
-    fn tick(&mut self, state: &EngineState) {
+    fn tick(&mut self, state: &mut EngineState) {
         for ball in &mut self.balls {
             ball.update(state.frame.width as f32, state.frame.height as f32);
         }
 
         for ball in &self.balls {
             self.draw_circle(
-                &state.frame.buffer,
-                state.frame.width,
-                state.frame.height,
+                state,
                 ball.x,
                 ball.y,
                 ball.radius,
@@ -160,7 +158,7 @@ impl Application for BallGame {
         }
     }
 
-    fn on_mouse_down(&mut self, x: f32, y: f32) {
-        self.balls.push(BallState::new_at_position(x, y, BALL_RADIUS));
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        self.balls.push(BallState::new_at_position(state.mouse.x, state.mouse.y, BALL_RADIUS));
     }
 }
