@@ -116,26 +116,23 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
 
-    let cursor_position = Rc::new(RefCell::new((0.0_f32, 0.0_f32)));
-    let (x, y) = *cursor_position.borrow();
-    let initial_state = EngineState {
+    let engine_state = Rc::new(RefCell::new(EngineState {
         frame: FrameState {
             width: size.width,
             height: size.height,
         },
         mouse: MouseState {
-            x,
-            y,
+            x: 0.0,
+            y: 0.0,
             is_down: false,
         },
-    };
+    }));
 
-    let mut app = Box::new(MouseTrackedApp {
-        app,
-        cursor: cursor_position.clone(),
-    });
+    let mut app = app;
 
-    app.setup(&initial_state)?;
+    app.setup(&engine_state.borrow())?;
+
+    let engine_state_clone = engine_state.clone();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -150,23 +147,14 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
                     let _ = pixels.resize_buffer(size.width, size.height);
                 }
 
+                {
+                    let mut state = engine_state.borrow_mut();
+                    state.frame.width = size.width;
+                    state.frame.height = size.height;
+                }
+
                 let frame = pixels.frame_mut();
-                let (x, y) = *cursor_position.borrow();
-                let mouse_state = MouseState {
-                    x,
-                    y,
-                    is_down: false, // TODO: wire this properly from mouse events
-                };
-
-                let engine_state = EngineState {
-                    frame: FrameState {
-                        width: size.width,
-                        height: size.height,
-                    },
-                    mouse: mouse_state,
-                };
-
-                let buffer = app.tick(&engine_state);
+                let buffer = app.tick(&engine_state.borrow());
                 validate_frame_dimensions("native tick", size.width, size.height, &buffer);
                 frame.copy_from_slice(&buffer);
                 let _ = pixels.render();
@@ -184,45 +172,50 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
                     let _ = pixels.resize_surface(size.width, size.height);
                     let _ = pixels.resize_buffer(size.width, size.height);
                     window.request_redraw();
-                },
+                }
 
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     size = *new_inner_size;
                     let _ = pixels.resize_surface(size.width, size.height);
                     let _ = pixels.resize_buffer(size.width, size.height);
                     window.request_redraw();
-                },
+                }
 
                 WindowEvent::CursorMoved { position, .. } => {
-                    let pos = (position.x as f32, position.y as f32);
-                    *cursor_position.borrow_mut() = pos;
-                    app.on_mouse_move(pos.0, pos.1);
-                },
+                    let mut state = engine_state.borrow_mut();
+                    state.mouse.x = position.x as f32;
+                    state.mouse.y = position.y as f32;
+                    app.on_mouse_move(state.mouse.x, state.mouse.y);
+                }
 
                 WindowEvent::MouseInput {
                     state: ElementState::Pressed,
                     button: MouseButton::Left,
                     ..
                 } => {
-                    let (x, y) = *cursor_position.borrow();
-                    app.on_mouse_down(x, y);
-                },
+                    let mut state = engine_state.borrow_mut();
+                    state.mouse.is_down = true;
+                    app.on_mouse_down(state.mouse.x, state.mouse.y);
+                }
 
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
                     button: MouseButton::Left,
                     ..
                 } => {
-                    let (x, y) = *cursor_position.borrow();
-                    app.on_mouse_up(x, y);
-                },
+                    let mut state = engine_state.borrow_mut();
+                    state.mouse.is_down = false;
+                    app.on_mouse_up(state.mouse.x, state.mouse.y);
+                }
 
                 _ => {}
             },
+
             _ => {}
         }
     });
 }
+
 
 #[cfg(target_arch = "wasm32")]
 pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {

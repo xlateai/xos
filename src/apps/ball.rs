@@ -82,8 +82,11 @@ impl Application for BallGame {
             ball.update(state.frame.width as f32, state.frame.height as f32);
         }
 
+        // print mouse state
+        // println!("Mouse: ({}, {}, {})", state.mouse.x, state.mouse.y, state.mouse.is_down);
+
         // Draw the frame
-        self.draw_frame(state.frame.width, state.frame.height)
+        return self.draw_frame(state.frame.width, state.frame.height);
     }
 
     fn on_mouse_down(&mut self, x: f32, y: f32) {
