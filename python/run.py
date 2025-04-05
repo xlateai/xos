@@ -3,34 +3,52 @@ import numpy as np
 
 class PyApp(xospy.ApplicationBase):
     def setup(self, state):
-        self.counter = 0
+        self.ball_y = 0.0
+        self.vy = 0.0
+        self.radius = 50
+        self.gravity = 2.0
 
     def tick(self, state):
-        print(state.frame.height, state.frame.width, state.mouse.x, state.mouse.y, state.mouse.is_down)
-
-        self.counter += 1
         width = state.frame.width
         height = state.frame.height
 
-        print(self.counter)
-        # Get the buffer as a memoryview (shared)
+        # Update velocity and position
+        self.vy += self.gravity
+        self.ball_y += self.vy
+
+        # Bounce off bottom
+        if self.ball_y >= height - self.radius:
+            self.ball_y = height - self.radius
+            self.vy *= -1
+
+        # Bounce off top
+        if self.ball_y <= self.radius:
+            self.ball_y = self.radius
+            self.vy *= -1
+
+        # Get and clear frame
         mv = memoryview(state.frame.buffer)
-
-        # Interpret as (height, width, 4) uint8 RGBA image
         frame = np.frombuffer(mv, dtype=np.uint8).reshape((height, width, 4))
+        frame[:, :, :] = 0  # black background
 
-        # Draw a red square in the center (200x200)
-        square_size = 200
-        x0 = width // 2 - square_size // 2
-        y0 = height // 2 - square_size // 2
-        x1 = x0 + square_size
-        y1 = y0 + square_size
+        # Draw ball
+        cx = width // 2
+        cy = int(self.ball_y)
+        r = self.radius
 
-        frame[y0:y1, x0:x1, 0] = 255  # R
-        frame[y0:y1, x0:x1, 1] = 0    # G
-        frame[y0:y1, x0:x1, 2] = 0    # B
-        frame[y0:y1, x0:x1, 3] = 255  # A
+        y0 = max(cy - r, 0)
+        y1 = min(cy + r, height)
+        x0 = max(cx - r, 0)
+        x1 = min(cx + r, width)
 
-        return frame
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                if (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2:
+                    frame[y, x, 0] = 255  # R
+                    frame[y, x, 1] = 0    # G
+                    frame[y, x, 2] = 0    # B
+                    frame[y, x, 3] = 255  # A
+
+        return frame  # yes, returning the damn frame
 
 xospy.run_py_game(PyApp(), web=False, react_native=False)
