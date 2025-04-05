@@ -47,17 +47,17 @@ class EyeTracker(torch.nn.Module):
     def __init__(self):
         super(EyeTracker, self).__init__()
         self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(3, 3, kernel_size=16, stride=1, padding=1),
+            torch.nn.Conv2d(3, 2, kernel_size=16, stride=11, padding=1),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(3, 1, kernel_size=16, stride=1, padding=1),
+            torch.nn.Conv2d(2, 1, kernel_size=16, stride=11, padding=1),
             torch.nn.ReLU(),
+            torch.nn.AdaptiveAvgPool2d((3, 3)),
         )
 
         self.decoder = torch.nn.Sequential(
             # adaptive avg pool to a fixed (2,) output variables
-            torch.nn.AdaptiveAvgPool2d((16,)),
             torch.nn.Flatten(),
-            torch.nn.Linear(16, 2),
+            torch.nn.Linear(9, 2),
             torch.nn.Sigmoid(),
         )
 
@@ -65,6 +65,7 @@ class EyeTracker(torch.nn.Module):
         x = self.conv(x)
         print(f"Conv output shape: {x.shape}")
         x = self.decoder(x)
+        print(f"Decoder output shape: {x.shape}")
         return x
 
 
@@ -148,7 +149,6 @@ class PyApp(xospy.ApplicationBase):
 
         self.ball.update(dt, width, height)
         self.ball.draw(frame)
-
 
         cam_frame = get_webcam_frame()
         print(cam_frame.shape)
