@@ -143,34 +143,34 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
             Event::RedrawRequested(_) => {
                 let current_size = window.inner_size();
             
-                // Handle window resizing (and buffer reallocation)
                 if current_size != size {
                     size = current_size;
                     let _ = pixels.resize_surface(size.width, size.height);
                     let _ = pixels.resize_buffer(size.width, size.height);
-            
-                    let mut state = engine_state.borrow_mut();
-                    state.frame.width = size.width;
-                    state.frame.height = size.height;
-                    state.frame.buffer.replace(vec![0; (size.width * size.height * 4) as usize]);
                 }
             
-                // Get mutable access to the buffer from state
+                // Always ensure buffer matches latest size
                 {
-                    let state = engine_state.borrow_mut();
+                    let mut state = engine_state.borrow_mut();
             
-                    // Clear the buffer (optional — or up to app logic)
+                    if state.frame.width != size.width || state.frame.height != size.height {
+                        state.frame.width = size.width;
+                        state.frame.height = size.height;
+                        state.frame.buffer.replace(vec![0; (size.width * size.height * 4) as usize]);
+                    }
+            
+                    // Clear the buffer if desired
                     state.frame.buffer.borrow_mut().fill(0);
             
-                    // Let the app draw into the buffer directly
                     app.tick(&*state);
                 }
             
-                // Copy final buffer into the pixels frame
                 let frame = pixels.frame_mut();
                 let state = engine_state.borrow();
                 let buffer = state.frame.buffer.borrow();
+            
                 validate_frame_dimensions("native tick", size.width, size.height, &buffer);
+            
                 frame.copy_from_slice(&buffer);
                 let _ = pixels.render();
             }
