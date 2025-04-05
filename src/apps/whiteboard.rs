@@ -109,13 +109,13 @@ impl Whiteboard {
 }
 
 impl Application for Whiteboard {
-    fn setup(&mut self, state: &EngineState) -> Result<(), String> {
+    fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.last_width = state.frame.width;
         self.last_height = state.frame.height;
         Ok(())
     }
 
-    fn tick(&mut self, state: &EngineState) {
+    fn tick(&mut self, state: &mut EngineState) {
         let width = state.frame.width;
         let height = state.frame.height;
 
@@ -125,28 +125,26 @@ impl Application for Whiteboard {
             self.last_height = height;
         }
 
-        let mut buffer = state.frame.buffer.borrow_mut();
-
         if self.is_cache_dirty {
             // Redraw all stored strokes
-            buffer.fill(0);
+            state.frame.buffer.fill(0);
             for stroke in &self.strokes {
-                self.draw_smooth_stroke(&mut buffer, width, height, stroke);
+                self.draw_smooth_stroke(&mut state.frame.buffer, width, height, stroke);
             }
             self.is_cache_dirty = false;
         }
 
         // Always draw current stroke on top
-        self.draw_smooth_stroke(&mut buffer, width, height, &self.current_stroke);
+        self.draw_smooth_stroke(&mut state.frame.buffer, width, height, &self.current_stroke);
     }
 
-    fn on_mouse_down(&mut self, x: f32, y: f32) {
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
         self.drawing = true;
         self.current_stroke.clear();
-        self.current_stroke.push((x, y));
+        self.current_stroke.push((state.mouse.x, state.mouse.y));
     }
 
-    fn on_mouse_up(&mut self, _x: f32, _y: f32) {
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
         self.drawing = false;
         if !self.current_stroke.is_empty() {
             self.strokes.push(self.current_stroke.clone());
@@ -155,9 +153,9 @@ impl Application for Whiteboard {
         }
     }
 
-    fn on_mouse_move(&mut self, x: f32, y: f32) {
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
         if self.drawing {
-            self.current_stroke.push((x, y));
+            self.current_stroke.push((state.mouse.x, state.mouse.y));
         }
     }
 }

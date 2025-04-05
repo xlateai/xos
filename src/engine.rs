@@ -95,10 +95,14 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 let current_size = window.inner_size();
             
                 if current_size != size {
+                    // Update the window size first
                     size = current_size;
-                    let _ = pixels.resize_surface(size.width, size.height);
-                    let _ = pixels.resize_buffer(size.width, size.height);
                     
+                    // Resize the pixels buffer first
+                    let _ = pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    
+                    // Then update our engine state to match
                     engine_state.frame.width = size.width;
                     engine_state.frame.height = size.height;
                     engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
@@ -110,13 +114,19 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 // Update the game state
                 app.tick(&mut engine_state);
             
-                // Render the updated state
+                // Ensure sizes match before copying
                 let frame = pixels.frame_mut();
-                validate_frame_dimensions("native tick", size.width, size.height, &engine_state.frame.buffer);
-                frame.copy_from_slice(&engine_state.frame.buffer);
-                let _ = pixels.render();
+                if frame.len() == engine_state.frame.buffer.len() {
+                    frame.copy_from_slice(&engine_state.frame.buffer);
+                    let _ = pixels.render();
+                } else {
+                    // Resize buffer if mismatch detected
+                    engine_state.frame.buffer.resize(frame.len(), 0);
+                    eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
+                }
             }
 
+            // Rest of the code remains the same...
             Event::MainEventsCleared => {
                 window.request_redraw();
             }
@@ -126,15 +136,29 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
                 WindowEvent::Resized(new_size) => {
                     size = new_size;
-                    let _ = pixels.resize_surface(size.width, size.height);
+                    // Update pixels first
                     let _ = pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    
+                    // Then update engine state
+                    engine_state.frame.width = size.width;
+                    engine_state.frame.height = size.height;
+                    engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
+                    
                     window.request_redraw();
                 }
 
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     size = *new_inner_size;
-                    let _ = pixels.resize_surface(size.width, size.height);
+                    // Update pixels first
                     let _ = pixels.resize_buffer(size.width, size.height);
+                    let _ = pixels.resize_surface(size.width, size.height);
+                    
+                    // Then update engine state
+                    engine_state.frame.width = size.width;
+                    engine_state.frame.height = size.height;
+                    engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
+                    
                     window.request_redraw();
                 }
 
