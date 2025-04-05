@@ -13,13 +13,13 @@ pub fn webcam(py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
+#[pyfunction(name="init_camera")]
 fn init_camera_py() {
     #[cfg(not(target_arch = "wasm32"))]
     native_webcam::init_camera();
 }
 
-#[pyfunction]
+#[pyfunction(name="get_resolution")]
 fn get_resolution_py(py: Python) -> PyObject {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -31,7 +31,7 @@ fn get_resolution_py(py: Python) -> PyObject {
     PyTuple::new(py, &[0u32, 0u32]).into()
 }
 
-#[pyfunction]
+#[pyfunction(name="get_frame")]
 fn get_frame_py(py: Python) -> PyObject {
     #[cfg(not(target_arch = "wasm32"))]
     {
