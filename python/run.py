@@ -31,4 +31,6 @@ class PyApp(xospy.ApplicationBase):
         frame[y0:y1, x0:x1, 2] = 0    # B
         frame[y0:y1, x0:x1, 3] = 255  # A
 
+        return frame
+
 xospy.run_py_game(PyApp(), web=False, react_native=False)

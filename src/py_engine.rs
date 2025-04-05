@@ -28,15 +28,22 @@ impl Application for PyApplicationWrapper {
         Python::with_gil(|py| {
             let app = self.py_app.bind(py);
             let state_obj = PyEngineState::new(py, state);
-            let _ = app.call_method1("tick", (state_obj,));
-            
-            // Print a debug message to show buffer is being accessed
-            println!("Tick completed, buffer address: {:p}", state.frame.buffer.as_ptr());
-            
-            // Force garbage collection to ensure no stale references
-            let _ = py.run_bound("import gc; gc.collect()", None, None);
+    
+            if let Ok(obj) = app.call_method1("tick", (state_obj,)) {
+                if let Ok(array) = obj.getattr("tobytes") {
+                    if let Ok(bytes_obj) = array.call0() {
+                        if let Ok(pybytes) = bytes_obj.downcast::<pyo3::types::PyBytes>() {
+                            let data = pybytes.as_bytes();
+                            let dst = &mut state.frame.buffer;
+                            let len = dst.len().min(data.len());
+                            dst[..len].copy_from_slice(&data[..len]);
+                        }
+                    }
+                }
+            }
         });
     }
+    
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         Python::with_gil(|py| {
@@ -80,11 +87,7 @@ impl PyFrameState {
         unsafe {
             // Get direct access to the Vec<u8>
             let buffer = &mut *self.rust_buffer;
-            
-            // Create a Python bytearray with the memory
             let byte_array = PyByteArray::new_bound(py, buffer.as_mut_slice());
-            
-            // Return the PyByteArray directly - Python will have direct access to modify it
             Ok(byte_array.unbind())
         }
     }
@@ -95,16 +98,6 @@ impl PyFrameState {
             let buffer = &*self.rust_buffer;
             println!("Buffer pointer: {:p}, len: {}", buffer.as_ptr(), buffer.len());
             println!("First few bytes: {:?}", &buffer[..buffer.len().min(16)]);
-        }
-        Ok(())
-    }
-    
-    // Helper to fill the buffer with a specific value (useful for testing)
-    fn fill(&self, value: u8) -> PyResult<()> {
-        unsafe {
-            let buffer = &mut *self.rust_buffer;
-            buffer.fill(value);
-            println!("Buffer filled with {}", value);
         }
         Ok(())
     }
