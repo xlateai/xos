@@ -24,6 +24,43 @@ fn catmull_rom(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t
     (x, y)
 }
 
+fn draw_smooth_stroke(pixels: &mut [u8], width: u32, height: u32, stroke: &[(f32, f32)]) {
+    if stroke.len() < 2 {
+        return;
+    }
+
+    for i in 0..stroke.len().saturating_sub(1) {
+        let p0 = if i > 0 { stroke[i - 1] } else { stroke[i] };
+        let p1 = stroke[i];
+        let p2 = stroke[i + 1];
+        let p3 = if i + 2 < stroke.len() { stroke[i + 2] } else { p2 };
+
+        let segments = 8;
+        for j in 0..segments {
+            let t0 = j as f32 / segments as f32;
+            let t1 = (j + 1) as f32 / segments as f32;
+
+            let (x0, y0) = catmull_rom(p0, p1, p2, p3, t0);
+            let (x1, y1) = catmull_rom(p0, p1, p2, p3, t1);
+
+            draw_line(pixels, width, height, x0 * width as f32, y0 * height as f32, x1 * width as f32, y1 * height as f32);
+        }
+    }
+}
+
+fn draw_line(pixels: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f32, y1: f32) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let steps = dx.abs().max(dy.abs()) as usize;
+
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = x0 + t * dx;
+        let y = y0 + t * dy;
+        draw_circle(pixels, width, height, x, y, STROKE_WIDTH);
+    }
+}
+
 fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, radius: f32) {
     let radius_squared = radius * radius;
     let start_x = (cx - radius).max(0.0) as u32;
@@ -48,13 +85,17 @@ fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad
     }
 }
 
+#[derive(Clone)]
 pub struct Whiteboard {
-    strokes: Vec<Vec<(f32, f32)>>,
+    strokes: Vec<Vec<(f32, f32)>>, // Normalized strokes [0.0 - 1.0]
     current_stroke: Vec<(f32, f32)>,
     drawing: bool,
-    is_cache_dirty: bool,
-    last_width: u32,
-    last_height: u32,
+
+    // Cache
+    cached_canvas: Vec<u8>,
+    cached_width: u32,
+    cached_height: u32,
+    needs_redraw: bool,
 }
 
 impl Whiteboard {
@@ -63,82 +104,67 @@ impl Whiteboard {
             strokes: Vec::new(),
             current_stroke: Vec::new(),
             drawing: false,
-            is_cache_dirty: true,
-            last_width: 0,
-            last_height: 0,
+            cached_canvas: Vec::new(),
+            cached_width: 0,
+            cached_height: 0,
+            needs_redraw: true,
         }
     }
 
-    fn draw_smooth_stroke(&self, pixels: &mut [u8], width: u32, height: u32, stroke: &[(f32, f32)]) {
-        if stroke.len() < 2 {
-            return;
-        }
-
-        for i in 0..stroke.len().saturating_sub(1) {
-            let p0 = if i > 0 { stroke[i - 1] } else { stroke[i] };
-            let p1 = stroke[i];
-            let p2 = stroke[i + 1];
-            let p3 = if i + 2 < stroke.len() { stroke[i + 2] } else { p2 };
-
-            let segments = 8;
-            for j in 0..segments {
-                let t0 = j as f32 / segments as f32;
-                let t1 = (j + 1) as f32 / segments as f32;
-
-                let (x0, y0) = catmull_rom(p0, p1, p2, p3, t0);
-                let (x1, y1) = catmull_rom(p0, p1, p2, p3, t1);
-
-                self.draw_line(pixels, width, height, x0, y0, x1, y1);
-            }
-        }
-    }
-
-    fn draw_line(&self, pixels: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f32, y1: f32) {
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        let steps = dx.abs().max(dy.abs()) as usize;
-
-        for i in 0..=steps {
-            let t = i as f32 / steps as f32;
-            let x = x0 + t * dx;
-            let y = y0 + t * dy;
-            draw_circle(pixels, width, height, x, y, STROKE_WIDTH);
-        }
+    fn normalize(x: f32, y: f32, width: u32, height: u32) -> (f32, f32) {
+        (x / width as f32, y / height as f32)
     }
 }
 
 impl Application for Whiteboard {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        self.last_width = state.frame.width;
-        self.last_height = state.frame.height;
+        self.cached_width = state.frame.width;
+        self.cached_height = state.frame.height;
+        self.cached_canvas = vec![0; (self.cached_width * self.cached_height * 4) as usize];
+        self.needs_redraw = true;
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let (width, height) = (state.frame.width, state.frame.height);
 
-        if self.last_width != width || self.last_height != height {
-            self.is_cache_dirty = true;
-            self.last_width = width;
-            self.last_height = height;
+        // Resize + rebuild cache if window changed
+        if width != self.cached_width || height != self.cached_height {
+            self.cached_width = width;
+            self.cached_height = height;
+            self.cached_canvas = vec![0; (width * height * 4) as usize];
+            self.needs_redraw = true;
         }
 
-        if self.is_cache_dirty {
+        // Redraw cached strokes only when needed
+        if self.needs_redraw {
+            self.cached_canvas.fill(0);
             for stroke in &self.strokes {
-                self.draw_smooth_stroke(&mut state.frame.buffer, width, height, stroke);
+                draw_smooth_stroke(&mut self.cached_canvas, width, height, stroke);
             }
-            self.is_cache_dirty = false;
+            self.needs_redraw = false;
         }
 
-        // Always draw current stroke on top
-        self.draw_smooth_stroke(&mut state.frame.buffer, width, height, &self.current_stroke);
+        // Copy cached canvas into live buffer
+        state.frame.buffer.copy_from_slice(&self.cached_canvas);
+
+        // Draw current stroke on top
+        draw_smooth_stroke(&mut state.frame.buffer, width, height, &self.current_stroke);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         self.drawing = true;
         self.current_stroke.clear();
-        self.current_stroke.push((state.mouse.x, state.mouse.y));
+
+        let point = Self::normalize(state.mouse.x, state.mouse.y, state.frame.width, state.frame.height);
+        self.current_stroke.push(point);
+    }
+
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        if self.drawing {
+            let point = Self::normalize(state.mouse.x, state.mouse.y, state.frame.width, state.frame.height);
+            self.current_stroke.push(point);
+        }
     }
 
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
@@ -146,13 +172,7 @@ impl Application for Whiteboard {
         if !self.current_stroke.is_empty() {
             self.strokes.push(self.current_stroke.clone());
             self.current_stroke.clear();
-            self.is_cache_dirty = true;
-        }
-    }
-
-    fn on_mouse_move(&mut self, state: &mut EngineState) {
-        if self.drawing {
-            self.current_stroke.push((state.mouse.x, state.mouse.y));
+            self.needs_redraw = true;
         }
     }
 }
