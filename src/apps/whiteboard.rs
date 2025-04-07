@@ -52,7 +52,6 @@ pub struct Whiteboard {
     strokes: Vec<Vec<(f32, f32)>>,
     current_stroke: Vec<(f32, f32)>,
     drawing: bool,
-    is_cache_dirty: bool,
     last_width: u32,
     last_height: u32,
 }
@@ -63,7 +62,6 @@ impl Whiteboard {
             strokes: Vec::new(),
             current_stroke: Vec::new(),
             drawing: false,
-            is_cache_dirty: true,
             last_width: 0,
             last_height: 0,
         }
@@ -117,23 +115,16 @@ impl Application for Whiteboard {
     fn tick(&mut self, state: &mut EngineState) {
         let width = state.frame.width;
         let height = state.frame.height;
-
-        if self.last_width != width || self.last_height != height {
-            self.is_cache_dirty = true;
-            self.last_width = width;
-            self.last_height = height;
+    
+        // Redraw all previous strokes
+        for stroke in &self.strokes {
+            self.draw_smooth_stroke(&mut state.frame.buffer, width, height, stroke);
         }
-
-        if self.is_cache_dirty {
-            for stroke in &self.strokes {
-                self.draw_smooth_stroke(&mut state.frame.buffer, width, height, stroke);
-            }
-            self.is_cache_dirty = false;
-        }
-
-        // Always draw current stroke on top
+    
+        // Draw current in-progress stroke on top
         self.draw_smooth_stroke(&mut state.frame.buffer, width, height, &self.current_stroke);
     }
+    
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         self.drawing = true;
@@ -146,7 +137,6 @@ impl Application for Whiteboard {
         if !self.current_stroke.is_empty() {
             self.strokes.push(self.current_stroke.clone());
             self.current_stroke.clear();
-            self.is_cache_dirty = true;
         }
     }
 
