@@ -23,6 +23,7 @@ impl Application for PyApplicationWrapper {
                 .map_err(|e| format!("setup error: {:?}", e))
         })
     }
+
     fn tick(&mut self, state: &mut EngineState) {
         Python::with_gil(|py| {
             let app = self.py_app.bind(py);
@@ -32,8 +33,9 @@ impl Application for PyApplicationWrapper {
                 let obj = app.call_method1("tick", (state_obj,))?;
                 let array = obj.getattr("tobytes")?;
                 let bytes_obj = array.call0()?;
-                let pybytes = bytes_obj.downcast::<pyo3::types::PyBytes>()
-                    .map_err(|e| PyErr::from(e))?; // <- FIXED
+                let pybytes = bytes_obj
+                    .downcast::<pyo3::types::PyBytes>()
+                    .map_err(PyErr::from)?; // clean and compiler-safe
                 let data = pybytes.as_bytes();
                 let dst = &mut state.frame.buffer;
                 let len = dst.len().min(data.len());
@@ -41,10 +43,11 @@ impl Application for PyApplicationWrapper {
                 Ok(())
             })() {
                 e.print(py);
+                std::process::exit(1); // <- hard exit
             }
         });
     }
-
+    
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         Python::with_gil(|py| {
             let app = self.py_app.bind(py);
