@@ -15,30 +15,18 @@ const CHANNEL_COLORS: &[[u8; 3]] = &[
 const DEFAULT_COLOR: [u8; 3] = [0, 255, 0];
 
 pub struct Waveform {
-    listener: audio::AudioListener,
+    maybe_listener: Option<audio::AudioListener>,
     channel_waveforms: Vec<Vec<f32>>,
     last_tick: Instant,
 }
 
 impl Waveform {
-    pub fn new() -> Result<Self, String> {
-        let device = audio::devices().get(0).ok_or("No audio device found")?;
-        let buffer_duration = (WIDTH as f32) / 44100.0;
-        let listener = audio::AudioListener::new(device, buffer_duration)
-            .map_err(|e| format!("Error creating listener: {}", e))?;
-        listener.record().map_err(|e| format!("Failed to start recording: {}", e))?;
-
-        let num_channels = listener.buffer().channels() as usize;
-        let mut channel_waveforms = Vec::with_capacity(num_channels);
-        for _ in 0..num_channels {
-            channel_waveforms.push(Vec::with_capacity(WIDTH as usize));
-        }
-
-        Ok(Self {
-            listener,
-            channel_waveforms,
+    pub fn new() -> Self {
+        Self {
+            maybe_listener: None,
+            channel_waveforms: Vec::new(),
             last_tick: Instant::now(),
-        })
+        }
     }
 
     fn draw_background(&self, buffer: &mut [u8]) {
@@ -106,6 +94,18 @@ impl Waveform {
 
 impl Application for Waveform {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+        let devices = audio::devices();
+        let device = devices.get(0).ok_or("No audio device found")?;
+
+        let buffer_duration = (WIDTH as f32) / 44100.0;
+        let mut listener = audio::AudioListener::new(device, buffer_duration)
+            .map_err(|e| format!("Error creating listener: {}", e))?;
+        listener.record().map_err(|e| format!("Failed to start recording: {}", e))?;
+
+        let num_channels = listener.buffer().channels() as usize;
+        self.channel_waveforms = vec![vec![0.0; WIDTH as usize]; num_channels];
+        self.maybe_listener = Some(listener);
+
         Ok(())
     }
 
@@ -113,13 +113,14 @@ impl Application for Waveform {
         let buffer = &mut state.frame.buffer;
         self.draw_background(buffer);
 
-        let all_samples = self.listener.get_samples_by_channel();
+        let Some(listener) = &self.maybe_listener else { return };
+        let all_samples = listener.get_samples_by_channel();
+
         for (i, samples) in all_samples.iter().enumerate() {
             if i < self.channel_waveforms.len() {
                 let waveform = &mut self.channel_waveforms[i];
                 *waveform = samples.clone();
 
-                // Trim or pad to WIDTH
                 if waveform.len() > WIDTH as usize {
                     waveform.drain(0..(waveform.len() - WIDTH as usize));
                 } else {
