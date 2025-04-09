@@ -18,23 +18,70 @@ impl Application for Waveform {
         let devices = audio::devices();
         let device = devices.get(0).ok_or("No audio device found")?;
 
-        let buffer_duration = 1.0; // ~50ms
+        let buffer_duration = 0.1; // 100ms buffer for better visualization
         let mut listener = audio::AudioListener::new(device, buffer_duration)?;
         listener.record()?;
         self.listener = Some(listener);
         Ok(())
     }
 
-    fn tick(&mut self, _state: &mut EngineState) {
+    fn tick(&mut self, state: &mut EngineState) {
         let Some(listener) = &self.listener else { return };
+        let buffer = &mut state.frame.buffer;
+        let width = state.frame.width;
+        let height = state.frame.height;
+
+        // Clear screen to dark gray
+        for pixel in buffer.chunks_exact_mut(4) {
+            pixel[0] = 16;
+            pixel[1] = 16;
+            pixel[2] = 24;
+            pixel[3] = 255;
+        }
+
         let all_samples = listener.get_samples_by_channel();
+        if all_samples.is_empty() {
+            return;
+        }
 
-        for (i, samples) in all_samples.iter().enumerate() {
-            let count = samples.len();
-            let peak = samples.iter().copied().fold(0.0, |a: f32, b: f32| a.max(b.abs()));
-            let rms = (samples.iter().map(|x| x * x).sum::<f32>() / samples.len().max(1) as f32).sqrt();
+        let center_y = height as f32 / 2.0;
+        let scale = center_y * 0.8; // amplitude scaling
 
-            println!("Channel {}: {} samples | RMS: {:.3} | Peak: {:.3}", i, count, rms, peak);
+        let samples = &all_samples[0];
+        let step = samples.len().max(1) as f32 / width as f32;
+
+        let mut prev_x = 0;
+        let mut prev_y = center_y as isize;
+
+        for x in 0..width as usize {
+            let sample_index = (x as f32 * step) as usize;
+            if sample_index >= samples.len() {
+                break;
+            }
+            let y = (center_y - samples[sample_index] * scale) as isize;
+
+            let dx = (x as isize - prev_x).abs();
+            let dy = (y - prev_y).abs();
+            let sx = if prev_x < x as isize { 1 } else { -1 };
+            let sy = if prev_y < y { 1 } else { -1 };
+            let mut err = dx - dy;
+            let (mut cx, mut cy) = (prev_x, prev_y);
+
+            while cx != x as isize || cy != y {
+                if cx >= 0 && cx < width as isize && cy >= 0 && cy < height as isize {
+                    let i = (cy as usize * width as usize + cx as usize) * 4;
+                    buffer[i] = 0;
+                    buffer[i + 1] = 255;
+                    buffer[i + 2] = 0;
+                    buffer[i + 3] = 255;
+                }
+                let e2 = 2 * err;
+                if e2 > -dy { err -= dy; cx += sx; }
+                if e2 < dx { err += dx; cy += sy; }
+            }
+
+            prev_x = x as isize;
+            prev_y = y;
         }
     }
 
