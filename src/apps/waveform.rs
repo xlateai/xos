@@ -16,9 +16,11 @@ impl Waveform {
 impl Application for Waveform {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let devices = audio::devices();
-        let device = devices.get(0).ok_or("No audio device found")?;
 
-        let buffer_duration = 0.1; // 100ms buffer for better visualization
+        let device_index = 1;  // hard-coded device selector for now (needs UI kit)
+        let device = devices.get(device_index).ok_or("No audio device found")?;
+
+        let buffer_duration = 1.0; // 100ms buffer for better visualization
         let mut listener = audio::AudioListener::new(device, buffer_duration)?;
         listener.record()?;
         self.listener = Some(listener);
