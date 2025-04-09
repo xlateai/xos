@@ -13,6 +13,7 @@ use webbrowser;
 pub mod apps;
 pub mod engine;
 pub mod video;
+pub mod audio;
 
 #[cfg(feature = "python")]
 mod py_engine;
