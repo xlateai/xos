@@ -18,7 +18,7 @@ impl Application for Waveform {
         let devices = audio::devices();
         let device = devices.get(0).ok_or("No audio device found")?;
 
-        let buffer_duration = 0.05; // ~50ms
+        let buffer_duration = 1.0; // ~50ms
         let mut listener = audio::AudioListener::new(device, buffer_duration)?;
         listener.record()?;
         self.listener = Some(listener);
