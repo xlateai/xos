@@ -8,6 +8,9 @@ const DOT_RADIUS: u32 = 2;
 pub struct ScrollApp {
     scroll_x: f32,
     scroll_y: f32,
+    dragging: bool,
+    last_mouse_x: f32,
+    last_mouse_y: f32,
 }
 
 impl ScrollApp {
@@ -15,6 +18,9 @@ impl ScrollApp {
         Self {
             scroll_x: 0.0,
             scroll_y: 0.0,
+            dragging: false,
+            last_mouse_x: 0.0,
+            last_mouse_y: 0.0,
         }
     }
 }
@@ -58,5 +64,28 @@ impl Application for ScrollApp {
     fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
         self.scroll_x += dx;
         self.scroll_y += dy;
+    }
+
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        self.dragging = true;
+        self.last_mouse_x = state.mouse.x;
+        self.last_mouse_y = state.mouse.y;
+    }
+
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        self.dragging = false;
+    }
+
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        if self.dragging {
+            let x = state.mouse.x;
+            let y = state.mouse.y;
+            let dx = x - self.last_mouse_x;
+            let dy = y - self.last_mouse_y;
+            self.scroll_x -= dx;
+            self.scroll_y -= dy;
+            self.last_mouse_x = x;
+            self.last_mouse_y = y;
+        }
     }
 }
