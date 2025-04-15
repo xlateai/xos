@@ -1,25 +1,31 @@
 use crate::engine::{Application, EngineState};
+use fontdue::{Font, FontSettings};
 use std::collections::VecDeque;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
-const FONT_WIDTH: u32 = 8;
-const FONT_HEIGHT: u32 = 16;
+const FONT_SIZE: f32 = 16.0;
 
 pub struct TextApp {
     scroll_y: f32,
     text: VecDeque<String>,
     cursor_x: usize,
     cursor_y: usize,
+    font: Font,
 }
 
 impl TextApp {
     pub fn new() -> Self {
+        // TODO: we should build a nice font loading system that can audomatically download and cache them
+        let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
+
         Self {
             scroll_y: 0.0,
             text: VecDeque::from([String::new()]),
             cursor_x: 0,
             cursor_y: 0,
+            font,
         }
     }
 }
@@ -42,28 +48,32 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
-        // Draw text (placeholder block rectangles)
-        let chars_per_line = (width / FONT_WIDTH) as usize;
-        let lines_visible = (height / FONT_HEIGHT) as usize;
-        let y_offset = (self.scroll_y / FONT_HEIGHT as f32) as usize;
+        let lines_visible = (height as f32 / FONT_SIZE) as usize;
+        let y_offset = (self.scroll_y / FONT_SIZE) as usize;
 
         for (i, line) in self.text.iter().skip(y_offset).take(lines_visible).enumerate() {
-            for (j, _ch) in line.chars().enumerate().take(chars_per_line) {
-                let x0 = (j as u32) * FONT_WIDTH;
-                let y0 = (i as u32) * FONT_HEIGHT;
-                for dy in 0..FONT_HEIGHT {
-                    for dx in 0..FONT_WIDTH {
-                        let px = x0 + dx;
-                        let py = y0 + dy;
+            let mut cursor_x = 0;
+            for ch in line.chars() {
+                let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
+                let x0 = cursor_x as u32;
+                let y0 = (i as f32 * FONT_SIZE) as u32;
+
+                for y in 0..metrics.height {
+                    for x in 0..metrics.width {
+                        let val = bitmap[y * metrics.width + x];
+                        let px = x0 + x as u32;
+                        let py = y0 + y as u32;
                         if px < width && py < height {
                             let idx = ((py * width + px) * 4) as usize;
-                            buffer[idx + 0] = TEXT_COLOR.0;
-                            buffer[idx + 1] = TEXT_COLOR.1;
-                            buffer[idx + 2] = TEXT_COLOR.2;
+                            buffer[idx + 0] = val;
+                            buffer[idx + 1] = val;
+                            buffer[idx + 2] = val;
                             buffer[idx + 3] = 0xff;
                         }
                     }
                 }
+
+                cursor_x += metrics.advance_width as usize;
             }
         }
     }
@@ -79,7 +89,7 @@ impl Application for TextApp {
                 self.cursor_y += 1;
                 self.cursor_x = 0;
             }
-            '\u{8}' => { // Backspace
+            '\u{8}' => {
                 if self.cursor_x > 0 {
                     self.text[self.cursor_y].remove(self.cursor_x - 1);
                     self.cursor_x -= 1;
@@ -97,4 +107,4 @@ impl Application for TextApp {
             }
         }
     }
-} 
+}
