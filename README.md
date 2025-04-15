@@ -12,11 +12,9 @@ cargo build --release
 cargo install --path .
 ```
 
-Advanced Linux Sound Architecture library is needed if you do not have it
+Advanced Linux Sound Architecture library is needed if you do not have it (TODO: we may want our own kernels for this? or auto install/features?)
 ```
-sudo apt-get install libasound2-dev
-sudo dnf install alsa-lib-devel
-sudo pacman -S alsa-lib
+sudo apt-get update && sudo apt-get install -y libasound2-dev
 ```
 
 To run the react native, expo & its dependencies are required
