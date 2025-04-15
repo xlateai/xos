@@ -36,10 +36,11 @@ pub struct MouseState {
 pub trait Application {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String>;
     fn tick(&mut self, state: &mut EngineState);
-    
+
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
+    fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
 }
 
 /// Shared function to validate frame buffer size
@@ -183,6 +184,15 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     }
                 }
 
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let (dx, dy) = match delta {
+                        MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
+                        MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                    };
+                
+                    app.on_scroll(&mut engine_state, dx, dy);
+                }
+
                 _ => {}
             },
 
@@ -194,7 +204,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
 
 
 #[cfg(target_arch = "wasm32")]
-pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
+pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
     console_error_panic_hook::set_once();
@@ -262,6 +272,24 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
         move_callback.forget();
     }
 
+    // Mouse Scroll
+    {
+        use web_sys::WheelEvent;
+    
+        let state_ptr_clone = state_ptr;
+        let scroll_callback = Closure::wrap(Box::new(move |event: WheelEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                let dx = event.delta_x() as f32;
+                let dy = event.delta_y() as f32;
+                state.app.on_scroll(&mut state.engine_state, dx, dy);
+            }
+        }) as Box<dyn FnMut(_)>);
+    
+        canvas.add_event_listener_with_callback("wheel", scroll_callback.as_ref().unchecked_ref())?;
+        scroll_callback.forget();
+    }
+
     // Mouse down
     {
         let state_ptr_clone = state_ptr;
@@ -292,6 +320,80 @@ pub fn run_web(mut app: Box<dyn Application>) -> Result<(), JsValue> {
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", up_callback.as_ref().unchecked_ref())?;
         up_callback.forget();
+    }
+
+    // Touch move (acts like mouse move + drag-to-scroll)
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone(); // ✅ clone canvas here
+
+        let touch_move_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                if let Some(touch) = event.touches().get(0) {
+                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let x = touch.client_x() as f64 - rect.left();
+                    let y = touch.client_y() as f64 - rect.top();
+                    let prev_x = state.engine_state.mouse.x;
+                    let prev_y = state.engine_state.mouse.y;
+                    state.engine_state.mouse.x = x as f32;
+                    state.engine_state.mouse.y = y as f32;
+                    state.app.on_mouse_move(&mut state.engine_state);
+
+                    let dx = state.engine_state.mouse.x - prev_x;
+                    let dy = state.engine_state.mouse.y - prev_y;
+                    if state.engine_state.mouse.is_down {
+                        state.app.on_scroll(&mut state.engine_state, -dx, -dy);
+                    }
+                }
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchmove", touch_move_callback.as_ref().unchecked_ref())?;
+        touch_move_callback.forget();
+    }
+
+    // Touch start
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone(); // ✅ clone canvas here
+
+        let touch_start_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                if let Some(touch) = event.touches().get(0) {
+                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let x = touch.client_x() as f64 - rect.left();
+                    let y = touch.client_y() as f64 - rect.top();
+                    state.engine_state.mouse.x = x as f32;
+                    state.engine_state.mouse.y = y as f32;
+                    state.engine_state.mouse.is_down = true;
+                    state.app.on_mouse_down(&mut state.engine_state);
+                }
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchstart", touch_start_callback.as_ref().unchecked_ref())?;
+        touch_start_callback.forget();
+    }
+
+    // Touch end
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+
+        let touch_end_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                state.engine_state.mouse.is_down = false;
+                state.app.on_mouse_up(&mut state.engine_state);
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchend", touch_end_callback.as_ref().unchecked_ref())?;
+        touch_end_callback.forget();
     }
 
     // Animation loop - use a different approach without Rc/RefCell
