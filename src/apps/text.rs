@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
-const FONT_SIZE: f32 = 16.0;
+const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
+const FONT_SIZE: f32 = 48.0; // 3x larger
 
 pub struct TextApp {
     scroll_y: f32,
@@ -28,7 +29,7 @@ impl TextApp {
         }
     }
 
-    fn wrap_lines(&self, max_width: u32) -> Vec<String> {
+    fn wrap_lines(&self, max_width: u32) -> Vec<(String, f32)> {
         let mut visual_lines = Vec::new();
 
         for line in &self.text {
@@ -38,7 +39,7 @@ impl TextApp {
             for ch in line.chars() {
                 let metrics = self.font.metrics(ch, FONT_SIZE);
                 if current_width + metrics.advance_width > max_width as f32 {
-                    visual_lines.push(current_line.clone());
+                    visual_lines.push((current_line.clone(), current_width));
                     current_line.clear();
                     current_width = 0.0;
                 }
@@ -46,7 +47,7 @@ impl TextApp {
                 current_width += metrics.advance_width;
             }
 
-            visual_lines.push(current_line);
+            visual_lines.push((current_line, current_width));
         }
 
         visual_lines
@@ -63,7 +64,6 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
-        // Clear background
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -75,7 +75,7 @@ impl Application for TextApp {
         let lines_visible = (height as f32 / FONT_SIZE) as usize;
         let y_offset = (self.scroll_y / FONT_SIZE) as usize;
 
-        for (i, line) in visual_lines.iter().skip(y_offset).take(lines_visible).enumerate() {
+        for (i, (line, line_width)) in visual_lines.iter().skip(y_offset).take(lines_visible).enumerate() {
             let mut cursor_x = 0;
 
             for ch in line.chars() {
@@ -99,6 +99,21 @@ impl Application for TextApp {
                 }
 
                 cursor_x += metrics.advance_width as usize;
+            }
+
+            // Draw cursor bar at end of visual line
+            let x_cursor = line_width.round() as u32;
+            let y0 = (i as f32 * FONT_SIZE) as u32;
+            for y in 0..(FONT_SIZE as u32) {
+                let px = x_cursor.min(width - 1);
+                let py = y0 + y;
+                if px < width && py < height {
+                    let idx = ((py * width + px) * 4) as usize;
+                    buffer[idx + 0] = CURSOR_COLOR.0;
+                    buffer[idx + 1] = CURSOR_COLOR.1;
+                    buffer[idx + 2] = CURSOR_COLOR.2;
+                    buffer[idx + 3] = 0xff;
+                }
             }
         }
     }
