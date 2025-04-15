@@ -5,7 +5,10 @@ use std::collections::VecDeque;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
+const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
 const FONT_SIZE: f32 = 48.0;
+
+const SHOW_BOUNDING_RECTANGLES: bool = true;
 
 pub struct TextApp {
     scroll_y: f32,
@@ -54,6 +57,28 @@ impl TextApp {
 
         visual_lines
     }
+
+    fn draw_rect(buffer: &mut [u8], width: u32, height: u32, x: u32, y: u32, w: u32, h: u32) {
+        let mut draw_pixel = |x, y| {
+            if x < width && y < height {
+                let idx = ((y * width + x) * 4) as usize;
+                buffer[idx + 0] = BOUND_COLOR.0;
+                buffer[idx + 1] = BOUND_COLOR.1;
+                buffer[idx + 2] = BOUND_COLOR.2;
+                buffer[idx + 3] = 0xff;
+            }
+        };
+
+        for dx in 0..w {
+            draw_pixel(x + dx, y);
+            draw_pixel(x + dx, y + h.saturating_sub(1));
+        }
+
+        for dy in 0..h {
+            draw_pixel(x, y + dy);
+            draw_pixel(x + w.saturating_sub(1), y + dy);
+        }
+    }
 }
 
 impl Application for TextApp {
@@ -66,7 +91,6 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
-        // Clear screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -74,11 +98,9 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
-        // Build wrapped visual lines
         let visual_lines = self.wrap_lines(width);
 
         let mut cursor_drawn = false;
-        let mut y_cursor_offset = 0.0;
 
         for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
             let y_screen = i as f32 * FONT_SIZE - self.scroll_y;
@@ -110,6 +132,14 @@ impl Application for TextApp {
                     }
                 }
 
+                if SHOW_BOUNDING_RECTANGLES {
+                    let w = metrics.width as u32;
+                    let h = metrics.height as u32;
+                    if y_pos >= 0 {
+                        Self::draw_rect(buffer, width, height, x_pos, y_pos as u32, w, h);
+                    }
+                }
+
                 // Check cursor position
                 let is_cursor = *logical_y == self.cursor_y && self.cursor_x == char_offset + j;
                 if is_cursor {
@@ -119,10 +149,8 @@ impl Application for TextApp {
                 x_cursor += metrics.advance_width;
             }
 
-            // Handle cursor at end of line
             if *logical_y == self.cursor_y && self.cursor_x == char_offset + line.len() {
                 cursor_here = true;
-                x_cursor += 1.0;
             }
 
             if cursor_here && !cursor_drawn {
@@ -139,7 +167,6 @@ impl Application for TextApp {
                     }
                 }
                 cursor_drawn = true;
-                y_cursor_offset = y_screen;
             }
         }
     }
