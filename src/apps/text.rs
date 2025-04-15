@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
-const FONT_SIZE: f32 = 48.0; // 3x larger
+const FONT_SIZE: f32 = 48.0;
 
 pub struct TextApp {
     scroll_y: f32,
@@ -101,18 +101,19 @@ impl Application for TextApp {
                 cursor_x += metrics.advance_width as usize;
             }
 
-            // Draw cursor bar at end of visual line
-            let x_cursor = line_width.round() as u32;
-            let y0 = (i as f32 * FONT_SIZE) as u32;
-            for y in 0..(FONT_SIZE as u32) {
-                let px = x_cursor.min(width - 1);
-                let py = y0 + y;
-                if px < width && py < height {
-                    let idx = ((py * width + px) * 4) as usize;
-                    buffer[idx + 0] = CURSOR_COLOR.0;
-                    buffer[idx + 1] = CURSOR_COLOR.1;
-                    buffer[idx + 2] = CURSOR_COLOR.2;
-                    buffer[idx + 3] = 0xff;
+            // Only draw cursor on the line with the cursor
+            if self.cursor_y == i + y_offset {
+                let x_cursor = cursor_x as u32;
+                let y0 = (i as f32 * FONT_SIZE) as u32;
+                for y in 0..(FONT_SIZE as u32) {
+                    let py = y0 + y;
+                    if x_cursor < width && py < height {
+                        let idx = ((py * width + x_cursor) * 4) as usize;
+                        buffer[idx + 0] = CURSOR_COLOR.0;
+                        buffer[idx + 1] = CURSOR_COLOR.1;
+                        buffer[idx + 2] = CURSOR_COLOR.2;
+                        buffer[idx + 3] = 0xff;
+                    }
                 }
             }
         }
@@ -124,25 +125,32 @@ impl Application for TextApp {
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
-            '\n' => {
-                self.text.insert(self.cursor_y + 1, String::new());
+            '\r' | '\n' => {
+                if self.cursor_y >= self.text.len() {
+                    self.text.push_back(String::new());
+                }
+                let current_line = self.text[self.cursor_y].split_off(self.cursor_x);
+                self.text.insert(self.cursor_y + 1, current_line);
                 self.cursor_y += 1;
                 self.cursor_x = 0;
             }
             '\u{8}' => {
                 if self.cursor_x > 0 {
-                    self.text[self.cursor_y].remove(self.cursor_x - 1);
                     self.cursor_x -= 1;
+                    self.text[self.cursor_y].remove(self.cursor_x);
                 } else if self.cursor_y > 0 {
-                    let prev_line = self.text.remove(self.cursor_y).unwrap();
+                    let current = self.text.remove(self.cursor_y).unwrap();
                     self.cursor_y -= 1;
                     self.cursor_x = self.text[self.cursor_y].len();
-                    self.text[self.cursor_y].push_str(&prev_line);
+                    self.text[self.cursor_y].push_str(&current);
                 }
             }
             _ => {
                 if ch.is_control() {
                     return;
+                }
+                if self.cursor_y >= self.text.len() {
+                    self.text.push_back(String::new());
                 }
                 self.text[self.cursor_y].insert(self.cursor_x, ch);
                 self.cursor_x += 1;
