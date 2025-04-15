@@ -29,25 +29,27 @@ impl TextApp {
         }
     }
 
-    fn wrap_lines(&self, max_width: u32) -> Vec<(String, f32)> {
+    fn wrap_lines(&self, max_width: u32) -> Vec<(String, usize, usize)> {
         let mut visual_lines = Vec::new();
 
-        for line in &self.text {
+        for (line_idx, line) in self.text.iter().enumerate() {
             let mut current_line = String::new();
             let mut current_width = 0.0;
+            let mut char_start = 0;
 
-            for ch in line.chars() {
+            for (i, ch) in line.chars().enumerate() {
                 let metrics = self.font.metrics(ch, FONT_SIZE);
                 if current_width + metrics.advance_width > max_width as f32 {
-                    visual_lines.push((current_line.clone(), current_width));
+                    visual_lines.push((current_line.clone(), line_idx, char_start));
                     current_line.clear();
                     current_width = 0.0;
+                    char_start = i;
                 }
                 current_line.push(ch);
                 current_width += metrics.advance_width;
             }
 
-            visual_lines.push((current_line, current_width));
+            visual_lines.push((current_line, line_idx, char_start));
         }
 
         visual_lines
@@ -64,6 +66,7 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
+        // Clear screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -71,25 +74,34 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
+        // Build wrapped visual lines
         let visual_lines = self.wrap_lines(width);
-        let lines_visible = (height as f32 / FONT_SIZE) as usize;
-        let y_offset = (self.scroll_y / FONT_SIZE) as usize;
 
-        for (i, (line, line_width)) in visual_lines.iter().skip(y_offset).take(lines_visible).enumerate() {
-            let mut cursor_x = 0;
+        let mut cursor_drawn = false;
+        let mut y_cursor_offset = 0.0;
 
-            for ch in line.chars() {
+        for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
+            let y_screen = i as f32 * FONT_SIZE - self.scroll_y;
+            if y_screen + FONT_SIZE < 0.0 || y_screen > height as f32 {
+                continue;
+            }
+
+            let mut x_cursor = 0.0;
+            let mut cursor_here = false;
+
+            for (j, ch) in line.chars().enumerate() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
-                let x0 = cursor_x as u32;
-                let y0 = (i as f32 * FONT_SIZE) as u32;
+                let x_pos = x_cursor as u32;
+                let y_pos = y_screen as i32;
 
+                // Draw glyph
                 for y in 0..metrics.height {
                     for x in 0..metrics.width {
                         let val = bitmap[y * metrics.width + x];
-                        let px = x0 + x as u32;
-                        let py = y0 + y as u32;
-                        if px < width && py < height {
-                            let idx = ((py * width + px) * 4) as usize;
+                        let px = x_pos + x as u32;
+                        let py = y_pos + y as i32;
+                        if px < width && py >= 0 && py < height as i32 {
+                            let idx = ((py as u32 * width + px) * 4) as usize;
                             buffer[idx + 0] = val;
                             buffer[idx + 1] = val;
                             buffer[idx + 2] = val;
@@ -98,37 +110,48 @@ impl Application for TextApp {
                     }
                 }
 
-                cursor_x += metrics.advance_width as usize;
+                // Check cursor position
+                let is_cursor = *logical_y == self.cursor_y && self.cursor_x == char_offset + j;
+                if is_cursor {
+                    cursor_here = true;
+                }
+
+                x_cursor += metrics.advance_width;
             }
 
-            // Only draw cursor on the line with the cursor
-            if self.cursor_y == i + y_offset {
-                let x_cursor = cursor_x as u32;
-                let y0 = (i as f32 * FONT_SIZE) as u32;
+            // Handle cursor at end of line
+            if *logical_y == self.cursor_y && self.cursor_x == char_offset + line.len() {
+                cursor_here = true;
+                x_cursor += 1.0;
+            }
+
+            if cursor_here && !cursor_drawn {
+                let x = x_cursor as u32;
+                let y0 = y_screen.max(0.0) as u32;
                 for y in 0..(FONT_SIZE as u32) {
                     let py = y0 + y;
-                    if x_cursor < width && py < height {
-                        let idx = ((py * width + x_cursor) * 4) as usize;
+                    if x < width && py < height {
+                        let idx = ((py * width + x) * 4) as usize;
                         buffer[idx + 0] = CURSOR_COLOR.0;
                         buffer[idx + 1] = CURSOR_COLOR.1;
                         buffer[idx + 2] = CURSOR_COLOR.2;
                         buffer[idx + 3] = 0xff;
                     }
                 }
+                cursor_drawn = true;
+                y_cursor_offset = y_screen;
             }
         }
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        self.scroll_y += dy;
+        self.scroll_y -= dy;
+        self.scroll_y = self.scroll_y.max(0.0);
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
             '\r' | '\n' => {
-                if self.cursor_y >= self.text.len() {
-                    self.text.push_back(String::new());
-                }
                 let current_line = self.text[self.cursor_y].split_off(self.cursor_x);
                 self.text.insert(self.cursor_y + 1, current_line);
                 self.cursor_y += 1;
@@ -148,9 +171,6 @@ impl Application for TextApp {
             _ => {
                 if ch.is_control() {
                     return;
-                }
-                if self.cursor_y >= self.text.len() {
-                    self.text.push_back(String::new());
                 }
                 self.text[self.cursor_y].insert(self.cursor_x, ch);
                 self.cursor_x += 1;
