@@ -322,6 +322,80 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         up_callback.forget();
     }
 
+    // Touch move (acts like mouse move + drag-to-scroll)
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone(); // ✅ clone canvas here
+
+        let touch_move_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                if let Some(touch) = event.touches().get(0) {
+                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let x = touch.client_x() as f64 - rect.left();
+                    let y = touch.client_y() as f64 - rect.top();
+                    let prev_x = state.engine_state.mouse.x;
+                    let prev_y = state.engine_state.mouse.y;
+                    state.engine_state.mouse.x = x as f32;
+                    state.engine_state.mouse.y = y as f32;
+                    state.app.on_mouse_move(&mut state.engine_state);
+
+                    let dx = state.engine_state.mouse.x - prev_x;
+                    let dy = state.engine_state.mouse.y - prev_y;
+                    if state.engine_state.mouse.is_down {
+                        state.app.on_scroll(&mut state.engine_state, -dx, -dy);
+                    }
+                }
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchmove", touch_move_callback.as_ref().unchecked_ref())?;
+        touch_move_callback.forget();
+    }
+
+    // Touch start
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone(); // ✅ clone canvas here
+
+        let touch_start_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                if let Some(touch) = event.touches().get(0) {
+                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let x = touch.client_x() as f64 - rect.left();
+                    let y = touch.client_y() as f64 - rect.top();
+                    state.engine_state.mouse.x = x as f32;
+                    state.engine_state.mouse.y = y as f32;
+                    state.engine_state.mouse.is_down = true;
+                    state.app.on_mouse_down(&mut state.engine_state);
+                }
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchstart", touch_start_callback.as_ref().unchecked_ref())?;
+        touch_start_callback.forget();
+    }
+
+    // Touch end
+    {
+        use web_sys::TouchEvent;
+        let state_ptr_clone = state_ptr;
+
+        let touch_end_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                state.engine_state.mouse.is_down = false;
+                state.app.on_mouse_up(&mut state.engine_state);
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("touchend", touch_end_callback.as_ref().unchecked_ref())?;
+        touch_end_callback.forget();
+    }
+
     // Animation loop - use a different approach without Rc/RefCell
     {
         // Store the callback in a static location
