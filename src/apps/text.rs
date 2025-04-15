@@ -6,14 +6,14 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
 const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
-const BASELINE_COLOR: (u8, u8, u8) = (0, 0, 255); // Added for baseline visualization
-const ASCENT_COLOR: (u8, u8, u8) = (255, 255, 0); // Added for ascent line visualization
-const DESCENT_COLOR: (u8, u8, u8) = (255, 0, 255); // Added for descent line visualization
+const BASELINE_COLOR: (u8, u8, u8) = (0, 0, 255);
+const ASCENT_COLOR: (u8, u8, u8) = (255, 255, 0);
+const DESCENT_COLOR: (u8, u8, u8) = (255, 0, 255);
 const FONT_SIZE: f32 = 48.0;
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
-const SHOW_BASELINE: bool = true; // Toggle to show baseline
-const SHOW_ASCENT_DESCENT: bool = true; // Toggle to show ascent/descent lines
+const SHOW_BASELINE: bool = true;
+const SHOW_ASCENT_DESCENT: bool = true;
 
 pub struct TextApp {
     scroll_y: f32,
@@ -21,14 +21,10 @@ pub struct TextApp {
     cursor_x: usize,
     cursor_y: usize,
     font: Font,
-    font_metrics: FontMetrics, // Added to store font-wide metrics
-}
-
-// New struct to hold font-wide metrics
-struct FontMetrics {
-    ascent: f32,
-    descent: f32,
     line_height: f32,
+    // We'll compute these directly from the font
+    max_ascent: f32,
+    max_descent: f32,
 }
 
 impl TextApp {
@@ -36,19 +32,28 @@ impl TextApp {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
         
-        // Calculate font metrics based on representative characters
-        // 'H' for ascent, 'p' for descent
-        let h_metrics = font.metrics('H', FONT_SIZE);
-        let p_metrics = font.metrics('p', FONT_SIZE);
-        let ascent = h_metrics.bounds.height as f32;
-        let descent = p_metrics.bounds.height as f32 - h_metrics.bounds.height as f32;
-        let line_height = ascent + descent + (FONT_SIZE * 0.2); // Adding some extra line spacing
+        // Get font metrics for common ASCII range to determine max ascent and descent
+        let mut max_ascent: f32 = 0.0;
+        let mut max_descent: f32 = 0.0;
         
-        let font_metrics = FontMetrics {
-            ascent,
-            descent,
-            line_height,
-        };
+        // Sample a range of characters to determine proper metrics
+        for c in " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,;:!?()[]{}'\"-_".chars() {
+            let metrics = font.metrics(c, FONT_SIZE);
+            // ymin is negative for characters extending above the baseline
+            if -metrics.bounds.ymin as f32 > max_ascent {
+                max_ascent = -metrics.bounds.ymin as f32;
+            }
+            
+            // For descent, we need to calculate how much the character extends below the baseline
+            // This is (ymin + height) if positive
+            let descent = metrics.bounds.ymin as f32 + metrics.bounds.height as f32;
+            if descent > 0.0 && descent > max_descent {
+                max_descent = descent;
+            }
+        }
+        
+        // Add a bit of padding for line height
+        let line_height = max_ascent + max_descent + (FONT_SIZE * 0.2);
 
         Self {
             scroll_y: 0.0,
@@ -56,7 +61,9 @@ impl TextApp {
             cursor_x: 0,
             cursor_y: 0,
             font,
-            font_metrics,
+            line_height,
+            max_ascent,
+            max_descent,
         }
     }
 
@@ -108,7 +115,6 @@ impl TextApp {
         }
     }
 
-    // New function to draw a horizontal line
     fn draw_horizontal_line(buffer: &mut [u8], width: u32, height: u32, x: u32, y: i32, w: u32, color: (u8, u8, u8)) {
         if y < 0 || y >= height as i32 {
             return;
@@ -145,63 +151,89 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
+        // Always draw baseline, ascent, and descent lines for the first line even if empty
+        if self.text.is_empty() || (self.text.len() == 1 && self.text[0].is_empty()) {
+            let baseline_y = self.max_ascent - self.scroll_y;
+            
+            if SHOW_BASELINE {
+                Self::draw_horizontal_line(
+                    buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR
+                );
+            }
+            
+            if SHOW_ASCENT_DESCENT {
+                Self::draw_horizontal_line(
+                    buffer, width, height, 0, (baseline_y - self.max_ascent) as i32, 
+                    width, ASCENT_COLOR
+                );
+                
+                Self::draw_horizontal_line(
+                    buffer, width, height, 0, (baseline_y + self.max_descent) as i32, 
+                    width, DESCENT_COLOR
+                );
+            }
+            
+            // Draw cursor at start position if we're at the beginning
+            if self.cursor_x == 0 && self.cursor_y == 0 {
+                let x = 0;
+                let y0 = (baseline_y - self.max_ascent).max(0.0) as u32;
+                let h = (self.max_ascent + self.max_descent) as u32;
+                
+                for y in 0..h {
+                    let py = y0 + y;
+                    if py < height {
+                        let idx = ((py * width + x) * 4) as usize;
+                        buffer[idx + 0] = CURSOR_COLOR.0;
+                        buffer[idx + 1] = CURSOR_COLOR.1;
+                        buffer[idx + 2] = CURSOR_COLOR.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+
         let visual_lines = self.wrap_lines(width);
         let mut cursor_drawn = false;
 
         for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
-            // Calculate the y position of the baseline
-            let baseline_y = (i as f32 * self.font_metrics.line_height) - self.scroll_y;
+            // Position based on line height
+            let baseline_y = (i as f32 * self.line_height) + self.max_ascent - self.scroll_y;
             
-            if baseline_y + self.font_metrics.descent < 0.0 || baseline_y - self.font_metrics.ascent > height as f32 {
+            if baseline_y + self.max_descent < 0.0 || baseline_y - self.max_ascent > height as f32 {
                 continue; // Skip if line is not visible
             }
 
             let mut x_cursor = 0.0;
             let mut cursor_here = false;
 
-            // Draw baseline if enabled
+            // Draw baseline for this line
             if SHOW_BASELINE {
                 Self::draw_horizontal_line(
-                    buffer, 
-                    width, 
-                    height, 
-                    0, 
-                    baseline_y as i32, 
-                    width, 
-                    BASELINE_COLOR
+                    buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR
                 );
             }
 
-            // Draw ascent line if enabled
+            // Draw ascent and descent lines for this line
             if SHOW_ASCENT_DESCENT {
                 Self::draw_horizontal_line(
-                    buffer, 
-                    width, 
-                    height, 
-                    0, 
-                    (baseline_y - self.font_metrics.ascent) as i32, 
-                    width, 
-                    ASCENT_COLOR
+                    buffer, width, height, 0, (baseline_y - self.max_ascent) as i32, 
+                    width, ASCENT_COLOR
                 );
                 
-                // Draw descent line if enabled
                 Self::draw_horizontal_line(
-                    buffer, 
-                    width, 
-                    height, 
-                    0, 
-                    (baseline_y + self.font_metrics.descent) as i32, 
-                    width, 
-                    DESCENT_COLOR
+                    buffer, width, height, 0, (baseline_y + self.max_descent) as i32, 
+                    width, DESCENT_COLOR
                 );
             }
 
             for (j, ch) in line.chars().enumerate() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
-                
-                // Calculate position relative to baseline 
-                // Subtract y_bearing to adjust for the character's individual position
                 let x_pos = x_cursor as u32;
+                
+                // Calculate vertical position:
+                // The baseline is at baseline_y, and we need to position the glyph
+                // so that its baseline aligns with baseline_y.
+                // The ymin value tells us how far above the baseline the glyph extends
                 let y_pos = (baseline_y - metrics.bounds.ymin as f32) as i32;
 
                 // Draw glyph
@@ -243,14 +275,13 @@ impl Application for TextApp {
             }
 
             if cursor_here && !cursor_drawn {
-                // Adjust cursor to draw from baseline to ascent line
                 let x = x_cursor as u32;
-                let y0 = (baseline_y - self.font_metrics.ascent).max(0.0) as u32;
-                let height = (self.font_metrics.ascent + self.font_metrics.descent) as u32;
+                let y0 = (baseline_y - self.max_ascent).max(0.0) as u32;
+                let h = (self.max_ascent + self.max_descent) as u32;
                 
-                for y in 0..height {
+                for y in 0..h {
                     let py = y0 + y;
-                    if x < width && py < state.frame.height {
+                    if x < width && py < height {
                         let idx = ((py * width + x) * 4) as usize;
                         buffer[idx + 0] = CURSOR_COLOR.0;
                         buffer[idx + 1] = CURSOR_COLOR.1;
