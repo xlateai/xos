@@ -1,82 +1,29 @@
 use crate::engine::{Application, EngineState};
-use fontdue::{Font, FontSettings};
-use std::collections::VecDeque;
+use cosmic_text::{Buffer, FontSystem, Metrics, SwashCache, Attrs, Action};
+use tiny_skia::PixmapMut;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
-const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
-const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
-const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
-const FONT_SIZE: f32 = 48.0;
-
-const SHOW_BOUNDING_RECTANGLES: bool = true;
+const FONT_SIZE: f32 = 16.0;
 
 pub struct TextApp {
+    font_system: FontSystem,
+    buffer: Buffer,
+    cache: SwashCache,
     scroll_y: f32,
-    text: VecDeque<String>,
-    cursor_x: usize,
-    cursor_y: usize,
-    font: Font,
 }
 
 impl TextApp {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
-        let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
+        let mut font_system = FontSystem::new();
+        let metrics = Metrics::new(FONT_SIZE, FONT_SIZE);
+        let mut buffer = Buffer::new(&mut font_system, metrics);
+        buffer.set_redraw(true);
 
         Self {
+            font_system,
+            buffer,
+            cache: SwashCache::new(),
             scroll_y: 0.0,
-            text: VecDeque::from([String::new()]),
-            cursor_x: 0,
-            cursor_y: 0,
-            font,
-        }
-    }
-
-    fn wrap_lines(&self, max_width: u32) -> Vec<(String, usize, usize)> {
-        let mut visual_lines = Vec::new();
-
-        for (line_idx, line) in self.text.iter().enumerate() {
-            let mut current_line = String::new();
-            let mut current_width = 0.0;
-            let mut char_start = 0;
-
-            for (i, ch) in line.chars().enumerate() {
-                let metrics = self.font.metrics(ch, FONT_SIZE);
-                if current_width + metrics.advance_width > max_width as f32 {
-                    visual_lines.push((current_line.clone(), line_idx, char_start));
-                    current_line.clear();
-                    current_width = 0.0;
-                    char_start = i;
-                }
-                current_line.push(ch);
-                current_width += metrics.advance_width;
-            }
-
-            visual_lines.push((current_line, line_idx, char_start));
-        }
-
-        visual_lines
-    }
-
-    fn draw_rect(buffer: &mut [u8], width: u32, height: u32, x: u32, y: u32, w: u32, h: u32) {
-        let mut draw_pixel = |x, y| {
-            if x < width && y < height {
-                let idx = ((y * width + x) * 4) as usize;
-                buffer[idx + 0] = BOUND_COLOR.0;
-                buffer[idx + 1] = BOUND_COLOR.1;
-                buffer[idx + 2] = BOUND_COLOR.2;
-                buffer[idx + 3] = 0xff;
-            }
-        };
-
-        for dx in 0..w {
-            draw_pixel(x + dx, y);
-            draw_pixel(x + dx, y + h.saturating_sub(1));
-        }
-
-        for dy in 0..h {
-            draw_pixel(x, y + dy);
-            draw_pixel(x + w.saturating_sub(1), y + dy);
         }
     }
 }
@@ -91,6 +38,7 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
+        // Clear frame
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -98,77 +46,29 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
-        let visual_lines = self.wrap_lines(width);
+        // Update buffer size
+        self.buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+        self.buffer.shape_until_scroll(&mut self.font_system, false);
 
-        let mut cursor_drawn = false;
-
-        for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
-            let y_screen = i as f32 * FONT_SIZE - self.scroll_y;
-            if y_screen + FONT_SIZE < 0.0 || y_screen > height as f32 {
-                continue;
-            }
-
-            let mut x_cursor = 0.0;
-            let mut cursor_here = false;
-
-            for (j, ch) in line.chars().enumerate() {
-                let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
-                let x_pos = x_cursor as u32;
-                let y_pos = y_screen as i32;
-
-                // Draw glyph
-                for y in 0..metrics.height {
-                    for x in 0..metrics.width {
-                        let val = bitmap[y * metrics.width + x];
-                        let px = x_pos + x as u32;
-                        let py = y_pos + y as i32;
-                        if px < width && py >= 0 && py < height as i32 {
-                            let idx = ((py as u32 * width + px) * 4) as usize;
-                            buffer[idx + 0] = val;
-                            buffer[idx + 1] = val;
-                            buffer[idx + 2] = val;
-                            buffer[idx + 3] = 0xff;
-                        }
+        // Render using a closure
+        let stride = width * 4;
+        let height_i32 = height as i32;
+        self.buffer.draw(&mut self.font_system, &mut self.cache, |x, y, w, h, color| {
+            for iy in 0..h {
+                for ix in 0..w {
+                    let px = x + ix as i32;
+                    let py = y + iy as i32;
+                    if px >= 0 && py >= 0 && px < width as i32 && py < height_i32 {
+                        let idx = (py as u32 * width + px as u32) * 4;
+                        let idx = idx as usize;
+                        buffer[idx + 0] = color.r();
+                        buffer[idx + 1] = color.g();
+                        buffer[idx + 2] = color.b();
+                        buffer[idx + 3] = color.a();
                     }
                 }
-
-                if SHOW_BOUNDING_RECTANGLES {
-                    let w = metrics.width as u32;
-                    let h = metrics.height as u32;
-                    if y_pos >= 0 {
-                        Self::draw_rect(buffer, width, height, x_pos, y_pos as u32, w, h);
-                    }
-                }
-
-                // Check cursor position
-                let is_cursor = *logical_y == self.cursor_y && self.cursor_x == char_offset + j;
-                if is_cursor {
-                    cursor_here = true;
-                }
-
-                x_cursor += metrics.advance_width;
             }
-
-            if *logical_y == self.cursor_y && self.cursor_x == char_offset + line.len() {
-                cursor_here = true;
-            }
-
-            if cursor_here && !cursor_drawn {
-                let x = x_cursor as u32;
-                let y0 = y_screen.max(0.0) as u32;
-                for y in 0..(FONT_SIZE as u32) {
-                    let py = y0 + y;
-                    if x < width && py < height {
-                        let idx = ((py * width + x) * 4) as usize;
-                        buffer[idx + 0] = CURSOR_COLOR.0;
-                        buffer[idx + 1] = CURSOR_COLOR.1;
-                        buffer[idx + 2] = CURSOR_COLOR.2;
-                        buffer[idx + 3] = 0xff;
-                    }
-                }
-                cursor_drawn = true;
-            }
-        }
+        });
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
@@ -177,31 +77,12 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
-        match ch {
-            '\r' | '\n' => {
-                let current_line = self.text[self.cursor_y].split_off(self.cursor_x);
-                self.text.insert(self.cursor_y + 1, current_line);
-                self.cursor_y += 1;
-                self.cursor_x = 0;
-            }
-            '\u{8}' => {
-                if self.cursor_x > 0 {
-                    self.cursor_x -= 1;
-                    self.text[self.cursor_y].remove(self.cursor_x);
-                } else if self.cursor_y > 0 {
-                    let current = self.text.remove(self.cursor_y).unwrap();
-                    self.cursor_y -= 1;
-                    self.cursor_x = self.text[self.cursor_y].len();
-                    self.text[self.cursor_y].push_str(&current);
-                }
-            }
-            _ => {
-                if ch.is_control() {
-                    return;
-                }
-                self.text[self.cursor_y].insert(self.cursor_x, ch);
-                self.cursor_x += 1;
-            }
+        if ch == '\u{8}' {
+            self.buffer.action(Action::Backspace);
+        } else if ch == '\r' || ch == '\n' {
+            self.buffer.action(Action::Enter);
+        } else if !ch.is_control() {
+            self.buffer.action(Action::Insert(ch));
         }
     }
 }
