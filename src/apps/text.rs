@@ -6,9 +6,14 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
 const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
+const BASELINE_COLOR: (u8, u8, u8) = (0, 0, 255); // Added for baseline visualization
+const ASCENT_COLOR: (u8, u8, u8) = (255, 255, 0); // Added for ascent line visualization
+const DESCENT_COLOR: (u8, u8, u8) = (255, 0, 255); // Added for descent line visualization
 const FONT_SIZE: f32 = 48.0;
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
+const SHOW_BASELINE: bool = true; // Toggle to show baseline
+const SHOW_ASCENT_DESCENT: bool = true; // Toggle to show ascent/descent lines
 
 pub struct TextApp {
     scroll_y: f32,
@@ -16,12 +21,34 @@ pub struct TextApp {
     cursor_x: usize,
     cursor_y: usize,
     font: Font,
+    font_metrics: FontMetrics, // Added to store font-wide metrics
+}
+
+// New struct to hold font-wide metrics
+struct FontMetrics {
+    ascent: f32,
+    descent: f32,
+    line_height: f32,
 }
 
 impl TextApp {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
+        
+        // Calculate font metrics based on representative characters
+        // 'H' for ascent, 'p' for descent
+        let h_metrics = font.metrics('H', FONT_SIZE);
+        let p_metrics = font.metrics('p', FONT_SIZE);
+        let ascent = h_metrics.bounds.height as f32;
+        let descent = p_metrics.bounds.height as f32 - h_metrics.bounds.height as f32;
+        let line_height = ascent + descent + (FONT_SIZE * 0.2); // Adding some extra line spacing
+        
+        let font_metrics = FontMetrics {
+            ascent,
+            descent,
+            line_height,
+        };
 
         Self {
             scroll_y: 0.0,
@@ -29,6 +56,7 @@ impl TextApp {
             cursor_x: 0,
             cursor_y: 0,
             font,
+            font_metrics,
         }
     }
 
@@ -79,6 +107,24 @@ impl TextApp {
             draw_pixel(x + w.saturating_sub(1), y + dy);
         }
     }
+
+    // New function to draw a horizontal line
+    fn draw_horizontal_line(buffer: &mut [u8], width: u32, height: u32, x: u32, y: i32, w: u32, color: (u8, u8, u8)) {
+        if y < 0 || y >= height as i32 {
+            return;
+        }
+        
+        for dx in 0..w {
+            let px = x + dx;
+            if px < width {
+                let idx = ((y as u32 * width + px) * 4) as usize;
+                buffer[idx + 0] = color.0;
+                buffer[idx + 1] = color.1;
+                buffer[idx + 2] = color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+    }
 }
 
 impl Application for TextApp {
@@ -91,6 +137,7 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
+        // Clear the screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -99,22 +146,63 @@ impl Application for TextApp {
         }
 
         let visual_lines = self.wrap_lines(width);
-
         let mut cursor_drawn = false;
 
         for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
-            let y_screen = i as f32 * FONT_SIZE - self.scroll_y;
-            if y_screen + FONT_SIZE < 0.0 || y_screen > height as f32 {
-                continue;
+            // Calculate the y position of the baseline
+            let baseline_y = (i as f32 * self.font_metrics.line_height) - self.scroll_y;
+            
+            if baseline_y + self.font_metrics.descent < 0.0 || baseline_y - self.font_metrics.ascent > height as f32 {
+                continue; // Skip if line is not visible
             }
 
             let mut x_cursor = 0.0;
             let mut cursor_here = false;
 
+            // Draw baseline if enabled
+            if SHOW_BASELINE {
+                Self::draw_horizontal_line(
+                    buffer, 
+                    width, 
+                    height, 
+                    0, 
+                    baseline_y as i32, 
+                    width, 
+                    BASELINE_COLOR
+                );
+            }
+
+            // Draw ascent line if enabled
+            if SHOW_ASCENT_DESCENT {
+                Self::draw_horizontal_line(
+                    buffer, 
+                    width, 
+                    height, 
+                    0, 
+                    (baseline_y - self.font_metrics.ascent) as i32, 
+                    width, 
+                    ASCENT_COLOR
+                );
+                
+                // Draw descent line if enabled
+                Self::draw_horizontal_line(
+                    buffer, 
+                    width, 
+                    height, 
+                    0, 
+                    (baseline_y + self.font_metrics.descent) as i32, 
+                    width, 
+                    DESCENT_COLOR
+                );
+            }
+
             for (j, ch) in line.chars().enumerate() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
+                
+                // Calculate position relative to baseline 
+                // Subtract y_bearing to adjust for the character's individual position
                 let x_pos = x_cursor as u32;
-                let y_pos = y_screen as i32;
+                let y_pos = (baseline_y - metrics.bounds.ymin as f32) as i32;
 
                 // Draw glyph
                 for y in 0..metrics.height {
@@ -124,9 +212,10 @@ impl Application for TextApp {
                         let py = y_pos + y as i32;
                         if px < width && py >= 0 && py < height as i32 {
                             let idx = ((py as u32 * width + px) * 4) as usize;
-                            buffer[idx + 0] = val;
-                            buffer[idx + 1] = val;
-                            buffer[idx + 2] = val;
+                            // Use proper text color and alpha blending
+                            buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
+                            buffer[idx + 1] = ((TEXT_COLOR.1 as u16 * val as u16) / 255) as u8;
+                            buffer[idx + 2] = ((TEXT_COLOR.2 as u16 * val as u16) / 255) as u8;
                             buffer[idx + 3] = 0xff;
                         }
                     }
@@ -154,11 +243,14 @@ impl Application for TextApp {
             }
 
             if cursor_here && !cursor_drawn {
+                // Adjust cursor to draw from baseline to ascent line
                 let x = x_cursor as u32;
-                let y0 = y_screen.max(0.0) as u32;
-                for y in 0..(FONT_SIZE as u32) {
+                let y0 = (baseline_y - self.font_metrics.ascent).max(0.0) as u32;
+                let height = (self.font_metrics.ascent + self.font_metrics.descent) as u32;
+                
+                for y in 0..height {
                     let py = y0 + y;
-                    if x < width && py < height {
+                    if x < width && py < state.frame.height {
                         let idx = ((py * width + x) * 4) as usize;
                         buffer[idx + 0] = CURSOR_COLOR.0;
                         buffer[idx + 1] = CURSOR_COLOR.1;
