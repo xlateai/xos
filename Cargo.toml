@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 description = "Experimental OS Windows Manager"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
@@ -50,3 +50,7 @@ console_error_panic_hook = "0.1"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "xos"
+path = "src/main.rs"
