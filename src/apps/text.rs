@@ -16,7 +16,6 @@ pub struct TextApp {
 
 impl TextApp {
     pub fn new() -> Self {
-        // TODO: we should build a nice font loading system that can audomatically download and cache them
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
@@ -27,6 +26,30 @@ impl TextApp {
             cursor_y: 0,
             font,
         }
+    }
+
+    fn wrap_lines(&self, max_width: u32) -> Vec<String> {
+        let mut visual_lines = Vec::new();
+
+        for line in &self.text {
+            let mut current_line = String::new();
+            let mut current_width = 0.0;
+
+            for ch in line.chars() {
+                let metrics = self.font.metrics(ch, FONT_SIZE);
+                if current_width + metrics.advance_width > max_width as f32 {
+                    visual_lines.push(current_line.clone());
+                    current_line.clear();
+                    current_width = 0.0;
+                }
+                current_line.push(ch);
+                current_width += metrics.advance_width;
+            }
+
+            visual_lines.push(current_line);
+        }
+
+        visual_lines
     }
 }
 
@@ -48,11 +71,13 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
+        let visual_lines = self.wrap_lines(width);
         let lines_visible = (height as f32 / FONT_SIZE) as usize;
         let y_offset = (self.scroll_y / FONT_SIZE) as usize;
 
-        for (i, line) in self.text.iter().skip(y_offset).take(lines_visible).enumerate() {
+        for (i, line) in visual_lines.iter().skip(y_offset).take(lines_visible).enumerate() {
             let mut cursor_x = 0;
+
             for ch in line.chars() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
                 let x0 = cursor_x as u32;
@@ -101,7 +126,9 @@ impl Application for TextApp {
                 }
             }
             _ => {
-                if ch.is_control() { return; }
+                if ch.is_control() {
+                    return;
+                }
                 self.text[self.cursor_y].insert(self.cursor_x, ch);
                 self.cursor_x += 1;
             }
