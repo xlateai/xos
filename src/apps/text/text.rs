@@ -90,6 +90,34 @@ impl TextApp {
             }
         }
     }
+
+    fn tick_keyboard(&mut self, state: &mut EngineState) {
+        for key in state.keyboard.get_pressed_keys() {
+            match key {
+                "backspace" => {
+                    self.text_engine.text.pop();
+                }
+                "tab" => {
+                    self.text_engine.text.push_str("    ");
+                }
+                "enter" => {
+                    self.text_engine.text.push('\n');
+                }
+                "space" => {
+                    self.text_engine.text.push(' ');
+                }
+                ch => {
+                    if ch.len() == 1 {
+                        let c = ch.chars().next().unwrap();
+                        if !c.is_control() {
+                            self.text_engine.text.push(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
 }
 
 impl Application for TextApp {
@@ -98,6 +126,8 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        self.tick_keyboard(state);
+
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
         let buffer = &mut state.frame.buffer;
@@ -160,25 +190,5 @@ impl Application for TextApp {
         self.scroll_y -= dy * 20.0;
         self.scroll_y = self.scroll_y.max(0.0);
     }
-
-    // fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
-    //     match ch {
-    //         '\t' => {
-    //             self.text_engine.text.push_str("    ");
-    //         }
-    //         '\r' | '\n' => {
-    //             self.text_engine.text.push('\n');
-    //         }
-    //         '\u{8}' => {
-    //             // Backspace
-    //             self.text_engine.text.pop();
-    //         }
-    //         _ => {
-    //             if !ch.is_control() {
-    //                 self.text_engine.text.push(ch);
-    //             }
-    //         }
-    //     }
-    // }
     
 }
