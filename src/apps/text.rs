@@ -22,7 +22,6 @@ pub struct TextApp {
     cursor_y: usize,
     font: Font,
     line_height: f32,
-    // Using fixed metrics since the fontdue metrics are giving us trouble
     ascent: f32,
     descent: f32,
 }
@@ -31,16 +30,16 @@ impl TextApp {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
-    
+
         let horizontal = font
             .horizontal_line_metrics(FONT_SIZE)
             .expect("Missing horizontal metrics");
-    
+
         let ascent = horizontal.ascent;
-        let descent = horizontal.descent.abs(); // Fontdue descent is negative
+        let descent = horizontal.descent.abs();
         let line_gap = horizontal.line_gap;
         let line_height = ascent + descent + line_gap;
-    
+
         Self {
             scroll_y: 0.0,
             text: VecDeque::from([String::new()]),
@@ -81,12 +80,12 @@ impl TextApp {
 
     fn draw_rect(buffer: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: u32, h: u32) {
         if x < 0 || y < 0 || w == 0 || h == 0 {
-            return; // Skip invalid rectangles
+            return;
         }
-        
+
         let x = x as u32;
         let y = y as u32;
-        
+
         let mut draw_pixel = |x, y| {
             if x < width && y < height {
                 let idx = ((y * width + x) * 4) as usize;
@@ -112,7 +111,7 @@ impl TextApp {
         if y < 0 || y >= height as i32 {
             return;
         }
-        
+
         for dx in 0..w {
             let px = x + dx;
             if px < width {
@@ -136,7 +135,6 @@ impl Application for TextApp {
         let height = state.frame.height;
         let buffer = &mut state.frame.buffer;
 
-        // Clear the screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
@@ -144,36 +142,23 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
-        // Always draw baseline, ascent, and descent lines for the first line even if empty
         if self.text.is_empty() || (self.text.len() == 1 && self.text[0].is_empty()) {
             let baseline_y = self.ascent - self.scroll_y;
-            
+
             if SHOW_BASELINE {
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR
-                );
+                Self::draw_horizontal_line(buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR);
             }
-            
+
             if SHOW_ASCENT_DESCENT {
-                // Ascent line (yellow) - top of line
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, (baseline_y - self.ascent) as i32, 
-                    width, ASCENT_COLOR
-                );
-                
-                // Descent line (magenta) - bottom of line
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, (baseline_y + self.descent) as i32, 
-                    width, DESCENT_COLOR
-                );
+                Self::draw_horizontal_line(buffer, width, height, 0, (baseline_y - self.ascent) as i32, width, ASCENT_COLOR);
+                Self::draw_horizontal_line(buffer, width, height, 0, (baseline_y + self.descent) as i32, width, DESCENT_COLOR);
             }
-            
-            // Draw cursor at start position if we're at the beginning
+
             if self.cursor_x == 0 && self.cursor_y == 0 {
                 let x = 0;
                 let y0 = (baseline_y - self.ascent).max(0.0) as u32;
                 let h = (self.ascent + self.descent) as u32;
-                
+
                 for y in 0..h {
                     let py = y0 + y;
                     if py < height {
@@ -191,10 +176,8 @@ impl Application for TextApp {
         let mut cursor_drawn = false;
 
         for (i, (line, logical_y, char_offset)) in visual_lines.iter().enumerate() {
-            // Baseline position for this line
             let baseline_y = (i as f32 * self.line_height) + self.ascent - self.scroll_y;
-            
-            // Skip if the line is completely outside the visible area
+
             if baseline_y + self.descent < 0.0 || baseline_y - self.ascent > height as f32 {
                 continue;
             }
@@ -202,45 +185,32 @@ impl Application for TextApp {
             let mut x_cursor = 0.0;
             let mut cursor_here = false;
 
-            // Draw baseline for this line
             if SHOW_BASELINE {
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR
-                );
+                Self::draw_horizontal_line(buffer, width, height, 0, baseline_y as i32, width, BASELINE_COLOR);
             }
 
-            // Draw ascent and descent lines for this line
             if SHOW_ASCENT_DESCENT {
-                // Ascent line (yellow) - top of line
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, (baseline_y - self.ascent) as i32, 
-                    width, ASCENT_COLOR
-                );
-                
-                // Descent line (magenta) - bottom of line
-                Self::draw_horizontal_line(
-                    buffer, width, height, 0, (baseline_y + self.descent) as i32, 
-                    width, DESCENT_COLOR
-                );
+                Self::draw_horizontal_line(buffer, width, height, 0, (baseline_y - self.ascent) as i32, width, ASCENT_COLOR);
+                Self::draw_horizontal_line(buffer, width, height, 0, (baseline_y + self.descent) as i32, width, DESCENT_COLOR);
             }
 
             for (j, ch) in line.chars().enumerate() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
                 let x_pos = x_cursor as i32;
-            
-                // Align using fontdue's per-glyph ymin
-                let y_pos = (baseline_y + metrics.ymin as f32) as i32;
-            
+
+                // 👇 This is the correct baseline-aligned y_pos now
+                let y_pos = (baseline_y - metrics.height as f32 - metrics.ymin as f32) as i32;
+
                 if SHOW_BOUNDING_RECTANGLES {
                     Self::draw_rect(buffer, width, height, x_pos, y_pos, metrics.width as u32, metrics.height as u32);
                 }
-            
+
                 for y in 0..metrics.height {
                     for x in 0..metrics.width {
                         let val = bitmap[y * metrics.width + x];
                         let px = x_pos + x as i32;
                         let py = y_pos + y as i32;
-            
+
                         if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
                             let idx = ((py as u32 * width + px as u32) * 4) as usize;
                             buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
@@ -250,12 +220,12 @@ impl Application for TextApp {
                         }
                     }
                 }
-            
+
                 let is_cursor = *logical_y == self.cursor_y && self.cursor_x == char_offset + j;
                 if is_cursor {
                     cursor_here = true;
                 }
-            
+
                 x_cursor += metrics.advance_width;
             }
 
@@ -267,7 +237,7 @@ impl Application for TextApp {
                 let x = x_cursor as u32;
                 let y0 = (baseline_y - self.ascent).max(0.0) as u32;
                 let h = (self.ascent + self.descent) as u32;
-                
+
                 for y in 0..h {
                     let py = y0 + y;
                     if x < width && py < height {
