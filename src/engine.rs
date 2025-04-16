@@ -198,6 +198,23 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     app.on_key_char(&mut engine_state, ch);
                 }
 
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(keycode),
+                            ..
+                        },
+                    ..
+                } => {
+                    match keycode {
+                        VirtualKeyCode::Back => {
+                            app.on_key_char(&mut engine_state, '\u{8}'); // ⬅️ Backspace as char
+                        }
+                        _ => {} // ignore others
+                    }
+                }
+
                 _ => {}
             },
 
