@@ -61,6 +61,35 @@ impl TextApp {
             draw_pixel(x + w.saturating_sub(1), y + dy);
         }
     }
+
+    fn tick_cursor(&mut self, state: &mut EngineState) {
+        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
+            if self.text_engine.text.chars().last() == Some('\n') {
+                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            }
+        } else {
+            (0.0, self.text_engine.ascent)
+        };
+        
+        // Smooth the x-position (linear interpolation)
+        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+        
+        let cursor_top = (baseline_y - self.text_engine.ascent - self.scroll_y).round() as i32;
+        let cursor_bottom = (baseline_y + self.text_engine.descent - self.scroll_y).round() as i32;
+        let cx = self.smooth_cursor_x.round() as i32;
+        
+        for y in cursor_top..cursor_bottom {
+            if y >= 0 && y < state.frame.height as i32 && cx >= 0 && cx < state.frame.width as i32 {
+                let idx = ((y as u32 * state.frame.width as u32 + cx as u32) * 4) as usize;
+                state.frame.buffer[idx + 0] = CURSOR_COLOR.0;
+                state.frame.buffer[idx + 1] = CURSOR_COLOR.1;
+                state.frame.buffer[idx + 2] = CURSOR_COLOR.2;
+                state.frame.buffer[idx + 3] = 0xff;
+            }
+        }
+    }
 }
 
 impl Application for TextApp {
@@ -124,32 +153,7 @@ impl Application for TextApp {
             }
         }
 
-        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
-            if self.text_engine.text.chars().last() == Some('\n') {
-                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
-            } else {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
-            }
-        } else {
-            (0.0, self.text_engine.ascent)
-        };
-        
-        // Smooth the x-position (linear interpolation)
-        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
-        
-        let cursor_top = (baseline_y - self.text_engine.ascent - self.scroll_y).round() as i32;
-        let cursor_bottom = (baseline_y + self.text_engine.descent - self.scroll_y).round() as i32;
-        let cx = self.smooth_cursor_x.round() as i32;
-        
-        for y in cursor_top..cursor_bottom {
-            if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
-                let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
-                buffer[idx + 0] = CURSOR_COLOR.0;
-                buffer[idx + 1] = CURSOR_COLOR.1;
-                buffer[idx + 2] = CURSOR_COLOR.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
+        self.tick_cursor(state);
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
@@ -157,7 +161,7 @@ impl Application for TextApp {
         self.scroll_y = self.scroll_y.max(0.0);
     }
 
-    fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
+    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
             '\t' => {
                 self.text_engine.text.push_str("    ");
