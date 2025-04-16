@@ -133,21 +133,25 @@ impl Application for TextApp {
         self.scroll_y = self.scroll_y.max(0.0);
     }
 
-    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+    fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
         if ch.is_control() {
             return;
         }
     
-        let mut text = self.text_engine.text.clone();
-        text.insert(self.cursor_index, ch);
+        // Direct mutation
+        self.text_engine.text.insert(self.cursor_index, ch);
         self.cursor_index += 1;
     
-        self.text_engine.set_text(text);
+        // Recompute layout after mutation
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+        self.text_engine.tick(width, height);
     
-        // fix: cursor_index can be == len, but that's not a valid index for .get()
+        // Clamp cursor to end if needed
         if self.cursor_index > self.text_engine.characters.len() {
-            self.cursor_index = self.text_engine.characters.len(); // allow one-past-end
+            self.cursor_index = self.text_engine.characters.len();
         }
     }
+    
     
 }
