@@ -43,7 +43,7 @@ impl KeyboardApp {
             "Enter" => 2.25,
             "Shift" => 2.25,
             "Ctrl" | "Alt" => 1.25,
-            "Space" => 6.0,
+            "Space" => 8.4, // ⬅️ Buffed from 6.0 to ~40% larger
             _ => 1.0,
         };
 
@@ -130,51 +130,62 @@ impl Application for KeyboardApp {
         let buffer = &mut state.frame.buffer;
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
-        let min_dim = width.min(height);
-
-        let scale = min_dim / 960.0;
-
-        let key_width = BASE_KEY_WIDTH * scale;
-        let key_height = BASE_KEY_HEIGHT * scale;
+    
+        // Use horizontal width only to keep a nice wide layout
+        let scale = width / 960.0;
         let key_spacing = BASE_KEY_SPACING * scale;
+        let key_height = BASE_KEY_HEIGHT * scale;
         let font_size = BASE_FONT_SIZE * scale;
-
-        let total_height = self.layout.len() as f32 * (key_height + key_spacing) - key_spacing;
-
+    
+        // Clear screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
             buffer[i + 2] = BACKGROUND_COLOR.2;
             buffer[i + 3] = 0xff;
         }
-
+    
+        // Compute total keyboard height with this horizontal-derived scaling
+        let total_height = self.layout.len() as f32 * (key_height + key_spacing) - key_spacing;
         let mut y = ((height - total_height) / 2.0).round();
-
+    
         for row in &mut self.layout {
-            let row_width: f32 = row.iter().map(|k| k.width_units * key_width + key_spacing).sum::<f32>() - key_spacing;
-            let mut x = ((width - row_width) / 2.0).round();
-
-            for key in row {
-                let w = (key.width_units * key_width).round() as u32;
+            let total_units: f32 = row.iter().map(|k| k.width_units).sum();
+            let total_spacing = (row.len() - 1) as f32 * key_spacing;
+            let unit_width = (width - total_spacing) / total_units;
+    
+            let mut x = 0.0;
+            let row_len = row.len();
+    
+            for (i, key) in row.iter_mut().enumerate() {
+                let w = (key.width_units * unit_width).round() as u32;
                 let h = key_height.round() as u32;
-                let px = x.round() as i32;
+    
+                // Adjust outer keys to eliminate edge gaps
+                let is_leftmost = i == 0;
+                let is_rightmost = i == row_len - 1;
+                let expand_left = if is_leftmost { (x as f32).floor() } else { 0.0 };
+                let expand_right = if is_rightmost { width - (x + w as f32) } else { 0.0 };
+    
+                let px = (x - expand_left).round() as i32;
                 let py = y.round() as i32;
-
+                let pw = (w as f32 + expand_left + expand_right).round() as u32;
+    
                 key.text.set_font_size(font_size);
                 key.text.tick(width, height);
-
-                Self::draw_key(buffer, state.frame.width, state.frame.height, px, py, w, h);
-
+    
+                Self::draw_key(buffer, state.frame.width, state.frame.height, px, py, pw, h);
+    
                 for ch in &key.text.characters {
-                    let cx = px + (w as i32 - ch.width as i32) / 2;
+                    let cx = px + (pw as i32 - ch.width as i32) / 2;
                     let cy = py + (h as i32 - ch.height as i32) / 2;
-
+    
                     for y in 0..ch.metrics.height {
                         for x in 0..ch.metrics.width {
                             let val = ch.bitmap[y * ch.metrics.width + x];
                             let sx = cx + x as i32;
                             let sy = cy + y as i32;
-
+    
                             if sx >= 0 && sx < state.frame.width as i32 && sy >= 0 && sy < state.frame.height as i32 {
                                 let idx = ((sy as u32 * state.frame.width + sx as u32) * 4) as usize;
                                 buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
@@ -185,11 +196,13 @@ impl Application for KeyboardApp {
                         }
                     }
                 }
-
-                x += key.width_units * key_width + key_spacing;
+    
+                x += key.width_units * unit_width + key_spacing;
             }
-
+    
             y += key_height + key_spacing;
         }
     }
+    
+    
 }
