@@ -223,7 +223,7 @@ impl Application for TextApp {
                 }
 
                 x_cursor += metrics.advance_width;
-                
+
                 if SHOW_BOUNDING_RECTANGLES {
                     Self::draw_rect(buffer, width, height, x_pos, y_pos, metrics.width as u32, metrics.height as u32);
                 }
@@ -265,6 +265,12 @@ impl Application for TextApp {
                 self.text.insert(self.cursor_y + 1, current_line);
                 self.cursor_y += 1;
                 self.cursor_x = 0;
+            }
+            '\t' => {
+                let tab_size = 4;
+                let spaces = " ".repeat(tab_size);
+                self.text[self.cursor_y].insert_str(self.cursor_x, &spaces);
+                self.cursor_x += tab_size;
             }
             '\u{8}' => {
                 if self.cursor_x > 0 {
