@@ -1,5 +1,7 @@
 #[derive(Debug, Clone)]
 pub struct Key {
+    pub label: &'static str,
+    pub char: char,
     pub is_pressed: bool,
     pub is_held: bool,
     pub is_released: bool,
@@ -7,8 +9,10 @@ pub struct Key {
 }
 
 impl Key {
-    pub fn new() -> Self {
+    pub fn new(label: &'static str, ch: char) -> Self {
         Self {
+            label,
+            char: ch,
             is_pressed: false,
             is_held: false,
             is_released: false,
@@ -32,7 +36,7 @@ impl Key {
 #[macro_export]
 macro_rules! define_keyboard_keys {
     (
-        $( $field:ident => $label:expr ),* $(,)?
+        $( $field:ident => ($label:expr, $ch:expr) ),* $(,)?
     ) => {
         #[derive(Debug, Clone)]
         pub struct KeyboardKeys {
@@ -42,32 +46,44 @@ macro_rules! define_keyboard_keys {
         impl KeyboardKeys {
             pub fn new() -> Self {
                 Self {
-                    $( $field: Key::new(), )*
+                    $( $field: Key::new($label, $ch), )*
                 }
             }
 
-            pub fn all_keys_mut(&mut self) -> Vec<(&'static str, &mut Key)> {
-                vec![ $( ($label, &mut self.$field), )* ]
+            pub fn all_keys_mut(&mut self) -> Vec<&mut Key> {
+                vec![ $( &mut self.$field, )* ]
             }
 
-            pub fn all_keys(&self) -> Vec<(&'static str, &Key)> {
-                vec![ $( ($label, &self.$field), )* ]
+            pub fn all_keys(&self) -> Vec<&Key> {
+                vec![ $( &self.$field, )* ]
             }
         }
     };
 }
 
 define_keyboard_keys! {
-    a => "a", b => "b", c => "c", d => "d", e => "e", f => "f", g => "g",
-    h => "h", i => "i", j => "j", k => "k", l => "l", m => "m", n => "n",
-    o => "o", p => "p", q => "q", r => "r", s => "s", t => "t", u => "u",
-    v => "v", w => "w", x => "x", y => "y", z => "z",
-    zero => "0", one => "1", two => "2", three => "3", four => "4",
-    five => "5", six => "6", seven => "7", eight => "8", nine => "9",
-    percent => "%", star => "*", dash => "-", underscore => "_", plus => "+",
-    equals => "=", slash => "/", backslash => "\\", comma => ",", period => ".",
-    space => " ", tab => "\t", enter => "\n", backspace => "\u{8}",
-    shift => "shift", control => "control", alt => "alt", meta => "meta",
+    a => ("a", 'a'), b => ("b", 'b'), c => ("c", 'c'), d => ("d", 'd'),
+    e => ("e", 'e'), f => ("f", 'f'), g => ("g", 'g'), h => ("h", 'h'),
+    i => ("i", 'i'), j => ("j", 'j'), k => ("k", 'k'), l => ("l", 'l'),
+    m => ("m", 'm'), n => ("n", 'n'), o => ("o", 'o'), p => ("p", 'p'),
+    q => ("q", 'q'), r => ("r", 'r'), s => ("s", 's'), t => ("t", 't'),
+    u => ("u", 'u'), v => ("v", 'v'), w => ("w", 'w'), x => ("x", 'x'),
+    y => ("y", 'y'), z => ("z", 'z'),
+
+    zero => ("0", '0'), one => ("1", '1'), two => ("2", '2'), three => ("3", '3'),
+    four => ("4", '4'), five => ("5", '5'), six => ("6", '6'),
+    seven => ("7", '7'), eight => ("8", '8'), nine => ("9", '9'),
+
+    percent => ("%", '%'), star => ("*", '*'), dash => ("-", '-'),
+    underscore => ("_", '_'), plus => ("+", '+'), equals => ("=", '='),
+    slash => ("/", '/'), backslash => ("\\", '\\'), comma => (",", ','),
+    period => (".", '.'),
+
+    space => ("space", ' '), tab => ("tab", '\t'), enter => ("enter", '\n'),
+    backspace => ("backspace", '\u{8}'),
+
+    shift => ("shift", '\0'), control => ("control", '\0'),
+    alt => ("alt", '\0'), meta => ("meta", '\0'),
 }
 
 #[derive(Debug, Clone)]
@@ -83,54 +99,29 @@ impl KeyboardState {
     }
 
     pub fn tick(&mut self, active: &[&str]) {
-        for (label, key) in self.keys.all_keys_mut() {
-            key.update(active.contains(&label));
+        for key in self.keys.all_keys_mut() {
+            key.update(active.contains(&key.label));
         }
     }
 
-    pub fn get_pressed_keys(&self) -> Vec<&str> {
+    pub fn get_pressed_keys(&self) -> Vec<&Key> {
         self.keys.all_keys()
             .into_iter()
-            .filter(|(_, k)| k.is_pressed)
-            .map(|(k, _)| k)
+            .filter(|k| k.is_pressed)
             .collect()
     }
 
-    pub fn get_held_keys(&self) -> Vec<&str> {
+    pub fn get_held_keys(&self) -> Vec<&Key> {
         self.keys.all_keys()
             .into_iter()
-            .filter(|(_, k)| k.is_held)
-            .map(|(k, _)| k)
+            .filter(|k| k.is_held)
             .collect()
     }
 
-    pub fn get_released_keys(&self) -> Vec<&str> {
+    pub fn get_released_keys(&self) -> Vec<&Key> {
         self.keys.all_keys()
             .into_iter()
-            .filter(|(_, k)| k.is_released)
-            .map(|(k, _)| k)
+            .filter(|k| k.is_released)
             .collect()
     }
 }
-
-// fn main() {
-//     let mut keyboard = Keyboard::new();
-
-//     keyboard.tick(&["a", "shift", "8", "*"]);
-
-//     for key in keyboard.get_pressed_keys() {
-//         println!("Key pressed: {}", key);
-//     }
-
-//     for key in keyboard.get_held_keys() {
-//         println!("Key held: {}", key);
-//     }
-
-//     for key in keyboard.get_released_keys() {
-//         println!("Key released: {}", key);
-//     }
-
-//     if keyboard.keys.a.is_held {
-//         println!("IntelliSense works: 'a' is held!");
-//     }
-// }

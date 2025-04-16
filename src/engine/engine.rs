@@ -33,19 +33,19 @@ pub trait Application {
 }
 
 pub fn on_key_char_update_keyboard_state(state: &mut KeyboardState, ch: char) {
-    let dynamic = ch.to_string(); // keep this alive across match
+    let dynamic = ch.to_string();
 
     let label: &str = match ch {
         '\u{8}' => "backspace",
         '\t' => "tab",
         '\n' => "enter",
         ' ' => "space",
-        _ => dynamic.as_str(), // safe now — dynamic lives long enough
+        _ => dynamic.as_str(),
     };
 
     let valid_labels: Vec<&'static str> = state.keys.all_keys()
         .into_iter()
-        .map(|(label, _)| label)
+        .map(|k| k.label)
         .collect();
 
     if valid_labels.contains(&label) {

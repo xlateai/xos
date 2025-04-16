@@ -93,27 +93,23 @@ impl TextApp {
 
     fn tick_keyboard(&mut self, state: &mut EngineState) {
         for key in state.keyboard.get_pressed_keys() {
-            match key {
-                "backspace" => {
-                    self.text_engine.text.pop();
+            match key.char {
+                '\u{8}' => {
+                    self.text_engine.text.pop(); // backspace
                 }
-                "tab" => {
-                    self.text_engine.text.push_str("    ");
+                '\t' => {
+                    self.text_engine.text.push_str("    "); // tab → 4 spaces
                 }
-                "enter" => {
-                    self.text_engine.text.push('\n');
+                '\n' => {
+                    self.text_engine.text.push('\n'); // enter
                 }
-                "space" => {
-                    self.text_engine.text.push(' ');
+                ' ' => {
+                    self.text_engine.text.push(' '); // space
                 }
-                ch => {
-                    if ch.len() == 1 {
-                        let c = ch.chars().next().unwrap();
-                        if !c.is_control() {
-                            self.text_engine.text.push(c);
-                        }
-                    }
+                c if !c.is_control() && c != '\0' => {
+                    self.text_engine.text.push(c); // normal character
                 }
+                _ => {}
             }
         }
     }
