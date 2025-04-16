@@ -145,9 +145,6 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
-        let width = state.frame.width as f32;
-        let height = state.frame.height as f32;
-    
         match ch {
             '\t' => {
                 self.text_engine.text.push_str("    ");
