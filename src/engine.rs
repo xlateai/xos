@@ -410,19 +410,30 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let key = event.key();
-
+        
                 match key.as_str() {
                     "Enter" => {
                         state.app.on_key_char(&mut state.engine_state, '\n');
-                        event.prevent_default(); // stop newlines in <body>
+                        event.prevent_default();
                     }
                     "Backspace" => {
                         state.app.on_key_char(&mut state.engine_state, '\u{8}');
-                        event.prevent_default(); // stop browser back nav
+                        event.prevent_default();
+                    }
+                    "Tab" => {
+                        state.app.on_key_char(&mut state.engine_state, '\t');
+                        event.prevent_default();
+                    }
+                    "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "ArrowLeft" | "ArrowRight"
+                    | "ArrowUp" | "ArrowDown" | "Home" | "End" | "PageUp" | "PageDown" => {
+                        // Do nothing — non-character keys
                     }
                     _ => {
-                        if let Some(c) = key.chars().next() {
-                            state.app.on_key_char(&mut state.engine_state, c);
+                        // If it's a single printable char, send it
+                        if key.len() == 1 && !event.ctrl_key() && !event.meta_key() && !event.alt_key() {
+                            if let Some(c) = key.chars().next() {
+                                state.app.on_key_char(&mut state.engine_state, c);
+                            }
                         }
                     }
                 }
