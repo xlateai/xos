@@ -286,7 +286,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let dx = event.delta_x() as f32;
-                let dy = event.delta_y() as f32;
+                let dy = -event.delta_y() as f32;
                 state.app.on_scroll(&mut state.engine_state, dx, dy);
             }
         }) as Box<dyn FnMut(_)>);
