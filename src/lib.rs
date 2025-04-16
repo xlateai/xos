@@ -14,6 +14,7 @@ pub mod apps;
 pub mod engine;
 pub mod video;
 pub mod audio;
+pub mod keyboard;
 
 #[cfg(feature = "python")]
 mod py_engine;

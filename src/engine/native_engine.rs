@@ -7,7 +7,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-use super::engine::{Application, EngineState, FrameState, MouseState};
+use super::engine::{Application, EngineState, FrameState, MouseState, KeyboardState};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
@@ -31,6 +31,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             y: 0.0,
             is_down: false,
         },
+        keyboard: KeyboardState::new(),
     };
 
     app.setup(&mut engine_state)?;

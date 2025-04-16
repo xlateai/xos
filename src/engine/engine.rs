@@ -1,7 +1,10 @@
+pub use crate::keyboard::KeyboardState;
+
 #[derive(Debug, Clone)]
 pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
+    pub keyboard: KeyboardState,
 }
 
 #[derive(Debug, Clone)]
