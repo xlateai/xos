@@ -54,6 +54,16 @@ impl GeometricText {
         self.text = text;
     }
 
+    pub fn set_font_size(&mut self, font_size: f32) {
+        self.font_size = font_size;
+    
+        if let Some(metrics) = self.font.horizontal_line_metrics(font_size) {
+            self.ascent = metrics.ascent;
+            self.descent = metrics.descent.abs();
+            self.line_gap = metrics.line_gap;
+        }
+    }
+
     pub fn tick(&mut self, window_width: f32, _window_height: f32) {
         self.characters.clear();
         self.lines.clear();
