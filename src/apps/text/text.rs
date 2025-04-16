@@ -9,6 +9,7 @@ const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
 const BASELINE_COLOR: (u8, u8, u8) = (100, 100, 100);
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
+const DRAW_BASELINES: bool = true;
 
 use std::collections::HashMap;
 
@@ -126,15 +127,17 @@ impl Application for TextApp {
         }
     
         // Draw baselines
-        for line in &self.text_engine.lines {
-            let y = (line.baseline_y - self.scroll_y) as i32;
-            if y >= 0 && y < height as i32 {
-                for x in 0..width as i32 {
-                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                    buffer[idx + 0] = BASELINE_COLOR.0;
-                    buffer[idx + 1] = BASELINE_COLOR.1;
-                    buffer[idx + 2] = BASELINE_COLOR.2;
-                    buffer[idx + 3] = 0xff;
+        if DRAW_BASELINES {
+            for line in &self.text_engine.lines {
+                let y = (line.baseline_y - self.scroll_y) as i32;
+                if y >= 0 && y < height as i32 {
+                    for x in 0..width as i32 {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        buffer[idx + 0] = BASELINE_COLOR.0;
+                        buffer[idx + 1] = BASELINE_COLOR.1;
+                        buffer[idx + 2] = BASELINE_COLOR.2;
+                        buffer[idx + 3] = 0xff;
+                    }
                 }
             }
         }
