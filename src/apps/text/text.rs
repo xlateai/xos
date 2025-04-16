@@ -139,15 +139,17 @@ impl Application for TextApp {
             }
         }
     
-        // Draw characters with fade-in effect
+        // Draw characters with fade and slide-in
         for character in &self.text_engine.characters {
             let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
             let fade = self.fade_map.entry(fade_key).or_insert(0.0);
-            *fade = (*fade + 0.08).min(1.0);
-    
+            *fade = (*fade + 0.16).min(1.0); // Fast fade
+
             let alpha = (*fade * 255.0).round() as u8;
-    
-            let px = character.x as i32;
+
+            // Slide in from the right using bitmap width as base
+            let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
+            let px = (character.x as i32) + slide_offset;
             let py = (character.y - self.scroll_y) as i32;
             let pw = character.width as u32;
             let ph = character.height as u32;
