@@ -165,8 +165,6 @@ impl Application for TextApp {
                 }
             }
         }
-    
-        self.text_engine.tick(width, height);
     }
     
 }
