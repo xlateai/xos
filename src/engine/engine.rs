@@ -31,3 +31,27 @@ pub trait Application {
     fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
     fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {}
 }
+
+pub fn on_key_char_update_keyboard_state(state: &mut KeyboardState, ch: char) {
+    let dynamic = ch.to_string(); // keep this alive across match
+
+    let label: &str = match ch {
+        '\u{8}' => "backspace",
+        '\t' => "tab",
+        '\n' => "enter",
+        ' ' => "space",
+        _ => dynamic.as_str(), // safe now — dynamic lives long enough
+    };
+
+    let valid_labels: Vec<&'static str> = state.keys.all_keys()
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+
+    if valid_labels.contains(&label) {
+        state.tick(&[label]);
+    } else {
+        state.tick(&[]);
+    }
+}
+

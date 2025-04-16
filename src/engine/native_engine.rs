@@ -7,7 +7,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-use super::engine::{Application, EngineState, FrameState, MouseState, KeyboardState};
+use super::engine::{Application, EngineState, FrameState, MouseState, KeyboardState, on_key_char_update_keyboard_state};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +102,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     app.on_scroll(&mut engine_state, dx, dy);
                 }
                 WindowEvent::ReceivedCharacter(ch) => {
-                    app.on_key_char(&mut engine_state, ch);
+                    on_key_char_update_keyboard_state(&mut engine_state.keyboard, ch);
+                    // app.on_key_char(&mut engine_state, ch);
                 }
                 WindowEvent::KeyboardInput {
                     input: KeyboardInput {
@@ -112,7 +113,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     },
                     ..
                 } => {
-                    app.on_key_char(&mut engine_state, '\u{8}');
+                    on_key_char_update_keyboard_state(&mut engine_state.keyboard, '\u{8}');
+                    // app.on_key_char(&mut engine_state, '\u{8}');
                 }
                 _ => {}
             },

@@ -161,24 +161,24 @@ impl Application for TextApp {
         self.scroll_y = self.scroll_y.max(0.0);
     }
 
-    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
-        match ch {
-            '\t' => {
-                self.text_engine.text.push_str("    ");
-            }
-            '\r' | '\n' => {
-                self.text_engine.text.push('\n');
-            }
-            '\u{8}' => {
-                // Backspace
-                self.text_engine.text.pop();
-            }
-            _ => {
-                if !ch.is_control() {
-                    self.text_engine.text.push(ch);
-                }
-            }
-        }
-    }
+    // fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+    //     match ch {
+    //         '\t' => {
+    //             self.text_engine.text.push_str("    ");
+    //         }
+    //         '\r' | '\n' => {
+    //             self.text_engine.text.push('\n');
+    //         }
+    //         '\u{8}' => {
+    //             // Backspace
+    //             self.text_engine.text.pop();
+    //         }
+    //         _ => {
+    //             if !ch.is_control() {
+    //                 self.text_engine.text.push(ch);
+    //             }
+    //         }
+    //     }
+    // }
     
 }
