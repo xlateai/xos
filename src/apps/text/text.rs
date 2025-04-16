@@ -6,12 +6,12 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
 const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
+const BASELINE_COLOR: (u8, u8, u8) = (100, 100, 100);
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
 
 pub struct TextApp {
     pub text_engine: GeometricText,
-    pub cursor_index: usize,
     pub scroll_y: f32,
 }
 
@@ -20,12 +20,10 @@ impl TextApp {
         let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
-        let mut text_engine = GeometricText::new(font, 48.0);
-        // text_engine.set_text("hello world!".to_string());
+        let text_engine = GeometricText::new(font, 48.0);
 
         Self {
             text_engine,
-            cursor_index: 0,
             scroll_y: 0.0,
         }
     }
@@ -77,6 +75,21 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
 
+        // Draw baselines
+        for line in &self.text_engine.lines {
+            let y = (line.baseline_y - self.scroll_y) as i32;
+            if y >= 0 && y < height as i32 {
+                for x in 0..width as i32 {
+                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                    buffer[idx + 0] = BASELINE_COLOR.0;
+                    buffer[idx + 1] = BASELINE_COLOR.1;
+                    buffer[idx + 2] = BASELINE_COLOR.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+
+        // Draw characters
         for character in &self.text_engine.characters {
             let px = character.x as i32;
             let py = (character.y - self.scroll_y) as i32;
@@ -104,14 +117,12 @@ impl Application for TextApp {
             }
         }
 
-        let (cx, cy, ch) = if let Some(c) = self.text_engine.characters.get(self.cursor_index) {
-            (c.x, c.y, c.height)
-        } else if let Some(last) = self.text_engine.characters.last() {
+        // Draw cursor at end of last character
+        let (cx, cy, ch) = if let Some(last) = self.text_engine.characters.last() {
             (last.x + last.metrics.advance_width, last.y, last.height)
         } else {
             (0.0, self.text_engine.ascent, self.text_engine.ascent + self.text_engine.descent)
         };
-        
 
         let cx = cx as u32;
         let cy = (cy - self.scroll_y) as u32;
@@ -137,21 +148,11 @@ impl Application for TextApp {
         if ch.is_control() {
             return;
         }
-    
-        // Direct mutation
-        self.text_engine.text.insert(self.cursor_index, ch);
-        self.cursor_index += 1;
-    
-        // Recompute layout after mutation
+
+        self.text_engine.text.push(ch);
+
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
         self.text_engine.tick(width, height);
-    
-        // Clamp cursor to end if needed
-        if self.cursor_index > self.text_engine.characters.len() {
-            self.cursor_index = self.text_engine.characters.len();
-        }
     }
-    
-    
 }
