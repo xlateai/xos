@@ -18,9 +18,13 @@ pub struct TextApp {
 impl TextApp {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        // let font_bytes = include_bytes!("../../../assets/NotoSansJP-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
         let text_engine = GeometricText::new(font, 48.0);
+
+        // huge TODO: multi-language support lmao
+        // text_engine.set_text("こんにちは、今日は大丈夫です".to_string());
 
         Self {
             text_engine,
