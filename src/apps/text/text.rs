@@ -13,7 +13,9 @@ const SHOW_BOUNDING_RECTANGLES: bool = true;
 pub struct TextApp {
     pub text_engine: GeometricText,
     pub scroll_y: f32,
+    pub smooth_cursor_x: f32, // ← NEW
 }
+
 
 impl TextApp {
     pub fn new() -> Self {
@@ -29,6 +31,7 @@ impl TextApp {
         Self {
             text_engine,
             scroll_y: 0.0,
+            smooth_cursor_x: 0.0,
         }
     }
 
@@ -121,8 +124,7 @@ impl Application for TextApp {
             }
         }
 
-        let (cursor_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
-            // Check if last typed character was a newline
+        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
             if self.text_engine.text.chars().last() == Some('\n') {
                 (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
             } else {
@@ -131,11 +133,14 @@ impl Application for TextApp {
         } else {
             (0.0, self.text_engine.ascent)
         };
-
+        
+        // Smooth the x-position (linear interpolation)
+        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+        
         let cursor_top = (baseline_y - self.text_engine.ascent - self.scroll_y).round() as i32;
         let cursor_bottom = (baseline_y + self.text_engine.descent - self.scroll_y).round() as i32;
-        let cx = cursor_x.round() as i32;
-
+        let cx = self.smooth_cursor_x.round() as i32;
+        
         for y in cursor_top..cursor_bottom {
             if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
                 let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
@@ -145,20 +150,6 @@ impl Application for TextApp {
                 buffer[idx + 3] = 0xff;
             }
         }
-
-        // let cx = cx as u32;
-        // let cy = (cy - self.scroll_y) as u32;
-        // let h = ch as u32;
-
-        // for y in 0..h {
-        //     let idx = ((cy + y) * width as u32 + cx) as usize * 4;
-        //     if idx + 3 < buffer.len() {
-        //         buffer[idx + 0] = CURSOR_COLOR.0;
-        //         buffer[idx + 1] = CURSOR_COLOR.1;
-        //         buffer[idx + 2] = CURSOR_COLOR.2;
-        //         buffer[idx + 3] = 0xff;
-        //     }
-        // }
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
