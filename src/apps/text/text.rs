@@ -21,7 +21,7 @@ impl TextApp {
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
         let mut text_engine = GeometricText::new(font, 48.0);
-        text_engine.set_text("hello world!".to_string());
+        // text_engine.set_text("hello world!".to_string());
 
         Self {
             text_engine,

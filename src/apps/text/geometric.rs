@@ -44,7 +44,7 @@ impl GeometricText {
             lines: vec![],
             font_size,
             ascent: metrics.ascent,
-            descent: metrics.descent,
+            descent: metrics.descent.abs(),
             line_gap: metrics.line_gap,
             font,
         }
@@ -59,7 +59,7 @@ impl GeometricText {
         self.lines.clear();
 
         let mut x = 0.0;
-        let mut y = 0.0;
+        let mut baseline_y = self.ascent;
         let mut line_start = 0;
         let mut line_index = 0;
 
@@ -71,16 +71,18 @@ impl GeometricText {
 
             if x + advance > window_width {
                 self.lines.push(LineInfo {
-                    baseline_y: y,
+                    baseline_y,
                     start_index: line_start,
                     end_index: i,
                 });
 
                 x = 0.0;
-                y += self.ascent + self.descent + self.line_gap;
+                baseline_y += self.ascent + self.descent + self.line_gap;
                 line_start = i;
                 line_index += 1;
             }
+
+            let y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
 
             self.characters.push(Character {
                 ch,
@@ -97,9 +99,8 @@ impl GeometricText {
             x += advance;
         }
 
-        // Final line
         self.lines.push(LineInfo {
-            baseline_y: y,
+            baseline_y,
             start_index: line_start,
             end_index: self.text.len(),
         });
