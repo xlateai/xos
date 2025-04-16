@@ -201,10 +201,6 @@ impl Application for TextApp {
                 // 👇 This is the correct baseline-aligned y_pos now
                 let y_pos = (baseline_y - metrics.height as f32 - metrics.ymin as f32) as i32;
 
-                if SHOW_BOUNDING_RECTANGLES {
-                    Self::draw_rect(buffer, width, height, x_pos, y_pos, metrics.width as u32, metrics.height as u32);
-                }
-
                 for y in 0..metrics.height {
                     for x in 0..metrics.width {
                         let val = bitmap[y * metrics.width + x];
@@ -227,6 +223,10 @@ impl Application for TextApp {
                 }
 
                 x_cursor += metrics.advance_width;
+                
+                if SHOW_BOUNDING_RECTANGLES {
+                    Self::draw_rect(buffer, width, height, x_pos, y_pos, metrics.width as u32, metrics.height as u32);
+                }
             }
 
             if *logical_y == self.cursor_y && self.cursor_x == char_offset + line.len() {
