@@ -145,14 +145,28 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
-        if ch.is_control() {
-            return;
-        }
-
-        self.text_engine.text.push(ch);
-
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
+    
+        match ch {
+            '\t' => {
+                self.text_engine.text.push_str("    ");
+            }
+            '\r' | '\n' => {
+                self.text_engine.text.push('\n');
+            }
+            '\u{8}' => {
+                // Backspace
+                self.text_engine.text.pop();
+            }
+            _ => {
+                if !ch.is_control() {
+                    self.text_engine.text.push(ch);
+                }
+            }
+        }
+    
         self.text_engine.tick(width, height);
     }
+    
 }
