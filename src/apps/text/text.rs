@@ -121,26 +121,40 @@ impl Application for TextApp {
             }
         }
 
-        // Draw cursor at end of last character
-        let (cx, cy, ch) = if let Some(last) = self.text_engine.characters.last() {
-            (last.x + last.metrics.advance_width, last.y, last.height)
+        // Draw cursor at end of last character, using line height
+        let (cursor_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
+            (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
         } else {
-            (0.0, self.text_engine.ascent, self.text_engine.ascent + self.text_engine.descent)
+            (0.0, self.text_engine.ascent)
         };
 
-        let cx = cx as u32;
-        let cy = (cy - self.scroll_y) as u32;
-        let h = ch as u32;
+        let cursor_top = (baseline_y - self.text_engine.ascent - self.scroll_y).round() as i32;
+        let cursor_bottom = (baseline_y + self.text_engine.descent - self.scroll_y).round() as i32;
+        let cx = cursor_x.round() as i32;
 
-        for y in 0..h {
-            let idx = ((cy + y) * width as u32 + cx) as usize * 4;
-            if idx + 3 < buffer.len() {
+        for y in cursor_top..cursor_bottom {
+            if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
+                let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
                 buffer[idx + 0] = CURSOR_COLOR.0;
                 buffer[idx + 1] = CURSOR_COLOR.1;
                 buffer[idx + 2] = CURSOR_COLOR.2;
                 buffer[idx + 3] = 0xff;
             }
         }
+
+        // let cx = cx as u32;
+        // let cy = (cy - self.scroll_y) as u32;
+        // let h = ch as u32;
+
+        // for y in 0..h {
+        //     let idx = ((cy + y) * width as u32 + cx) as usize * 4;
+        //     if idx + 3 < buffer.len() {
+        //         buffer[idx + 0] = CURSOR_COLOR.0;
+        //         buffer[idx + 1] = CURSOR_COLOR.1;
+        //         buffer[idx + 2] = CURSOR_COLOR.2;
+        //         buffer[idx + 3] = 0xff;
+        //     }
+        // }
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
