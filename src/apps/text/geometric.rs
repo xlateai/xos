@@ -57,33 +57,49 @@ impl GeometricText {
     pub fn tick(&mut self, window_width: f32, _window_height: f32) {
         self.characters.clear();
         self.lines.clear();
-
+    
         let mut x = 0.0;
         let mut baseline_y = self.ascent;
         let mut line_start = 0;
         let mut line_index = 0;
-
+    
         let text = self.text.clone();
-
+        let mut last_index = 0;
+    
         for (i, ch) in text.chars().enumerate() {
+            if ch == '\n' {
+                // End current line on newline character
+                self.lines.push(LineInfo {
+                    baseline_y,
+                    start_index: line_start,
+                    end_index: i,
+                });
+    
+                x = 0.0;
+                baseline_y += self.ascent + self.descent + self.line_gap;
+                line_start = i + 1;
+                line_index += 1;
+                continue;
+            }
+    
             let (metrics, bitmap) = self.font.rasterize(ch, self.font_size);
             let advance = metrics.advance_width;
-
+    
             if x + advance > window_width {
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
                     end_index: i,
                 });
-
+    
                 x = 0.0;
                 baseline_y += self.ascent + self.descent + self.line_gap;
                 line_start = i;
                 line_index += 1;
             }
-
+    
             let y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
-
+    
             self.characters.push(Character {
                 ch,
                 x,
@@ -95,14 +111,16 @@ impl GeometricText {
                 metrics,
                 bitmap,
             });
-
+    
             x += advance;
+            last_index = i;
         }
-
+    
         self.lines.push(LineInfo {
             baseline_y,
             start_index: line_start,
-            end_index: self.text.len(),
+            end_index: last_index + 1,
         });
     }
+    
 }
