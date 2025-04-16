@@ -41,6 +41,7 @@ pub trait Application {
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
     fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
+    fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {} // 👈 Add this
 }
 
 /// Shared function to validate frame buffer size
@@ -191,6 +192,10 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     };
                 
                     app.on_scroll(&mut engine_state, dx, dy);
+                }
+
+                WindowEvent::ReceivedCharacter(ch) => {
+                    app.on_key_char(&mut engine_state, ch);
                 }
 
                 _ => {}
@@ -394,6 +399,26 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("touchend", touch_end_callback.as_ref().unchecked_ref())?;
         touch_end_callback.forget();
+    }
+
+    // Keyboard input
+    {
+        use web_sys::KeyboardEvent;
+        let state_ptr_clone = state_ptr;
+
+        let keypress_callback = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            unsafe {
+                let ch = event.key();
+                if let Some(c) = ch.chars().next() {
+                    let state = &mut *state_ptr_clone;
+                    state.app.on_key_char(&mut state.engine_state, c);
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        window
+            .add_event_listener_with_callback("keypress", keypress_callback.as_ref().unchecked_ref())?;
+        keypress_callback.forget();
     }
 
     // Animation loop - use a different approach without Rc/RefCell

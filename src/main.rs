@@ -84,6 +84,14 @@ enum Commands {
         #[arg(long = "react-native")]
         react_native: bool,
     },
+
+    Text {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
 }
 
 fn main() {
@@ -120,6 +128,10 @@ fn main() {
 
         Some(Commands::Scroll { web, react_native }) => {
             run_game("scroll", web, react_native);
+        }
+
+        Some(Commands::Text { web, react_native }) => {
+            run_game("text", web, react_native);
         }
 
         None => {
