@@ -121,9 +121,13 @@ impl Application for TextApp {
             }
         }
 
-        // Draw cursor at end of last character, using line height
         let (cursor_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
-            (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            // Check if last typed character was a newline
+            if self.text_engine.text.chars().last() == Some('\n') {
+                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            }
         } else {
             (0.0, self.text_engine.ascent)
         };
