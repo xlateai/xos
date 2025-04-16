@@ -406,19 +406,32 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         use web_sys::KeyboardEvent;
         let state_ptr_clone = state_ptr;
 
-        let keypress_callback = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+        let keydown_callback = Closure::wrap(Box::new(move |event: KeyboardEvent| {
             unsafe {
-                let ch = event.key();
-                if let Some(c) = ch.chars().next() {
-                    let state = &mut *state_ptr_clone;
-                    state.app.on_key_char(&mut state.engine_state, c);
+                let state = &mut *state_ptr_clone;
+                let key = event.key();
+
+                match key.as_str() {
+                    "Enter" => {
+                        state.app.on_key_char(&mut state.engine_state, '\n');
+                        event.prevent_default(); // stop newlines in <body>
+                    }
+                    "Backspace" => {
+                        state.app.on_key_char(&mut state.engine_state, '\u{8}');
+                        event.prevent_default(); // stop browser back nav
+                    }
+                    _ => {
+                        if let Some(c) = key.chars().next() {
+                            state.app.on_key_char(&mut state.engine_state, c);
+                        }
+                    }
                 }
             }
         }) as Box<dyn FnMut(_)>);
 
         window
-            .add_event_listener_with_callback("keypress", keypress_callback.as_ref().unchecked_ref())?;
-        keypress_callback.forget();
+            .add_event_listener_with_callback("keydown", keydown_callback.as_ref().unchecked_ref())?;
+        keydown_callback.forget();
     }
 
     // Animation loop - use a different approach without Rc/RefCell
