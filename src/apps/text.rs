@@ -31,13 +31,16 @@ impl TextApp {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
-        
-        // Hard-coded but reasonable values for most monospace fonts
-        let ascent = FONT_SIZE * 0.7;   // Distance above baseline
-        let descent = FONT_SIZE * 0.3;  // Distance below baseline
-        let line_gap = FONT_SIZE * 0.2; // Extra space between lines
+    
+        let horizontal = font
+            .horizontal_line_metrics(FONT_SIZE)
+            .expect("Missing horizontal metrics");
+    
+        let ascent = horizontal.ascent;
+        let descent = horizontal.descent.abs(); // Fontdue descent is negative
+        let line_gap = horizontal.line_gap;
         let line_height = ascent + descent + line_gap;
-
+    
         Self {
             scroll_y: 0.0,
             text: VecDeque::from([String::new()]),
@@ -224,69 +227,22 @@ impl Application for TextApp {
             for (j, ch) in line.chars().enumerate() {
                 let (metrics, bitmap) = self.font.rasterize(ch, FONT_SIZE);
                 let x_pos = x_cursor as i32;
-                
-                // Universal approach - focus on getting the character's vertical
-                // position correct in relation to the baseline
-                let y_offset = match ch {
-                    // Uppercase letters and tall lowercase letters sit on baseline
-                    'A'..='Z' | 'b' | 'd' | 'f' | 'h' | 'k' | 'l' | 't' => {
-                        // Position so bottom 1/4 of bitmap is below baseline
-                        -(metrics.height as f32 * 0.75)
-                    },
-                    
-                    // Regular lowercase letters sit on baseline
-                    'a' | 'c' | 'e' | 'i' | 'm' | 'n' | 'o' | 'r' | 's' | 'u' | 'v' | 'w' | 'x' | 'z' => {
-                        // Position so bottom 1/3 of bitmap is below baseline
-                        -(metrics.height as f32 * 0.65)
-                    },
-                    
-                    // Letters with descenders
-                    'g' | 'j' | 'p' | 'q' | 'y' => {
-                        // Position so top 2/3 of bitmap is above baseline
-                        -(metrics.height as f32 * 0.6)
-                    },
-                    
-                    // Punctuation that goes above baseline
-                    '\'' | '"' | '`' => {
-                        // Position higher up
-                        -(metrics.height as f32 * 0.9)
-                    },
-                    
-                    // Punctuation that sits on baseline
-                    '.' | ',' | ';' | ':' => {
-                        // Position so bottom 1/3 of bitmap is below baseline
-                        -(metrics.height as f32 * 0.3)
-                    },
-                    
-                    // Underscore sits below baseline
-                    '_' => 0.0,
-                    
-                    // Middle height characters (like +, -, =)
-                    '+' | '-' | '=' | '*' | '/' | '\\' | '<' | '>' => {
-                        -(metrics.height as f32 * 0.5)
-                    },
-                    
-                    // Default case for other characters
-                    _ => -(metrics.height as f32 * 0.6),
-                };
-                
-                let y_pos = (baseline_y + y_offset) as i32;
-                
-                // Draw bounding rectangle
+            
+                // Align using fontdue's per-glyph ymin
+                let y_pos = (baseline_y + metrics.ymin as f32) as i32;
+            
                 if SHOW_BOUNDING_RECTANGLES {
                     Self::draw_rect(buffer, width, height, x_pos, y_pos, metrics.width as u32, metrics.height as u32);
                 }
-                
-                // Draw the glyph bitmap
+            
                 for y in 0..metrics.height {
                     for x in 0..metrics.width {
                         let val = bitmap[y * metrics.width + x];
                         let px = x_pos + x as i32;
                         let py = y_pos + y as i32;
-                        
+            
                         if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
                             let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                            // Use white text with alpha from the bitmap
                             buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
                             buffer[idx + 1] = ((TEXT_COLOR.1 as u16 * val as u16) / 255) as u8;
                             buffer[idx + 2] = ((TEXT_COLOR.2 as u16 * val as u16) / 255) as u8;
@@ -294,13 +250,12 @@ impl Application for TextApp {
                         }
                     }
                 }
-
-                // Check cursor position
+            
                 let is_cursor = *logical_y == self.cursor_y && self.cursor_x == char_offset + j;
                 if is_cursor {
                     cursor_here = true;
                 }
-
+            
                 x_cursor += metrics.advance_width;
             }
 
