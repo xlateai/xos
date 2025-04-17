@@ -24,6 +24,13 @@ pub struct CursorStyleSetter {
 
 impl CursorStyleSetter {
     #[inline(always)]
+    pub fn new() -> Self {
+        Self {
+            current_style: CursorStyle::Default,
+        }
+    }
+
+    #[inline(always)]
     pub fn get(&self) -> CursorStyle {
         self.current_style
     }
@@ -33,6 +40,7 @@ impl CursorStyleSetter {
         self.current_style = val;
     }
 }
+
 
 macro_rules! impl_cursor_style_setters {
     ($($variant:ident => $method:ident),* $(,)?) => {
