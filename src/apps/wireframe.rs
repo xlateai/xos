@@ -57,22 +57,29 @@ impl WireframeDemo {
 
     fn write_literal_to_file(file: &str, line: u32, new_x: f32, new_y: f32) {
         let path = std::path::Path::new(file);
-        let contents = fs::read_to_string(path).expect("could not read file");
-
-        let mut lines: Vec<_> = contents.lines().map(|l| l.to_string()).collect();
-        let target_line = line as usize - 1;
-
-        if target_line >= lines.len() { return; }
-
-        // crude string replacement assuming pattern:
-        // tuneable!("square_x" => 320.0),
-        lines[target_line] = format!(
-            "    tuneable!(\"square_x\" => {:.1}),\n    tuneable!(\"square_y\" => {:.1}),",
-            new_x, new_y
-        );
-
-        fs::write(path, lines.join("\n")).expect("failed to write updated literal");
+        let contents = std::fs::read_to_string(path).expect("could not read file");
+    
+        let mut lines: Vec<String> = contents.lines().map(|l| l.to_string()).collect();
+        let start_line = line as usize - 1;
+    
+        // Look ahead for the two-line tuple definition
+        if start_line + 1 >= lines.len() { return; }
+    
+        // Crude check: find and replace lines containing `square_x` and `square_y`
+        let x_line_idx = start_line;
+        let y_line_idx = start_line + 1;
+    
+        if lines[x_line_idx].contains("square_x") && lines[y_line_idx].contains("square_y") {
+            lines[x_line_idx] = format!("    tuneable!(\"square_x\" => {:.1}),", new_x);
+            lines[y_line_idx] = format!("    tuneable!(\"square_y\" => {:.1}),", new_y);
+        } else {
+            eprintln!("Warning: expected `square_x` and `square_y` on lines {}, {} — skipping update", x_line_idx + 1, y_line_idx + 1);
+            return;
+        }
+    
+        std::fs::write(path, lines.join("\n")).expect("failed to write updated literal");
     }
+    
 }
 
 impl Application for WireframeDemo {
