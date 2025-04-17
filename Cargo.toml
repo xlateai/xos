@@ -28,6 +28,10 @@ rand = "0.8"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 image = { version = "0.25", features = ["default-formats"] }
 pyo3 = { version = "0.21", optional = true, features = ["extension-module"] }
+syn = { version = "2", features = ["full", "visit-mut"] }
+quote = "1"
+prettyplease = "0.2"
+
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

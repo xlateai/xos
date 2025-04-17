@@ -4,6 +4,9 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::fmt::Debug;
 
+use syn::{visit_mut::VisitMut, Expr, ExprAssign, ExprPath, File, Item, ItemMacro};
+use quote::ToTokens;
+
 /// Trait all tuneables implement
 pub trait TuneableEntry: Send + Sync {
     fn file(&self) -> &'static str;
@@ -11,6 +14,7 @@ pub trait TuneableEntry: Send + Sync {
     fn column(&self) -> u32;
     fn name(&self) -> &'static str;
     fn write_source_line(&self) -> String;
+    fn get_dynamic_value(&self) -> String;
 }
 
 static REGISTRY: OnceLock<Mutex<Vec<&'static dyn TuneableEntry>>> = OnceLock::new();
@@ -19,58 +23,79 @@ pub fn register(entry: &'static dyn TuneableEntry) {
     REGISTRY.get_or_init(Default::default).lock().unwrap().push(entry);
 }
 
-fn patch_tuneable_block(lines: &mut Vec<String>, entries: &[&dyn TuneableEntry]) {
-    // Map name -> entry
-    let mut entry_map: HashMap<&str, &dyn TuneableEntry> = HashMap::new();
-    for entry in entries {
-        entry_map.insert(entry.name(), *entry);
-    }
-
-    let mut inside_block = false;
-
-    for i in 0..lines.len() {
-        let line = lines[i].trim_start();
-
-        if line.starts_with("tuneables!") && line.contains('{') {
-            inside_block = true;
-            continue;
-        }
-
-        if inside_block {
-            if line.starts_with('}') {
-                inside_block = false;
-                continue;
-            }
-
-            // Try to match line like: `name: type = value;`
-            if let Some((name, _rest)) = line.split_once(':') {
-                let name = name.trim();
-                if let Some(entry) = entry_map.get(name) {
-                    lines[i] = entry.write_source_line();
-                }
-            }
-        }
-    }
-}
-
-
 pub fn write_all_to_source() {
     let Some(registry) = REGISTRY.get() else { return };
     let registry = registry.lock().unwrap();
 
-    // Group tuneables by file
-    let mut by_file: HashMap<&'static str, Vec<&dyn TuneableEntry>> = HashMap::new();
+    let mut by_file: HashMap<&'static str, HashMap<&'static str, &dyn TuneableEntry>> = HashMap::new();
     for entry in registry.iter() {
-        by_file.entry(entry.file()).or_default().push(*entry);
+        by_file
+            .entry(entry.file())
+            .or_default()
+            .insert(entry.name(), *entry);
     }
 
     for (file, entries) in by_file {
         let path = Path::new(file);
-        let Ok(content) = fs::read_to_string(path) else { continue };
-        let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        let Ok(code) = fs::read_to_string(path) else { continue };
+        let Ok(mut syntax) = syn::parse_file(&code) else { continue };
 
-        patch_tuneable_block(&mut lines, &entries);
-        let _ = fs::write(path, lines.join("\n"));
+        let mut visitor = TuneableUpdater { entry_map: &entries };
+        visitor.visit_file_mut(&mut syntax);
+
+        let updated_code = prettyplease::unparse(&syntax);
+        let _ = fs::write(path, updated_code);
+    }
+}
+
+struct TuneableUpdater<'a> {
+    entry_map: &'a HashMap<&'static str, &'static dyn TuneableEntry>,
+}
+
+impl<'a> VisitMut for TuneableUpdater<'a> {
+    fn visit_item_macro_mut(&mut self, mac: &mut ItemMacro) {
+        if let Some(ident) = mac.mac.path.get_ident() {
+            if ident == "tuneables" {
+                let tokens = mac.mac.tokens.clone();
+                let block = match syn::parse2::<syn::Block>(tokens) {
+                    Ok(b) => b,
+                    Err(_) => return,
+                };
+
+                let mut new_lines = Vec::new();
+
+                for stmt in block.stmts {
+                    if let syn::Stmt::Expr(expr, semi_opt) = stmt {
+                        match expr {
+                            Expr::Assign(mut assign) => {
+                                if let Expr::Path(ExprPath { path, .. }) = *assign.left.clone() {
+                                    if let Some(ident) = path.get_ident() {
+                                        if let Some(entry) = self.entry_map.get(ident.to_string().as_str()) {
+                                            let new_rhs: Expr = syn::parse_str(&entry.get_dynamic_value()).unwrap();
+                                            assign.right = Box::new(new_rhs);
+                                            new_lines.push(syn::Stmt::Expr(Expr::Assign(assign), semi_opt));
+                                            continue;
+                                        }
+                                    }
+                                }
+                
+                                // fallback to original assignment if we didn't match anything
+                                new_lines.push(syn::Stmt::Expr(Expr::Assign(assign), semi_opt));
+                            }
+                            other => {
+                                new_lines.push(syn::Stmt::Expr(other, semi_opt));
+                            }
+                        }
+                    } else {
+                        new_lines.push(stmt);
+                    }
+                }
+
+                mac.mac.tokens = quote::quote!({ #(#new_lines)* });
+            }
+        }
+
+        syn::visit_mut::visit_item_macro_mut(self, mac);
     }
 }
 
@@ -112,6 +137,9 @@ macro_rules! impl_tuneable_entry {
             fn name(&self) -> &'static str { self.name }
             fn write_source_line(&self) -> String {
                 format!("    {}: {} = {:?};", self.name, stringify!($t), self.get())
+            }
+            fn get_dynamic_value(&self) -> String {
+                format!("{:?}", self.get())
             }
         }
     };
