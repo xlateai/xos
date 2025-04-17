@@ -6,6 +6,7 @@ pub mod tracers;
 pub mod waveform;
 pub mod scroll;
 pub mod text;
+pub mod wireframe;
 
 use crate::engine::Application;
 
@@ -19,6 +20,7 @@ pub fn get_app(name: &str) -> Option<Box<dyn Application>> {
         "waveform" => Some(Box::new(waveform::Waveform::new())),
         "scroll" => Some(Box::new(scroll::ScrollApp::new())),
         "text" => Some(Box::new(text::TextApp::new())),
+        "wireframe" => Some(Box::new(wireframe::WireframeDemo::new())),
         _ => None,
     }
 }
