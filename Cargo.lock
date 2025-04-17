@@ -3797,6 +3797,7 @@ dependencies = [
  "once_cell",
  "pixels",
  "prettyplease",
+ "proc-macro2",
  "pyo3",
  "quote",
  "rand",

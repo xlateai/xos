@@ -31,6 +31,7 @@ pyo3 = { version = "0.21", optional = true, features = ["extension-module"] }
 syn = { version = "2", features = ["full", "visit-mut"] }
 quote = "1"
 prettyplease = "0.2"
+proc-macro2 = "1"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

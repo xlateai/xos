@@ -6,6 +6,7 @@ use std::fmt::Debug;
 
 use syn::{visit_mut::VisitMut, Expr, ExprAssign, ExprPath, File, Item, ItemMacro};
 use quote::ToTokens;
+use proc_macro2::TokenStream;
 
 /// Trait all tuneables implement
 pub trait TuneableEntry: Send + Sync {
@@ -56,16 +57,18 @@ impl<'a> VisitMut for TuneableUpdater<'a> {
     fn visit_item_macro_mut(&mut self, mac: &mut ItemMacro) {
         if let Some(ident) = mac.mac.path.get_ident() {
             if ident == "tuneables" {
+                // Attempt to parse macro body as token tree (not Block!)
                 let tokens = mac.mac.tokens.clone();
-                let block = match syn::parse2::<syn::Block>(tokens) {
-                    Ok(b) => b,
+                let stmts = match syn::parse2::<syn::Block>(tokens.clone()).map(|b| b.stmts) {
+                    Ok(stmts) => stmts,
                     Err(_) => return,
                 };
 
-                let mut new_lines = Vec::new();
+                let mut new_tokens = proc_macro2::TokenStream::new();
 
-                for stmt in block.stmts {
-                    if let syn::Stmt::Expr(expr, semi_opt) = stmt {
+                for stmt in stmts {
+                    if let syn::Stmt::Expr(expr, Some(semi)) = stmt {
+                        let orig_expr = expr.clone();
                         match expr {
                             Expr::Assign(mut assign) => {
                                 if let Expr::Path(ExprPath { path, .. }) = *assign.left.clone() {
@@ -73,25 +76,28 @@ impl<'a> VisitMut for TuneableUpdater<'a> {
                                         if let Some(entry) = self.entry_map.get(ident.to_string().as_str()) {
                                             let new_rhs: Expr = syn::parse_str(&entry.get_dynamic_value()).unwrap();
                                             assign.right = Box::new(new_rhs);
-                                            new_lines.push(syn::Stmt::Expr(Expr::Assign(assign), semi_opt));
+                                            assign.to_tokens(&mut new_tokens);
+                                            semi.to_tokens(&mut new_tokens);
                                             continue;
                                         }
                                     }
                                 }
-                
-                                // fallback to original assignment if we didn't match anything
-                                new_lines.push(syn::Stmt::Expr(Expr::Assign(assign), semi_opt));
+
+                                // fallback to original assignment
+                                orig_expr.to_tokens(&mut new_tokens);
+                                semi.to_tokens(&mut new_tokens);
                             }
                             other => {
-                                new_lines.push(syn::Stmt::Expr(other, semi_opt));
+                                other.to_tokens(&mut new_tokens);
+                                semi.to_tokens(&mut new_tokens);
                             }
                         }
                     } else {
-                        new_lines.push(stmt);
+                        stmt.to_tokens(&mut new_tokens);
                     }
                 }
 
-                mac.mac.tokens = quote::quote!({ #(#new_lines)* });
+                mac.mac.tokens = quote::quote! { { #new_tokens } };
             }
         }
 
