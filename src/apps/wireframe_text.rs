@@ -7,8 +7,8 @@ use fontdue::{Font, FontSettings};
 tuneables! {
     square_x: f32 = 0.5;
     square_y: f32 = 0.5;
-    left_edge: f32 = 0.2;
-    right_edge: f32 = 0.8;
+    left_edge: f32 = 0.19982228;
+    right_edge: f32 = 0.9262413;
     top_edge: f32 = 0.3;
     bottom_edge: f32 = 0.7;
 }
@@ -17,9 +17,23 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const SQUARE_COLOR: (u8, u8, u8) = (64, 64, 64);
 
+#[derive(PartialEq)]
+enum DragRegion {
+    None,
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 pub struct WireframeText {
     pub text_engine: GeometricText,
-    dragging: bool,
+    dragging: DragRegion,
     drag_offset_x: f32,
     drag_offset_y: f32,
 }
@@ -33,7 +47,7 @@ impl WireframeText {
 
         Self {
             text_engine,
-            dragging: false,
+            dragging: DragRegion::None,
             drag_offset_x: 0.0,
             drag_offset_y: 0.0,
         }
@@ -106,6 +120,32 @@ impl WireframeText {
             }
         }
     }
+
+    fn region_under_mouse(mx: f32, my: f32, w: f32, h: f32) -> DragRegion {
+        let left = left_edge().get() * w;
+        let right = right_edge().get() * w;
+        let top = top_edge().get() * h;
+        let bottom = bottom_edge().get() * h;
+        let near = 8.0;
+
+        let near_left = (mx - left).abs() <= near;
+        let near_right = (mx - right).abs() <= near;
+        let near_top = (my - top).abs() <= near;
+        let near_bottom = (my - bottom).abs() <= near;
+
+        match (near_left, near_right, near_top, near_bottom) {
+            (true, false, true, false) => DragRegion::TopLeft,
+            (false, true, true, false) => DragRegion::TopRight,
+            (true, false, false, true) => DragRegion::BottomLeft,
+            (false, true, false, true) => DragRegion::BottomRight,
+            (true, false, false, false) => DragRegion::Left,
+            (false, true, false, false) => DragRegion::Right,
+            (false, false, true, false) => DragRegion::Top,
+            (false, false, false, true) => DragRegion::Bottom,
+            _ if mx > left && mx < right && my > top && my < bottom => DragRegion::Center,
+            _ => DragRegion::None,
+        }
+    }
 }
 
 impl Application for WireframeText {
@@ -130,28 +170,95 @@ impl Application for WireframeText {
         let my = state.mouse.y;
         let w = state.frame.width as f32;
         let h = state.frame.height as f32;
-
-        let left = left_edge().get() * w;
-        let right = right_edge().get() * w;
-        let top = top_edge().get() * h;
-        let bottom = bottom_edge().get() * h;
-
-        let near = 8.0;
-
-        if !self.dragging {
-            let near_left = (mx - left).abs() <= near;
-            let near_right = (mx - right).abs() <= near;
-            let near_top = (my - top).abs() <= near;
-            let near_bottom = (my - bottom).abs() <= near;
-
-            if near_left || near_right {
-                state.mouse.style.resize_horizontal();
-            } else if near_top || near_bottom {
-                state.mouse.style.resize_vertical();
-            } else {
-                state.mouse.style.default();
+    
+        if self.dragging != DragRegion::None {
+            match self.dragging {
+                DragRegion::Left => {
+                    let new_left = (mx / w).min(right_edge().get() - 0.01);
+                    left_edge().set(new_left.clamp(0.0, 1.0));
+                }
+                DragRegion::Right => {
+                    let new_right = (mx / w).max(left_edge().get() + 0.01);
+                    right_edge().set(new_right.clamp(0.0, 1.0));
+                }
+                DragRegion::Top => {
+                    let new_top = (my / h).min(bottom_edge().get() - 0.01);
+                    top_edge().set(new_top.clamp(0.0, 1.0));
+                }
+                DragRegion::Bottom => {
+                    let new_bottom = (my / h).max(top_edge().get() + 0.01);
+                    bottom_edge().set(new_bottom.clamp(0.0, 1.0));
+                }
+                DragRegion::TopLeft => {
+                    let new_left = (mx / w).min(right_edge().get() - 0.01);
+                    let new_top = (my / h).min(bottom_edge().get() - 0.01);
+                    left_edge().set(new_left.clamp(0.0, 1.0));
+                    top_edge().set(new_top.clamp(0.0, 1.0));
+                }
+                DragRegion::TopRight => {
+                    let new_right = (mx / w).max(left_edge().get() + 0.01);
+                    let new_top = (my / h).min(bottom_edge().get() - 0.01);
+                    right_edge().set(new_right.clamp(0.0, 1.0));
+                    top_edge().set(new_top.clamp(0.0, 1.0));
+                }
+                DragRegion::BottomLeft => {
+                    let new_left = (mx / w).min(right_edge().get() - 0.01);
+                    let new_bottom = (my / h).max(top_edge().get() + 0.01);
+                    left_edge().set(new_left.clamp(0.0, 1.0));
+                    bottom_edge().set(new_bottom.clamp(0.0, 1.0));
+                }
+                DragRegion::BottomRight => {
+                    let new_right = (mx / w).max(left_edge().get() + 0.01);
+                    let new_bottom = (my / h).max(top_edge().get() + 0.01);
+                    right_edge().set(new_right.clamp(0.0, 1.0));
+                    bottom_edge().set(new_bottom.clamp(0.0, 1.0));
+                }
+                DragRegion::Center => {
+                    let dx = (mx - self.drag_offset_x) / w;
+                    let dy = (my - self.drag_offset_y) / h;
+    
+                    let width = right_edge().get() - left_edge().get();
+                    let height = bottom_edge().get() - top_edge().get();
+    
+                    let new_left = (left_edge().get() + dx).clamp(0.0, 1.0 - width);
+                    let new_top = (top_edge().get() + dy).clamp(0.0, 1.0 - height);
+    
+                    left_edge().set(new_left);
+                    right_edge().set(new_left + width);
+                    top_edge().set(new_top);
+                    bottom_edge().set(new_top + height);
+    
+                    // update drag offset for smooth continuous motion
+                    self.drag_offset_x = mx;
+                    self.drag_offset_y = my;
+                }
+                _ => {}
+            }
+    
+            write_all_to_source();
+        } else {
+            // Hover cursor styling
+            match Self::region_under_mouse(mx, my, w, h) {
+                DragRegion::Left | DragRegion::Right => state.mouse.style.resize_horizontal(),
+                DragRegion::Top | DragRegion::Bottom => state.mouse.style.resize_vertical(),
+                DragRegion::TopLeft | DragRegion::BottomRight => state.mouse.style.resize_diagonal_nw(),
+                DragRegion::TopRight | DragRegion::BottomLeft => state.mouse.style.resize_diagonal_ne(),
+                _ => state.mouse.style.default(),
             }
         }
+    }
+    
+
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let w = state.frame.width as f32;
+        let h = state.frame.height as f32;
+        self.dragging = Self::region_under_mouse(state.mouse.x, state.mouse.y, w, h);
+        self.drag_offset_x = state.mouse.x;
+        self.drag_offset_y = state.mouse.y;
+    }
+
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        self.dragging = DragRegion::None;
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
@@ -164,13 +271,5 @@ impl Application for WireframeText {
             _ if !ch.is_control() => self.text_engine.text.push(ch),
             _ => {}
         }
-    }
-
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {
-        self.dragging = true;
-    }
-
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        self.dragging = false;
     }
 }
