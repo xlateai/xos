@@ -4,10 +4,10 @@ use pixels::{Pixels, SurfaceTexture};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    window::{CursorIcon, WindowBuilder},
 };
 
-use super::engine::{Application, EngineState, FrameState, MouseState};
+use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,6 +30,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             x: 0.0,
             y: 0.0,
             is_down: false,
+            style: CursorStyleSetter::new(),
         },
     };
 
@@ -63,11 +64,28 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 }
             }
             Event::MainEventsCleared => {
+                // ✅ Sync cursor with current style using `.get()`
+                let icon = match engine_state.mouse.style.get() {
+                    CursorStyle::Default => CursorIcon::Default,
+                    CursorStyle::Text => CursorIcon::Text,
+                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                    CursorStyle::Hand => CursorIcon::Hand,
+                    CursorStyle::Crosshair => CursorIcon::Crosshair,
+                };
+                window.set_cursor_icon(icon);
+
                 window.request_redraw();
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                WindowEvent::Resized(new_size) | WindowEvent::ScaleFactorChanged { new_inner_size: &mut new_size, .. } => {
+                WindowEvent::Resized(new_size)
+                | WindowEvent::ScaleFactorChanged {
+                    new_inner_size: &mut new_size,
+                    ..
+                } => {
                     size = new_size;
                     let _ = pixels.resize_buffer(size.width, size.height);
                     let _ = pixels.resize_surface(size.width, size.height);
@@ -81,18 +99,20 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     engine_state.mouse.y = position.y as f32;
                     app.on_mouse_move(&mut engine_state);
                 }
-                WindowEvent::MouseInput { state: button_state, button: MouseButton::Left, .. } => {
-                    match button_state {
-                        ElementState::Pressed => {
-                            engine_state.mouse.is_down = true;
-                            app.on_mouse_down(&mut engine_state);
-                        }
-                        ElementState::Released => {
-                            engine_state.mouse.is_down = false;
-                            app.on_mouse_up(&mut engine_state);
-                        }
+                WindowEvent::MouseInput {
+                    state: button_state,
+                    button: MouseButton::Left,
+                    ..
+                } => match button_state {
+                    ElementState::Pressed => {
+                        engine_state.mouse.is_down = true;
+                        app.on_mouse_down(&mut engine_state);
                     }
-                }
+                    ElementState::Released => {
+                        engine_state.mouse.is_down = false;
+                        app.on_mouse_up(&mut engine_state);
+                    }
+                },
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = match delta {
                         MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
@@ -104,11 +124,12 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     app.on_key_char(&mut engine_state, ch);
                 }
                 WindowEvent::KeyboardInput {
-                    input: KeyboardInput {
-                        state: ElementState::Pressed,
-                        virtual_keycode: Some(VirtualKeyCode::Back),
-                        ..
-                    },
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(VirtualKeyCode::Back),
+                            ..
+                        },
                     ..
                 } => {
                     app.on_key_char(&mut engine_state, '\u{8}');

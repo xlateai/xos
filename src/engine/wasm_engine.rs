@@ -4,7 +4,8 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::engine::{Application, EngineState, FrameState, MouseState};
+use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
+
 
 #[cfg(target_arch = "wasm32")]
 pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
@@ -49,6 +50,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 x: 0.0,
                 y: 0.0,
                 is_down: false,
+                style: CursorStyleSetter::new(),
             },
         },
         app,
@@ -63,12 +65,26 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     // Mouse move
     {
         let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone();
         let move_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
                 state.app.on_mouse_move(&mut state.engine_state);
+
+                let style = match state.engine_state.mouse.style.get() {
+                    CursorStyle::Default => "default",
+                    CursorStyle::Text => "text",
+                    CursorStyle::ResizeHorizontal => "ew-resize",
+                    CursorStyle::ResizeVertical => "ns-resize",
+                    CursorStyle::ResizeDiagonalNE => "nesw-resize",
+                    CursorStyle::ResizeDiagonalNW => "nwse-resize",
+                    CursorStyle::Hand => "pointer",
+                    CursorStyle::Crosshair => "crosshair",
+                };
+
+                canvas_clone.style().set_property("cursor", style).unwrap();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", move_callback.as_ref().unchecked_ref())?;
