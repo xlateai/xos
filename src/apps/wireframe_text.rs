@@ -5,15 +5,17 @@ use crate::apps::text::geometric::GeometricText;
 use fontdue::{Font, FontSettings};
 
 tuneables! {
-    square_x: f32 = 0.42148933;
-    square_y: f32 = 0.5229107;
+    square_x: f32 = 0.5;
+    square_y: f32 = 0.5;
+    left_edge: f32 = 0.2;
+    right_edge: f32 = 0.8;
+    top_edge: f32 = 0.3;
+    bottom_edge: f32 = 0.7;
 }
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const SQUARE_COLOR: (u8, u8, u8) = (64, 64, 64);
-const SQUARE_WIDTH: f32 = 400.0;
-const SQUARE_HEIGHT: f32 = 200.0;
 
 pub struct WireframeText {
     pub text_engine: GeometricText,
@@ -37,36 +39,29 @@ impl WireframeText {
         }
     }
 
-    fn clamp_position(x: f32, y: f32, width: u32, height: u32) -> (f32, f32) {
-        let half_w = SQUARE_WIDTH / (2.0 * width as f32);
-        let half_h = SQUARE_HEIGHT / (2.0 * height as f32);
-        let cx = x.clamp(half_w, 1.0 - half_w);
-        let cy = y.clamp(half_h, 1.0 - half_h);
-        (cx, cy)
-    }
+    fn draw_square_from_edges(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+    ) -> (i32, i32, u32, u32) {
+        let w = width as f32;
+        let h = height as f32;
 
-    fn get_absolute_xy(state: &EngineState) -> (f32, f32) {
-        let norm_x = square_x().get();
-        let norm_y = square_y().get();
-        (
-            norm_x * state.frame.width as f32,
-            norm_y * state.frame.height as f32,
-        )
-    }
+        let x0 = (left_edge().get() * w).round().clamp(0.0, w) as i32;
+        let x1 = (right_edge().get() * w).round().clamp(0.0, w) as i32;
+        let y0 = (top_edge().get() * h).round().clamp(0.0, h) as i32;
+        let y1 = (bottom_edge().get() * h).round().clamp(0.0, h) as i32;
 
-    fn draw_square(&self, buffer: &mut [u8], width: u32, height: u32, x: f32, y: f32) -> (i32, i32, u32, u32) {
-        let half_w = SQUARE_WIDTH / 2.0;
-        let half_h = SQUARE_HEIGHT / 2.0;
-        let x0 = (x - half_w).max(0.0).round() as i32;
-        let y0 = (y - half_h).max(0.0).round() as i32;
-        let w = SQUARE_WIDTH.round() as u32;
-        let h = SQUARE_HEIGHT.round() as u32;
+        let rect_w = (x1 - x0).max(0) as u32;
+        let rect_h = (y1 - y0).max(0) as u32;
 
-        for dy in 0..h {
-            for dx in 0..w {
+        for dy in 0..rect_h {
+            for dx in 0..rect_w {
                 let sx = x0 + dx as i32;
                 let sy = y0 + dy as i32;
-                if sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
+
+                if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
                     let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
                     buffer[idx + 0] = SQUARE_COLOR.0;
                     buffer[idx + 1] = SQUARE_COLOR.1;
@@ -76,7 +71,7 @@ impl WireframeText {
             }
         }
 
-        (x0, y0, w, h)
+        (x0, y0, rect_w, rect_h)
     }
 
     fn draw_text(&mut self, state: &mut EngineState, tx: i32, ty: i32, tw: u32, th: u32) {
@@ -84,22 +79,22 @@ impl WireframeText {
         let width = state.frame.width;
         let height = state.frame.height;
         self.text_engine.tick(tw as f32, th as f32);
-    
+
         for character in &self.text_engine.characters {
             let px = tx + character.x as i32;
             let py = ty + character.y as i32;
-    
+
             for y in 0..character.metrics.height {
                 for x in 0..character.metrics.width {
                     let val = character.bitmap[y * character.metrics.width + x];
-    
+
                     if val == 0 {
                         continue;
                     }
-    
+
                     let sx = px + x as i32;
                     let sy = py + y as i32;
-    
+
                     if sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
                         let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
                         buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
@@ -110,12 +105,6 @@ impl WireframeText {
                 }
             }
         }
-    }
-
-    fn is_inside(&self, x: f32, y: f32, mx: f32, my: f32) -> bool {
-        let half_w = SQUARE_WIDTH / 2.0;
-        let half_h = SQUARE_HEIGHT / 2.0;
-        mx >= x - half_w && mx <= x + half_w && my >= y - half_h && my <= y + half_h
     }
 }
 
@@ -132,53 +121,56 @@ impl Application for WireframeText {
             p[3] = 0xff;
         });
 
-        let (abs_x, abs_y) = Self::get_absolute_xy(state);
-        let (x0, y0, w, h) = self.draw_square(&mut state.frame.buffer, state.frame.width, state.frame.height, abs_x, abs_y);
+        let (x0, y0, w, h) = self.draw_square_from_edges(&mut state.frame.buffer, state.frame.width, state.frame.height);
         self.draw_text(state, x0, y0, w, h);
+    }
+
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        let mx = state.mouse.x;
+        let my = state.mouse.y;
+        let w = state.frame.width as f32;
+        let h = state.frame.height as f32;
+
+        let left = left_edge().get() * w;
+        let right = right_edge().get() * w;
+        let top = top_edge().get() * h;
+        let bottom = bottom_edge().get() * h;
+
+        let near = 8.0;
+
+        if !self.dragging {
+            let near_left = (mx - left).abs() <= near;
+            let near_right = (mx - right).abs() <= near;
+            let near_top = (my - top).abs() <= near;
+            let near_bottom = (my - bottom).abs() <= near;
+
+            if near_left || near_right {
+                state.mouse.style.resize_horizontal();
+            } else if near_top || near_bottom {
+                state.mouse.style.resize_vertical();
+            } else {
+                state.mouse.style.default();
+            }
+        }
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
             '\t' => self.text_engine.text.push_str("    "),
             '\n' | '\r' => self.text_engine.text.push('\n'),
-            '\u{8}' => { self.text_engine.text.pop(); }
+            '\u{8}' => {
+                self.text_engine.text.pop();
+            }
             _ if !ch.is_control() => self.text_engine.text.push(ch),
             _ => {}
         }
     }
 
-    fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let (x, y) = Self::get_absolute_xy(state);
-        if self.is_inside(x, y, state.mouse.x, state.mouse.y) {
-            self.dragging = true;
-            self.drag_offset_x = state.mouse.x - x;
-            self.drag_offset_y = state.mouse.y - y;
-        }
+    fn on_mouse_down(&mut self, _state: &mut EngineState) {
+        self.dragging = true;
     }
 
-    fn on_mouse_up(&mut self, state: &mut EngineState) {
-        if self.dragging {
-            let raw_x = state.mouse.x - self.drag_offset_x;
-            let raw_y = state.mouse.y - self.drag_offset_y;
-            let norm_x = raw_x / state.frame.width as f32;
-            let norm_y = raw_y / state.frame.height as f32;
-            let (cx, cy) = Self::clamp_position(norm_x, norm_y, state.frame.width, state.frame.height);
-            square_x().set(cx);
-            square_y().set(cy);
-            write_all_to_source();
-        }
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
         self.dragging = false;
-    }
-
-    fn on_mouse_move(&mut self, state: &mut EngineState) {
-        if self.dragging {
-            let raw_x = state.mouse.x - self.drag_offset_x;
-            let raw_y = state.mouse.y - self.drag_offset_y;
-            let norm_x = raw_x / state.frame.width as f32;
-            let norm_y = raw_y / state.frame.height as f32;
-            let (cx, cy) = Self::clamp_position(norm_x, norm_y, state.frame.width, state.frame.height);
-            square_x().set(cx);
-            square_y().set(cy);
-        }
     }
 }
