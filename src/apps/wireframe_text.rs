@@ -5,8 +5,8 @@ use crate::apps::text::geometric::GeometricText;
 use fontdue::{Font, FontSettings};
 
 tuneables! {
-    square_x: f32 = 0.4678812;
-    square_y: f32 = 0.6614094;
+    square_x: f32 = 0.42148933;
+    square_y: f32 = 0.5229107;
 }
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
@@ -84,18 +84,22 @@ impl WireframeText {
         let width = state.frame.width;
         let height = state.frame.height;
         self.text_engine.tick(tw as f32, th as f32);
-
+    
         for character in &self.text_engine.characters {
             let px = tx + character.x as i32;
             let py = ty + character.y as i32;
-
+    
             for y in 0..character.metrics.height {
                 for x in 0..character.metrics.width {
                     let val = character.bitmap[y * character.metrics.width + x];
-
+    
+                    if val == 0 {
+                        continue;
+                    }
+    
                     let sx = px + x as i32;
                     let sy = py + y as i32;
-
+    
                     if sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
                         let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
                         buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
