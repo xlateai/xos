@@ -17,19 +17,26 @@ pub enum CursorStyle {
     Crosshair,
 }
 
-pub struct CursorStyleSetter<'a> {
-    style: &'a mut CursorStyle,
+#[derive(Debug)]
+pub struct CursorStyleSetter {
+    current_style: CursorStyle,
 }
 
-impl<'a> CursorStyleSetter<'a> {
+impl CursorStyleSetter {
+    #[inline(always)]
+    pub fn get(&self) -> CursorStyle {
+        self.current_style
+    }
+
+    #[inline(always)]
     fn set(&mut self, val: CursorStyle) {
-        *self.style = val;
+        self.current_style = val;
     }
 }
 
 macro_rules! impl_cursor_style_setters {
     ($($variant:ident => $method:ident),* $(,)?) => {
-        impl<'a> CursorStyleSetter<'a> {
+        impl CursorStyleSetter {
             $(
                 #[inline(always)]
                 pub fn $method(&mut self) {
@@ -51,16 +58,18 @@ impl_cursor_style_setters! {
     Crosshair => crosshair,
 }
 
-pub struct MouseState<'a> {
+#[derive(Debug)]
+pub struct MouseState {
     pub x: f32,
     pub y: f32,
     pub is_down: bool,
-    pub style: CursorStyleSetter<'a>,
+    pub style: CursorStyleSetter,
 }
 
-pub struct EngineState<'a> {
+#[derive(Debug)]
+pub struct EngineState {
     pub frame: FrameState,
-    pub mouse: MouseState<'a>,
+    pub mouse: MouseState,
 }
 
 pub trait Application {
