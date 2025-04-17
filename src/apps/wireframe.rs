@@ -1,34 +1,15 @@
 use crate::engine::{Application, EngineState};
-use crate::tuneable::{Tuneable, tuneable};
-use std::sync::{Mutex, OnceLock};
+use crate::tuneable::write_all_to_source;
+use crate::tuneables;
+
+tuneables! {
+    square_x: f32 = 320.0;
+    square_y: f32 = 240.0;
+}
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const SQUARE_COLOR: (u8, u8, u8) = (255, 100, 100);
 const SQUARE_SIZE: f32 = 100.0;
-
-static SQUARE_ORIGIN: OnceLock<Mutex<(Tuneable<f32>, Tuneable<f32>)>> = OnceLock::new();
-
-pub fn init_square_origin() {
-    SQUARE_ORIGIN.get_or_init(|| {
-        Mutex::new((
-            tuneable!("square_x" => 320.0),
-            tuneable!("square_y" => 240.0),
-        ))
-    });
-}
-
-pub fn get_square_origin() -> (f32, f32) {
-    let origin = SQUARE_ORIGIN.get().expect("not initialized").lock().unwrap();
-    (origin.0.get(), origin.1.get())
-}
-
-pub fn set_square_origin(new_x: f32, new_y: f32) {
-    let mut origin = SQUARE_ORIGIN.get().expect("not initialized").lock().unwrap();
-    origin.0.set(new_x);
-    origin.1.set(new_y);
-    Tuneable::try_write_update_pair(&origin.0, &origin.1, new_x, new_y);
-}
-
 
 pub struct WireframeDemo {
     dragging: bool,
@@ -38,7 +19,6 @@ pub struct WireframeDemo {
 
 impl WireframeDemo {
     pub fn new() -> Self {
-        init_square_origin();
         Self {
             dragging: false,
             drag_offset_x: 0.0,
@@ -81,20 +61,19 @@ impl Application for WireframeDemo {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let buffer = &mut state.frame.buffer;
-        for chunk in buffer.chunks_exact_mut(4) {
+        for chunk in state.frame.buffer.chunks_exact_mut(4) {
             chunk[0] = BACKGROUND_COLOR.0;
             chunk[1] = BACKGROUND_COLOR.1;
             chunk[2] = BACKGROUND_COLOR.2;
             chunk[3] = 0xff;
         }
 
-        let (x, y) = get_square_origin();
+        let (x, y) = (square_x().get(), square_y().get());
         self.draw_square(state, x, y);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let (x, y) = get_square_origin();
+        let (x, y) = (square_x().get(), square_y().get());
 
         if self.is_inside_square(x, y, state.mouse.x, state.mouse.y) {
             self.dragging = true;
@@ -107,7 +86,10 @@ impl Application for WireframeDemo {
         if self.dragging {
             let new_x = state.mouse.x - self.drag_offset_x;
             let new_y = state.mouse.y - self.drag_offset_y;
-            set_square_origin(new_x, new_y);
+
+            square_x().set(new_x);
+            square_y().set(new_y);
+            write_all_to_source();
         }
         self.dragging = false;
     }
@@ -116,7 +98,9 @@ impl Application for WireframeDemo {
         if self.dragging {
             let new_x = state.mouse.x - self.drag_offset_x;
             let new_y = state.mouse.y - self.drag_offset_y;
-            set_square_origin(new_x, new_y);
+
+            square_x().set(new_x);
+            square_y().set(new_y);
         }
     }
 }
