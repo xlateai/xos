@@ -1,14 +1,34 @@
 use crate::engine::{Application, EngineState};
 use crate::tuneable::{Tuneable, tuneable};
+use std::sync::{Mutex, OnceLock};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const SQUARE_COLOR: (u8, u8, u8) = (255, 100, 100);
 const SQUARE_SIZE: f32 = 100.0;
 
-pub static mut SQUARE_ORIGIN: (Tuneable<f32>, Tuneable<f32>) = (
-    tuneable!("square_x" => 320.0),
-    tuneable!("square_y" => 240.0),
-);
+static SQUARE_ORIGIN: OnceLock<Mutex<(Tuneable<f32>, Tuneable<f32>)>> = OnceLock::new();
+
+pub fn init_square_origin() {
+    SQUARE_ORIGIN.get_or_init(|| {
+        Mutex::new((
+            tuneable!("square_x" => 320.0),
+            tuneable!("square_y" => 240.0),
+        ))
+    });
+}
+
+pub fn get_square_origin() -> (f32, f32) {
+    let origin = SQUARE_ORIGIN.get().expect("not initialized").lock().unwrap();
+    (origin.0.get(), origin.1.get())
+}
+
+pub fn set_square_origin(new_x: f32, new_y: f32) {
+    let mut origin = SQUARE_ORIGIN.get().expect("not initialized").lock().unwrap();
+    origin.0.set(new_x);
+    origin.1.set(new_y);
+    Tuneable::try_write_update_pair(&origin.0, &origin.1, new_x, new_y);
+}
+
 
 pub struct WireframeDemo {
     dragging: bool,
@@ -18,6 +38,7 @@ pub struct WireframeDemo {
 
 impl WireframeDemo {
     pub fn new() -> Self {
+        init_square_origin();
         Self {
             dragging: false,
             drag_offset_x: 0.0,
@@ -68,12 +89,12 @@ impl Application for WireframeDemo {
             chunk[3] = 0xff;
         }
 
-        let (x, y) = unsafe { (SQUARE_ORIGIN.0.get(), SQUARE_ORIGIN.1.get()) };
+        let (x, y) = get_square_origin();
         self.draw_square(state, x, y);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let (x, y) = unsafe { (SQUARE_ORIGIN.0.get(), SQUARE_ORIGIN.1.get()) };
+        let (x, y) = get_square_origin();
 
         if self.is_inside_square(x, y, state.mouse.x, state.mouse.y) {
             self.dragging = true;
@@ -86,13 +107,7 @@ impl Application for WireframeDemo {
         if self.dragging {
             let new_x = state.mouse.x - self.drag_offset_x;
             let new_y = state.mouse.y - self.drag_offset_y;
-
-            unsafe {
-                SQUARE_ORIGIN.0.set(new_x);
-                SQUARE_ORIGIN.1.set(new_y);
-
-                Tuneable::try_write_update_pair(&SQUARE_ORIGIN.0, &SQUARE_ORIGIN.1, new_x, new_y);
-            }
+            set_square_origin(new_x, new_y);
         }
         self.dragging = false;
     }
@@ -101,11 +116,7 @@ impl Application for WireframeDemo {
         if self.dragging {
             let new_x = state.mouse.x - self.drag_offset_x;
             let new_y = state.mouse.y - self.drag_offset_y;
-
-            unsafe {
-                SQUARE_ORIGIN.0.set(new_x);
-                SQUARE_ORIGIN.1.set(new_y);
-            }
+            set_square_origin(new_x, new_y);
         }
     }
 }
