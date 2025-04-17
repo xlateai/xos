@@ -10,6 +10,7 @@ use std::time::Duration;
 use tiny_http::{Server, Response};
 use webbrowser;
 
+pub mod tuneable;
 pub mod apps;
 pub mod engine;
 pub mod video;
