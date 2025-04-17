@@ -5,12 +5,10 @@ use crate::apps::text::geometric::GeometricText;
 use fontdue::{Font, FontSettings};
 
 tuneables! {
-    square_x: f32 = 0.5;
-    square_y: f32 = 0.5;
-    left_edge: f32 = 0.19982228;
-    right_edge: f32 = 0.9262413;
-    top_edge: f32 = 0.3;
-    bottom_edge: f32 = 0.7;
+    left_edge: f32 = 0.31168655;
+    right_edge: f32 = 0.72704995;
+    top_edge: f32 = 0.35551643;
+    bottom_edge: f32 = 0.61583114;
 }
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
