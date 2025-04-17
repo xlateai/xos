@@ -19,11 +19,48 @@ pub fn register(entry: &'static dyn TuneableEntry) {
     REGISTRY.get_or_init(Default::default).lock().unwrap().push(entry);
 }
 
+fn patch_tuneable_block(lines: &mut Vec<String>, entries: &[&dyn TuneableEntry]) {
+    // Map name -> entry
+    let mut entry_map: HashMap<&str, &dyn TuneableEntry> = HashMap::new();
+    for entry in entries {
+        entry_map.insert(entry.name(), *entry);
+    }
+
+    let mut inside_block = false;
+
+    for i in 0..lines.len() {
+        let line = lines[i].trim_start();
+
+        if line.starts_with("tuneables!") && line.contains('{') {
+            inside_block = true;
+            continue;
+        }
+
+        if inside_block {
+            if line.starts_with('}') {
+                inside_block = false;
+                continue;
+            }
+
+            // Try to match line like: `name: type = value;`
+            if let Some((name, _rest)) = line.split_once(':') {
+                let name = name.trim();
+                if let Some(entry) = entry_map.get(name) {
+                    lines[i] = entry.write_source_line();
+                }
+            }
+        }
+    }
+}
+
+
 pub fn write_all_to_source() {
     let Some(registry) = REGISTRY.get() else { return };
+    let registry = registry.lock().unwrap();
 
+    // Group tuneables by file
     let mut by_file: HashMap<&'static str, Vec<&dyn TuneableEntry>> = HashMap::new();
-    for entry in registry.lock().unwrap().iter() {
+    for entry in registry.iter() {
         by_file.entry(entry.file()).or_default().push(*entry);
     }
 
@@ -32,16 +69,11 @@ pub fn write_all_to_source() {
         let Ok(content) = fs::read_to_string(path) else { continue };
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
-        for entry in entries {
-            let idx = entry.line() as usize - 1;
-            if idx < lines.len() {
-                lines[idx] = entry.write_source_line();
-            }
-        }
-
+        patch_tuneable_block(&mut lines, &entries);
         let _ = fs::write(path, lines.join("\n"));
     }
 }
+
 
 pub struct Tuneable<T: Copy + Debug + 'static> {
     name: &'static str,
