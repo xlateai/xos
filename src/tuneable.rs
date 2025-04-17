@@ -79,7 +79,7 @@ macro_rules! impl_tuneable_entry {
             fn column(&self) -> u32 { self.column }
             fn name(&self) -> &'static str { self.name }
             fn write_source_line(&self) -> String {
-                format!("    tuneables! {{ {}: {} = {:?}; }}", self.name, stringify!($t), self.get())
+                format!("    {}: {} = {:?};", self.name, stringify!($t), self.get())
             }
         }
     };
