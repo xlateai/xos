@@ -7,7 +7,7 @@ const BAND_HEIGHT: f64 = 200.0;
 const POINT_RADIUS: f64 = 6.0;
 const POINTS_PER_BAND: usize = 40;
 
-pub struct InfiniteTriApp {
+pub struct TrianglesApp {
     scroll_offset: f64,
     cached_bands: HashMap<i32, Band>,
 }
@@ -19,7 +19,7 @@ struct Band {
     color_map: Vec<[u8; 3]>,
 }
 
-impl InfiniteTriApp {
+impl TrianglesApp {
     pub fn new() -> Self {
         Self {
             scroll_offset: 0.0,
@@ -54,7 +54,7 @@ impl InfiniteTriApp {
     }
 }
 
-impl Application for InfiniteTriApp {
+impl Application for TrianglesApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         Ok(())
     }
@@ -70,19 +70,19 @@ impl Application for InfiniteTriApp {
 
         let top_band = ((self.scroll_offset - BAND_HEIGHT).floor() / BAND_HEIGHT).floor() as i32;
         let bottom_band = ((self.scroll_offset + height).ceil() / BAND_HEIGHT).ceil() as i32;
+        let scroll_offset = self.scroll_offset;
 
         for band_index in top_band..=bottom_band {
             let band = self.get_band(band_index, width);
-
             for (i, tri) in band.triangles.iter().enumerate() {
                 let a = &band.points[tri[0]];
                 let b = &band.points[tri[1]];
                 let c = &band.points[tri[2]];
                 let color = band.color_map[i];
-                draw_filled_triangle(a, b, c, color, self.scroll_offset, width, height, buffer);
-                draw_line(a, b, self.scroll_offset, buffer, width);
-                draw_line(b, c, self.scroll_offset, buffer, width);
-                draw_line(c, a, self.scroll_offset, buffer, width);
+                draw_filled_triangle(a, b, c, color, scroll_offset, width, height, buffer);
+                draw_line(a, b, scroll_offset, buffer, width);
+                draw_line(b, c, scroll_offset, buffer, width);
+                draw_line(c, a, scroll_offset, buffer, width);
             }
         }
 
