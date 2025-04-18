@@ -13,8 +13,9 @@ const POINT_RADIUS: i32 = 7;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
 pub struct TrianglesApp {
-    unit_points: Vec<Point>,         // normalized points [0.0, 1.0]
-    triangles: Vec<[usize; 3]>,      // index triplets
+    unit_points: Vec<Point>,
+    triangles: Vec<[usize; 3]>,
+    triangle_colors: Vec<(u8, u8, u8)>,
     last_width: u32,
     last_height: u32,
 }
@@ -28,10 +29,11 @@ impl TrianglesApp {
                 y: rng.gen_range(UNIT_MIN..UNIT_MAX),
             })
             .collect();
-    
+
         Self {
             unit_points,
             triangles: Vec::new(),
+            triangle_colors: Vec::new(),
             last_width: 0,
             last_height: 0,
         }
@@ -58,6 +60,10 @@ impl TrianglesApp {
                 }
             })
             .collect();
+
+        // Assign random purple-biased colors to triangles
+        let mut rng = rand::thread_rng();
+        self.triangle_colors = self.triangles.iter().map(|_| random_purple(&mut rng)).collect();
     }
 }
 
@@ -87,7 +93,6 @@ impl Application for TrianglesApp {
             self.last_height = height;
         }
 
-        // Map normalized points to pixel space
         let points: Vec<Point> = self.unit_points
             .iter()
             .map(|p| Point {
@@ -96,19 +101,67 @@ impl Application for TrianglesApp {
             })
             .collect();
 
-        for tri in &self.triangles {
+        for (i, tri) in self.triangles.iter().enumerate() {
             let a = &points[tri[0]];
             let b = &points[tri[1]];
             let c = &points[tri[2]];
+            let color = self.triangle_colors[i];
+        
+            // fix winding
+            let area = edge_function(a, b, c.x, c.y);
+            if area < 0.0 {
+                draw_filled_triangle(c, b, a, buffer, width_f, height_f, color);
+            } else {
+                draw_filled_triangle(a, b, c, buffer, width_f, height_f, color);
+            }
+        
             draw_line(a.x, a.y, b.x, b.y, buffer, width_f, height_f, LINE_COLOR);
             draw_line(b.x, b.y, c.x, c.y, buffer, width_f, height_f, LINE_COLOR);
             draw_line(c.x, c.y, a.x, a.y, buffer, width_f, height_f, LINE_COLOR);
         }
+    
 
         for p in &points {
             draw_circle(p.x, p.y, POINT_RADIUS, buffer, width_f, height_f, POINT_COLOR);
         }
     }
+}
+
+fn random_purple<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
+    let r = rng.gen_range(100..180);
+    let g = rng.gen_range(0..40);
+    let b = rng.gen_range(180..255);
+    (r, g, b)
+}
+
+fn draw_filled_triangle(a: &Point, b: &Point, c: &Point, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
+    let min_x = a.x.min(b.x).min(c.x).floor() as i32;
+    let max_x = a.x.max(b.x).max(c.x).ceil() as i32;
+    let min_y = a.y.min(b.y).min(c.y).floor() as i32;
+    let max_y = a.y.max(b.y).max(c.y).ceil() as i32;
+
+    let area = edge_function(a, b, c.x, c.y);
+    if area == 0.0 {
+        return;
+    }
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            let w0 = edge_function(b, c, px, py);
+            let w1 = edge_function(c, a, px, py);
+            let w2 = edge_function(a, b, px, py);
+
+            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                put_pixel(x, y, buffer, width, height, color);
+            }
+        }
+    }
+}
+
+fn edge_function(a: &Point, b: &Point, x: f64, y: f64) -> f64 {
+    (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
 }
 
 fn draw_line(x0: f64, y0: f64, x1: f64, y1: f64, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
