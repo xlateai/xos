@@ -1,16 +1,17 @@
 use crate::engine::{Application, EngineState};
 use delaunator::{triangulate, Point};
-use rand::Rng;
+use rand::{Rng, SeedableRng};
+use rand_pcg::Pcg64;
 use std::collections::HashMap;
 
-const NUM_POINTS: usize = 256;
-const UNIT_MIN: f64 = -0.25;
-const UNIT_MAX: f64 = 1.25;
+const TILE_SIZE: f64 = 1024.0;
+const TILE_MARGIN: i32 = 1;
+const POINTS_PER_TILE: usize = 64;
 
 const LINE_COLOR: (u8, u8, u8) = (255, 255, 255);
 const LINE_THICKNESS: i32 = 1;
 const POINT_COLOR: (u8, u8, u8) = (214, 34, 64);
-const POINT_RADIUS: i32 = 7;
+const POINT_RADIUS: i32 = 5;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
 type TriangleKey = [usize; 3];
@@ -21,80 +22,86 @@ struct IdentifiedPoint {
     pos: Point,
 }
 
-pub struct TrianglesApp {
+struct Tile {
+    origin: (i32, i32),
     points: Vec<IdentifiedPoint>,
-    triangles: Vec<[usize; 3]>, // index into `points`
-    triangle_colors: HashMap<TriangleKey, (u8, u8, u8)>,
-    last_width: u32,
-    last_height: u32,
+    triangles: Vec<[usize; 3]>,
+    colors: HashMap<TriangleKey, (u8, u8, u8)>,
+}
+
+pub struct TrianglesApp {
+    scroll_x: f64,
+    scroll_y: f64,
+    dragging: bool,
+    last_mouse_x: f32,
+    last_mouse_y: f32,
+    tiles: HashMap<(i32, i32), Tile>,
+    global_point_counter: usize,
 }
 
 impl TrianglesApp {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
-        let points = (0..NUM_POINTS)
-            .map(|id| IdentifiedPoint {
-                id,
-                pos: Point {
-                    x: rng.gen_range(UNIT_MIN..UNIT_MAX),
-                    y: rng.gen_range(UNIT_MIN..UNIT_MAX),
-                },
-            })
-            .collect();
-
         Self {
-            points,
-            triangles: Vec::new(),
-            triangle_colors: HashMap::new(),
-            last_width: 0,
-            last_height: 0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dragging: false,
+            last_mouse_x: 0.0,
+            last_mouse_y: 0.0,
+            tiles: HashMap::new(),
+            global_point_counter: 0,
         }
     }
 
-    fn recompute_triangulation(&mut self, width: f64, height: f64) {
-        let positions: Vec<Point> = self
-            .points
-            .iter()
-            .map(|p| Point {
-                x: p.pos.x * width,
-                y: p.pos.y * height,
-            })
-            .collect();
+    fn get_tile(&mut self, tx: i32, ty: i32) -> &Tile {
+        self.tiles.entry((tx, ty)).or_insert_with(|| {
+            let seed = ((tx as u64) << 32) | (ty as u32 as u64);
+            let mut rng = Pcg64::seed_from_u64(seed);
+            let mut points = Vec::new();
 
-        let result = triangulate(&positions);
-        let new_tris: Vec<[usize; 3]> = result
-            .triangles
-            .chunks(3)
-            .filter_map(|t| {
-                if t.len() == 3 {
-                    Some([t[0], t[1], t[2]])
-                } else {
-                    None
-                }
-            })
-            .collect();
+            let base_id = self.global_point_counter;
+            for i in 0..POINTS_PER_TILE {
+                let x = rng.gen_range(0.0..TILE_SIZE);
+                let y = rng.gen_range(0.0..TILE_SIZE);
+                points.push(IdentifiedPoint {
+                    id: base_id + i,
+                    pos: Point { x, y },
+                });
+            }
+            self.global_point_counter += POINTS_PER_TILE;
 
-        let mut rng = rand::thread_rng();
-        let mut new_color_map = HashMap::new();
+            let pos_points: Vec<Point> = points.iter().map(|p| p.pos.clone()).collect();
+            let result = triangulate(&pos_points);
 
-        for tri in &new_tris {
-            let mut ids = [
-                self.points[tri[0]].id,
-                self.points[tri[1]].id,
-                self.points[tri[2]].id,
-            ];
-            ids.sort();
+            let triangles: Vec<[usize; 3]> = result
+                .triangles
+                .chunks(3)
+                .filter_map(|t| {
+                    if t.len() == 3 {
+                        Some([t[0], t[1], t[2]])
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-            let color = *self
-                .triangle_colors
-                .get(&ids)
-                .unwrap_or_else(|| new_color_map.entry(ids).or_insert(random_purple(&mut rng)));
+            let mut colors = HashMap::new();
+            for tri in &triangles {
+                let mut ids = [
+                    points[tri[0]].id,
+                    points[tri[1]].id,
+                    points[tri[2]].id,
+                ];
+                ids.sort();
+                colors.insert(ids, random_purple(&mut rng));
+            }
 
-            new_color_map.insert(ids, color);
-        }
-
-        self.triangles = new_tris;
-        self.triangle_colors = new_color_map;
+            Tile {
+                origin: (tx, ty),
+                points,
+                triangles,
+                colors,
+            }
+        })
     }
 }
 
@@ -115,51 +122,89 @@ impl Application for TrianglesApp {
             buffer[i + 3] = 255;
         }
 
-        let width_f = width as f64;
-        let height_f = height as f64;
+        let screen_left = self.scroll_x;
+        let screen_top = self.scroll_y;
+        let screen_right = self.scroll_x + width as f64;
+        let screen_bottom = self.scroll_y + height as f64;
 
-        if width != self.last_width || height != self.last_height {
-            self.recompute_triangulation(width_f, height_f);
-            self.last_width = width;
-            self.last_height = height;
-        }
+        let tx_min = ((screen_left / TILE_SIZE).floor() as i32) - TILE_MARGIN;
+        let tx_max = ((screen_right / TILE_SIZE).ceil() as i32) + TILE_MARGIN;
+        let ty_min = ((screen_top / TILE_SIZE).floor() as i32) - TILE_MARGIN;
+        let ty_max = ((screen_bottom / TILE_SIZE).ceil() as i32) + TILE_MARGIN;
 
-        let screen_points: Vec<Point> = self
-            .points
-            .iter()
-            .map(|p| Point {
-                x: p.pos.x * width_f,
-                y: p.pos.y * height_f,
-            })
-            .collect();
+        for ty in ty_min..=ty_max {
+            for tx in tx_min..=tx_max {
+                let scroll_x = self.scroll_x;
+                let scroll_y = self.scroll_y;
 
-        for tri in &self.triangles {
-            let a = &screen_points[tri[0]];
-            let b = &screen_points[tri[1]];
-            let c = &screen_points[tri[2]];
+                let tile = self.get_tile(tx, ty);
+                let offset_x = tx as f64 * TILE_SIZE - scroll_x;
+                let offset_y = ty as f64 * TILE_SIZE - scroll_y;
 
-            let mut ids = [
-                self.points[tri[0]].id,
-                self.points[tri[1]].id,
-                self.points[tri[2]].id,
-            ];
-            ids.sort();
-            let color = self.triangle_colors[&ids];
+                let screen_points: Vec<Point> = tile
+                    .points
+                    .iter()
+                    .map(|p| Point {
+                        x: p.pos.x + offset_x,
+                        y: p.pos.y + offset_y,
+                    })
+                    .collect();
 
-            let area = edge_function(a, b, c.x, c.y);
-            if area < 0.0 {
-                draw_filled_triangle(c, b, a, buffer, width_f, height_f, color);
-            } else {
-                draw_filled_triangle(a, b, c, buffer, width_f, height_f, color);
+                for tri in &tile.triangles {
+                    let a = &screen_points[tri[0]];
+                    let b = &screen_points[tri[1]];
+                    let c = &screen_points[tri[2]];
+
+                    let mut ids = [
+                        tile.points[tri[0]].id,
+                        tile.points[tri[1]].id,
+                        tile.points[tri[2]].id,
+                    ];
+                    ids.sort();
+                    let color = tile.colors[&ids];
+
+                    let area = edge_function(a, b, c.x, c.y);
+                    if area < 0.0 {
+                        draw_filled_triangle(c, b, a, buffer, width as f64, height as f64, color);
+                    } else {
+                        draw_filled_triangle(a, b, c, buffer, width as f64, height as f64, color);
+                    }
+
+                    draw_line(a.x, a.y, b.x, b.y, buffer, width as f64, height as f64, LINE_COLOR);
+                    draw_line(b.x, b.y, c.x, c.y, buffer, width as f64, height as f64, LINE_COLOR);
+                    draw_line(c.x, c.y, a.x, a.y, buffer, width as f64, height as f64, LINE_COLOR);
+                }
+
+                for p in &screen_points {
+                    draw_circle(p.x, p.y, POINT_RADIUS, buffer, width as f64, height as f64, POINT_COLOR);
+                }
             }
-
-            draw_line(a.x, a.y, b.x, b.y, buffer, width_f, height_f, LINE_COLOR);
-            draw_line(b.x, b.y, c.x, c.y, buffer, width_f, height_f, LINE_COLOR);
-            draw_line(c.x, c.y, a.x, a.y, buffer, width_f, height_f, LINE_COLOR);
         }
+    }
 
-        for p in &screen_points {
-            draw_circle(p.x, p.y, POINT_RADIUS, buffer, width_f, height_f, POINT_COLOR);
+    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
+        self.scroll_x += dx as f64;
+        self.scroll_y += dy as f64;
+    }
+
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        self.dragging = true;
+        self.last_mouse_x = state.mouse.x;
+        self.last_mouse_y = state.mouse.y;
+    }
+
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        self.dragging = false;
+    }
+
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        if self.dragging {
+            let dx = state.mouse.x - self.last_mouse_x;
+            let dy = state.mouse.y - self.last_mouse_y;
+            self.scroll_x -= dx as f64;
+            self.scroll_y -= dy as f64;
+            self.last_mouse_x = state.mouse.x;
+            self.last_mouse_y = state.mouse.y;
         }
     }
 }
@@ -171,6 +216,7 @@ fn random_purple<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
     (r, g, b)
 }
 
+// Drawing functions unchanged
 fn draw_filled_triangle(a: &Point, b: &Point, c: &Point, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
     let min_x = a.x.min(b.x).min(c.x).floor() as i32;
     let max_x = a.x.max(b.x).max(c.x).ceil() as i32;
