@@ -108,6 +108,14 @@ enum Commands {
         #[arg(long = "react-native")]
         react_native: bool,
     },
+
+    Triangles {
+        #[arg(long)]
+        web: bool,
+
+        #[arg(long = "react-native")]
+        react_native: bool,
+    },
 }
 
 fn main() {
@@ -156,6 +164,10 @@ fn main() {
 
         Some(Commands::WireframeText { web, react_native }) => {
             run_game("wireframe_text", web, react_native);
+        }
+        
+        Some(Commands::Triangles { web, react_native }) => {
+            run_game("triangles", web, react_native);
         }
 
         None => {

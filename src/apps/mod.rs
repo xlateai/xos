@@ -8,6 +8,7 @@ pub mod scroll;
 pub mod text;
 pub mod wireframe;
 pub mod wireframe_text;
+pub mod triangles;
 
 use crate::engine::Application;
 
@@ -23,6 +24,7 @@ pub fn get_app(name: &str) -> Option<Box<dyn Application>> {
         "text" => Some(Box::new(text::TextApp::new())),
         "wireframe" => Some(Box::new(wireframe::WireframeDemo::new())),
         "wireframe_text" => Some(Box::new(wireframe_text::WireframeText::new())),
+        "triangles" => Some(Box::new(triangles::TrianglesApp::new())),
         _ => None,
     }
 }
