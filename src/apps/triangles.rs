@@ -2,28 +2,48 @@ use crate::engine::{Application, EngineState};
 use delaunator::{triangulate, Point};
 use rand::Rng;
 
-const NUM_POINTS: usize = 40;
+const NUM_POINTS: usize = 64;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const LINE_COLOR: (u8, u8, u8) = (255, 255, 255);
-const EXTRA_MARGIN: f64 = 100.0;
 
 pub struct TrianglesApp {
-    scroll_x: f64,
-    scroll_y: f64,
-    dragging: bool,
-    last_mouse_x: f32,
-    last_mouse_y: f32,
+    points: Vec<Point>,
+    triangles: Vec<[usize; 3]>,
+    generated: bool,
 }
 
 impl TrianglesApp {
     pub fn new() -> Self {
         Self {
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            dragging: false,
-            last_mouse_x: 0.0,
-            last_mouse_y: 0.0,
+            points: Vec::new(),
+            triangles: Vec::new(),
+            generated: false,
         }
+    }
+
+    fn generate(&mut self, width: f64, height: f64) {
+        let mut rng = rand::thread_rng();
+        self.points = (0..NUM_POINTS)
+            .map(|_| Point {
+                x: rng.gen_range(0.0..width),
+                y: rng.gen_range(0.0..height),
+            })
+            .collect();
+
+        let result = triangulate(&self.points);
+        self.triangles = result
+            .triangles
+            .chunks(3)
+            .filter_map(|t| {
+                if t.len() == 3 {
+                    Some([t[0], t[1], t[2]])
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        self.generated = true;
     }
 }
 
@@ -41,85 +61,21 @@ impl Application for TrianglesApp {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
             buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 0xff;
+            buffer[i + 3] = 255;
         }
 
-        let mut rng = rand::thread_rng();
-        let mut points = Vec::with_capacity(NUM_POINTS);
-
-        for _ in 0..NUM_POINTS {
-            points.push(Point {
-                x: rng.gen_range(-EXTRA_MARGIN..(width + EXTRA_MARGIN)) + self.scroll_x,
-                y: rng.gen_range(-EXTRA_MARGIN..(height + EXTRA_MARGIN)) + self.scroll_y,
-            });
+        if !self.generated {
+            self.generate(width, height);
         }
 
-        let triangulation = triangulate(&points);
-        for tri in triangulation.triangles.chunks(3) {
-            if tri.len() == 3 {
-                let a = &points[tri[0]];
-                let b = &points[tri[1]];
-                let c = &points[tri[2]];
+        for tri in &self.triangles {
+            let a = &self.points[tri[0]];
+            let b = &self.points[tri[1]];
+            let c = &self.points[tri[2]];
 
-                draw_line(
-                    a.x - self.scroll_x,
-                    a.y - self.scroll_y,
-                    b.x - self.scroll_x,
-                    b.y - self.scroll_y,
-                    buffer,
-                    width,
-                    height,
-                    LINE_COLOR,
-                );
-                draw_line(
-                    b.x - self.scroll_x,
-                    b.y - self.scroll_y,
-                    c.x - self.scroll_x,
-                    c.y - self.scroll_y,
-                    buffer,
-                    width,
-                    height,
-                    LINE_COLOR,
-                );
-                draw_line(
-                    c.x - self.scroll_x,
-                    c.y - self.scroll_y,
-                    a.x - self.scroll_x,
-                    a.y - self.scroll_y,
-                    buffer,
-                    width,
-                    height,
-                    LINE_COLOR,
-                );
-            }
-        }
-    }
-
-    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
-        self.scroll_x += dx as f64;
-        self.scroll_y += dy as f64;
-    }
-
-    fn on_mouse_down(&mut self, state: &mut EngineState) {
-        self.dragging = true;
-        self.last_mouse_x = state.mouse.x;
-        self.last_mouse_y = state.mouse.y;
-    }
-
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        self.dragging = false;
-    }
-
-    fn on_mouse_move(&mut self, state: &mut EngineState) {
-        if self.dragging {
-            let x = state.mouse.x;
-            let y = state.mouse.y;
-            let dx = x - self.last_mouse_x;
-            let dy = y - self.last_mouse_y;
-            self.scroll_x -= dx as f64;
-            self.scroll_y -= dy as f64;
-            self.last_mouse_x = x;
-            self.last_mouse_y = y;
+            draw_line(a.x, a.y, b.x, b.y, buffer, width, height, LINE_COLOR);
+            draw_line(b.x, b.y, c.x, c.y, buffer, width, height, LINE_COLOR);
+            draw_line(c.x, c.y, a.x, a.y, buffer, width, height, LINE_COLOR);
         }
     }
 }
