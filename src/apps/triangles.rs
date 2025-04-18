@@ -2,7 +2,10 @@ use crate::engine::{Application, EngineState};
 use delaunator::{triangulate, Point};
 use rand::Rng;
 
-const NUM_POINTS: usize = 128;
+const NUM_POINTS: usize = 256;
+const UNIT_MIN: f64 = -0.25;
+const UNIT_MAX: f64 = 1.25;
+
 const LINE_COLOR: (u8, u8, u8) = (255, 255, 255);
 const LINE_THICKNESS: i32 = 1;
 const POINT_COLOR: (u8, u8, u8) = (255, 255, 255);
@@ -21,10 +24,11 @@ impl TrianglesApp {
         let mut rng = rand::thread_rng();
         let unit_points = (0..NUM_POINTS)
             .map(|_| Point {
-                x: rng.gen_range(0.0..1.0),
-                y: rng.gen_range(0.0..1.0),
+                x: rng.gen_range(UNIT_MIN..UNIT_MAX),
+                y: rng.gen_range(UNIT_MIN..UNIT_MAX),
             })
             .collect();
+    
         Self {
             unit_points,
             triangles: Vec::new(),
