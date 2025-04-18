@@ -37,9 +37,9 @@ pub struct TrianglesApp {
 impl TrianglesApp {
     pub fn new() -> Self {
         Self {
-            points: vec![],
-            triangles: vec![],
-            triangle_colors: HashMap::new(),
+            points: Vec::with_capacity(MAX_POINTS),
+            triangles: Vec::with_capacity(MAX_POINTS),
+            triangle_colors: HashMap::with_capacity(MAX_POINTS),
             scroll_x: 0.0,
             scroll_y: 0.0,
             dragging: false,
@@ -78,13 +78,18 @@ impl TrianglesApp {
         let delaunay_points: Vec<Point> = self.points.iter().map(|p| p.pos.clone()).collect();
         let result = triangulate(&delaunay_points);
 
-        self.triangles = result
-            .triangles
-            .chunks(3)
-            .filter_map(|tri| if tri.len() == 3 { Some([tri[0], tri[1], tri[2]]) } else { None })
-            .collect();
+        self.triangles.clear();
+        self.triangles.extend(
+            result.triangles.chunks(3).filter_map(|tri| {
+                if tri.len() == 3 {
+                    Some([tri[0], tri[1], tri[2]])
+                } else {
+                    None
+                }
+            })
+        );
 
-        let mut new_colors = HashMap::new();
+        let mut new_colors = HashMap::with_capacity(self.triangles.len());
         for tri in &self.triangles {
             let mut ids = [
                 self.points[tri[0]].id,
@@ -96,7 +101,7 @@ impl TrianglesApp {
             let color = if let Some(existing) = self.triangle_colors.get(&key) {
                 *existing
             } else {
-                let c = random_purple(&mut rng);
+                let c = random_gray(&mut rng);
                 new_colors.insert(key, c);
                 c
             };
@@ -117,11 +122,11 @@ impl Application for TrianglesApp {
         let height = state.frame.height as f64;
         let buffer = &mut state.frame.buffer;
 
-        for i in (0..buffer.len()).step_by(4) {
-            buffer[i + 0] = BACKGROUND_COLOR.0;
-            buffer[i + 1] = BACKGROUND_COLOR.1;
-            buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 255;
+        for chunk in buffer.chunks_exact_mut(4) {
+            chunk[0] = BACKGROUND_COLOR.0;
+            chunk[1] = BACKGROUND_COLOR.1;
+            chunk[2] = BACKGROUND_COLOR.2;
+            chunk[3] = 255;
         }
 
         self.regenerate(width, height);
@@ -192,11 +197,14 @@ impl Application for TrianglesApp {
     }
 }
 
-fn random_purple<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
-    let r = rng.gen_range(100..180);
-    let g = rng.gen_range(0..40);
-    let b = rng.gen_range(180..255);
-    (r, g, b)
+
+fn random_gray<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
+    let shade = rng.gen_range(32..180);
+    (shade, shade, shade)
+}
+
+fn edge_function(a: &Point, b: &Point, x: f64, y: f64) -> f64 {
+    (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
 }
 
 fn draw_filled_triangle(a: &Point, b: &Point, c: &Point, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
@@ -225,10 +233,6 @@ fn draw_filled_triangle(a: &Point, b: &Point, c: &Point, buffer: &mut [u8], widt
     }
 }
 
-fn edge_function(a: &Point, b: &Point, x: f64, y: f64) -> f64 {
-    (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
-}
-
 fn draw_line(x0: f64, y0: f64, x1: f64, y1: f64, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
     if LINE_THICKNESS <= 1 {
         draw_thin_line(x0, y0, x1, y1, buffer, width, height, color);
@@ -242,7 +246,7 @@ fn draw_line(x0: f64, y0: f64, x1: f64, y1: f64, buffer: &mut [u8], width: f64, 
 }
 
 fn draw_thin_line(x0: f64, y0: f64, x1: f64, y1: f64, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
-    let (mut x0, mut y0, mut x1, mut y1) = (x0 as i32, y0 as i32, x1 as i32, y1 as i32);
+    let (mut x0, mut y0, x1, y1) = (x0 as i32, y0 as i32, x1 as i32, y1 as i32);
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
     let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
