@@ -165,9 +165,13 @@ fn edge_function(a: &Point, b: &Point, x: f64, y: f64) -> f64 {
 }
 
 fn draw_line(x0: f64, y0: f64, x1: f64, y1: f64, buffer: &mut [u8], width: f64, height: f64, color: (u8, u8, u8)) {
-    for dx in -LINE_THICKNESS..=LINE_THICKNESS {
-        for dy in -LINE_THICKNESS..=LINE_THICKNESS {
-            draw_thin_line(x0 + dx as f64, y0 + dy as f64, x1 + dx as f64, y1 + dy as f64, buffer, width, height, color);
+    if LINE_THICKNESS <= 1 {
+        draw_thin_line(x0, y0, x1, y1, buffer, width, height, color);
+    } else {
+        for dx in -(LINE_THICKNESS / 2)..=(LINE_THICKNESS / 2) {
+            for dy in -(LINE_THICKNESS / 2)..=(LINE_THICKNESS / 2) {
+                draw_thin_line(x0 + dx as f64, y0 + dy as f64, x1 + dx as f64, y1 + dy as f64, buffer, width, height, color);
+            }
         }
     }
 }
