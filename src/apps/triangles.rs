@@ -1,6 +1,7 @@
 use crate::engine::{Application, EngineState};
 use delaunator::{triangulate, Point};
 use rand::Rng;
+use std::collections::HashMap;
 
 const NUM_POINTS: usize = 256;
 const UNIT_MIN: f64 = -0.25;
@@ -12,10 +13,18 @@ const POINT_COLOR: (u8, u8, u8) = (214, 34, 64);
 const POINT_RADIUS: i32 = 7;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
+type TriangleKey = [usize; 3];
+
+#[derive(Clone)]
+struct IdentifiedPoint {
+    id: usize,
+    pos: Point,
+}
+
 pub struct TrianglesApp {
-    unit_points: Vec<Point>,
-    triangles: Vec<[usize; 3]>,
-    triangle_colors: Vec<(u8, u8, u8)>,
+    points: Vec<IdentifiedPoint>,
+    triangles: Vec<[usize; 3]>, // index into `points`
+    triangle_colors: HashMap<TriangleKey, (u8, u8, u8)>,
     last_width: u32,
     last_height: u32,
 }
@@ -23,33 +32,37 @@ pub struct TrianglesApp {
 impl TrianglesApp {
     pub fn new() -> Self {
         let mut rng = rand::thread_rng();
-        let unit_points = (0..NUM_POINTS)
-            .map(|_| Point {
-                x: rng.gen_range(UNIT_MIN..UNIT_MAX),
-                y: rng.gen_range(UNIT_MIN..UNIT_MAX),
+        let points = (0..NUM_POINTS)
+            .map(|id| IdentifiedPoint {
+                id,
+                pos: Point {
+                    x: rng.gen_range(UNIT_MIN..UNIT_MAX),
+                    y: rng.gen_range(UNIT_MIN..UNIT_MAX),
+                },
             })
             .collect();
 
         Self {
-            unit_points,
+            points,
             triangles: Vec::new(),
-            triangle_colors: Vec::new(),
+            triangle_colors: HashMap::new(),
             last_width: 0,
             last_height: 0,
         }
     }
 
     fn recompute_triangulation(&mut self, width: f64, height: f64) {
-        let points: Vec<Point> = self.unit_points
+        let positions: Vec<Point> = self
+            .points
             .iter()
             .map(|p| Point {
-                x: p.x * width,
-                y: p.y * height,
+                x: p.pos.x * width,
+                y: p.pos.y * height,
             })
             .collect();
 
-        let result = triangulate(&points);
-        self.triangles = result
+        let result = triangulate(&positions);
+        let new_tris: Vec<[usize; 3]> = result
             .triangles
             .chunks(3)
             .filter_map(|t| {
@@ -61,9 +74,27 @@ impl TrianglesApp {
             })
             .collect();
 
-        // Assign random purple-biased colors to triangles
         let mut rng = rand::thread_rng();
-        self.triangle_colors = self.triangles.iter().map(|_| random_purple(&mut rng)).collect();
+        let mut new_color_map = HashMap::new();
+
+        for tri in &new_tris {
+            let mut ids = [
+                self.points[tri[0]].id,
+                self.points[tri[1]].id,
+                self.points[tri[2]].id,
+            ];
+            ids.sort();
+
+            let color = *self
+                .triangle_colors
+                .get(&ids)
+                .unwrap_or_else(|| new_color_map.entry(ids).or_insert(random_purple(&mut rng)));
+
+            new_color_map.insert(ids, color);
+        }
+
+        self.triangles = new_tris;
+        self.triangle_colors = new_color_map;
     }
 }
 
@@ -93,35 +124,41 @@ impl Application for TrianglesApp {
             self.last_height = height;
         }
 
-        let points: Vec<Point> = self.unit_points
+        let screen_points: Vec<Point> = self
+            .points
             .iter()
             .map(|p| Point {
-                x: p.x * width_f,
-                y: p.y * height_f,
+                x: p.pos.x * width_f,
+                y: p.pos.y * height_f,
             })
             .collect();
 
-        for (i, tri) in self.triangles.iter().enumerate() {
-            let a = &points[tri[0]];
-            let b = &points[tri[1]];
-            let c = &points[tri[2]];
-            let color = self.triangle_colors[i];
-        
-            // fix winding
+        for tri in &self.triangles {
+            let a = &screen_points[tri[0]];
+            let b = &screen_points[tri[1]];
+            let c = &screen_points[tri[2]];
+
+            let mut ids = [
+                self.points[tri[0]].id,
+                self.points[tri[1]].id,
+                self.points[tri[2]].id,
+            ];
+            ids.sort();
+            let color = self.triangle_colors[&ids];
+
             let area = edge_function(a, b, c.x, c.y);
             if area < 0.0 {
                 draw_filled_triangle(c, b, a, buffer, width_f, height_f, color);
             } else {
                 draw_filled_triangle(a, b, c, buffer, width_f, height_f, color);
             }
-        
+
             draw_line(a.x, a.y, b.x, b.y, buffer, width_f, height_f, LINE_COLOR);
             draw_line(b.x, b.y, c.x, c.y, buffer, width_f, height_f, LINE_COLOR);
             draw_line(c.x, c.y, a.x, a.y, buffer, width_f, height_f, LINE_COLOR);
         }
-    
 
-        for p in &points {
+        for p in &screen_points {
             draw_circle(p.x, p.y, POINT_RADIUS, buffer, width_f, height_f, POINT_COLOR);
         }
     }
