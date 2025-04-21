@@ -106,7 +106,7 @@ pub async fn init_microphone() -> Result<(), JsValue> {
     let navigator = window.navigator();
     let media_devices = navigator.media_devices()?;
 
-    let mut constraints = js_sys::Object::new();
+    let constraints = js_sys::Object::new();
     js_sys::Reflect::set(
         &constraints,
         &JsValue::from_str("audio"),
