@@ -1,31 +1,37 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>XOS Web View</title>
-  <style>
-    html, body {
-      margin: 0;
-      height: 100%;
-      background: #000;
+<script type="module">
+  import init from "./pkg/xos.js";
+
+  // Optional: expose to WASM later if needed
+  async function initMic() {
+    try {
+      const ctx = new AudioContext();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const source = ctx.createMediaStreamSource(stream);
+
+      const processor = ctx.createScriptProcessor(1024, 1, 1);
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        // You can later send these samples to WASM via shared memory
+        console.log("🎙️ Mic Sample[0]:", input[0].toFixed(4));
+        // TODO: pass to wasm (e.g., Module.receiveSamples(input))
+      };
+
+      source.connect(processor);
+      processor.connect(ctx.destination);
+
+      console.log("✅ Microphone initialized");
+    } catch (e) {
+      console.error("❌ Failed to initialize mic:", e);
     }
-    canvas {
-      display: block;
-    }
-  </style>
-</head>
-<body>
-  <canvas id="xos-canvas" width="256" height="256"></canvas>
-  <script type="module">
-    import init from "./pkg/xos.js";
-    init().then(() => {
-      console.log("✅ WASM Initialized");
-    });
-    window.addEventListener("resize", () => {
-      const canvas = document.getElementById("xos-canvas");
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    });
-  </script>
-</body>
-</html>
+  }
+
+  init().then(() => {
+    console.log("✅ WASM Initialized");
+  });
+
+  window.addEventListener("resize", () => {
+    const canvas = document.getElementById("xos-canvas");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  });
+</script>
