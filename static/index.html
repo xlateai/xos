@@ -26,6 +26,30 @@
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     });
+
+    async function initMic() {
+      try {
+        const ctx = new AudioContext();
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const source = ctx.createMediaStreamSource(stream);
+  
+        const processor = ctx.createScriptProcessor(1024, 1, 1);
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          // You can later send these samples to WASM via shared memory
+          console.log("🎙️ Mic Sample[0]:", input[0].toFixed(4));
+          // TODO: pass to wasm (e.g., Module.receiveSamples(input))
+        };
+  
+        source.connect(processor);
+        processor.connect(ctx.destination);
+  
+        console.log("✅ Microphone initialized");
+      } catch (e) {
+        console.error("❌ Failed to initialize mic:", e);
+      }
+    }
   </script>
+  
 </body>
 </html>
