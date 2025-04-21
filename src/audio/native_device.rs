@@ -75,33 +75,3 @@ pub fn print_all() {
         println!("  {}: {}", i+1, device);
     }
 }
-
-/// Get the default input device if available
-pub fn default_input() -> Option<AudioDevice> {
-    let host = cpal::default_host();
-    host.default_input_device().and_then(|device| {
-        device.name().ok().map(|name| {
-            AudioDevice {
-                name,
-                is_input: true,
-                is_output: false,
-                device_cpal: device,
-            }
-        })
-    })
-}
-
-/// Get the default output device if available
-pub fn default_output() -> Option<AudioDevice> {
-    let host = cpal::default_host();
-    host.default_output_device().and_then(|device| {
-        device.name().ok().map(|name| {
-            AudioDevice {
-                name,
-                is_input: false,
-                is_output: true,
-                device_cpal: device,
-            }
-        })
-    })
-}
