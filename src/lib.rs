@@ -10,6 +10,8 @@ use std::time::Duration;
 use tiny_http::{Server, Response};
 use webbrowser;
 
+pub mod registry;
+
 pub mod random;
 pub mod tuneable;
 pub mod apps;
