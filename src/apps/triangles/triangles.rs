@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::triangles::geometric_utils::{
-    draw_circle, draw_filled_triangle, draw_line, edge_function, random_gray,
+    draw_filled_triangle, edge_function,
 };
 use delaunator::{triangulate, Point};
 use rand::Rng;
@@ -16,6 +16,15 @@ const LINE_THICKNESS: i32 = 1;
 const POINT_COLOR: (u8, u8, u8) = (214, 34, 64);
 const POINT_RADIUS: i32 = 5;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
+
+
+pub fn random_color<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
+    // generate a random purple
+    let r = rng.gen_range(0..=255);
+    let g = rng.gen_range(0..=10);
+    let b = rng.gen_range(0..=255);
+    (r, g, b)
+}
 
 #[derive(Clone)]
 struct IdentifiedPoint {
@@ -104,7 +113,7 @@ impl TrianglesApp {
             let color = if let Some(existing) = self.triangle_colors.get(&key) {
                 *existing
             } else {
-                let c = random_gray(&mut rng);
+                let c = random_color(&mut rng);
                 new_colors.insert(key, c);
                 c
             };
@@ -163,14 +172,14 @@ impl Application for TrianglesApp {
                 draw_filled_triangle(a, b, c, buffer, width, height, color);
             }
 
-            draw_line(a.x, a.y, b.x, b.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
-            draw_line(b.x, b.y, c.x, c.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
-            draw_line(c.x, c.y, a.x, a.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
+            // draw_line(a.x, a.y, b.x, b.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
+            // draw_line(b.x, b.y, c.x, c.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
+            // draw_line(c.x, c.y, a.x, a.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
         }
 
-        for p in &screen_points {
-            draw_circle(p.x, p.y, POINT_RADIUS, buffer, width, height, POINT_COLOR);
-        }
+        // for p in &screen_points {
+        //     draw_circle(p.x, p.y, POINT_RADIUS, buffer, width, height, POINT_COLOR);
+        // }
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
