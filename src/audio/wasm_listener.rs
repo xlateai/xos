@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{AudioContext, AudioProcessingEvent, MediaStream, window};
 use std::sync::{Arc, Mutex};
-use once_cell::unsync::OnceCell; // ✅ not `sync` — safe in single-threaded WASM
+use once_cell::unsync::OnceCell;
 
 #[derive(Clone)]
 pub struct AudioListener {
@@ -25,7 +25,6 @@ impl AudioListener {
     }
 }
 
-// Local static buffer — WASM is single-threaded so we don't need Sync
 thread_local! {
     static BUFFER: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.0; 1024]));
     static AUDIO_CONTEXT: OnceCell<AudioContext> = OnceCell::new();
@@ -37,7 +36,6 @@ pub async fn init_microphone() -> Result<(), JsValue> {
     let navigator = window.navigator();
     let media_devices = navigator.media_devices()?;
 
-    // Build constraints: { audio: true }
     let mut constraints = js_sys::Object::new();
     js_sys::Reflect::set(
         &constraints,
@@ -56,7 +54,6 @@ pub async fn init_microphone() -> Result<(), JsValue> {
     let source = context.create_media_stream_source(&stream)?;
     let processor = context.create_script_processor_with_buffer_size(1024)?;
 
-    // Set up JS closure to receive PCM data
     let closure = Closure::<dyn FnMut(_)>::wrap(Box::new(move |event: AudioProcessingEvent| {
         let input_buf = event.input_buffer().unwrap();
         let input = input_buf.get_channel_data(0).unwrap();
@@ -64,12 +61,12 @@ pub async fn init_microphone() -> Result<(), JsValue> {
         BUFFER.with(|shared| {
             let mut buffer = shared.lock().unwrap();
             buffer.clear();
-            buffer.extend((0..input.length()).map(|i| input.get_index(i)));
+            buffer.extend(input.iter().cloned());
         });
     }) as Box<dyn FnMut(_)>);
 
     processor.set_onaudioprocess(Some(closure.as_ref().unchecked_ref()));
-    closure.forget(); // prevent GC
+    closure.forget(); // Pin JS closure
 
     source.connect_with_audio_node(&processor)?;
     processor.connect_with_audio_node(&context.destination())?;
