@@ -89,10 +89,18 @@ fn start_web_server() {
 
     for request in server.incoming_requests() {
         let url = request.url();
-        let path = if url == "/" {
-            "static/index.html".to_string()
+        let mut path = if url == "/" {
+            // always use the XOS root index.html
+            concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
         } else {
-            format!("static{}", url)
+            let full_path = format!("static{}", url);
+            if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
+                full_path
+            } else {
+                eprintln!("❌ File not found: {full_path}");
+                // fallback to index.html so SPA still loads
+                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+            }
         };
 
         match fs::read(&path) {
@@ -102,7 +110,8 @@ fn start_web_server() {
                     .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap());
                 let _ = request.respond(response);
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("❌ Failed to read {path}: {e}");
                 let response = Response::from_string("404 Not Found").with_status_code(404);
                 let _ = request.respond(response);
             }
