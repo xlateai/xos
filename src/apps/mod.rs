@@ -18,6 +18,11 @@ macro_rules! define_apps {
                     react_native: bool,
                 },
             )*
+            /// Run an app from a local file or folder path
+            Dev {
+                #[arg()]
+                path: String,
+            },
         }
 
         pub fn run_app_command(app: AppCommands) {
@@ -27,6 +32,21 @@ macro_rules! define_apps {
                         $crate::run_game(stringify!($file), web, react_native);
                     }
                 )*
+                AppCommands::Dev { path } => {
+                    match std::fs::canonicalize(&path) {
+                        Ok(abs) => {
+                            println!("📂 Launching app from: {}", abs.display());
+                            // TODO: load and run app from .rs or .py file, etc.
+                        }
+                        Err(_) => {
+                            eprintln!("❗ Failed to resolve path: {}\n", path);
+                            eprintln!("👉 You can point to a code file/folder, OR use one of these apps:");
+                            $(
+                                eprintln!("- {}", stringify!($file));
+                            )*
+                        }
+                    }
+                }
             }
         }
 
@@ -41,7 +61,6 @@ macro_rules! define_apps {
     };
 }
 
-// Expand the macro here
 define_apps! {
     Ball => ball::BallGame,
     Tracers => tracers::TracersApp,

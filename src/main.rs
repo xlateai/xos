@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
-
 use xos::apps::{AppCommands, run_app_command};
 
 #[derive(Parser)]
@@ -13,6 +12,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run an application
     App {
         #[command(subcommand)]
         app: AppCommands,
