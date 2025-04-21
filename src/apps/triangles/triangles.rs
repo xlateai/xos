@@ -12,10 +12,6 @@ const SPAWN_PADDING: f64 = 128.0;
 const POINT_DENSITY: f64 = 0.00015;
 const MAX_POINTS: usize = 5000;
 
-const LINE_COLOR: (u8, u8, u8) = (255, 255, 255);
-const LINE_THICKNESS: i32 = 1;
-const POINT_COLOR: (u8, u8, u8) = (214, 34, 64);
-const POINT_RADIUS: i32 = 5;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
 

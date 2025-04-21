@@ -1,21 +1,7 @@
 use clap::{Parser, Subcommand};
-use clap::CommandFactory; // Needed for .command()
+use clap::CommandFactory;
 
-use xos::define_apps;
-
-define_apps! {
-    Ball => "ball",
-    Tracers => "tracers",
-    Camera => "camera",
-    Whiteboard => "whiteboard",
-    Blank => "blank",
-    Waveform => "waveform",
-    Scroll => "scroll",
-    Text => "text",
-    Wireframe => "wireframe",
-    WireframeText => "wireframe_text",
-    Triangles => "triangles",
-}
+use xos::apps::{AppCommands, run_app_command};
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -27,7 +13,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run an application
     App {
         #[command(subcommand)]
         app: AppCommands,
@@ -41,7 +26,6 @@ fn main() {
         Some(Commands::App { app }) => {
             run_app_command(app);
         }
-
         None => {
             eprintln!("❗ No command provided.\n");
             Cli::command().print_help().unwrap();
