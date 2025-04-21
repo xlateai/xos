@@ -26,7 +26,7 @@ impl Application for Waveform {
         }
 
 
-        let device_index = 1;  // hard-coded device selector for now (needs UI kit)
+        let device_index = 0;  // hard-coded device selector for now (needs UI kit)
         let device = devices.get(device_index).ok_or("No audio device found")?;
 
         let buffer_duration = 1.0; // 100ms buffer for better visualization
