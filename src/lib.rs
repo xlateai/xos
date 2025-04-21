@@ -45,19 +45,22 @@ pub fn start() -> Result<(), JsValue> {
 }
 
 // --- Tooling helpers ---
-fn build_wasm(game: &str) {
+fn build_wasm(app_name: &str) {
+    let out_dir = format!("static/pkg/");
+
     let mut command = Command::new("wasm-pack");
     command
-        .env("GAME_SELECTION", game)
-        .args(["build", "--target", "web", "--out-dir", "static/pkg"]);
+        .env("GAME_SELECTION", app_name)
+        .args(["build", "--target", "web", "--out-dir", &out_dir]);
 
     let status = command.status().expect("Failed to run wasm-pack");
     if !status.success() {
         panic!("WASM build failed");
     }
 
-    println!("✅ WASM built to static/pkg/ with game: {}", game);
+    println!("✅ WASM built to {out_dir} with app: {app_name}");
 }
+
 
 fn launch_browser() {
     thread::spawn(|| {
@@ -193,9 +196,27 @@ fn xospy(py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
-/// Runs any app that implements the `Application` trait.
-/// Automatically selects native or WASM backend.
+
+use clap::Parser;
+
+/// Internal CLI flags for `xos::run()` used by third-party apps
+#[derive(Parser, Debug)]
+#[command(name = "xos-app")]
+struct XosAppArgs {
+    #[arg(long)]
+    web: bool,
+
+    #[arg(long = "react-native")]
+    react_native: bool,
+}
+
+
+
 pub fn run<T: engine::Application + 'static>(app: T) {
+    let args = XosAppArgs::parse();
+
+    let app_name = env!("CARGO_PKG_NAME");
+
     #[cfg(target_arch = "wasm32")]
     {
         engine::run_web(Box::new(app)).unwrap();
@@ -203,6 +224,20 @@ pub fn run<T: engine::Application + 'static>(app: T) {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        engine::start_native(Box::new(app)).unwrap();
+        if args.web {
+            println!("🌐 Launching app in web mode...");
+            build_wasm(app_name);
+            launch_browser();
+            start_web_server();
+        } else if args.react_native {
+            println!("📱 Launching app in React Native mode...");
+            build_wasm(app_name);
+            thread::spawn(start_web_server);
+            launch_expo();
+        } else {
+            println!("🖥️  Launching app in native mode...");
+            engine::start_native(Box::new(app)).unwrap();
+        }
     }
 }
+
