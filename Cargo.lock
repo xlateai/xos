@@ -3816,6 +3816,7 @@ dependencies = [
  "cpal",
  "delaunator",
  "fontdue",
+ "getrandom 0.2.15",
  "image",
  "js-sys",
  "nokhwa",

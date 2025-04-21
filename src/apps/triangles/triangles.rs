@@ -3,8 +3,9 @@ use crate::apps::triangles::geometric_utils::{
     draw_filled_triangle, edge_function,
 };
 use delaunator::{triangulate, Point};
-use rand::Rng;
 use std::collections::HashMap;
+
+use crate::random::{randint, uniform_range};
 
 const VIEW_MARGIN: f64 = 512.0;
 const SPAWN_PADDING: f64 = 128.0;
@@ -18,13 +19,14 @@ const POINT_RADIUS: i32 = 5;
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
 
-pub fn random_color<R: Rng>(rng: &mut R) -> (u8, u8, u8) {
+pub fn random_color() -> (u8, u8, u8) {
     // generate a random purple
-    let r = rng.gen_range(0..=255);
-    let g = rng.gen_range(0..=10);
-    let b = rng.gen_range(0..=255);
-    (r, g, b)
+    let r = randint(0, 256);
+    let g = randint(0, 11);
+    let b = randint(0, 256);
+    (r as u8, g as u8, b as u8)
 }
+
 
 #[derive(Clone)]
 struct IdentifiedPoint {
@@ -62,34 +64,33 @@ impl TrianglesApp {
     }
 
     fn regenerate(&mut self, width: f64, height: f64) {
-        let mut rng = rand::thread_rng();
         let view_left = self.scroll_x - VIEW_MARGIN;
         let view_top = self.scroll_y - VIEW_MARGIN;
         let view_right = self.scroll_x + width + VIEW_MARGIN;
         let view_bottom = self.scroll_y + height + VIEW_MARGIN;
-
+    
         self.points.retain(|p| {
             let x = p.pos.x;
             let y = p.pos.y;
             x >= view_left && x <= view_right && y >= view_top && y <= view_bottom
         });
-
+    
         let target_area = (view_right - view_left) * (view_bottom - view_top);
         let target_points = (POINT_DENSITY * target_area) as usize;
-
+    
         while self.points.len() < target_points && self.points.len() < MAX_POINTS {
-            let x = rng.gen_range(view_left - SPAWN_PADDING..view_right + SPAWN_PADDING);
-            let y = rng.gen_range(view_top - SPAWN_PADDING..view_bottom + SPAWN_PADDING);
+            let x = uniform_range(view_left - SPAWN_PADDING, view_right + SPAWN_PADDING);
+            let y = uniform_range(view_top - SPAWN_PADDING, view_bottom + SPAWN_PADDING);
             self.points.push(IdentifiedPoint {
                 id: self.next_point_id,
                 pos: Point { x, y },
             });
             self.next_point_id += 1;
         }
-
+    
         let delaunay_points: Vec<Point> = self.points.iter().map(|p| p.pos.clone()).collect();
         let result = triangulate(&delaunay_points);
-
+    
         self.triangles.clear();
         self.triangles.extend(
             result.triangles.chunks(3).filter_map(|tri| {
@@ -100,7 +101,7 @@ impl TrianglesApp {
                 }
             }),
         );
-
+    
         let mut new_colors = HashMap::with_capacity(self.triangles.len());
         for tri in &self.triangles {
             let mut ids = [
@@ -113,15 +114,16 @@ impl TrianglesApp {
             let color = if let Some(existing) = self.triangle_colors.get(&key) {
                 *existing
             } else {
-                let c = random_color(&mut rng);
+                let c = random_color();
                 new_colors.insert(key, c);
                 c
             };
             new_colors.insert(key, color);
         }
-
+    
         self.triangle_colors = new_colors;
     }
+    
 }
 
 impl Application for TrianglesApp {
