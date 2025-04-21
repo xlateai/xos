@@ -1,5 +1,3 @@
-// src/apps/mod.rs
-
 use crate::engine::Application;
 
 #[macro_export]
