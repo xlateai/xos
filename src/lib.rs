@@ -193,3 +193,16 @@ fn xospy(py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+/// Runs any app that implements the `Application` trait.
+/// Automatically selects native or WASM backend.
+pub fn run<T: engine::Application + 'static>(app: T) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        engine::run_web(Box::new(app)).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        engine::start_native(Box::new(app)).unwrap();
+    }
+}
