@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use super::device::AudioDevice;
+use crate::audio::native_device::AudioDevice;
 
 /// Buffer to store audio samples, separated by channel
 #[derive(Clone)]
