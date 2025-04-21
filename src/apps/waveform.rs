@@ -16,6 +16,15 @@ impl Waveform {
 impl Application for Waveform {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let devices = audio::devices();
+        if devices.is_empty() {
+            return Err("⚠️ No audio input devices found.".to_string());
+        }
+
+        println!("🔊 Available devices:");
+        for (i, d) in devices.iter().enumerate() {
+            println!("  [{}] {}", i, d.name);
+        }
+
 
         let device_index = 1;  // hard-coded device selector for now (needs UI kit)
         let device = devices.get(device_index).ok_or("No audio device found")?;
