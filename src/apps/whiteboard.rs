@@ -121,20 +121,20 @@ impl Application for Whiteboard {
         }
 
         // Add point if drawing
-        if state.mouse.is_down && self.current_stroke.len() < 10_000 {
+        if state.mouse.is_left_clicking && self.current_stroke.len() < 10_000 {
             let p = Self::normalize(state.mouse.x, state.mouse.y, width, height);
             self.current_stroke.push(p);
         }
 
         // On release
-        if self.was_drawing && !state.mouse.is_down {
+        if self.was_drawing && !state.mouse.is_left_clicking {
             if !self.current_stroke.is_empty() {
                 self.strokes.push(std::mem::take(&mut self.current_stroke));
                 self.needs_redraw = true;
             }
         }
 
-        self.was_drawing = state.mouse.is_down;
+        self.was_drawing = state.mouse.is_left_clicking;
 
         // Redraw cache
         if self.needs_redraw {
@@ -190,7 +190,7 @@ impl Application for Whiteboard {
             height,
             state.mouse.x,
             state.mouse.y,
-            state.mouse.is_down,
+            state.mouse.is_left_clicking,
         );
     }
 }

@@ -29,7 +29,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
         mouse: MouseState {
             x: 0.0,
             y: 0.0,
-            is_down: false,
+            is_left_clicking: false,
+            is_right_clicking: false,
             style: CursorStyleSetter::new(),
         },
     };
@@ -113,14 +114,26 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     ..
                 } => match button_state {
                     ElementState::Pressed => {
-                        engine_state.mouse.is_down = true;
+                        engine_state.mouse.is_left_clicking = true;
                         app.on_mouse_down(&mut engine_state);
                     }
                     ElementState::Released => {
-                        engine_state.mouse.is_down = false;
+                        engine_state.mouse.is_left_clicking = false;
                         app.on_mouse_up(&mut engine_state);
                     }
                 },
+                WindowEvent::MouseInput {
+                    state: button_state,
+                    button: MouseButton::Right,
+                    ..
+                } => match button_state {
+                    ElementState::Pressed => {
+                        engine_state.mouse.is_right_clicking = true;
+                    }
+                    ElementState::Released => {
+                        engine_state.mouse.is_right_clicking = false;
+                    }
+                }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = match delta {
                         MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),

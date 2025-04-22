@@ -49,7 +49,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             mouse: MouseState {
                 x: 0.0,
                 y: 0.0,
-                is_down: false,
+                is_left_clicking: false,
                 style: CursorStyleSetter::new(),
             },
         },
@@ -118,7 +118,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_down = true;
+                state.engine_state.mouse.is_left_clicking = true;
                 state.app.on_mouse_down(&mut state.engine_state);
             }
         }) as Box<dyn FnMut(_)>);
@@ -134,7 +134,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_down = false;
+                state.engine_state.mouse.is_left_clicking = false;
                 state.app.on_mouse_up(&mut state.engine_state);
             }
         }) as Box<dyn FnMut(_)>);
@@ -163,7 +163,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
 
                     let dx = state.engine_state.mouse.x - prev_x;
                     let dy = state.engine_state.mouse.y - prev_y;
-                    if state.engine_state.mouse.is_down {
+                    if state.engine_state.mouse.is_left_clicking {
                         state.app.on_scroll(&mut state.engine_state, -dx, -dy);
                     }
                 }
@@ -189,7 +189,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     let y = touch.client_y() as f64 - rect.top();
                     state.engine_state.mouse.x = x as f32;
                     state.engine_state.mouse.y = y as f32;
-                    state.engine_state.mouse.is_down = true;
+                    state.engine_state.mouse.is_left_clicking = true;
                     state.app.on_mouse_down(&mut state.engine_state);
                 }
                 event.prevent_default();
@@ -207,7 +207,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let touch_end_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
             unsafe {
                 let state = &mut *state_ptr_clone;
-                state.engine_state.mouse.is_down = false;
+                state.engine_state.mouse.is_left_clicking = false;
                 state.app.on_mouse_up(&mut state.engine_state);
                 event.prevent_default();
             }
