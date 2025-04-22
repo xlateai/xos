@@ -120,13 +120,13 @@ impl Application for Whiteboard {
             self.needs_redraw = true;
         }
 
-        // Begin drawing?
-        if state.mouse.is_down {
+        // Add point if drawing
+        if state.mouse.is_down && self.current_stroke.len() < 10_000 {
             let p = Self::normalize(state.mouse.x, state.mouse.y, width, height);
             self.current_stroke.push(p);
         }
 
-        // Finish stroke on mouse release
+        // On release
         if self.was_drawing && !state.mouse.is_down {
             if !self.current_stroke.is_empty() {
                 self.strokes.push(std::mem::take(&mut self.current_stroke));
@@ -136,14 +136,27 @@ impl Application for Whiteboard {
 
         self.was_drawing = state.mouse.is_down;
 
-        // Rebuild cache if necessary
+        // Redraw cache
         if self.needs_redraw {
             self.cached_canvas.fill(0);
             for stroke in &self.strokes {
-                for w in stroke.windows(2) {
-                    let (x0, y0) = Self::denormalize(w[0].0, w[0].1, width, height);
-                    let (x1, y1) = Self::denormalize(w[1].0, w[1].1, width, height);
-                    draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
+                match stroke.len() {
+                    0 => {}
+                    1 => {
+                        let (x, y) = Self::denormalize(stroke[0].0, stroke[0].1, width, height);
+                        draw_circle(&mut self.cached_canvas, width, height, x, y, STROKE_WIDTH);
+                    }
+                    _ => {
+                        let mut last = stroke[0];
+                        for &point in &stroke[1..] {
+                            if (point.0 - last.0).abs() + (point.1 - last.1).abs() > 0.001 {
+                                let (x0, y0) = Self::denormalize(last.0, last.1, width, height);
+                                let (x1, y1) = Self::denormalize(point.0, point.1, width, height);
+                                draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
+                            }
+                            last = point;
+                        }
+                    }
                 }
             }
             self.needs_redraw = false;
@@ -152,14 +165,25 @@ impl Application for Whiteboard {
         // Copy cache
         state.frame.buffer.copy_from_slice(&self.cached_canvas);
 
-        // Draw live stroke
-        for w in self.current_stroke.windows(2) {
-            let (x0, y0) = Self::denormalize(w[0].0, w[0].1, width, height);
-            let (x1, y1) = Self::denormalize(w[1].0, w[1].1, width, height);
-            draw_line(&mut state.frame.buffer, width, height, x0, y0, x1, y1);
+        // Live stroke
+        match self.current_stroke.len() {
+            0 => {}
+            1 => {
+                let (x, y) = Self::denormalize(self.current_stroke[0].0, self.current_stroke[0].1, width, height);
+                draw_circle(&mut state.frame.buffer, width, height, x, y, STROKE_WIDTH);
+            }
+            _ => {
+                let mut last = self.current_stroke[0];
+                for &point in &self.current_stroke[1..] {
+                    let (x0, y0) = Self::denormalize(last.0, last.1, width, height);
+                    let (x1, y1) = Self::denormalize(point.0, point.1, width, height);
+                    draw_line(&mut state.frame.buffer, width, height, x0, y0, x1, y1);
+                    last = point;
+                }
+            }
         }
 
-        // Draw cursor
+        // Cursor
         draw_cursor_dot(
             &mut state.frame.buffer,
             width,
