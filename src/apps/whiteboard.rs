@@ -8,6 +8,11 @@ fn draw_line(pixels: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f
     let dy = y1 - y0;
     let steps = dx.abs().max(dy.abs()) as usize;
 
+    if steps == 0 {
+        draw_circle(pixels, width, height, x0, y0, STROKE_WIDTH);
+        return;
+    }
+
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
         let x = x0 + t * dx;
@@ -128,74 +133,70 @@ impl Application for Whiteboard {
     fn tick(&mut self, state: &mut EngineState) {
         let (width, height) = (state.frame.width, state.frame.height);
 
-        // Resize canvas (but don't affect content offset)
         if width != self.cached_width || height != self.cached_height {
             self.cached_width = width;
             self.cached_height = height;
             self.cached_canvas = vec![0; (width * height * 4) as usize];
         }
 
+        // Right click: pan
         if state.mouse.is_right_clicking {
             self.offset_x += state.mouse.dx;
             self.offset_y += state.mouse.dy;
         }
 
+        // Left click: draw stroke
         if state.mouse.is_left_clicking && self.current_stroke.len() < 10_000 {
             let p = self.screen_to_world(state.mouse.x, state.mouse.y);
             self.current_stroke.push(p);
         }
 
+        // On release: commit stroke (even if just 1 dot)
         if self.was_drawing && !state.mouse.is_left_clicking {
-            if !self.current_stroke.is_empty() {
-                self.strokes.push(std::mem::take(&mut self.current_stroke));
-                self.needs_redraw = true;
+            if self.current_stroke.is_empty() {
+                let p = self.screen_to_world(state.mouse.x, state.mouse.y);
+                self.current_stroke.push(p);
             }
+            self.strokes.push(std::mem::take(&mut self.current_stroke));
+            self.needs_redraw = true;
         }
 
         self.was_drawing = state.mouse.is_left_clicking;
 
-        // Draw strokes
+        // Draw all completed strokes
         self.cached_canvas.fill(0);
         for stroke in &self.strokes {
-            match stroke.len() {
-                0 => {}
-                1 => {
-                    let (x, y) = self.world_to_screen(stroke[0].0, stroke[0].1);
-                    draw_circle(&mut self.cached_canvas, width, height, x, y, STROKE_WIDTH);
-                }
-                _ => {
-                    let mut last = stroke[0];
-                    for &point in &stroke[1..] {
-                        let (x0, y0) = self.world_to_screen(last.0, last.1);
-                        let (x1, y1) = self.world_to_screen(point.0, point.1);
-                        draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
-                        last = point;
-                    }
+            if stroke.len() == 1 {
+                let (x, y) = self.world_to_screen(stroke[0].0, stroke[0].1);
+                draw_circle(&mut self.cached_canvas, width, height, x, y, STROKE_WIDTH);
+            } else {
+                for stroke_pair in stroke.windows(2) {
+                    let (x0, y0) = self.world_to_screen(stroke_pair[0].0, stroke_pair[0].1);
+                    let (x1, y1) = self.world_to_screen(stroke_pair[1].0, stroke_pair[1].1);
+                    draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
                 }
             }
         }
 
+        // Push final canvas
         state.frame.buffer.copy_from_slice(&self.cached_canvas);
 
-        // Draw current stroke live
-        match self.current_stroke.len() {
-            0 => {}
-            1 => {
-                let (x, y) = self.world_to_screen(self.current_stroke[0].0, self.current_stroke[0].1);
-                draw_circle(&mut state.frame.buffer, width, height, x, y, STROKE_WIDTH);
-            }
-            _ => {
-                let mut last = self.current_stroke[0];
-                for &point in &self.current_stroke[1..] {
-                    let (x0, y0) = self.world_to_screen(last.0, last.1);
+        // Live preview stroke
+        if let Some((first, rest)) = self.current_stroke.split_first() {
+            let (x0, y0) = self.world_to_screen(first.0, first.1);
+            if rest.is_empty() {
+                draw_circle(&mut state.frame.buffer, width, height, x0, y0, STROKE_WIDTH);
+            } else {
+                let mut last = *first;
+                for &point in rest {
                     let (x1, y1) = self.world_to_screen(point.0, point.1);
-                    draw_line(&mut state.frame.buffer, width, height, x0, y0, x1, y1);
+                    draw_line(&mut state.frame.buffer, width, height, last.0 * self.zoom + self.offset_x, last.1 * self.zoom + self.offset_y, x1, y1);
                     last = point;
                 }
             }
         }
 
-        // Draw cursor
+        // Cursor
         draw_cursor_dot(
             &mut state.frame.buffer,
             width,
@@ -209,22 +210,13 @@ impl Application for Whiteboard {
 
     fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32) {
         let factor = if dy > 0.0 { 1.1 } else { 1.0 / 1.1 };
-    
+
         let mouse_screen_x = state.mouse.x;
         let mouse_screen_y = state.mouse.y;
-    
-        // Get world coords under mouse before zoom
         let world_before = self.screen_to_world(mouse_screen_x, mouse_screen_y);
-    
-        // Apply zoom
         self.zoom *= factor;
-    
-        // Get world coords under mouse after zoom
         let world_after = self.screen_to_world(mouse_screen_x, mouse_screen_y);
-    
-        // Adjust offset so world_before stays under cursor
         self.offset_x += (world_after.0 - world_before.0) * self.zoom;
         self.offset_y += (world_after.1 - world_before.1) * self.zoom;
     }
-    
 }
