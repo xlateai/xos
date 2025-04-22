@@ -207,12 +207,24 @@ impl Application for Whiteboard {
         );
     }
 
-    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
-        let factor = 1.1;
-        if dy > 0.0 {
-            self.zoom *= factor;
-        } else {
-            self.zoom /= factor;
-        }
+    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32) {
+        let factor = if dy > 0.0 { 1.1 } else { 1.0 / 1.1 };
+    
+        let mouse_screen_x = state.mouse.x;
+        let mouse_screen_y = state.mouse.y;
+    
+        // Get world coords under mouse before zoom
+        let world_before = self.screen_to_world(mouse_screen_x, mouse_screen_y);
+    
+        // Apply zoom
+        self.zoom *= factor;
+    
+        // Get world coords under mouse after zoom
+        let world_after = self.screen_to_world(mouse_screen_x, mouse_screen_y);
+    
+        // Adjust offset so world_before stays under cursor
+        self.offset_x += (world_after.0 - world_before.0) * self.zoom;
+        self.offset_y += (world_after.1 - world_before.1) * self.zoom;
     }
+    
 }
