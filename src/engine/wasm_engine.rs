@@ -49,7 +49,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             mouse: MouseState {
                 x: 0.0,
                 y: 0.0,
-                is_down: false,
+                dx: 0.0,
+                dy: 0.0,
+                is_left_clicking: false,
+                is_right_clicking: false,
                 style: CursorStyleSetter::new(),
             },
         },
@@ -69,11 +72,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let move_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
             unsafe {
                 let state = &mut *state_ptr_clone;
-                state.engine_state.mouse.x = event.offset_x() as f32;
-                state.engine_state.mouse.y = event.offset_y() as f32;
+        
+                let new_x = event.offset_x() as f32;
+                let new_y = event.offset_y() as f32;
+        
+                state.engine_state.mouse.dx = new_x - state.engine_state.mouse.x;
+                state.engine_state.mouse.dy = new_y - state.engine_state.mouse.y;
+        
+                state.engine_state.mouse.x = new_x;
+                state.engine_state.mouse.y = new_y;
+        
                 state.app.on_mouse_move(&mut state.engine_state);
-
-                let style = match state.engine_state.mouse.style.get() {
+        
+                let cursor_style = state.engine_state.mouse.style.get();
+                let style = match cursor_style {
                     CursorStyle::Default => "default",
                     CursorStyle::Text => "text",
                     CursorStyle::ResizeHorizontal => "ew-resize",
@@ -82,8 +94,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     CursorStyle::ResizeDiagonalNW => "nwse-resize",
                     CursorStyle::Hand => "pointer",
                     CursorStyle::Crosshair => "crosshair",
+                    CursorStyle::Hidden => "none",
                 };
-
                 canvas_clone.style().set_property("cursor", style).unwrap();
             }
         }) as Box<dyn FnMut(_)>);
@@ -117,8 +129,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_down = true;
-                state.app.on_mouse_down(&mut state.engine_state);
+
+                match event.button() {
+                    0 => {
+                        state.engine_state.mouse.is_left_clicking = true;
+                        state.app.on_mouse_down(&mut state.engine_state);
+                    }
+                    2 => {
+                        state.engine_state.mouse.is_right_clicking = true;
+                        // Optionally call a separate handler here if needed
+                    }
+                    _ => {}
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", down_callback.as_ref().unchecked_ref())?;
@@ -133,8 +155,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_down = false;
-                state.app.on_mouse_up(&mut state.engine_state);
+
+                match event.button() {
+                    0 => {
+                        state.engine_state.mouse.is_left_clicking = false;
+                        state.app.on_mouse_up(&mut state.engine_state);
+                    }
+                    2 => {
+                        state.engine_state.mouse.is_right_clicking = false;
+                        // Optionally call a separate handler here too
+                    }
+                    _ => {}
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", up_callback.as_ref().unchecked_ref())?;
@@ -162,7 +194,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
 
                     let dx = state.engine_state.mouse.x - prev_x;
                     let dy = state.engine_state.mouse.y - prev_y;
-                    if state.engine_state.mouse.is_down {
+                    if state.engine_state.mouse.is_left_clicking {
                         state.app.on_scroll(&mut state.engine_state, -dx, -dy);
                     }
                 }
@@ -188,7 +220,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     let y = touch.client_y() as f64 - rect.top();
                     state.engine_state.mouse.x = x as f32;
                     state.engine_state.mouse.y = y as f32;
-                    state.engine_state.mouse.is_down = true;
+                    state.engine_state.mouse.is_left_clicking = true;
                     state.app.on_mouse_down(&mut state.engine_state);
                 }
                 event.prevent_default();
@@ -206,7 +238,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let touch_end_callback = Closure::wrap(Box::new(move |event: TouchEvent| {
             unsafe {
                 let state = &mut *state_ptr_clone;
-                state.engine_state.mouse.is_down = false;
+                state.engine_state.mouse.is_left_clicking = false;
                 state.app.on_mouse_up(&mut state.engine_state);
                 event.prevent_default();
             }

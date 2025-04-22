@@ -29,7 +29,10 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
         mouse: MouseState {
             x: 0.0,
             y: 0.0,
-            is_down: false,
+            dx: 0.0,
+            dy: 0.0,
+            is_left_clicking: false,
+            is_right_clicking: false,
             style: CursorStyleSetter::new(),
         },
     };
@@ -64,19 +67,27 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 }
             }
             Event::MainEventsCleared => {
-                // ✅ Sync cursor with current style using `.get()`
-                let icon = match engine_state.mouse.style.get() {
-                    CursorStyle::Default => CursorIcon::Default,
-                    CursorStyle::Text => CursorIcon::Text,
-                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
-                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
-                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
-                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
-                    CursorStyle::Hand => CursorIcon::Hand,
-                    CursorStyle::Crosshair => CursorIcon::Crosshair,
-                };
-                window.set_cursor_icon(icon);
-
+                match engine_state.mouse.style.get() {
+                    CursorStyle::Hidden => {
+                        window.set_cursor_visible(false);
+                    }
+                    other => {
+                        window.set_cursor_visible(true);
+                        let icon = match other {
+                            CursorStyle::Default => CursorIcon::Default,
+                            CursorStyle::Text => CursorIcon::Text,
+                            CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                            CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                            CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                            CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                            CursorStyle::Hand => CursorIcon::Hand,
+                            CursorStyle::Crosshair => CursorIcon::Crosshair,
+                            CursorStyle::Hidden => unreachable!(), // already handled above
+                        };
+                        window.set_cursor_icon(icon);
+                    }
+                }
+            
                 window.request_redraw();
             }
             Event::WindowEvent { event, .. } => match event {
@@ -95,8 +106,15 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     window.request_redraw();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
+                    let prev_x = engine_state.mouse.x;
+                    let prev_y = engine_state.mouse.y;
+                
                     engine_state.mouse.x = position.x as f32;
                     engine_state.mouse.y = position.y as f32;
+                
+                    engine_state.mouse.dx = engine_state.mouse.x - prev_x;
+                    engine_state.mouse.dy = engine_state.mouse.y - prev_y;
+                
                     app.on_mouse_move(&mut engine_state);
                 }
                 WindowEvent::MouseInput {
@@ -105,14 +123,26 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     ..
                 } => match button_state {
                     ElementState::Pressed => {
-                        engine_state.mouse.is_down = true;
+                        engine_state.mouse.is_left_clicking = true;
                         app.on_mouse_down(&mut engine_state);
                     }
                     ElementState::Released => {
-                        engine_state.mouse.is_down = false;
+                        engine_state.mouse.is_left_clicking = false;
                         app.on_mouse_up(&mut engine_state);
                     }
                 },
+                WindowEvent::MouseInput {
+                    state: button_state,
+                    button: MouseButton::Right,
+                    ..
+                } => match button_state {
+                    ElementState::Pressed => {
+                        engine_state.mouse.is_right_clicking = true;
+                    }
+                    ElementState::Released => {
+                        engine_state.mouse.is_right_clicking = false;
+                    }
+                }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = match delta {
                         MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
