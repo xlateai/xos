@@ -90,7 +90,7 @@ fn start_web_server() {
 
     for request in server.incoming_requests() {
         let url = request.url();
-        let mut path = if url == "/" {
+        let path = if url == "/" {
             // always use the XOS root index.html
             concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
         } else {
