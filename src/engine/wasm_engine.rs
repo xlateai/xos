@@ -50,6 +50,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 x: 0.0,
                 y: 0.0,
                 is_left_clicking: false,
+                is_right_clicking: false,
                 style: CursorStyleSetter::new(),
             },
         },
@@ -118,8 +119,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_left_clicking = true;
-                state.app.on_mouse_down(&mut state.engine_state);
+
+                match event.button() {
+                    0 => {
+                        state.engine_state.mouse.is_left_clicking = true;
+                        state.app.on_mouse_down(&mut state.engine_state);
+                    }
+                    2 => {
+                        state.engine_state.mouse.is_right_clicking = true;
+                        // Optionally call a separate handler here if needed
+                    }
+                    _ => {}
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousedown", down_callback.as_ref().unchecked_ref())?;
@@ -134,8 +145,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.x = event.offset_x() as f32;
                 state.engine_state.mouse.y = event.offset_y() as f32;
-                state.engine_state.mouse.is_left_clicking = false;
-                state.app.on_mouse_up(&mut state.engine_state);
+
+                match event.button() {
+                    0 => {
+                        state.engine_state.mouse.is_left_clicking = false;
+                        state.app.on_mouse_up(&mut state.engine_state);
+                    }
+                    2 => {
+                        state.engine_state.mouse.is_right_clicking = false;
+                        // Optionally call a separate handler here too
+                    }
+                    _ => {}
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mouseup", up_callback.as_ref().unchecked_ref())?;
