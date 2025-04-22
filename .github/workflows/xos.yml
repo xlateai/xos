@@ -80,31 +80,38 @@ jobs:
     needs: [rust-native, rust-wasm]
     steps:
       - uses: actions/checkout@v3
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
       - name: Cache Python virtualenv
         uses: actions/cache@v3
         with:
           path: .venv
           key: python-venv-${{ hashFiles('pyproject.toml', 'Cargo.lock', 'src/**') }}
           restore-keys: python-venv-
-      - run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install maturin pytest toml
-      - run: |
-          source .venv/bin/activate
-          maturin develop --release --features python
-      - run: |
-          source .venv/bin/activate
-          pytest .
+
+      - name: Install Python dependencies
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install maturin pytest toml
+
+      - name: Build Python extension
+        run: .venv/bin/maturin develop --release --features python
+
+      - name: Run Python tests
+        run: .venv/bin/pytest .
 
   publish-rust:
     name: Publish Rust Crate
