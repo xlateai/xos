@@ -73,7 +73,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.y = event.offset_y() as f32;
                 state.app.on_mouse_move(&mut state.engine_state);
 
-                let style = match state.engine_state.mouse.style.get() {
+                let cursor_style = state.engine_state.mouse.style.get();
+                let style = match cursor_style {
                     CursorStyle::Default => "default",
                     CursorStyle::Text => "text",
                     CursorStyle::ResizeHorizontal => "ew-resize",
@@ -82,8 +83,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     CursorStyle::ResizeDiagonalNW => "nwse-resize",
                     CursorStyle::Hand => "pointer",
                     CursorStyle::Crosshair => "crosshair",
+                    CursorStyle::Hidden => "none",
                 };
-
                 canvas_clone.style().set_property("cursor", style).unwrap();
             }
         }) as Box<dyn FnMut(_)>);
