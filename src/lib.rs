@@ -11,6 +11,7 @@ use tiny_http::{Server, Response};
 use webbrowser;
 
 pub mod random;
+pub mod text;
 pub mod tuneable;
 pub mod engine;
 pub mod video;
@@ -45,19 +46,22 @@ pub fn start() -> Result<(), JsValue> {
 }
 
 // --- Tooling helpers ---
-fn build_wasm(game: &str) {
+fn build_wasm(app_name: &str) {
+    let out_dir = format!("static/pkg/");
+
     let mut command = Command::new("wasm-pack");
     command
-        .env("GAME_SELECTION", game)
-        .args(["build", "--target", "web", "--out-dir", "static/pkg"]);
+        .env("GAME_SELECTION", app_name)
+        .args(["build", "--target", "web", "--out-dir", &out_dir]);
 
     let status = command.status().expect("Failed to run wasm-pack");
     if !status.success() {
         panic!("WASM build failed");
     }
 
-    println!("✅ WASM built to static/pkg/ with game: {}", game);
+    println!("✅ WASM built to {out_dir} with app: {app_name}");
 }
+
 
 fn launch_browser() {
     thread::spawn(|| {
@@ -87,9 +91,17 @@ fn start_web_server() {
     for request in server.incoming_requests() {
         let url = request.url();
         let path = if url == "/" {
-            "static/index.html".to_string()
+            // always use the XOS root index.html
+            concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
         } else {
-            format!("static{}", url)
+            let full_path = format!("static{}", url);
+            if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
+                full_path
+            } else {
+                eprintln!("❌ File not found: {full_path}");
+                // fallback to index.html so SPA still loads
+                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+            }
         };
 
         match fs::read(&path) {
@@ -99,7 +111,8 @@ fn start_web_server() {
                     .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap());
                 let _ = request.respond(response);
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("❌ Failed to read {path}: {e}");
                 let response = Response::from_string("404 Not Found").with_status_code(404);
                 let _ = request.respond(response);
             }
@@ -191,5 +204,50 @@ fn xospy(py: Python, m: &PyModule) -> PyResult<()> {
     // ───────────────────────────────────────────────────────────────────────────
 
     Ok(())
+}
+
+
+use clap::Parser;
+
+/// Internal CLI flags for `xos::run()` used by third-party apps
+#[derive(Parser, Debug)]
+#[command(name = "xos-app")]
+struct XosAppArgs {
+    #[arg(long)]
+    web: bool,
+
+    #[arg(long = "react-native")]
+    react_native: bool,
+}
+
+
+
+pub fn run<T: engine::Application + 'static>(app: T) {
+    let args = XosAppArgs::parse();
+
+    let app_name = env!("CARGO_PKG_NAME");
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        engine::run_web(Box::new(app)).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if args.web {
+            println!("🌐 Launching app in web mode...");
+            build_wasm(app_name);
+            launch_browser();
+            start_web_server();
+        } else if args.react_native {
+            println!("📱 Launching app in React Native mode...");
+            build_wasm(app_name);
+            thread::spawn(start_web_server);
+            launch_expo();
+        } else {
+            println!("🖥️  Launching app in native mode...");
+            engine::start_native(Box::new(app)).unwrap();
+        }
+    }
 }
 

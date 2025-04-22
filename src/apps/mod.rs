@@ -41,7 +41,6 @@ macro_rules! define_apps {
     };
 }
 
-// Expand the macro here
 define_apps! {
     Ball => ball::BallGame,
     Tracers => tracers::TracersApp,
