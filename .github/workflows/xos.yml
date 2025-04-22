@@ -92,25 +92,16 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
-      - name: Create virtual environment
-        run: python -m venv .venv
-
-      - name: Cache Python virtualenv
-        uses: actions/cache@v3
-        with:
-          path: .venv
-          key: python-venv-${{ hashFiles('pyproject.toml', 'Cargo.lock', 'src/**') }}
-          restore-keys: python-venv-
-
-      - name: Install Python dependencies
+      - name: Create and install Python environment
         run: |
+          python -m venv .venv
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install maturin pytest toml
 
       - name: Build Python extension
         run: .venv/bin/maturin develop --release --features python
 
-      - name: Run Python tests
+      - name: Run tests
         run: .venv/bin/pytest .
 
   publish-rust:
