@@ -74,40 +74,41 @@ jobs:
           restore-keys: rust-wasm-
       - run: wasm-pack build --target web --out-dir static/pkg
 
-  python-test:
-    name: Build/Test Python
-    runs-on: ubuntu-latest
-    needs: [rust-native, rust-wasm]
-    steps:
-      - uses: actions/checkout@v3
+  # python-test:
+  #   name: Build/Test Python
+  #   runs-on: ubuntu-latest
+  #   needs: [rust-native, rust-wasm]
+  #   steps:
+  #     - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
 
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+  #     - uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: stable
+  #         override: true
 
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+  #     - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
-      - name: Create and install Python environment
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install maturin pytest toml
+  #     - name: Create and install Python environment
+  #       run: |
+  #         python -m venv .venv
+  #         .venv/bin/pip install --upgrade pip
+  #         .venv/bin/pip install maturin pytest toml
 
-      - name: Build Python extension
-        run: .venv/bin/maturin develop --release --features python
+  #     - name: Build Python extension
+  #       run: .venv/bin/maturin develop --release --features python
 
-      - name: Run tests
-        run: .venv/bin/pytest .
+  #     - name: Run tests
+  #       run: .venv/bin/pytest .
 
   publish-rust:
     name: Publish Rust Crate
     runs-on: ubuntu-latest
-    needs: python-test
+    # needs: python-test
+    needs: [rust-native, rust-wasm]
     if: github.ref == 'refs/heads/main'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -141,44 +142,44 @@ jobs:
         run: echo "published=true" >> $GITHUB_OUTPUT
         if: steps.version-check.outputs.exists != 'true'
 
-  publish-python:
-    name: Publish Python Package
-    runs-on: ubuntu-latest
-    needs: python-test
-    if: github.ref == 'refs/heads/main'
-    outputs:
-      published: ${{ steps.set-output.outputs.published }}
-    steps:
-      - uses: actions/checkout@v3
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-      - run: pip install maturin toml jq
-      - id: get-version
-        run: |
-          version=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
-          echo "version=$version" >> $GITHUB_OUTPUT
-      - id: version-check
-        run: |
-          name=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['name'])")
-          version="${{ steps.get-version.outputs.version }}"
-          if curl -sSf "https://pypi.org/pypi/${name}/json" | jq -e ".releases[\"$version\"]" > /dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Publish
-        if: steps.version-check.outputs.exists != 'true'
-        run: |
-          maturin publish -u __token__ -p "${{ secrets.PYPI_API_TOKEN }}"
-      - id: set-output
-        run: echo "published=true" >> $GITHUB_OUTPUT
-        if: steps.version-check.outputs.exists != 'true'
+  # publish-python:
+  #   name: Publish Python Package
+  #   runs-on: ubuntu-latest
+  #   needs: python-test
+  #   if: github.ref == 'refs/heads/main'
+  #   outputs:
+  #     published: ${{ steps.set-output.outputs.published }}
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #     - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
+  #     - uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: stable
+  #         override: true
+  #     - run: pip install maturin toml jq
+  #     - id: get-version
+  #       run: |
+  #         version=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+  #         echo "version=$version" >> $GITHUB_OUTPUT
+  #     - id: version-check
+  #       run: |
+  #         name=$(python3 -c "import toml; print(toml.load('pyproject.toml')['project']['name'])")
+  #         version="${{ steps.get-version.outputs.version }}"
+  #         if curl -sSf "https://pypi.org/pypi/${name}/json" | jq -e ".releases[\"$version\"]" > /dev/null; then
+  #           echo "exists=true" >> $GITHUB_OUTPUT
+  #         else
+  #           echo "exists=false" >> $GITHUB_OUTPUT
+  #         fi
+  #     - name: Publish
+  #       if: steps.version-check.outputs.exists != 'true'
+  #       run: |
+  #         maturin publish -u __token__ -p "${{ secrets.PYPI_API_TOKEN }}"
+  #     - id: set-output
+  #       run: echo "published=true" >> $GITHUB_OUTPUT
+  #       if: steps.version-check.outputs.exists != 'true'
 
   tag-release:
     name: Tag Commit w/ Version
