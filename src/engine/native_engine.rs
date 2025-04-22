@@ -64,19 +64,27 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                 }
             }
             Event::MainEventsCleared => {
-                // ✅ Sync cursor with current style using `.get()`
-                let icon = match engine_state.mouse.style.get() {
-                    CursorStyle::Default => CursorIcon::Default,
-                    CursorStyle::Text => CursorIcon::Text,
-                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
-                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
-                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
-                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
-                    CursorStyle::Hand => CursorIcon::Hand,
-                    CursorStyle::Crosshair => CursorIcon::Crosshair,
-                };
-                window.set_cursor_icon(icon);
-
+                match engine_state.mouse.style.get() {
+                    CursorStyle::Hidden => {
+                        window.set_cursor_visible(false);
+                    }
+                    other => {
+                        window.set_cursor_visible(true);
+                        let icon = match other {
+                            CursorStyle::Default => CursorIcon::Default,
+                            CursorStyle::Text => CursorIcon::Text,
+                            CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                            CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                            CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                            CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                            CursorStyle::Hand => CursorIcon::Hand,
+                            CursorStyle::Crosshair => CursorIcon::Crosshair,
+                            CursorStyle::Hidden => unreachable!(), // already handled above
+                        };
+                        window.set_cursor_icon(icon);
+                    }
+                }
+            
                 window.request_redraw();
             }
             Event::WindowEvent { event, .. } => match event {

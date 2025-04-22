@@ -15,6 +15,7 @@ pub enum CursorStyle {
     ResizeDiagonalNW,
     Hand,
     Crosshair,
+    Hidden,
 }
 
 #[derive(Debug)]
@@ -64,6 +65,7 @@ impl_cursor_style_setters! {
     ResizeDiagonalNW => resize_diagonal_nw,
     Hand => hand,
     Crosshair => crosshair,
+    Hidden => hidden,
 }
 
 #[derive(Debug)]
