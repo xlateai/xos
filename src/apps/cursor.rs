@@ -17,7 +17,7 @@ impl Application for CursorApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.mouse.style.hidden();
+        // state.mouse.style.hidden();
 
         let buffer = &mut state.frame.buffer;
         let width = state.frame.width;
