@@ -49,6 +49,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             mouse: MouseState {
                 x: 0.0,
                 y: 0.0,
+                dx: 0.0,
+                dy: 0.0,
                 is_left_clicking: false,
                 is_right_clicking: false,
                 style: CursorStyleSetter::new(),
@@ -70,10 +72,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let move_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
             unsafe {
                 let state = &mut *state_ptr_clone;
-                state.engine_state.mouse.x = event.offset_x() as f32;
-                state.engine_state.mouse.y = event.offset_y() as f32;
+        
+                let new_x = event.offset_x() as f32;
+                let new_y = event.offset_y() as f32;
+        
+                state.engine_state.mouse.dx = new_x - state.engine_state.mouse.x;
+                state.engine_state.mouse.dy = new_y - state.engine_state.mouse.y;
+        
+                state.engine_state.mouse.x = new_x;
+                state.engine_state.mouse.y = new_y;
+        
                 state.app.on_mouse_move(&mut state.engine_state);
-
+        
                 let cursor_style = state.engine_state.mouse.style.get();
                 let style = match cursor_style {
                     CursorStyle::Default => "default",
