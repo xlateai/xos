@@ -21,11 +21,17 @@
     init().then(() => {
       console.log("✅ WASM Initialized");
     });
+    
     window.addEventListener("resize", () => {
       const canvas = document.getElementById("xos-canvas");
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     });
+
+    window.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+    });
+
 
     async function initMic() {
       try {
