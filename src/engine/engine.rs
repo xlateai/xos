@@ -72,6 +72,8 @@ impl_cursor_style_setters! {
 pub struct MouseState {
     pub x: f32,
     pub y: f32,
+    pub dx: f32,
+    pub dy: f32,
     pub is_left_clicking: bool,
     pub is_right_clicking: bool,
     pub style: CursorStyleSetter,

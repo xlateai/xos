@@ -18,17 +18,20 @@ fn draw_line(pixels: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f
 
 fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, radius: f32) {
     let radius_squared = radius * radius;
-    let start_x = (cx - radius).max(0.0) as u32;
-    let end_x = (cx + radius).min(width as f32) as u32;
-    let start_y = (cy - radius).max(0.0) as u32;
-    let end_y = (cy + radius).min(height as f32) as u32;
+    let start_x = (cx - radius).floor() as i32;
+    let end_x = (cx + radius).ceil() as i32;
+    let start_y = (cy - radius).floor() as i32;
+    let end_y = (cy + radius).ceil() as i32;
 
     for y in start_y..end_y {
         for x in start_x..end_x {
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                continue;
+            }
             let dx = x as f32 - cx;
             let dy = y as f32 - cy;
             if dx * dx + dy * dy <= radius_squared {
-                let i = ((y * width + x) * 4) as usize;
+                let i = ((y as u32 * width + x as u32) * 4) as usize;
                 if i + 3 < pixels.len() {
                     pixels[i + 0] = DRAW_COLOR.0;
                     pixels[i + 1] = DRAW_COLOR.1;
@@ -40,8 +43,14 @@ fn draw_circle(pixels: &mut [u8], width: u32, height: u32, cx: f32, cy: f32, rad
     }
 }
 
-fn draw_cursor_dot(pixels: &mut [u8], width: u32, height: u32, x: f32, y: f32, pressed: bool) {
-    let color = if pressed { (0, 255, 0) } else { (255, 255, 255) };
+fn draw_cursor_dot(pixels: &mut [u8], width: u32, height: u32, x: f32, y: f32, left: bool, right: bool) {
+    let color = if right {
+        (255, 0, 0)
+    } else if left {
+        (0, 255, 0)
+    } else {
+        (255, 255, 255)
+    };
     let radius = 3.0;
     let radius_squared = radius * radius;
     let start_x = (x - radius).max(0.0) as u32;
@@ -68,9 +77,13 @@ fn draw_cursor_dot(pixels: &mut [u8], width: u32, height: u32, x: f32, y: f32, p
 
 #[derive(Clone)]
 pub struct Whiteboard {
-    strokes: Vec<Vec<(f32, f32)>>, // Normalized
+    strokes: Vec<Vec<(f32, f32)>>,
     current_stroke: Vec<(f32, f32)>,
     was_drawing: bool,
+
+    offset_x: f32,
+    offset_y: f32,
+    zoom: f32,
 
     cached_canvas: Vec<u8>,
     cached_width: u32,
@@ -84,6 +97,9 @@ impl Whiteboard {
             strokes: Vec::new(),
             current_stroke: Vec::new(),
             was_drawing: false,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            zoom: 1.0,
             cached_canvas: Vec::new(),
             cached_width: 0,
             cached_height: 0,
@@ -91,12 +107,12 @@ impl Whiteboard {
         }
     }
 
-    fn normalize(x: f32, y: f32, width: u32, height: u32) -> (f32, f32) {
-        (x / width as f32, y / height as f32)
+    fn screen_to_world(&self, x: f32, y: f32) -> (f32, f32) {
+        ((x - self.offset_x) / self.zoom, (y - self.offset_y) / self.zoom)
     }
 
-    fn denormalize(x: f32, y: f32, width: u32, height: u32) -> (f32, f32) {
-        (x * width as f32, y * height as f32)
+    fn world_to_screen(&self, x: f32, y: f32) -> (f32, f32) {
+        (x * self.zoom + self.offset_x, y * self.zoom + self.offset_y)
     }
 }
 
@@ -112,21 +128,23 @@ impl Application for Whiteboard {
     fn tick(&mut self, state: &mut EngineState) {
         let (width, height) = (state.frame.width, state.frame.height);
 
-        // Resize
+        // Resize canvas (but don't affect content offset)
         if width != self.cached_width || height != self.cached_height {
             self.cached_width = width;
             self.cached_height = height;
             self.cached_canvas = vec![0; (width * height * 4) as usize];
-            self.needs_redraw = true;
         }
 
-        // Add point if drawing
+        if state.mouse.is_right_clicking {
+            self.offset_x += state.mouse.dx;
+            self.offset_y += state.mouse.dy;
+        }
+
         if state.mouse.is_left_clicking && self.current_stroke.len() < 10_000 {
-            let p = Self::normalize(state.mouse.x, state.mouse.y, width, height);
+            let p = self.screen_to_world(state.mouse.x, state.mouse.y);
             self.current_stroke.push(p);
         }
 
-        // On release
         if self.was_drawing && !state.mouse.is_left_clicking {
             if !self.current_stroke.is_empty() {
                 self.strokes.push(std::mem::take(&mut self.current_stroke));
@@ -136,54 +154,48 @@ impl Application for Whiteboard {
 
         self.was_drawing = state.mouse.is_left_clicking;
 
-        // Redraw cache
-        if self.needs_redraw {
-            self.cached_canvas.fill(0);
-            for stroke in &self.strokes {
-                match stroke.len() {
-                    0 => {}
-                    1 => {
-                        let (x, y) = Self::denormalize(stroke[0].0, stroke[0].1, width, height);
-                        draw_circle(&mut self.cached_canvas, width, height, x, y, STROKE_WIDTH);
-                    }
-                    _ => {
-                        let mut last = stroke[0];
-                        for &point in &stroke[1..] {
-                            if (point.0 - last.0).abs() + (point.1 - last.1).abs() > 0.001 {
-                                let (x0, y0) = Self::denormalize(last.0, last.1, width, height);
-                                let (x1, y1) = Self::denormalize(point.0, point.1, width, height);
-                                draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
-                            }
-                            last = point;
-                        }
+        // Draw strokes
+        self.cached_canvas.fill(0);
+        for stroke in &self.strokes {
+            match stroke.len() {
+                0 => {}
+                1 => {
+                    let (x, y) = self.world_to_screen(stroke[0].0, stroke[0].1);
+                    draw_circle(&mut self.cached_canvas, width, height, x, y, STROKE_WIDTH);
+                }
+                _ => {
+                    let mut last = stroke[0];
+                    for &point in &stroke[1..] {
+                        let (x0, y0) = self.world_to_screen(last.0, last.1);
+                        let (x1, y1) = self.world_to_screen(point.0, point.1);
+                        draw_line(&mut self.cached_canvas, width, height, x0, y0, x1, y1);
+                        last = point;
                     }
                 }
             }
-            self.needs_redraw = false;
         }
 
-        // Copy cache
         state.frame.buffer.copy_from_slice(&self.cached_canvas);
 
-        // Live stroke
+        // Draw current stroke live
         match self.current_stroke.len() {
             0 => {}
             1 => {
-                let (x, y) = Self::denormalize(self.current_stroke[0].0, self.current_stroke[0].1, width, height);
+                let (x, y) = self.world_to_screen(self.current_stroke[0].0, self.current_stroke[0].1);
                 draw_circle(&mut state.frame.buffer, width, height, x, y, STROKE_WIDTH);
             }
             _ => {
                 let mut last = self.current_stroke[0];
                 for &point in &self.current_stroke[1..] {
-                    let (x0, y0) = Self::denormalize(last.0, last.1, width, height);
-                    let (x1, y1) = Self::denormalize(point.0, point.1, width, height);
+                    let (x0, y0) = self.world_to_screen(last.0, last.1);
+                    let (x1, y1) = self.world_to_screen(point.0, point.1);
                     draw_line(&mut state.frame.buffer, width, height, x0, y0, x1, y1);
                     last = point;
                 }
             }
         }
 
-        // Cursor
+        // Draw cursor
         draw_cursor_dot(
             &mut state.frame.buffer,
             width,
@@ -191,6 +203,16 @@ impl Application for Whiteboard {
             state.mouse.x,
             state.mouse.y,
             state.mouse.is_left_clicking,
+            state.mouse.is_right_clicking,
         );
+    }
+
+    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
+        let factor = 1.1;
+        if dy > 0.0 {
+            self.zoom *= factor;
+        } else {
+            self.zoom /= factor;
+        }
     }
 }

@@ -29,6 +29,8 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
         mouse: MouseState {
             x: 0.0,
             y: 0.0,
+            dx: 0.0,
+            dy: 0.0,
             is_left_clicking: false,
             is_right_clicking: false,
             style: CursorStyleSetter::new(),
@@ -104,8 +106,15 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
                     window.request_redraw();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
+                    let prev_x = engine_state.mouse.x;
+                    let prev_y = engine_state.mouse.y;
+                
                     engine_state.mouse.x = position.x as f32;
                     engine_state.mouse.y = position.y as f32;
+                
+                    engine_state.mouse.dx = engine_state.mouse.x - prev_x;
+                    engine_state.mouse.dy = engine_state.mouse.y - prev_y;
+                
                     app.on_mouse_move(&mut engine_state);
                 }
                 WindowEvent::MouseInput {
