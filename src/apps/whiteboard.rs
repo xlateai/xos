@@ -116,6 +116,32 @@ impl Whiteboard {
     }
 }
 
+fn draw_cursor_dot(pixels: &mut [u8], width: u32, height: u32, x: f32, y: f32, pressed: bool) {
+    let color = if pressed { (0, 255, 0) } else { (255, 255, 255) };
+    let radius = 3.0;
+    let radius_squared = radius * radius;
+    let start_x = (x - radius).max(0.0) as u32;
+    let end_x = (x + radius).min(width as f32) as u32;
+    let start_y = (y - radius).max(0.0) as u32;
+    let end_y = (y + radius).min(height as f32) as u32;
+
+    for y_ in start_y..end_y {
+        for x_ in start_x..end_x {
+            let dx = x_ as f32 - x;
+            let dy = y_ as f32 - y;
+            if dx * dx + dy * dy <= radius_squared {
+                let i = ((y_ * width + x_) * 4) as usize;
+                if i + 3 < pixels.len() {
+                    pixels[i + 0] = color.0;
+                    pixels[i + 1] = color.1;
+                    pixels[i + 2] = color.2;
+                    pixels[i + 3] = 0xff;
+                }
+            }
+        }
+    }
+}
+
 impl Application for Whiteboard {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.cached_width = state.frame.width;
@@ -124,6 +150,7 @@ impl Application for Whiteboard {
         self.needs_redraw = true;
         Ok(())
     }
+    
 
     fn tick(&mut self, state: &mut EngineState) {
         let (width, height) = (state.frame.width, state.frame.height);
@@ -150,6 +177,16 @@ impl Application for Whiteboard {
 
         // Draw current stroke on top
         draw_smooth_stroke(&mut state.frame.buffer, width, height, &self.current_stroke);
+
+        // Draw cursor dot
+        draw_cursor_dot(
+            &mut state.frame.buffer,
+            width,
+            height,
+            state.mouse.x,
+            state.mouse.y,
+            state.mouse.is_down,
+        );
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
