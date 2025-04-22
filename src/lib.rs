@@ -11,6 +11,7 @@ use tiny_http::{Server, Response};
 use webbrowser;
 
 pub mod random;
+pub mod text;
 pub mod tuneable;
 pub mod engine;
 pub mod video;
