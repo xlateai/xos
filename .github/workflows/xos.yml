@@ -184,7 +184,7 @@ jobs:
   tag-release:
     name: Tag Commit w/ Version
     runs-on: ubuntu-latest
-    needs: [publish-rust, publish-python]
+    needs: [publish-rust]
     if: github.ref == 'refs/heads/main' && 
         (needs.publish-rust.outputs.published == 'true' || needs.publish-python.outputs.published == 'true')
     permissions:
