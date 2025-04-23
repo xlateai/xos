@@ -91,6 +91,8 @@ fn run_dev_app(bin: Option<String>, web: bool, react_native: bool) {
 
     let mut cmd = Command::new("cargo");
 
+    cmd.env("XOS_APP_NAME", &bin_to_run);
+
     // Always use `cargo run` so we can pass flags through
     cmd.args([
         "run",

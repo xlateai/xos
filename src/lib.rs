@@ -47,7 +47,7 @@ pub fn start() -> Result<(), JsValue> {
 
 // --- Tooling helpers ---
 fn build_wasm(app_name: &str) {
-    let out_dir = format!("static/pkg/");
+    let out_dir = format!("{}/static/pkg", env!("CARGO_MANIFEST_DIR"));
 
     let mut command = Command::new("wasm-pack");
     command
@@ -92,7 +92,7 @@ fn start_web_server() {
         let url = request.url();
         let path = if url == "/" {
             // always use the XOS root index.html
-            concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+            format!("{}/static/index.html", env!("CARGO_MANIFEST_DIR")).to_string()
         } else {
             let full_path = format!("static{}", url);
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
@@ -100,7 +100,7 @@ fn start_web_server() {
             } else {
                 eprintln!("❌ File not found: {full_path}");
                 // fallback to index.html so SPA still loads
-                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+                format!("{}/static/index.html", env!("CARGO_MANIFEST_DIR")).to_string()
             }
         };
 
@@ -225,7 +225,7 @@ struct XosAppArgs {
 pub fn run<T: engine::Application + 'static>(app: T) {
     let args = XosAppArgs::parse();
 
-    let app_name = env!("CARGO_PKG_NAME");
+    let app_name = std::env::var("XOS_APP_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -236,12 +236,12 @@ pub fn run<T: engine::Application + 'static>(app: T) {
     {
         if args.web {
             println!("🌐 Launching app in web mode...");
-            build_wasm(app_name);
+            build_wasm(&app_name);
             launch_browser();
             start_web_server();
         } else if args.react_native {
             println!("📱 Launching app in React Native mode...");
-            build_wasm(app_name);
+            build_wasm(&app_name);
             thread::spawn(start_web_server);
             launch_expo();
         } else {
