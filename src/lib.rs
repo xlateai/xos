@@ -88,37 +88,102 @@ fn start_web_server() {
     let server = Server::http("0.0.0.0:8080").unwrap();
     println!("🚀 Serving at http://localhost:8080");
 
+    let app_name = std::env::var("XOS_APP_NAME").unwrap_or_else(|_| "xos".to_string());
+
     for request in server.incoming_requests() {
         let url = request.url();
         let path = if url == "/" {
-            // always use the XOS root index.html
-            format!("{}/static/index.html", env!("CARGO_MANIFEST_DIR")).to_string()
+            // dynamically generate index.html with correct app name
+            None
         } else {
-            let full_path = format!("static{}", url);
-            if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
-                full_path
+            let path = format!("static{}", url);
+            if std::fs::metadata(&path).map_or(false, |m| m.is_file()) {
+                Some(path)
             } else {
-                eprintln!("❌ File not found: {full_path}");
-                // fallback to index.html so SPA still loads
-                format!("{}/static/index.html", env!("CARGO_MANIFEST_DIR")).to_string()
+                eprintln!("❌ File not found: {path}");
+                None
             }
         };
 
-        match fs::read(&path) {
-            Ok(data) => {
-                let content_type = mime_type(&path);
-                let response = Response::from_data(data)
-                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap());
-                let _ = request.respond(response);
+        if let Some(path) = path {
+            match fs::read(&path) {
+                Ok(data) => {
+                    let content_type = mime_type(&path);
+                    let response = Response::from_data(data)
+                        .with_header(tiny_http::Header::from_bytes("Content-Type", content_type).unwrap());
+                    let _ = request.respond(response);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to read {path}: {e}");
+                    let response = Response::from_string("404 Not Found").with_status_code(404);
+                    let _ = request.respond(response);
+                }
             }
-            Err(e) => {
-                eprintln!("❌ Failed to read {path}: {e}");
-                let response = Response::from_string("404 Not Found").with_status_code(404);
-                let _ = request.respond(response);
-            }
+        } else {
+            // Generate index.html dynamically
+            let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{app_name} Web View</title>
+  <style>
+    html, body {{
+      margin: 0;
+      height: 100%;
+      background: #000;
+    }}
+    canvas {{
+      display: block;
+    }}
+  </style>
+</head>
+<body>
+  <canvas id="xos-canvas" width="256" height="256"></canvas>
+  <script type="module">
+    import init from "/pkg/{app_name}.js";
+    init().then(() => {{
+      console.log("✅ WASM Initialized");
+    }});
+
+    window.addEventListener("resize", () => {{
+      const canvas = document.getElementById("xos-canvas");
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }});
+
+    window.addEventListener("contextmenu", (e) => {{
+      e.preventDefault();
+    }});
+
+    async function initMic() {{
+      try {{
+        const ctx = new AudioContext();
+        const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(1024, 1, 1);
+        processor.onaudioprocess = (event) => {{
+          const input = event.inputBuffer.getChannelData(0);
+          console.log("🎙️ Mic Sample[0]:", input[0].toFixed(4));
+        }};
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        console.log("✅ Microphone initialized");
+      }} catch (e) {{
+        console.error("❌ Failed to initialize mic:", e);
+      }}
+    }}
+  </script>
+</body>
+</html>
+"#, app_name = app_name);
+
+            let response = Response::from_string(html)
+                .with_header(tiny_http::Header::from_bytes("Content-Type", "text/html").unwrap());
+            let _ = request.respond(response);
         }
     }
 }
+
 
 fn launch_expo() {
     let mut cmd = Command::new("npx");
