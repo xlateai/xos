@@ -290,10 +290,6 @@ struct XosAppArgs {
 
 
 pub fn run<T: engine::Application + 'static>(app: T) {
-    let args = XosAppArgs::parse();
-
-    let app_name = std::env::var("XOS_APP_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
-
     #[cfg(target_arch = "wasm32")]
     {
         engine::run_web(Box::new(app)).unwrap();
@@ -301,6 +297,9 @@ pub fn run<T: engine::Application + 'static>(app: T) {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let args = XosAppArgs::parse();
+        let app_name = std::env::var("XOS_APP_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
+
         if args.web {
             println!("🌐 Launching app in web mode...");
             build_wasm(&app_name);
