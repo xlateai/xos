@@ -91,29 +91,22 @@ fn run_dev_app(bin: Option<String>, web: bool, react_native: bool) {
 
     let mut cmd = Command::new("cargo");
 
+    // Always use `cargo run` so we can pass flags through
+    cmd.args([
+        "run",
+        "--manifest-path",
+        manifest_path.to_str().unwrap(),
+        "--release",
+        "--bin",
+        &bin_to_run,
+        "--", // ← everything after this goes to the binary
+    ]);
+
     if web {
-        cmd.args([
-            "build",
-            "--target", "wasm32-unknown-unknown",
-            "--manifest-path", manifest_path.to_str().unwrap(),
-            "--release",
-            "--bin", &bin_to_run,
-        ]);
-    } else if react_native {
-        cmd.args([
-            "build",
-            "--manifest-path", manifest_path.to_str().unwrap(),
-            "--release",
-            "--features", "react-native",
-            "--bin", &bin_to_run,
-        ]);
-    } else {
-        cmd.args([
-            "run",
-            "--manifest-path", manifest_path.to_str().unwrap(),
-            "--release",
-            "--bin", &bin_to_run,
-        ]);
+        cmd.arg("--web");
+    }
+    if react_native {
+        cmd.arg("--react-native");
     }
 
     let status = cmd.status().expect("Failed to run dev binary");
