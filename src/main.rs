@@ -21,12 +21,21 @@ enum Commands {
         app: AppCommands,
     },
 
-    /// Run a local dev binary (e.g. xos dev or xos dev other-bin)
+    /// Run a dev app from current directory
     Dev {
-        /// Optional binary name (defaults to package name)
+        /// Optional binary name
         bin: Option<String>,
+
+        /// Run in web (WASM) mode
+        #[arg(long)]
+        web: bool,
+
+        /// Run in React Native mode
+        #[arg(long = "react-native")]
+        react_native: bool,
     },
 }
+
 
 fn main() {
     let cli = Cli::parse();
@@ -35,8 +44,8 @@ fn main() {
         Some(Commands::App { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Dev { bin }) => {
-            run_dev_app(bin);
+        Some(Commands::Dev { bin, web, react_native }) => {
+            run_dev_app(bin, web, react_native);
         }
         None => {
             eprintln!("❗ No command provided.\n");
@@ -61,7 +70,7 @@ fn find_nearest_cargo_toml(start: &Path) -> Option<PathBuf> {
     None
 }
 
-fn run_dev_app(bin: Option<String>) {
+fn run_dev_app(bin: Option<String>, web: bool, react_native: bool) {
     let current_dir = std::env::current_dir().expect("Couldn't get current directory");
     let manifest_path = find_nearest_cargo_toml(&current_dir)
         .expect("Couldn't find Cargo.toml in this directory or any parent");
@@ -80,17 +89,34 @@ fn run_dev_app(bin: Option<String>) {
         }
     };
 
-    let status = Command::new("cargo")
-        .args([
-            "run",
-            "--manifest-path",
-            manifest_path.to_str().unwrap(),
+    let mut cmd = Command::new("cargo");
+
+    if web {
+        cmd.args([
+            "build",
+            "--target", "wasm32-unknown-unknown",
+            "--manifest-path", manifest_path.to_str().unwrap(),
             "--release",
-            "--bin",
-            &bin_to_run,
-        ])
-        .status()
-        .expect("Failed to run dev binary");
+            "--bin", &bin_to_run,
+        ]);
+    } else if react_native {
+        cmd.args([
+            "build",
+            "--manifest-path", manifest_path.to_str().unwrap(),
+            "--release",
+            "--features", "react-native",
+            "--bin", &bin_to_run,
+        ]);
+    } else {
+        cmd.args([
+            "run",
+            "--manifest-path", manifest_path.to_str().unwrap(),
+            "--release",
+            "--bin", &bin_to_run,
+        ]);
+    }
+
+    let status = cmd.status().expect("Failed to run dev binary");
 
     if !status.success() {
         eprintln!("❌ Binary `{}` failed to run.", bin_to_run);
