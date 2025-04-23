@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
 use xos::apps::{AppCommands, run_app_command};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser)]
@@ -20,13 +21,9 @@ enum Commands {
         app: AppCommands,
     },
 
-    /// Run a dev app from a path, optionally specifying a binary
+    /// Run a local dev binary (e.g. xos dev or xos dev other-bin)
     Dev {
-        /// Path to the Cargo project
-        path: PathBuf,
-
-        /// Optional binary name to run (defaults to package name)
-        #[arg(long)]
+        /// Optional binary name (defaults to package name)
         bin: Option<String>,
     },
 }
@@ -38,8 +35,8 @@ fn main() {
         Some(Commands::App { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Dev { path, bin }) => {
-            run_dev_app(path, bin);
+        Some(Commands::Dev { bin }) => {
+            run_dev_app(bin);
         }
         None => {
             eprintln!("❗ No command provided.\n");
@@ -48,23 +45,38 @@ fn main() {
     }
 }
 
-fn run_dev_app(path: PathBuf, bin: Option<String>) {
-    let manifest_path = path.join("Cargo.toml");
+fn find_nearest_cargo_toml(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
 
-    // Read package name if no bin was provided
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if !(dir.pop()) {
+            break;
+        }
+    }
+
+    None
+}
+
+fn run_dev_app(bin: Option<String>) {
+    let current_dir = std::env::current_dir().expect("Couldn't get current directory");
+    let manifest_path = find_nearest_cargo_toml(&current_dir)
+        .expect("Couldn't find Cargo.toml in this directory or any parent");
+
     let bin_to_run = match bin {
         Some(name) => name,
         None => {
-            // Fallback to using [package] name
-            let contents = std::fs::read_to_string(&manifest_path)
+            let contents = fs::read_to_string(&manifest_path)
                 .expect("Failed to read Cargo.toml");
-            let package_name = contents
+            contents
                 .lines()
                 .find(|line| line.trim_start().starts_with("name"))
                 .and_then(|line| line.split('=').nth(1))
                 .map(|s| s.trim().trim_matches('"').to_string())
-                .expect("Could not infer package name");
-            package_name
+                .expect("Could not infer package name")
         }
     };
 
@@ -73,7 +85,7 @@ fn run_dev_app(path: PathBuf, bin: Option<String>) {
             "run",
             "--manifest-path",
             manifest_path.to_str().unwrap(),
-            "--release",  // always need release because winit is slow like that
+            "--release",
             "--bin",
             &bin_to_run,
         ])
