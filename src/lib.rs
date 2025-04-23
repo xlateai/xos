@@ -47,7 +47,9 @@ pub fn start() -> Result<(), JsValue> {
 
 // --- Tooling helpers ---
 fn build_wasm(app_name: &str) {
-    let out_dir = format!("{}/static/pkg", env!("CARGO_MANIFEST_DIR"));
+    println!("📂 Running from: {}", std::env::current_dir().unwrap().display());
+
+    let out_dir = "static/pkg".to_string(); // relative to wherever `cargo run` is invoked
 
     let mut command = Command::new("wasm-pack");
     command
@@ -96,7 +98,7 @@ fn start_web_server() {
             // dynamically generate index.html with correct app name
             None
         } else {
-            let path = format!("static{}", url);
+            let path = format!("./static{}", url);
             if std::fs::metadata(&path).map_or(false, |m| m.is_file()) {
                 Some(path)
             } else {
