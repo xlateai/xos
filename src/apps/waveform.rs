@@ -15,7 +15,7 @@ pub struct Waveform {
     is_recording: bool,
     recording_start_time: Option<Instant>,
     recorded_samples: Vec<f32>,
-    record_button_pressed: bool,
+    recording: bool,
     // Replay functionality
     is_replaying: bool,
     replay_start_time: Option<Instant>,
@@ -32,7 +32,7 @@ impl Waveform {
             is_recording: false,
             recording_start_time: None,
             recorded_samples: Vec::new(),
-            record_button_pressed: false,
+            recording: false,
             is_replaying: false,
             replay_start_time: None,
             replay_position: 0,
@@ -96,9 +96,9 @@ impl Waveform {
 
         // Choose color based on recording state
         let (r, g, b) = if self.is_recording {
-            (200, 0, 0) // Recorder red when recording
+            (255, 50, 50) // Bright recorder red when recording
         } else {
-            (80, 60, 60) // Light gray-red when not recording
+            (60, 60, 60) // Light gray when not recording (same as toggle button)
         };
 
         for y in y0..y1.min(state.frame.height as usize) {
@@ -293,16 +293,20 @@ impl Waveform {
     }
 
     fn start_recording(&mut self) {
-        self.is_recording = true;
-        self.recording_start_time = Some(Instant::now());
-        self.recorded_samples.clear();
-        println!("🎙️ Recording started...");
+        if !self.is_recording {
+            self.is_recording = true;
+            self.recording_start_time = Some(Instant::now());
+            self.recorded_samples.clear();
+            println!("🎙️ Recording started...");
+        }
     }
 
     fn stop_recording(&mut self) {
-        self.is_recording = false;
-        self.recording_start_time = None;
-        println!("🎙️ Recording stopped. Recorded {} samples", self.recorded_samples.len());
+        if self.is_recording {
+            self.is_recording = false;
+            self.recording_start_time = None;
+            println!("🎙️ Recording stopped. Recorded {} samples", self.recorded_samples.len());
+        }
     }
 
     fn update_recording(&mut self, samples: &[f32]) {
@@ -522,12 +526,10 @@ impl Application for Waveform {
                 self.stop_output_stream();
             }
         } else if self.is_inside_record_button(state.mouse.x, state.mouse.y, state) {
-            // Start recording on mouse down (hold to record)
-            self.record_button_pressed = true;
-            if !self.is_recording {
-                self.start_recording();
-                println!("Started recording!");
-            }
+            // Start recording when record button is pressed (wireframe pattern)
+            self.recording = true;
+            self.start_recording();
+            println!("Started recording!");
         } else if self.is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
             // Toggle replay
             if self.is_replaying {
@@ -540,13 +542,16 @@ impl Application for Waveform {
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        // Stop recording when mouse is released (if we were recording via record button)
-        if self.record_button_pressed && self.is_recording {
+        // Stop recording when mouse is released (wireframe pattern)  
+        if self.recording {
             self.stop_recording();
             println!("Stopped recording!");
         }
-        self.record_button_pressed = false;
+        self.recording = false;
     }
     
-    fn on_mouse_move(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_move(&mut self, _state: &mut EngineState) {
+        // Keep recording while mouse is held (wireframe pattern)
+        // Nothing to do here - recording continues until mouse up
+    }
 }
