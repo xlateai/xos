@@ -3,13 +3,70 @@ use crate::engine::{Application, EngineState};
 
 pub struct Waveform {
     listener: Option<audio::AudioListener>,
+    playback_enabled: bool,
 }
 
 impl Waveform {
     pub fn new() -> Self {
         Self {
             listener: None,
+            playback_enabled: false,
         }
+    }
+
+    fn draw_toggle_button(&self, state: &mut EngineState) {
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        
+        let buffer = &mut state.frame.buffer;
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        // Position in bottom right corner
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
+
+        let x0 = (x_center - BUTTON_SIZE / 2.0) as usize;
+        let x1 = (x_center + BUTTON_SIZE / 2.0) as usize;
+        let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
+        let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
+
+        // Choose color based on toggle state
+        let (r, g, b) = if self.playback_enabled {
+            (0, 200, 0) // Green when enabled
+        } else {
+            (60, 60, 60) // Light gray when disabled
+        };
+
+        for y in y0..y1.min(state.frame.height as usize) {
+            for x in x0..x1.min(state.frame.width as usize) {
+                let i = (y * state.frame.width as usize + x) * 4;
+                if i + 3 < buffer.len() {
+                    buffer[i] = r;
+                    buffer[i + 1] = g;
+                    buffer[i + 2] = b;
+                    buffer[i + 3] = 255;
+                }
+            }
+        }
+    }
+
+    fn is_inside_toggle_button(&self, mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
+
+        let half_size = BUTTON_SIZE / 2.0;
+        
+        mouse_x >= x_center - half_size &&
+        mouse_x <= x_center + half_size &&
+        mouse_y >= y_center - half_size &&
+        mouse_y <= y_center + half_size
     }
 }
 
@@ -132,9 +189,17 @@ impl Application for Waveform {
 
             prev = Some((x, y));
         }
+
+        // Draw the toggle button
+        self.draw_toggle_button(state);
     }
 
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        if self.is_inside_toggle_button(state.mouse.x, state.mouse.y, state) {
+            self.playback_enabled = !self.playback_enabled;
+        }
+    }
+    
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
 }
