@@ -15,6 +15,7 @@ pub struct Waveform {
     is_recording: bool,
     recording_start_time: Option<Instant>,
     recorded_samples: Vec<f32>,
+    record_button_pressed: bool,
     // Replay functionality
     is_replaying: bool,
     replay_start_time: Option<Instant>,
@@ -31,6 +32,7 @@ impl Waveform {
             is_recording: false,
             recording_start_time: None,
             recorded_samples: Vec::new(),
+            record_button_pressed: false,
             is_replaying: false,
             replay_start_time: None,
             replay_position: 0,
@@ -348,21 +350,15 @@ impl Waveform {
             return;
         }
 
-        // Feed replay samples to playback buffer - replay should work even if live playback is disabled
+        // Feed replay samples to playback buffer continuously - much smaller chunks to avoid gaps
         if self.replay_position < self.recorded_samples.len() {
             let mut buffer = self.playback_buffer.lock().unwrap();
             
-            // Add a chunk of replay samples
-            const CHUNK_SIZE: usize = 256;
-            let end_pos = (self.replay_position + CHUNK_SIZE).min(self.recorded_samples.len());
-            
-            for i in self.replay_position..end_pos {
-                if buffer.len() < 2048 { // Same max buffer size as live playback
-                    buffer.push_back(self.recorded_samples[i]);
-                }
+            // Add samples one by one up to buffer capacity, but more frequently
+            while buffer.len() < 1024 && self.replay_position < self.recorded_samples.len() {
+                buffer.push_back(self.recorded_samples[self.replay_position]);
+                self.replay_position += 1;
             }
-            
-            self.replay_position = end_pos;
         }
 
         // Check if replay is finished
@@ -370,6 +366,7 @@ impl Waveform {
             self.is_replaying = false;
             self.replay_start_time = None;
             self.replay_position = 0;
+            println!("Replay finished!");
         }
     }
 }
@@ -526,8 +523,10 @@ impl Application for Waveform {
             }
         } else if self.is_inside_record_button(state.mouse.x, state.mouse.y, state) {
             // Start recording on mouse down (hold to record)
+            self.record_button_pressed = true;
             if !self.is_recording {
                 self.start_recording();
+                println!("Started recording!");
             }
         } else if self.is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
             // Toggle replay
@@ -541,10 +540,12 @@ impl Application for Waveform {
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        // Stop recording when mouse is released (if we were recording)
-        if self.is_recording {
+        // Stop recording when mouse is released (if we were recording via record button)
+        if self.record_button_pressed && self.is_recording {
             self.stop_recording();
+            println!("Stopped recording!");
         }
+        self.record_button_pressed = false;
     }
     
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
