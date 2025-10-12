@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::Stream;
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct Waveform {
     listener: Option<audio::AudioListener>,
@@ -12,10 +12,12 @@ pub struct Waveform {
     output_stream: Option<Stream>,
     playback_buffer: Arc<Mutex<VecDeque<f32>>>,
     // Recording functionality
-    is_recording: bool,
+    is_recording: bool, // True when button is pressed and we're actively recording
+    button_pressed: bool, // True when record button is currently held down
     recording_start_time: Option<Instant>,
     recorded_samples: Vec<f32>,
-    recording: bool,
+    fresh_recording_buffer: Vec<f32>, // New buffer that gets populated during button press
+    skip_first_buffer: bool, // Skip the first buffer after recording starts (it's old data)
     // Replay functionality
     is_replaying: bool,
     replay_start_time: Option<Instant>,
@@ -30,9 +32,11 @@ impl Waveform {
             output_stream: None,
             playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(4096))),
             is_recording: false,
+            button_pressed: false,
             recording_start_time: None,
             recorded_samples: Vec::new(),
-            recording: false,
+            fresh_recording_buffer: Vec::new(),
+            skip_first_buffer: false,
             is_replaying: false,
             replay_start_time: None,
             replay_position: 0,
@@ -94,11 +98,11 @@ impl Waveform {
         let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
         let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
 
-        // Choose color based on recording state
-        let (r, g, b) = if self.is_recording {
-            (255, 50, 50) // Bright recorder red when recording
+        // Choose color based on button press state (not just recording state)
+        let (r, g, b) = if self.button_pressed || self.is_recording {
+            (255, 50, 50) // Bright recorder red when button is pressed or recording
         } else {
-            (60, 60, 60) // Light gray when not recording (same as toggle button)
+            (60, 60, 60) // Light gray when not pressed
         };
 
         for y in y0..y1.min(state.frame.height as usize) {
@@ -296,7 +300,8 @@ impl Waveform {
         if !self.is_recording {
             self.is_recording = true;
             self.recording_start_time = Some(Instant::now());
-            self.recorded_samples.clear();
+            self.fresh_recording_buffer.clear(); // Clear the fresh buffer that will collect new samples
+            self.skip_first_buffer = true; // Skip the first buffer (it contains old data)
             println!("🎙️ Recording started...");
         }
     }
@@ -305,6 +310,9 @@ impl Waveform {
         if self.is_recording {
             self.is_recording = false;
             self.recording_start_time = None;
+            // Transfer the fresh recording buffer to the final recorded samples
+            self.recorded_samples = self.fresh_recording_buffer.clone();
+            self.fresh_recording_buffer.clear();
             println!("🎙️ Recording stopped. Recorded {} samples", self.recorded_samples.len());
         }
     }
@@ -312,6 +320,12 @@ impl Waveform {
     fn update_recording(&mut self, samples: &[f32]) {
         if !self.is_recording {
             return;
+        }
+
+        // Skip the first buffer after recording starts (it contains old data from before button press)
+        if self.skip_first_buffer {
+            self.skip_first_buffer = false;
+            return; // Don't record this buffer, wait for the next fresh one
         }
 
         // Check if we've exceeded 5 seconds
@@ -322,13 +336,13 @@ impl Waveform {
             }
         }
 
-        // Add samples to recording buffer
-        self.recorded_samples.extend_from_slice(samples);
+        // Add samples to the fresh recording buffer (not the final recorded_samples)
+        self.fresh_recording_buffer.extend_from_slice(samples);
 
         // Limit to approximately 5 seconds at 44.1kHz (220,500 samples)
         const MAX_RECORDING_SAMPLES: usize = 220_500;
-        if self.recorded_samples.len() > MAX_RECORDING_SAMPLES {
-            self.recorded_samples.truncate(MAX_RECORDING_SAMPLES);
+        if self.fresh_recording_buffer.len() > MAX_RECORDING_SAMPLES {
+            self.fresh_recording_buffer.truncate(MAX_RECORDING_SAMPLES);
             self.stop_recording();
         }
     }
@@ -526,10 +540,9 @@ impl Application for Waveform {
                 self.stop_output_stream();
             }
         } else if self.is_inside_record_button(state.mouse.x, state.mouse.y, state) {
-            // Start recording when record button is pressed (wireframe pattern)
-            self.recording = true;
+            // Start recording when record button is pressed
+            self.button_pressed = true;
             self.start_recording();
-            println!("Started recording!");
         } else if self.is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
             // Toggle replay
             if self.is_replaying {
@@ -542,12 +555,13 @@ impl Application for Waveform {
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        // Stop recording when mouse is released (wireframe pattern)  
-        if self.recording {
-            self.stop_recording();
-            println!("Stopped recording!");
+        // Stop recording when mouse is released
+        if self.button_pressed {
+            self.button_pressed = false;
+            if self.is_recording {
+                self.stop_recording();
+            }
         }
-        self.recording = false;
     }
     
     fn on_mouse_move(&mut self, _state: &mut EngineState) {
