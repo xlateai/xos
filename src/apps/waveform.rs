@@ -1,9 +1,15 @@
 use crate::audio;
 use crate::engine::{Application, EngineState};
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::Stream;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 
 pub struct Waveform {
     listener: Option<audio::AudioListener>,
     playback_enabled: bool,
+    output_stream: Option<Stream>,
+    playback_buffer: Arc<Mutex<VecDeque<f32>>>,
 }
 
 impl Waveform {
@@ -11,6 +17,8 @@ impl Waveform {
         Self {
             listener: None,
             playback_enabled: false,
+            output_stream: None,
+            playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(4096))),
         }
     }
 
@@ -67,6 +75,81 @@ impl Waveform {
         mouse_x <= x_center + half_size &&
         mouse_y >= y_center - half_size &&
         mouse_y <= y_center + half_size
+    }
+
+    fn setup_output_stream(&mut self) -> Result<(), String> {
+        let devices = audio::devices();
+        if devices.len() < 3 {
+            return Err("Not enough audio devices found (need at least 3)".to_string());
+        }
+
+        // Hardcode index 2 for speakers playback as requested
+        let output_device = &devices[2];
+        if !output_device.is_output {
+            return Err("Device at index 2 is not an output device".to_string());
+        }
+
+        let device = &output_device.device_cpal;
+        let config = device.default_output_config()
+            .map_err(|e| format!("Failed to get output config: {}", e))?;
+
+        let playback_buffer = Arc::clone(&self.playback_buffer);
+        let channels = config.channels() as usize;
+
+        let stream = device.build_output_stream(
+            &config.into(),
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut buffer = playback_buffer.lock().unwrap();
+                
+                // Fill output with samples from buffer, interleaved for all channels
+                for chunk in data.chunks_mut(channels) {
+                    if let Some(sample) = buffer.pop_front() {
+                        // Duplicate the mono sample across all channels
+                        for channel_data in chunk.iter_mut() {
+                            *channel_data = sample;
+                        }
+                    } else {
+                        // Fill with silence if no data available
+                        for channel_data in chunk.iter_mut() {
+                            *channel_data = 0.0;
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("Output stream error: {}", err),
+            None,
+        ).map_err(|e| format!("Failed to build output stream: {}", e))?;
+
+        stream.play().map_err(|e| format!("Failed to start output stream: {}", e))?;
+        self.output_stream = Some(stream);
+        Ok(())
+    }
+
+    fn stop_output_stream(&mut self) {
+        if let Some(stream) = self.output_stream.take() {
+            let _ = stream.pause();
+        }
+        // Clear the buffer
+        self.playback_buffer.lock().unwrap().clear();
+    }
+
+    fn feed_playback_buffer(&self, samples: &[f32]) {
+        if self.playback_enabled {
+            let mut buffer = self.playback_buffer.lock().unwrap();
+            
+            // Add samples to playback buffer, but limit buffer size to prevent latency buildup
+            const MAX_BUFFER_SIZE: usize = 2048; // Keep buffer small for low latency
+            
+            for &sample in samples {
+                if buffer.len() < MAX_BUFFER_SIZE {
+                    buffer.push_back(sample);
+                } else {
+                    // If buffer is full, remove oldest sample and add new one
+                    buffer.pop_front();
+                    buffer.push_back(sample);
+                }
+            }
+        }
     }
 }
 
@@ -156,6 +239,9 @@ impl Application for Waveform {
         }
 
         let samples = &all_samples[0];
+        
+        // Feed samples to playback buffer if playback is enabled
+        self.feed_playback_buffer(samples);
         let vertical = height > width;
 
         let (len, scale, center) = if vertical {
@@ -196,7 +282,19 @@ impl Application for Waveform {
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         if self.is_inside_toggle_button(state.mouse.x, state.mouse.y, state) {
+            let was_enabled = self.playback_enabled;
             self.playback_enabled = !self.playback_enabled;
+            
+            if self.playback_enabled && !was_enabled {
+                // Enable playback - setup output stream
+                if let Err(e) = self.setup_output_stream() {
+                    eprintln!("Failed to setup audio playback: {}", e);
+                    self.playback_enabled = false;
+                }
+            } else if !self.playback_enabled && was_enabled {
+                // Disable playback - stop output stream
+                self.stop_output_stream();
+            }
         }
     }
     
