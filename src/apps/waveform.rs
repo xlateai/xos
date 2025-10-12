@@ -302,10 +302,13 @@ impl Waveform {
             self.recording_start_time = Some(Instant::now());
             self.fresh_recording_buffer.clear(); // Clear the fresh buffer that will collect new samples
             
-            // Reset the processed length tracker - start fresh
-            self.last_processed_length = 0;
+            // Clear the audio buffer so we only get fresh samples from this point forward
+            if let Some(listener) = &self.listener {
+                listener.buffer().clear();
+            }
+            self.last_processed_length = 0; // Reset since we cleared the buffer
             
-            println!("🎙️ Push-to-talk recording started...");
+            println!("🎙️ Push-to-talk recording started (cleared buffer)...");
         }
     }
 
@@ -321,6 +324,7 @@ impl Waveform {
     }
 
     fn update_recording(&mut self, samples: &[f32]) {
+        // ONLY record if button is pressed
         if !self.button_pressed {
             return;
         }
@@ -333,18 +337,13 @@ impl Waveform {
             }
         }
 
-        // Only take new samples that we haven't processed yet
-        let current_length = samples.len();
-        if current_length > self.last_processed_length {
+        // Since we cleared the buffer when recording started, all samples are fresh
+        if samples.len() > self.last_processed_length {
             let new_samples = &samples[self.last_processed_length..];
             self.fresh_recording_buffer.extend_from_slice(new_samples);
-            
-            if !new_samples.is_empty() {
-                println!("📝 Recording {} new samples (total: {})", new_samples.len(), self.fresh_recording_buffer.len());
-            }
+            self.last_processed_length = samples.len();
+            println!("📝 Recording {} samples (total: {})", new_samples.len(), self.fresh_recording_buffer.len());
         }
-        
-        self.last_processed_length = current_length;
 
         // Limit to approximately 5 seconds at 44.1kHz (220,500 samples)
         const MAX_RECORDING_SAMPLES: usize = 220_500;
