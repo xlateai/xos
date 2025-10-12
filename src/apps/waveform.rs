@@ -4,12 +4,21 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::Stream;
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 pub struct Waveform {
     listener: Option<audio::AudioListener>,
     playback_enabled: bool,
     output_stream: Option<Stream>,
     playback_buffer: Arc<Mutex<VecDeque<f32>>>,
+    // Recording functionality
+    is_recording: bool,
+    recording_start_time: Option<Instant>,
+    recorded_samples: Vec<f32>,
+    // Replay functionality
+    is_replaying: bool,
+    replay_start_time: Option<Instant>,
+    replay_position: usize,
 }
 
 impl Waveform {
@@ -19,6 +28,12 @@ impl Waveform {
             playback_enabled: false,
             output_stream: None,
             playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(4096))),
+            is_recording: false,
+            recording_start_time: None,
+            recorded_samples: Vec::new(),
+            is_replaying: false,
+            replay_start_time: None,
+            replay_position: 0,
         }
     }
 
@@ -59,6 +74,87 @@ impl Waveform {
         }
     }
 
+    fn draw_record_button(&self, state: &mut EngineState) {
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        const BUTTON_SPACING: f32 = 50.0;
+        
+        let buffer = &mut state.frame.buffer;
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        // Position to the left of the toggle button
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0 - BUTTON_SPACING;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
+
+        let x0 = (x_center - BUTTON_SIZE / 2.0) as usize;
+        let x1 = (x_center + BUTTON_SIZE / 2.0) as usize;
+        let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
+        let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
+
+        // Choose color based on recording state
+        let (r, g, b) = if self.is_recording {
+            (200, 0, 0) // Recorder red when recording
+        } else {
+            (80, 60, 60) // Light gray-red when not recording
+        };
+
+        for y in y0..y1.min(state.frame.height as usize) {
+            for x in x0..x1.min(state.frame.width as usize) {
+                let i = (y * state.frame.width as usize + x) * 4;
+                if i + 3 < buffer.len() {
+                    buffer[i] = r;
+                    buffer[i + 1] = g;
+                    buffer[i + 2] = b;
+                    buffer[i + 3] = 255;
+                }
+            }
+        }
+    }
+
+    fn draw_replay_button(&self, state: &mut EngineState) {
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        const BUTTON_SPACING: f32 = 50.0;
+        
+        // Only draw if we have recorded samples
+        if self.recorded_samples.is_empty() {
+            return;
+        }
+
+        let buffer = &mut state.frame.buffer;
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        // Position above the toggle button
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0 - BUTTON_SPACING;
+
+        let x0 = (x_center - BUTTON_SIZE / 2.0) as usize;
+        let x1 = (x_center + BUTTON_SIZE / 2.0) as usize;
+        let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
+        let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
+
+        // Use same colors as toggle button for consistency
+        let (r, g, b) = if self.is_replaying {
+            (0, 200, 0) // Green when replaying (same as toggle button when active)
+        } else {
+            (60, 60, 60) // Light gray when idle (same as toggle button when inactive)
+        };
+
+        for y in y0..y1.min(state.frame.height as usize) {
+            for x in x0..x1.min(state.frame.width as usize) {
+                let i = (y * state.frame.width as usize + x) * 4;
+                if i + 3 < buffer.len() {
+                    buffer[i] = r;
+                    buffer[i + 1] = g;
+                    buffer[i + 2] = b;
+                    buffer[i + 3] = 255;
+                }
+            }
+        }
+    }
+
     fn is_inside_toggle_button(&self, mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
         const BUTTON_SIZE: f32 = 40.0;
         const MARGIN: f32 = 20.0;
@@ -68,6 +164,48 @@ impl Waveform {
 
         let x_center = width - MARGIN - BUTTON_SIZE / 2.0;
         let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
+
+        let half_size = BUTTON_SIZE / 2.0;
+        
+        mouse_x >= x_center - half_size &&
+        mouse_x <= x_center + half_size &&
+        mouse_y >= y_center - half_size &&
+        mouse_y <= y_center + half_size
+    }
+
+    fn is_inside_record_button(&self, mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        const BUTTON_SPACING: f32 = 50.0;
+        
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0 - BUTTON_SPACING;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
+
+        let half_size = BUTTON_SIZE / 2.0;
+        
+        mouse_x >= x_center - half_size &&
+        mouse_x <= x_center + half_size &&
+        mouse_y >= y_center - half_size &&
+        mouse_y <= y_center + half_size
+    }
+
+    fn is_inside_replay_button(&self, mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
+        if self.recorded_samples.is_empty() {
+            return false;
+        }
+
+        const BUTTON_SIZE: f32 = 40.0;
+        const MARGIN: f32 = 20.0;
+        const BUTTON_SPACING: f32 = 50.0;
+        
+        let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
+
+        let x_center = width - MARGIN - BUTTON_SIZE / 2.0;
+        let y_center = height - MARGIN - BUTTON_SIZE / 2.0 - BUTTON_SPACING;
 
         let half_size = BUTTON_SIZE / 2.0;
         
@@ -149,6 +287,89 @@ impl Waveform {
                     buffer.push_back(sample);
                 }
             }
+        }
+    }
+
+    fn start_recording(&mut self) {
+        self.is_recording = true;
+        self.recording_start_time = Some(Instant::now());
+        self.recorded_samples.clear();
+        println!("🎙️ Recording started...");
+    }
+
+    fn stop_recording(&mut self) {
+        self.is_recording = false;
+        self.recording_start_time = None;
+        println!("🎙️ Recording stopped. Recorded {} samples", self.recorded_samples.len());
+    }
+
+    fn update_recording(&mut self, samples: &[f32]) {
+        if !self.is_recording {
+            return;
+        }
+
+        // Check if we've exceeded 5 seconds
+        if let Some(start_time) = self.recording_start_time {
+            if start_time.elapsed().as_secs() >= 5 {
+                self.stop_recording();
+                return;
+            }
+        }
+
+        // Add samples to recording buffer
+        self.recorded_samples.extend_from_slice(samples);
+
+        // Limit to approximately 5 seconds at 44.1kHz (220,500 samples)
+        const MAX_RECORDING_SAMPLES: usize = 220_500;
+        if self.recorded_samples.len() > MAX_RECORDING_SAMPLES {
+            self.recorded_samples.truncate(MAX_RECORDING_SAMPLES);
+            self.stop_recording();
+        }
+    }
+
+    fn start_replay(&mut self) {
+        if !self.recorded_samples.is_empty() && !self.is_replaying {
+            self.is_replaying = true;
+            self.replay_start_time = Some(Instant::now());
+            self.replay_position = 0;
+            
+            // Make sure output stream is running for replay
+            if self.output_stream.is_none() {
+                if let Err(e) = self.setup_output_stream() {
+                    eprintln!("Failed to setup audio playback for replay: {}", e);
+                    self.is_replaying = false;
+                }
+            }
+        }
+    }
+
+    fn update_replay(&mut self) {
+        if !self.is_replaying {
+            return;
+        }
+
+        // Feed replay samples to playback buffer - replay should work even if live playback is disabled
+        if self.replay_position < self.recorded_samples.len() {
+            let mut buffer = self.playback_buffer.lock().unwrap();
+            
+            // Add a chunk of replay samples
+            const CHUNK_SIZE: usize = 256;
+            let end_pos = (self.replay_position + CHUNK_SIZE).min(self.recorded_samples.len());
+            
+            for i in self.replay_position..end_pos {
+                if buffer.len() < 2048 { // Same max buffer size as live playback
+                    buffer.push_back(self.recorded_samples[i]);
+                }
+            }
+            
+            self.replay_position = end_pos;
+        }
+
+        // Check if replay is finished
+        if self.replay_position >= self.recorded_samples.len() {
+            self.is_replaying = false;
+            self.replay_start_time = None;
+            self.replay_position = 0;
         }
     }
 }
@@ -276,8 +497,16 @@ impl Application for Waveform {
             prev = Some((x, y));
         }
 
-        // Draw the toggle button
+        // Update recording if active
+        self.update_recording(samples);
+        
+        // Update replay if active
+        self.update_replay();
+
+        // Draw all buttons
         self.draw_toggle_button(state);
+        self.draw_record_button(state);
+        self.draw_replay_button(state);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
@@ -295,9 +524,28 @@ impl Application for Waveform {
                 // Disable playback - stop output stream
                 self.stop_output_stream();
             }
+        } else if self.is_inside_record_button(state.mouse.x, state.mouse.y, state) {
+            // Start recording on mouse down (hold to record)
+            if !self.is_recording {
+                self.start_recording();
+            }
+        } else if self.is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
+            // Toggle replay
+            if self.is_replaying {
+                self.is_replaying = false;
+                self.replay_position = 0;
+            } else {
+                self.start_replay();
+            }
         }
     }
     
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        // Stop recording when mouse is released (if we were recording)
+        if self.is_recording {
+            self.stop_recording();
+        }
+    }
+    
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
 }
