@@ -17,7 +17,7 @@ pub struct Waveform {
     recording_start_time: Option<Instant>,
     recorded_samples: Vec<f32>,
     fresh_recording_buffer: Vec<f32>, // New buffer that gets populated during button press
-    skip_first_buffer: bool, // Skip the first buffer after recording starts (it's old data)
+    last_processed_length: usize, // Track how many samples we've already processed
     // Replay functionality
     is_replaying: bool,
     replay_start_time: Option<Instant>,
@@ -36,7 +36,7 @@ impl Waveform {
             recording_start_time: None,
             recorded_samples: Vec::new(),
             fresh_recording_buffer: Vec::new(),
-            skip_first_buffer: false,
+            last_processed_length: 0,
             is_replaying: false,
             replay_start_time: None,
             replay_position: 0,
@@ -301,8 +301,11 @@ impl Waveform {
             self.is_recording = true;
             self.recording_start_time = Some(Instant::now());
             self.fresh_recording_buffer.clear(); // Clear the fresh buffer that will collect new samples
-            self.skip_first_buffer = true; // Skip the first buffer (it contains old data)
-            println!("🎙️ Recording started...");
+            
+            // Reset the processed length tracker - start fresh
+            self.last_processed_length = 0;
+            
+            println!("🎙️ Push-to-talk recording started...");
         }
     }
 
@@ -318,14 +321,8 @@ impl Waveform {
     }
 
     fn update_recording(&mut self, samples: &[f32]) {
-        if !self.is_recording {
+        if !self.button_pressed {
             return;
-        }
-
-        // Skip the first buffer after recording starts (it contains old data from before button press)
-        if self.skip_first_buffer {
-            self.skip_first_buffer = false;
-            return; // Don't record this buffer, wait for the next fresh one
         }
 
         // Check if we've exceeded 5 seconds
@@ -336,8 +333,18 @@ impl Waveform {
             }
         }
 
-        // Add samples to the fresh recording buffer (not the final recorded_samples)
-        self.fresh_recording_buffer.extend_from_slice(samples);
+        // Only take new samples that we haven't processed yet
+        let current_length = samples.len();
+        if current_length > self.last_processed_length {
+            let new_samples = &samples[self.last_processed_length..];
+            self.fresh_recording_buffer.extend_from_slice(new_samples);
+            
+            if !new_samples.is_empty() {
+                println!("📝 Recording {} new samples (total: {})", new_samples.len(), self.fresh_recording_buffer.len());
+            }
+        }
+        
+        self.last_processed_length = current_length;
 
         // Limit to approximately 5 seconds at 44.1kHz (220,500 samples)
         const MAX_RECORDING_SAMPLES: usize = 220_500;
