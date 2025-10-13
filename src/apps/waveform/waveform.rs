@@ -1,18 +1,12 @@
 use crate::audio;
 use crate::engine::{Application, EngineState};
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
-use std::time::Instant;
-use cpal::Stream;
-
 use super::recording::{self, RecordingState};
 use super::visualization;
+use super::playback::Playback;
 
 pub struct Waveform {
     pub(crate) listener: Option<audio::AudioListener>,
-    pub(crate) playback_enabled: bool,
-    pub(crate) output_stream: Option<Stream>,
-    pub(crate) playback_buffer: Arc<Mutex<VecDeque<f32>>>,
+    pub(crate) playback: Option<Playback>,
     pub(crate) recording_state: RecordingState,
 }
 
@@ -20,9 +14,7 @@ impl Waveform {
     pub fn new() -> Self {
         Self {
             listener: None,
-            playback_enabled: false,
-            output_stream: None,
-            playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(4096))),
+            playback: None,
             recording_state: RecordingState::new(),
         }
     }
@@ -47,6 +39,9 @@ impl Application for Waveform {
         let listener = audio::AudioListener::new(device, buffer_duration)?;
         listener.record()?;
         self.listener = Some(listener);
+
+        self.playback = Some(Playback::new()?);
+
         Ok(())
     }
 
@@ -68,13 +63,19 @@ impl Application for Waveform {
 
         let samples = &all_samples[0];
         
-        recording::feed_playback_buffer(self, samples);
+        if let Some(playback) = &mut self.playback {
+            if playback.output_stream.is_some() {
+                playback.feed(samples);
+            }
+        }
         
         visualization::draw_waveform(state, samples);
 
-        recording::update_recording(self, samples);
+    recording::update_recording(self, samples);
         
-        recording::update_replay(self);
+        if let Some(playback) = self.playback.as_mut() {
+            recording::update_replay(&mut self.recording_state, playback);
+        }
 
         visualization::draw_toggle_button(self, state);
         visualization::draw_record_button(self, state);
@@ -82,19 +83,19 @@ impl Application for Waveform {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        if visualization::is_inside_toggle_button(state.mouse.x, state.mouse.y, state) {
-            let was_enabled = self.playback_enabled;
-            self.playback_enabled = !self.playback_enabled;
-            
-            if self.playback_enabled && !was_enabled {
-                if let Err(e) = recording::setup_output_stream(self) {
-                    eprintln!("Failed to setup audio playback: {}", e);
-                    self.playback_enabled = false;
+        if let Some(playback) = &mut self.playback {
+            if visualization::is_inside_toggle_button(state.mouse.x, state.mouse.y, state) {
+                if playback.output_stream.is_some() {
+                    playback.stop();
+                } else {
+                    if let Err(e) = playback.start() {
+                        eprintln!("Failed to start playback: {}", e);
+                    }
                 }
-            } else if !self.playback_enabled && was_enabled {
-                recording::stop_output_stream(self);
             }
-        } else if visualization::is_inside_record_button(state.mouse.x, state.mouse.y, state) {
+        }
+        
+        if visualization::is_inside_record_button(state.mouse.x, state.mouse.y, state) {
             self.recording_state.button_pressed = true;
             recording::start_recording(self);
         } else if visualization::is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
@@ -102,7 +103,9 @@ impl Application for Waveform {
                 self.recording_state.is_replaying = false;
                 self.recording_state.replay_position = 0;
             } else {
-                recording::start_replay(self);
+                if let Some(playback) = self.playback.as_mut() {
+                    recording::start_replay(&mut self.recording_state, playback);
+                }
             }
         }
     }

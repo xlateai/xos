@@ -101,7 +101,7 @@ pub fn draw_toggle_button(waveform: &Waveform, state: &mut EngineState) {
     let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
     let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
 
-    let (r, g, b) = if waveform.playback_enabled {
+    let (r, g, b) = if waveform.playback.as_ref().map_or(false, |p| p.output_stream.is_some()) {
         (0, 200, 0)
     } else {
         (60, 60, 60)

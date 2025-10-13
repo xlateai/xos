@@ -1,7 +1,6 @@
-use cpal::traits::{DeviceTrait, StreamTrait};
-use std::sync::Arc;
 use std::time::Instant;
 use super::waveform::Waveform;
+use super::playback::Playback;
 
 pub struct RecordingState {
     pub is_recording: bool,
@@ -27,74 +26,6 @@ impl RecordingState {
             is_replaying: false,
             replay_start_time: None,
             replay_position: 0,
-        }
-    }
-}
-
-pub fn setup_output_stream(waveform: &mut Waveform) -> Result<(), String> {
-    let devices = crate::audio::devices();
-    if devices.len() < 3 {
-        return Err("Not enough audio devices found (need at least 3)".to_string());
-    }
-
-    let output_device = &devices[2];
-    if !output_device.is_output {
-        return Err("Device at index 2 is not an output device".to_string());
-    }
-
-    let device = &output_device.device_cpal;
-    let config = device.default_output_config()
-        .map_err(|e| format!("Failed to get output config: {}", e))?;
-
-    let playback_buffer = Arc::clone(&waveform.playback_buffer);
-    let channels = config.channels() as usize;
-
-    let stream = device.build_output_stream(
-        &config.into(),
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            let mut buffer = playback_buffer.lock().unwrap();
-            
-            for chunk in data.chunks_mut(channels) {
-                if let Some(sample) = buffer.pop_front() {
-                    for channel_data in chunk.iter_mut() {
-                        *channel_data = sample;
-                    }
-                } else {
-                    for channel_data in chunk.iter_mut() {
-                        *channel_data = 0.0;
-                    }
-                }
-            }
-        },
-        |err| eprintln!("Output stream error: {}", err),
-        None,
-    ).map_err(|e| format!("Failed to build output stream: {}", e))?;
-
-    stream.play().map_err(|e| format!("Failed to start output stream: {}", e))?;
-    waveform.output_stream = Some(stream);
-    Ok(())
-}
-
-pub fn stop_output_stream(waveform: &mut Waveform) {
-    if let Some(stream) = waveform.output_stream.take() {
-        let _ = stream.pause();
-    }
-    waveform.playback_buffer.lock().unwrap().clear();
-}
-
-pub fn feed_playback_buffer(waveform: &Waveform, samples: &[f32]) {
-    if waveform.playback_enabled {
-        let mut buffer = waveform.playback_buffer.lock().unwrap();
-        
-        const MAX_BUFFER_SIZE: usize = 2048;
-        
-        for &sample in samples {
-            if buffer.len() < MAX_BUFFER_SIZE {
-                buffer.push_back(sample);
-            } else {
-                buffer.pop_front();
-                buffer.push_back(sample);
-            }
         }
     }
 }
@@ -150,39 +81,39 @@ pub fn update_recording(waveform: &mut Waveform, samples: &[f32]) {
     }
 }
 
-pub fn start_replay(waveform: &mut Waveform) {
-    if !waveform.recording_state.recorded_samples.is_empty() && !waveform.recording_state.is_replaying {
-        waveform.recording_state.is_replaying = true;
-        waveform.recording_state.replay_start_time = Some(Instant::now());
-        waveform.recording_state.replay_position = 0;
+pub fn start_replay(recording_state: &mut RecordingState, playback: &mut Playback) {
+    if !recording_state.recorded_samples.is_empty() && !recording_state.is_replaying {
+        recording_state.is_replaying = true;
+        recording_state.replay_start_time = Some(Instant::now());
+        recording_state.replay_position = 0;
         
-        if waveform.output_stream.is_none() {
-            if let Err(e) = setup_output_stream(waveform) {
+        if playback.output_stream.is_none() {
+            if let Err(e) = playback.start() {
                 eprintln!("Failed to setup audio playback for replay: {}", e);
-                waveform.recording_state.is_replaying = false;
+                recording_state.is_replaying = false;
             }
         }
     }
 }
 
-pub fn update_replay(waveform: &mut Waveform) {
-    if !waveform.recording_state.is_replaying {
+pub fn update_replay(recording_state: &mut RecordingState, playback: &mut Playback) {
+    if !recording_state.is_replaying {
         return;
     }
 
-    if waveform.recording_state.replay_position < waveform.recording_state.recorded_samples.len() {
-        let mut buffer = waveform.playback_buffer.lock().unwrap();
+    if recording_state.replay_position < recording_state.recorded_samples.len() {
+        let mut buffer = playback.playback_buffer.lock().unwrap();
         
-        while buffer.len() < 1024 && waveform.recording_state.replay_position < waveform.recording_state.recorded_samples.len() {
-            buffer.push_back(waveform.recording_state.recorded_samples[waveform.recording_state.replay_position]);
-            waveform.recording_state.replay_position += 1;
+        while buffer.len() < 1024 && recording_state.replay_position < recording_state.recorded_samples.len() {
+            buffer.push_back(recording_state.recorded_samples[recording_state.replay_position]);
+            recording_state.replay_position += 1;
         }
     }
 
-    if waveform.recording_state.replay_position >= waveform.recording_state.recorded_samples.len() {
-        waveform.recording_state.is_replaying = false;
-        waveform.recording_state.replay_start_time = None;
-        waveform.recording_state.replay_position = 0;
+    if recording_state.replay_position >= recording_state.recorded_samples.len() {
+        recording_state.is_replaying = false;
+        recording_state.replay_start_time = None;
+        recording_state.replay_position = 0;
         println!("Replay finished!");
     }
 }
