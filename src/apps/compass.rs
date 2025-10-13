@@ -1,4 +1,4 @@
-use crate::engine::{Application, EngineState};
+use crate::engine::{engine::PositionalData, Application, EngineState};
 use std::f32::consts::PI;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // dark gray
@@ -111,15 +111,12 @@ impl Application for CompassApp {
         }
 
         // Use data if available
-        let bearing = state.bearing_deg;
-        let lat = state.latitude;
-        let lon = state.longitude;
 
         // Draw compass and labels
-        self.draw_compass_overlay(buffer, w, h, bearing);
+        self.draw_compass_overlay(buffer, w, h, state.position.bearing as f32);
 
         // Draw coordinates text
-        let coords = format!("{:.4}°, {:.4}°", lat, lon);
+        let coords = format!("{:.4}°, {:.4}°", state.position.latitude, state.position.longitude);
         Self::draw_text_centered(buffer, w, h, &coords, w as f32 / 2.0, h as f32 - 30.0, 1.0, TEXT_COLOR);
     }
 
