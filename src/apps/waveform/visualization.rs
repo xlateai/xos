@@ -1,3 +1,71 @@
+pub fn draw_waveform_red(state: &mut EngineState, samples: &[f32]) {
+    let buffer = &mut state.frame.buffer;
+    let width = state.frame.width;
+    let height = state.frame.height;
+    let vertical = height > width;
+
+    let (len, scale, center) = if vertical {
+        (height, width as f32 * 0.5 * 0.8, width as f32 * 0.5)
+    } else {
+        (width, height as f32 * 0.5 * 0.8, height as f32 * 0.5)
+    };
+
+    let step = samples.len().max(1) as f32 / len as f32;
+    let stride = 2;
+    let thickness = 2;
+
+    let mut prev = None;
+
+    for i in (0..len).step_by(stride as usize) {
+        let sample_index = (i as f32 * step) as usize;
+        if sample_index >= samples.len() {
+            break;
+        }
+
+        let offset = samples[sample_index] * scale;
+        let (x, y) = if vertical {
+            ((center + offset) as isize, i as isize)
+        } else {
+            (i as isize, (center - offset) as isize)
+        };
+
+        if let Some((prev_x, prev_y)) = prev {
+            // Draw red line
+            let dx = (x as isize - prev_x as isize).abs();
+            let dy = (y as isize - prev_y as isize).abs();
+            let sx = if prev_x < x { 1 } else { -1 };
+            let sy = if prev_y < y { 1 } else { -1 };
+            let mut err = dx - dy;
+            let mut px = prev_x;
+            let mut py = prev_y;
+            while px != x || py != y {
+                for tx in 0..thickness {
+                    for ty in 0..thickness {
+                        let rx = px + tx as isize;
+                        let ry = py + ty as isize;
+                        if rx >= 0 && ry >= 0 && (rx as u32) < width && (ry as u32) < height {
+                            let idx = (ry as usize * width as usize + rx as usize) * 4;
+                            buffer[idx] = 255;
+                            buffer[idx + 1] = 0;
+                            buffer[idx + 2] = 0;
+                            buffer[idx + 3] = 255;
+                        }
+                    }
+                }
+                let e2 = 2 * err;
+                if e2 > -dy {
+                    err -= dy;
+                    px += sx;
+                }
+                if e2 < dx {
+                    err += dx;
+                    py += sy;
+                }
+            }
+        }
+        prev = Some((x, y));
+    }
+}
 use crate::engine::EngineState;
 use super::waveform::Waveform;
 
@@ -85,10 +153,10 @@ pub fn draw_waveform(state: &mut EngineState, samples: &[f32]) {
     }
 }
 
-pub fn draw_toggle_button(waveform: &Waveform, state: &mut EngineState) {
+pub fn draw_active_replay_button(waveform: &Waveform, state: &mut EngineState) {
     const BUTTON_SIZE: f32 = 40.0;
     const MARGIN: f32 = 20.0;
-    
+
     let buffer = &mut state.frame.buffer;
     let width = state.frame.width as f32;
     let height = state.frame.height as f32;
@@ -101,7 +169,7 @@ pub fn draw_toggle_button(waveform: &Waveform, state: &mut EngineState) {
     let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
     let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
 
-    let (r, g, b) = if waveform.playback.as_ref().map_or(false, |p| p.output_stream.is_some()) {
+    let (r, g, b) = if waveform.is_actively_replaying {
         (0, 200, 0)
     } else {
         (60, 60, 60)
@@ -156,11 +224,11 @@ pub fn draw_record_button(waveform: &Waveform, state: &mut EngineState) {
     }
 }
 
-pub fn draw_replay_button(waveform: &Waveform, state: &mut EngineState) {
+pub fn draw_replay_recording_button(waveform: &Waveform, state: &mut EngineState) {
     const BUTTON_SIZE: f32 = 40.0;
     const MARGIN: f32 = 20.0;
     const BUTTON_SPACING: f32 = 50.0;
-    
+
     if waveform.recording_state.recorded_samples.is_empty() {
         return;
     }
@@ -177,7 +245,7 @@ pub fn draw_replay_button(waveform: &Waveform, state: &mut EngineState) {
     let y0 = (y_center - BUTTON_SIZE / 2.0) as usize;
     let y1 = (y_center + BUTTON_SIZE / 2.0) as usize;
 
-    let (r, g, b) = if waveform.recording_state.is_replaying {
+    let (r, g, b) = if waveform.is_replaying_recording {
         (0, 200, 0)
     } else {
         (60, 60, 60)
@@ -196,10 +264,10 @@ pub fn draw_replay_button(waveform: &Waveform, state: &mut EngineState) {
     }
 }
 
-pub fn is_inside_toggle_button(mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
+pub fn is_inside_active_replay_button(mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
     const BUTTON_SIZE: f32 = 40.0;
     const MARGIN: f32 = 20.0;
-    
+
     let width = state.frame.width as f32;
     let height = state.frame.height as f32;
 
@@ -207,7 +275,7 @@ pub fn is_inside_toggle_button(mouse_x: f32, mouse_y: f32, state: &EngineState) 
     let y_center = height - MARGIN - BUTTON_SIZE / 2.0;
 
     let half_size = BUTTON_SIZE / 2.0;
-    
+
     mouse_x >= x_center - half_size &&
     mouse_x <= x_center + half_size &&
     mouse_y >= y_center - half_size &&
@@ -233,11 +301,11 @@ pub fn is_inside_record_button(mouse_x: f32, mouse_y: f32, state: &EngineState) 
     mouse_y <= y_center + half_size
 }
 
-pub fn is_inside_replay_button(mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
+pub fn is_inside_replay_recording_button(mouse_x: f32, mouse_y: f32, state: &EngineState) -> bool {
     const BUTTON_SIZE: f32 = 40.0;
     const MARGIN: f32 = 20.0;
     const BUTTON_SPACING: f32 = 50.0;
-    
+
     let width = state.frame.width as f32;
     let height = state.frame.height as f32;
 
@@ -245,7 +313,7 @@ pub fn is_inside_replay_button(mouse_x: f32, mouse_y: f32, state: &EngineState) 
     let y_center = height - MARGIN - BUTTON_SIZE / 2.0 - BUTTON_SPACING;
 
     let half_size = BUTTON_SIZE / 2.0;
-    
+
     mouse_x >= x_center - half_size &&
     mouse_x <= x_center + half_size &&
     mouse_y >= y_center - half_size &&

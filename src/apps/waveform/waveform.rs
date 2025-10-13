@@ -8,6 +8,8 @@ pub struct Waveform {
     pub(crate) listener: Option<audio::AudioListener>,
     pub(crate) playback: Option<Playback>,
     pub(crate) recording_state: RecordingState,
+    pub is_actively_replaying: bool,
+    pub is_replaying_recording: bool,
 }
 
 impl Waveform {
@@ -16,6 +18,8 @@ impl Waveform {
             listener: None,
             playback: None,
             recording_state: RecordingState::new(),
+            is_actively_replaying: false,
+            is_replaying_recording: false,
         }
     }
 }
@@ -62,51 +66,60 @@ impl Application for Waveform {
         }
 
         let samples = &all_samples[0];
-        
-        if let Some(playback) = &mut self.playback {
-            if playback.output_stream.is_some() {
+
+        // Feed playback buffer with mic samples if actively replaying
+        if self.is_actively_replaying {
+            if let Some(playback) = &mut self.playback {
                 playback.feed(samples);
+                // Visualize playback buffer in red
+                let playback_samples: Vec<f32> = playback.playback_buffer.lock().unwrap().iter().copied().collect();
+                visualization::draw_waveform_red(state, &playback_samples);
             }
         }
-        
+
+        // If replaying recording, feed playback buffer with recorded samples and visualize in red
+        if self.is_replaying_recording {
+            if let Some(playback) = &mut self.playback {
+                playback.feed(&self.recording_state.recorded_samples);
+                let playback_samples: Vec<f32> = playback.playback_buffer.lock().unwrap().iter().copied().collect();
+                visualization::draw_waveform_red(state, &playback_samples);
+            }
+        }
+
+        // Draw main waveform (mic input) in green
         visualization::draw_waveform(state, samples);
 
-    recording::update_recording(self, samples);
-        
+        recording::update_recording(self, samples);
+
         if let Some(playback) = self.playback.as_mut() {
             recording::update_replay(&mut self.recording_state, playback);
         }
 
-        visualization::draw_toggle_button(self, state);
+        visualization::draw_active_replay_button(self, state);
         visualization::draw_record_button(self, state);
-        visualization::draw_replay_button(self, state);
+        visualization::draw_replay_recording_button(self, state);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        if let Some(playback) = &mut self.playback {
-            if visualization::is_inside_toggle_button(state.mouse.x, state.mouse.y, state) {
-                if playback.output_stream.is_some() {
-                    playback.stop();
-                } else {
-                    if let Err(e) = playback.start() {
-                        eprintln!("Failed to start playback: {}", e);
-                    }
-                }
-            }
+        // Active replay button toggles is_actively_replaying only
+        if visualization::is_inside_active_replay_button(state.mouse.x, state.mouse.y, state) {
+            self.is_actively_replaying = !self.is_actively_replaying;
+            // Optionally start/stop playback stream here if needed
+            return;
         }
-        
+
+        // Record button logic
         if visualization::is_inside_record_button(state.mouse.x, state.mouse.y, state) {
             self.recording_state.button_pressed = true;
             recording::start_recording(self);
-        } else if visualization::is_inside_replay_button(state.mouse.x, state.mouse.y, state) {
-            if self.recording_state.is_replaying {
-                self.recording_state.is_replaying = false;
-                self.recording_state.replay_position = 0;
-            } else {
-                if let Some(playback) = self.playback.as_mut() {
-                    recording::start_replay(&mut self.recording_state, playback);
-                }
-            }
+            return;
+        }
+
+        // Replay recording button toggles is_replaying_recording only
+        if visualization::is_inside_replay_recording_button(state.mouse.x, state.mouse.y, state) {
+            self.is_replaying_recording = !self.is_replaying_recording;
+            // Optionally start/stop replay logic here if needed
+            return;
         }
     }
     
