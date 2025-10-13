@@ -22,6 +22,10 @@ pub struct AudioBuffer {
 }
 
 impl AudioBuffer {
+    /// Get the buffer capacity
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
     fn new(capacity: usize, sample_rate: u32, channels: u16) -> Self {
         // Create a vector of empty VecDeques, one for each channel
         let mut channel_buffers = Vec::with_capacity(channels as usize);

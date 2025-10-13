@@ -10,10 +10,11 @@ pub struct Playback {
     pub playback_buffer: Arc<Mutex<VecDeque<f32>>>,
     output_device: Device,
     output_config: SupportedStreamConfig,
+    pub max_buffer_size: usize,
 }
 
 impl Playback {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(max_buffer_size: usize) -> Result<Self, String> {
         let host = cpal::default_host();
         let output_device = host
             .output_devices()
@@ -36,9 +37,10 @@ impl Playback {
 
         Ok(Self {
             output_stream: None,
-            playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(4096))),
+            playback_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(max_buffer_size))),
             output_device,
             output_config,
+            max_buffer_size,
         })
     }
 
@@ -82,9 +84,8 @@ impl Playback {
 
     pub fn feed(&self, samples: &[f32]) {
         let mut buffer = self.playback_buffer.lock().unwrap();
-        const MAX_BUFFER_SIZE: usize = 2048;
         for &sample in samples {
-            if buffer.len() < MAX_BUFFER_SIZE {
+            if buffer.len() < self.max_buffer_size {
                 buffer.push_back(sample);
             } else {
                 buffer.pop_front();
