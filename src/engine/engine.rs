@@ -83,6 +83,9 @@ pub struct MouseState {
 pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
+    pub bearing_deg: f32,
+    pub latitude: f64,
+    pub longitude: f64,
 }
 
 pub trait Application {

@@ -35,6 +35,9 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             is_right_clicking: false,
             style: CursorStyleSetter::new(),
         },
+        bearing_deg: 0.0,
+        latitude: 0.0,
+        longitude: 0.0,
     };
 
     app.setup(&mut engine_state)?;
