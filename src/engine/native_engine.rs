@@ -20,6 +20,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     let mut size = window.inner_size();
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
+    let positionals = get_positionals();
 
     let mut engine_state = EngineState {
         frame: FrameState {
@@ -37,10 +38,10 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             style: CursorStyleSetter::new(),
         },
         position: PositionalData {
-            bearing: get_positionals().bearing,
-            latitude: get_positionals().latitude,
-            longitude: get_positionals().longitude,
-            altitude: get_positionals().altitude,
+            bearing: positionals.bearing,
+            latitude: positionals.latitude,
+            longitude: positionals.longitude,
+            altitude: positionals.altitude,
         },
     };
 
