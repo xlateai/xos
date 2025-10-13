@@ -36,9 +36,6 @@ pub fn start_recording(waveform: &mut Waveform) {
         waveform.recording_state.recording_start_time = Some(Instant::now());
         waveform.recording_state.fresh_recording_buffer.clear();
         
-        if let Some(listener) = &waveform.listener {
-            listener.buffer().clear();
-        }
         waveform.recording_state.last_processed_length = 0;
         
         println!("🎙️ Push-to-talk recording started (cleared buffer)...");
