@@ -177,6 +177,9 @@ pub struct AudioListener {
 }
 
 impl AudioListener {
+    pub fn capacity(&self) -> usize {
+        self.buffer.capacity()
+    }
     /// Create a new listener for the specified device
     pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
         let device = &audio_device.device_cpal;

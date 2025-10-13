@@ -44,7 +44,7 @@ impl Application for Waveform {
         listener.record()?;
         self.listener = Some(listener);
 
-        let max_buffer_size = self.listener.as_ref().unwrap().buffer().capacity();
+    let max_buffer_size = self.listener.as_ref().unwrap().capacity();
         self.playback = Some(Playback::new(max_buffer_size)?);
 
         Ok(())
