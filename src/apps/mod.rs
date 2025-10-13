@@ -54,4 +54,5 @@ define_apps! {
     WireframeText => wireframe_text::WireframeText,
     Triangles => triangles::TrianglesApp,
     Cursor => cursor::CursorApp,
+    Compass => compass::CompassApp,
 }
