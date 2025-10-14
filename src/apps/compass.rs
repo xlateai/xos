@@ -1,4 +1,4 @@
-use crate::engine::{engine::PositionalData, Application, EngineState};
+use crate::engine::{Application, EngineState};
 use std::f32::consts::PI;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // dark gray

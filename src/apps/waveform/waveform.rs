@@ -36,7 +36,7 @@ impl Application for Waveform {
             println!("  [{}] {}", i, d.name);
         }
 
-        let device_index = 0;
+        let device_index = 1;
         let device = devices.get(device_index).ok_or("No audio device found")?;
 
         let buffer_duration = 1.0;
