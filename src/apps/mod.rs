@@ -48,10 +48,12 @@ define_apps! {
     Whiteboard => whiteboard::Whiteboard,
     Blank => blank::BlankApp,
     Waveform => waveform::Waveform,
+    Synthesis => synthesis::SynthesisApp,
     Scroll => scroll::ScrollApp,
     Text => text::TextApp,
     Wireframe => wireframe::WireframeDemo,
     WireframeText => wireframe_text::WireframeText,
     Triangles => triangles::TrianglesApp,
     Cursor => cursor::CursorApp,
+    Compass => compass::CompassApp,
 }

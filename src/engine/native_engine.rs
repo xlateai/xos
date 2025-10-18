@@ -7,7 +7,8 @@ use winit::{
     window::{CursorIcon, WindowBuilder},
 };
 
-use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
+use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter, PositionalData};
+use super::positionals::get_positionals;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
@@ -19,6 +20,7 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
     let mut size = window.inner_size();
     let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
     let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
+    let positionals = get_positionals();
 
     let mut engine_state = EngineState {
         frame: FrameState {
@@ -34,6 +36,12 @@ pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::er
             is_left_clicking: false,
             is_right_clicking: false,
             style: CursorStyleSetter::new(),
+        },
+        position: PositionalData {
+            bearing: positionals.bearing,
+            latitude: positionals.latitude,
+            longitude: positionals.longitude,
+            altitude: positionals.altitude,
         },
     };
 

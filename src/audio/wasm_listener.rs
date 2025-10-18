@@ -11,6 +11,9 @@ pub struct AudioListener {
 }
 
 impl AudioListener {
+    pub fn capacity(&self) -> usize {
+        self.buffer.capacity
+    }
     pub fn new(_device: &super::wasm_device::AudioDevice, duration_secs: f32) -> Result<Self, String> {
         BUFFER.with(|cell| {
             *cell.borrow_mut() = Some(AudioBuffer::new(duration_secs));

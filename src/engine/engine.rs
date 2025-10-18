@@ -80,9 +80,18 @@ pub struct MouseState {
 }
 
 #[derive(Debug)]
+pub struct PositionalData {
+    pub bearing: f64,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude: f64,
+}
+
+#[derive(Debug)]
 pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
+    pub position: PositionalData,
 }
 
 pub trait Application {
