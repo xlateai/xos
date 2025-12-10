@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::ui::Selector;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
@@ -12,6 +13,7 @@ pub struct AudiovisApp {
     _sink: Option<Sink>, // Keep the sink alive so audio continues playing
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
+    visual_type_selector: Selector,
 }
 
 impl AudiovisApp {
@@ -21,12 +23,19 @@ impl AudiovisApp {
             _sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
+            visual_type_selector: Selector::new(vec![
+                "waveform".to_string(),
+                "convolution".to_string(),
+            ]),
         }
     }
 }
 
 impl Application for AudiovisApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+        // Open the selector on startup
+        self.visual_type_selector.open();
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Open file picker for audio files
@@ -92,16 +101,28 @@ impl Application for AudiovisApp {
         let buffer = &mut state.frame.buffer;
         let len = buffer.len();
 
+        // Clear background
         for i in (0..len).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
             buffer[i + 1] = BACKGROUND_COLOR.1;
             buffer[i + 2] = BACKGROUND_COLOR.2;
             buffer[i + 3] = 0xff;
         }
+
+        // Update and render the selector
+        self.visual_type_selector.update();
+        self.visual_type_selector.render(state);
+
+        // Log selected option if one is chosen
+        if let Some(selected) = self.visual_type_selector.selected_option() {
+            // This will only print once when selection is made
+            // In a real implementation, you'd want to track this differently
+        }
     }
 
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {
-        // No interaction
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        // Forward mouse down to the selector
+        self.visual_type_selector.on_mouse_down(state);
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
