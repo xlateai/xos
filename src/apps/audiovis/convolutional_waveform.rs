@@ -155,7 +155,18 @@ impl ConvolutionalWaveform {
         let out_w = output_shape[3];
         
         // Convert from [C, H, W] back to [H, W, C]
-        self.image = self.image_from_chw(output_data, out_h, out_w);
+        let mut image_data = self.image_from_chw(output_data, out_h, out_w);
+        
+        // Clamp pixel values to ensure they never go below minimum threshold
+        // This prevents the screen from going completely black
+        const MIN_VALUE: f32 = 1.0 / 255.0; // Minimum value (1 in 0-255 range, normalized)
+        const MAX_VALUE: f32 = 1.0;
+        
+        for pixel_value in image_data.iter_mut() {
+            *pixel_value = pixel_value.max(MIN_VALUE).min(MAX_VALUE);
+        }
+        
+        self.image = image_data;
         
         // Update dimensions (should be same with padding=1, but update to be safe)
         self.height = out_h as u32;
