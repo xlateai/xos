@@ -106,7 +106,8 @@ impl Application for AudiovisApp {
 
                 println!("Playing audio file: {:?}", path);
             } else {
-                println!("No audio file selected");
+                // No audio file selected - close the app
+                return Err("No audio file selected. Application will close.".to_string());
             }
         }
 
