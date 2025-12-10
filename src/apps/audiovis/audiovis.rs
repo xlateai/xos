@@ -1,11 +1,9 @@
 use crate::engine::{Application, EngineState};
 
 #[cfg(not(target_arch = "wasm32"))]
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
-#[cfg(not(target_arch = "wasm32"))]
-use std::io::BufReader;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 
@@ -38,19 +36,33 @@ impl Application for AudiovisApp {
                 .pick_file();
 
             if let Some(path) = file {
+                println!("Selected file: {:?}", path);
+                
                 // Get an output stream handle to the default physical sound device
-                let (_stream, stream_handle) = OutputStream::try_default()
+                let _stream = OutputStreamBuilder::open_default_stream()
                     .map_err(|e| format!("Failed to get audio output stream: {}", e))?;
 
-                // Create a sink (a queue for audio playback)
-                let sink = Sink::try_new(&stream_handle)
-                    .map_err(|e| format!("Failed to create audio sink: {}", e))?;
+                // Create a sink (a queue for audio playback) connected to the mixer
+                let sink = Sink::connect_new(&_stream.mixer());
 
                 // Load the audio file
                 let file = File::open(&path)
                     .map_err(|e| format!("Failed to open audio file: {}", e))?;
-                let source = Decoder::new(BufReader::new(file))
-                    .map_err(|e| format!("Failed to decode audio file: {}", e))?;
+                
+                // Try to decode the audio file using the new API (rodio 0.21+)
+                // Decoder::try_from auto-detects the format
+                let source = Decoder::try_from(file)
+                    .map_err(|e| {
+                        let extension = path.extension()
+                            .and_then(|ext| ext.to_str())
+                            .unwrap_or("unknown");
+                        format!(
+                            "Failed to decode audio file (extension: {}). Error: {}. \
+                            Supported formats: MP3, WAV, FLAC, OGG. \
+                            If your file is M4A/AAC, try converting it to one of the supported formats.",
+                            extension, e
+                        )
+                    })?;
 
                 // Play the audio
                 sink.append(source);

@@ -31,8 +31,8 @@ rand_pcg = "0.3"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 image = { version = "0.25", features = ["default-formats"] }
 pyo3 = { version = "0.21", optional = true, features = ["extension-module"] }
-rfd = "0.14"
-rodio = "0.18"
+rfd = "0.16.0"
+rodio = { version = "0.21.1", features = ["mp3", "flac", "vorbis", "wav"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
