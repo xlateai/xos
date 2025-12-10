@@ -1,4 +1,8 @@
 use crate::engine::EngineState;
+use crate::tensor::{Array, depthwise_conv2d};
+
+const CHANNELS: usize = 3;
+const KERNEL_SIZE: usize = 3;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -8,19 +12,20 @@ pub struct ConvolutionalWaveform {
     /// Image dimensions
     width: u32,
     height: u32,
+    /// Random convolution kernel (3x3x3 for RGB)
+    kernel: Vec<f32>,
 }
 
 impl ConvolutionalWaveform {
     pub fn new(width: u32, height: u32) -> Self {
         // Initialize random colored image mask (RGB channels)
-        let mut image = Vec::with_capacity((width * height * 3) as usize);
+        let mut image = Vec::with_capacity((width as usize * height as usize * CHANNELS));
         
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
             let mut rng = rand::thread_rng();
             for _ in 0..(width * height) {
-                // Random RGB values between 0.0 and 1.0
                 image.push(rng.gen::<f32>()); // R
                 image.push(rng.gen::<f32>()); // G
                 image.push(rng.gen::<f32>()); // B
@@ -29,7 +34,6 @@ impl ConvolutionalWaveform {
         
         #[cfg(target_arch = "wasm32")]
         {
-            // WASM: use simple pseudo-random
             let mut seed = 12345u32;
             for _ in 0..(width * height) {
                 seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
@@ -41,20 +45,133 @@ impl ConvolutionalWaveform {
             }
         }
 
+        // Generate random 3x3x3 convolution kernel
+        let kernel = Self::generate_random_kernel();
+
         Self {
             image,
             width,
             height,
+            kernel,
         }
     }
 
-    /// Update with new audio samples (placeholder for future convolution)
+    /// Generate a random 3x3x3 convolution kernel
+    fn generate_random_kernel() -> Vec<f32> {
+        let mut kernel = Vec::with_capacity(KERNEL_SIZE * KERNEL_SIZE * CHANNELS);
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            for _ in 0..(KERNEL_SIZE * KERNEL_SIZE * CHANNELS) {
+                // Random values between -1.0 and 1.0
+                kernel.push(rng.gen_range(-1.0..=1.0));
+            }
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut seed = 67890u32;
+            for _ in 0..(KERNEL_SIZE * KERNEL_SIZE * CHANNELS) {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                kernel.push(((seed % 2000) as f32 / 1000.0) - 1.0);
+            }
+        }
+        
+        kernel
+    }
+
+    /// Convert image from [H, W, C] to [C, H, W] format
+    fn image_to_chw(&self, hwc: &[f32]) -> Vec<f32> {
+        let h = self.height as usize;
+        let w = self.width as usize;
+        let mut chw = Vec::with_capacity(hwc.len());
+        
+        for c in 0..CHANNELS {
+            for y in 0..h {
+                for x in 0..w {
+                    let src_idx = (y * w + x) * CHANNELS + c;
+                    chw.push(hwc[src_idx]);
+                }
+            }
+        }
+        chw
+    }
+
+    /// Convert image from [C, H, W] back to [H, W, C] format
+    fn image_from_chw(&self, chw: &[f32], h: usize, w: usize) -> Vec<f32> {
+        let mut hwc = Vec::with_capacity(chw.len());
+        
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..CHANNELS {
+                    let src_idx = c * h * w + y * w + x;
+                    hwc.push(chw[src_idx]);
+                }
+            }
+        }
+        hwc
+    }
+
+    /// Convert kernel from [H, W, C] to [C, H, W] format for depthwise convolution
+    fn kernel_to_chw(&self, hwc: &[f32]) -> Vec<f32> {
+        let mut chw = Vec::with_capacity(CHANNELS * KERNEL_SIZE * KERNEL_SIZE);
+        
+        for c in 0..CHANNELS {
+            for ky in 0..KERNEL_SIZE {
+                for kx in 0..KERNEL_SIZE {
+                    let src_idx = (ky * KERNEL_SIZE + kx) * CHANNELS + c;
+                    chw.push(hwc[src_idx]);
+                }
+            }
+        }
+        chw
+    }
+
+    /// Apply convolution using custom tensor library
+    fn apply_convolution(&mut self) {
+        let h = self.height as usize;
+        let w = self.width as usize;
+
+        // Convert image from [H, W, C] to [C, H, W]
+        let image_chw = self.image_to_chw(&self.image);
+        let image_array = Array::new(image_chw, vec![CHANNELS, h, w]);
+
+        // Convert kernel from [H, W, C] to [C, H, W] for depthwise convolution
+        let kernel_chw = self.kernel_to_chw(&self.kernel);
+        let kernel_array = Array::new(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE]);
+
+        // Apply depthwise convolution with same padding (padding=1 for 3x3 kernel, stride=1)
+        let output_array = depthwise_conv2d(&image_array, &kernel_array, (1, 1), (1, 1));
+
+        // Output is [1, C, H, W], but since batch=1, the data is effectively [C, H, W]
+        // The data layout is already [C, H, W] (batch dimension is just 1)
+        let output_shape = output_array.shape();
+        let output_data = output_array.data();
+        
+        // Extract output dimensions (should match input with same padding)
+        let out_h = output_shape[2];
+        let out_w = output_shape[3];
+        
+        // Convert from [C, H, W] back to [H, W, C]
+        self.image = self.image_from_chw(output_data, out_h, out_w);
+        
+        // Update dimensions (should be same with padding=1, but update to be safe)
+        self.height = out_h as u32;
+        self.width = out_w as u32;
+    }
+
+    /// Update with new audio samples - applies convolution
     pub fn update_samples(&mut self, _samples: &[f32]) {
-        // TODO: Will implement convolution using burn tensor framework
+        self.apply_convolution();
     }
 
     /// Render the convolved image to the frame buffer with perfect square pixels
+    /// Applies convolution each frame for dynamic visualization
     pub fn tick(&mut self, state: &mut EngineState) {
+        // Apply convolution each frame
+        self.apply_convolution();
         let buffer = &mut state.frame.buffer;
         let width = state.frame.width;
         let height = state.frame.height;
