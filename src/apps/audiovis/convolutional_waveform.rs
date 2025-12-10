@@ -4,6 +4,10 @@ use crate::tensor::{Array, depthwise_conv2d};
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
+// Kernel normalization range - tune these to adjust kernel value distribution
+const KERNEL_MIN: f32 = -0.75;
+const KERNEL_MAX: f32 = 1.0;
+
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
     /// Image buffer (width x height pixels, each pixel has RGB channels)
@@ -21,7 +25,7 @@ pub struct ConvolutionalWaveform {
 impl ConvolutionalWaveform {
     pub fn new(width: u32, height: u32) -> Self {
         // Initialize random colored image mask (RGB channels)
-        let mut image = Vec::with_capacity((width as usize * height as usize * CHANNELS));
+        let mut image = Vec::with_capacity(width as usize * height as usize * CHANNELS);
         
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -241,18 +245,20 @@ impl ConvolutionalWaveform {
             }
         }
         
-        // Normalize the averages to [-1, 1] range
+        // Normalize the averages to [KERNEL_MIN, KERNEL_MAX] range
         let min_val = cell_averages.iter().copied().fold(f32::INFINITY, f32::min);
         let max_val = cell_averages.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         
         let normalized_cells: Vec<f32> = if (max_val - min_val).abs() > f32::EPSILON {
-            // Normal case: scale from [min, max] to [-1, 1]
+            // Normal case: scale from [min, max] to [KERNEL_MIN, KERNEL_MAX]
+            let range_scale = KERNEL_MAX - KERNEL_MIN;
             cell_averages.iter().map(|&val| {
-                2.0 * (val - min_val) / (max_val - min_val) - 1.0
+                KERNEL_MIN + (val - min_val) / (max_val - min_val) * range_scale
             }).collect()
         } else {
-            // Edge case: all values are the same, set to 0
-            vec![0.0; KERNEL_CELLS]
+            // Edge case: all values are the same, set to middle of [KERNEL_MIN, KERNEL_MAX] range
+            let mid_value = (KERNEL_MIN + KERNEL_MAX) / 2.0;
+            vec![mid_value; KERNEL_CELLS]
         };
         
         // Build new kernel from normalized cell averages
