@@ -129,8 +129,39 @@ impl ConvolutionalWaveform {
         chw
     }
 
+    /// Add barely-visible noise to the image to keep it alive
+    fn add_noise(&mut self) {
+        const NOISE_AMOUNT: f32 = 0.01; // Small amount of noise (±1% in normalized range)
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            for pixel_value in self.image.iter_mut() {
+                // Add small random noise: ±NOISE_AMOUNT
+                let noise = rng.gen_range(-NOISE_AMOUNT..=NOISE_AMOUNT);
+                *pixel_value = (*pixel_value + noise).clamp(0.0, 1.0);
+            }
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            // WASM: use simple pseudo-random
+            let mut seed = 12345u32;
+            for pixel_value in self.image.iter_mut() {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                // Generate noise in range [-NOISE_AMOUNT, NOISE_AMOUNT]
+                let noise = ((seed % 2000) as f32 / 1000.0 - 1.0) * NOISE_AMOUNT;
+                *pixel_value = (*pixel_value + noise).clamp(0.0, 1.0);
+            }
+        }
+    }
+
     /// Apply convolution using custom tensor library
     fn apply_convolution(&mut self) {
+        // Add barely-visible noise before convolution to keep image alive
+        self.add_noise();
+        
         let h = self.height as usize;
         let w = self.width as usize;
 
@@ -173,45 +204,59 @@ impl ConvolutionalWaveform {
         self.width = out_w as u32;
     }
 
-    /// Update kernel from audio samples and apply convolution
-    /// Uses the first 21 audio values to fill the RGB kernel (3x3x3 = 27 values)
-    /// Normalizes audio samples to [-1, 1] range before using them
+    /// Update kernel from audio samples using de-interleaving approach
+    /// Distributes all audio samples across 21 kernel cells in round-robin fashion,
+    /// then averages each cell. This makes the kernel more informationally dense.
     fn update_kernel_from_audio(&mut self, samples: &[f32]) {
-        const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS; // 27
+        const KERNEL_CELLS: usize = 21; // Number of cells to fill from audio
+        const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS; // 27 total
         
         if samples.is_empty() {
-            // If no samples, keep existing kernel or use zeros
+            // If no samples, keep existing kernel
             return;
         }
         
-        // Use first 21 values as requested
-        let num_samples = samples.len().min(21);
-        let audio_slice = &samples[..num_samples];
+        // Initialize bins: sums and counts for each of the 21 cells
+        let mut cell_sums = vec![0.0f32; KERNEL_CELLS];
+        let mut cell_counts = vec![0usize; KERNEL_CELLS];
         
-        // Normalize audio samples to [-1, 1] range
-        // Find min and max values
-        let min_val = audio_slice.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_val = audio_slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // Distribute all samples across the 21 cells using modulus (round-robin)
+        for (idx, &sample) in samples.iter().enumerate() {
+            let cell_idx = idx % KERNEL_CELLS;
+            cell_sums[cell_idx] += sample;
+            cell_counts[cell_idx] += 1;
+        }
         
-        // Normalize to [-1, 1] range
-        let normalized_samples: Vec<f32> = if (max_val - min_val).abs() > f32::EPSILON {
+        // Calculate averages for each cell
+        let mut cell_averages = Vec::with_capacity(KERNEL_CELLS);
+        for i in 0..KERNEL_CELLS {
+            if cell_counts[i] > 0 {
+                cell_averages.push(cell_sums[i] / cell_counts[i] as f32);
+            } else {
+                cell_averages.push(0.0);
+            }
+        }
+        
+        // Normalize the averages to [-1, 1] range
+        let min_val = cell_averages.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_val = cell_averages.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        
+        let normalized_cells: Vec<f32> = if (max_val - min_val).abs() > f32::EPSILON {
             // Normal case: scale from [min, max] to [-1, 1]
-            audio_slice.iter().map(|&val| {
-                // Map from [min, max] to [-1, 1]
-                // Formula: 2 * (val - min) / (max - min) - 1
+            cell_averages.iter().map(|&val| {
                 2.0 * (val - min_val) / (max_val - min_val) - 1.0
             }).collect()
         } else {
             // Edge case: all values are the same, set to 0
-            vec![0.0; num_samples]
+            vec![0.0; KERNEL_CELLS]
         };
         
-        // Clear and fill kernel
+        // Clear and fill kernel with normalized cell averages
         self.kernel.clear();
         self.kernel.reserve(KERNEL_LEN);
         
-        // Fill kernel with normalized audio samples
-        for &value in normalized_samples.iter() {
+        // Fill kernel with the 21 normalized cell averages
+        for &value in normalized_cells.iter() {
             self.kernel.push(value);
         }
         
