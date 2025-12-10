@@ -77,6 +77,11 @@ impl Selector {
         self.selected.and_then(|idx| self.options.get(idx)).map(|s| s.as_str())
     }
 
+    /// Get the selected option index
+    pub fn selected_index(&self) -> Option<usize> {
+        self.selected
+    }
+
     /// Handle mouse down event - returns true if the click was handled
     pub fn on_mouse_down(&mut self, state: &mut EngineState) -> bool {
         if !self.is_open {

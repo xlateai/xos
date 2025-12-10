@@ -1,5 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::ui::Selector;
+use crate::apps::audiovis::waveform::WaveformVisualizer;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
@@ -14,6 +15,8 @@ pub struct AudiovisApp {
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
     visual_type_selector: Selector,
+    waveform: Option<WaveformVisualizer>,
+    frame_count: u32, // For generating test waveform data
 }
 
 impl AudiovisApp {
@@ -27,6 +30,8 @@ impl AudiovisApp {
                 "waveform".to_string(),
                 "convolution".to_string(),
             ]),
+            waveform: None,
+            frame_count: 0,
         }
     }
 }
@@ -111,12 +116,39 @@ impl Application for AudiovisApp {
 
         // Update and render the selector
         self.visual_type_selector.update(state.frame.width as f32, state.frame.height as f32);
-        self.visual_type_selector.render(state);
+        
+        // Check if selector is closed and we have a selection
+        if !self.visual_type_selector.is_open() {
+            if let Some(selected) = self.visual_type_selector.selected_option() {
+                match selected {
+                    "waveform" => {
+                        // Initialize waveform if not already done
+                        if self.waveform.is_none() {
+                            self.waveform = Some(WaveformVisualizer::new());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            // Selector is open, render it
+            self.visual_type_selector.render(state);
+        }
 
-        // Log selected option if one is chosen
-        if let Some(selected) = self.visual_type_selector.selected_option() {
-            // This will only print once when selection is made
-            // In a real implementation, you'd want to track this differently
+        // If waveform is selected and initialized, render it
+        if let Some(waveform) = &mut self.waveform {
+            // For now, generate test waveform data (256 samples)
+            // TODO: Replace with actual audio samples from rodio
+            self.frame_count += 1;
+            let time = self.frame_count as f32 * 0.1;
+            let mut samples = vec![0.0; 256];
+            for i in 0..256 {
+                let t = time + (i as f32 * 0.1);
+                // Simple sine wave for testing
+                samples[i] = (t * 2.0).sin() * 0.5;
+            }
+            waveform.update_samples(&samples);
+            waveform.tick(state);
         }
     }
 
