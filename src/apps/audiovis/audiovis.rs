@@ -149,10 +149,7 @@ impl Application for AudiovisApp {
                     "convolution" => {
                         // Initialize convolutional waveform if not already done
                         if self.convolutional_waveform.is_none() {
-                            // Use a small window to avoid overheating
-                            let img_width = 64;
-                            let img_height = 64;
-                            self.convolutional_waveform = Some(ConvolutionalWaveform::new(img_width, img_height));
+                            self.convolutional_waveform = Some(ConvolutionalWaveform::new());
                         }
                     }
                     _ => {}

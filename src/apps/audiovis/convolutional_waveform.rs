@@ -4,6 +4,10 @@ use crate::tensor::{Array, depthwise_conv2d, same_padding};
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 5;
 
+// Image resolution - tune these to adjust the visualization size
+const IMAGE_WIDTH: u32 = 64;
+const IMAGE_HEIGHT: u32 = 64;
+
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
@@ -23,15 +27,15 @@ pub struct ConvolutionalWaveform {
 }
 
 impl ConvolutionalWaveform {
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new() -> Self {
         // Initialize random colored image mask (RGB channels)
-        let mut image = Vec::with_capacity(width as usize * height as usize * CHANNELS);
+        let mut image = Vec::with_capacity(IMAGE_WIDTH as usize * IMAGE_HEIGHT as usize * CHANNELS);
         
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
             let mut rng = rand::rng();
-            for _ in 0..(width * height) {
+            for _ in 0..(IMAGE_WIDTH * IMAGE_HEIGHT) {
                 image.push(rng.random::<f32>()); // R
                 image.push(rng.random::<f32>()); // G
                 image.push(rng.random::<f32>()); // B
@@ -41,7 +45,7 @@ impl ConvolutionalWaveform {
         #[cfg(target_arch = "wasm32")]
         {
             let mut seed = 12345u32;
-            for _ in 0..(width * height) {
+            for _ in 0..(IMAGE_WIDTH * IMAGE_HEIGHT) {
                 seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
                 image.push((seed % 1000) as f32 / 1000.0); // R
                 seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
@@ -57,8 +61,8 @@ impl ConvolutionalWaveform {
 
         Self {
             image,
-            width,
-            height,
+            width: IMAGE_WIDTH,
+            height: IMAGE_HEIGHT,
             kernel,
             previous_kernel,
         }
@@ -169,11 +173,11 @@ impl ConvolutionalWaveform {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             for _ in 0..total_pixels {
-                self.image.push(rng.gen::<f32>()); // R
-                self.image.push(rng.gen::<f32>()); // G
-                self.image.push(rng.gen::<f32>()); // B
+                self.image.push(rng.random::<f32>()); // R
+                self.image.push(rng.random::<f32>()); // G
+                self.image.push(rng.random::<f32>()); // B
             }
         }
         
