@@ -17,7 +17,7 @@ pub struct Selector {
     /// Text renderers for each option
     text_renderers: Vec<GeometricText>,
     /// Font size for option text
-    font_size: f32,
+    _font_size: f32,
 }
 
 impl Selector {
@@ -43,7 +43,7 @@ impl Selector {
             animation_progress: 0.0,
             animation_speed: 0.15, // Smooth animation speed
             text_renderers,
-            font_size,
+            _font_size: font_size,
         }
     }
 
@@ -121,7 +121,7 @@ impl Selector {
     }
 
     /// Update the selector (handles animation and text rendering)
-    pub fn update(&mut self, width: f32, height: f32) {
+    pub fn update(&mut self, _width: f32, height: f32) {
         if self.is_open {
             // Animate opening
             self.animation_progress = (self.animation_progress + self.animation_speed).min(1.0);
@@ -153,8 +153,8 @@ impl Selector {
         let selector_height = (self.options.len() as f32 * option_height) + 40.0;
         let center_x = width as f32 / 2.0;
         let center_y = height as f32 / 2.0;
-        let x = (center_x - selector_width / 2.0) as i32;
-        let y = (center_y - selector_height / 2.0) as i32;
+        let _x = (center_x - selector_width / 2.0) as i32;
+        let _y = (center_y - selector_height / 2.0) as i32;
 
         // Apply animation (fade + slight scale)
         let alpha = self.animation_progress;
@@ -273,7 +273,7 @@ impl Selector {
         // Text color (bright white for visibility)
         let text_color = (255, 255, 255);
 
-        for (idx, option) in self.options.iter().enumerate() {
+        for (idx, _option) in self.options.iter().enumerate() {
             let option_y = option_start_y + (idx as i32 * option_height as i32);
             let option_rect_y = option_y;
             let option_rect_height = option_height as i32 - 4;
