@@ -84,8 +84,8 @@ fn rand_float(min: f32, max: f32) -> f32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rand::Rng;
-        let mut rng = rand::thread_rng();
-        rng.gen_range(min..max)
+        let mut rng = rand::rng();
+        rng.random_range(min..max)
     }
 }
 

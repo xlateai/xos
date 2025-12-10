@@ -12,15 +12,15 @@ static RNG: Lazy<Mutex<StdRng>> = Lazy::new(|| {
 
 pub fn uniform() -> f64 {
     let mut rng = RNG.lock().unwrap();
-    rng.gen()
+    rng.random()
 }
 
 pub fn uniform_range(min: f64, max: f64) -> f64 {
     let mut rng = RNG.lock().unwrap();
-    rng.gen_range(min..max)
+    rng.random_range(min..max)
 }
 
 pub fn randint(min: i32, max: i32) -> i32 {
     let mut rng = RNG.lock().unwrap();
-    rng.gen_range(min..max)
+    rng.random_range(min..max)
 }

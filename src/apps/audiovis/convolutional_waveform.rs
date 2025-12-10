@@ -30,11 +30,11 @@ impl ConvolutionalWaveform {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             for _ in 0..(width * height) {
-                image.push(rng.gen::<f32>()); // R
-                image.push(rng.gen::<f32>()); // G
-                image.push(rng.gen::<f32>()); // B
+                image.push(rng.random::<f32>()); // R
+                image.push(rng.random::<f32>()); // G
+                image.push(rng.random::<f32>()); // B
             }
         }
         
@@ -71,10 +71,10 @@ impl ConvolutionalWaveform {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             for _ in 0..(KERNEL_SIZE * KERNEL_SIZE * CHANNELS) {
                 // Random values between -1.0 and 1.0
-                kernel.push(rng.gen_range(-1.0..=1.0));
+                kernel.push(rng.random_range(-1.0..=1.0));
             }
         }
         
@@ -144,10 +144,10 @@ impl ConvolutionalWaveform {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             for pixel_value in self.image.iter_mut() {
                 // Add small random noise: ±NOISE_AMOUNT
-                let noise = rng.gen_range(-NOISE_AMOUNT..=NOISE_AMOUNT);
+                let noise = rng.random_range(-NOISE_AMOUNT..=NOISE_AMOUNT);
                 *pixel_value = (*pixel_value + noise).clamp(0.0, 1.0);
             }
         }

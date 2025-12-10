@@ -2,171 +2,284 @@
 use pixels::{Pixels, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
-    event::*,
-    event_loop::{ControlFlow, EventLoop},
-    window::{CursorIcon, WindowBuilder},
+    application::ApplicationHandler,
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{Key, NamedKey},
+    window::{CursorIcon, Window, WindowId},
 };
 
 use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn start_native(mut app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("XOS Game")
-        .build(&event_loop)?;
+struct AppState {
+    window: Window,
+    pixels: Pixels<'static>,
+    engine_state: EngineState,
+    app: Box<dyn Application>,
+    size: winit::dpi::PhysicalSize<u32>,
+}
 
-    let mut size = window.inner_size();
-    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-    let mut pixels = Pixels::new(size.width, size.height, surface_texture)?;
+#[cfg(not(target_arch = "wasm32"))]
+impl ApplicationHandler for AppState {
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
+        // Application resumed
+    }
 
-    let mut engine_state = EngineState {
-        frame: FrameState {
-            width: size.width,
-            height: size.height,
-            buffer: vec![0; (size.width * size.height * 4) as usize],
-        },
-        mouse: MouseState {
-            x: 0.0,
-            y: 0.0,
-            dx: 0.0,
-            dy: 0.0,
-            is_left_clicking: false,
-            is_right_clicking: false,
-            style: CursorStyleSetter::new(),
-        },
-    };
-
-    app.setup(&mut engine_state)?;
-
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
-
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         match event {
-            Event::RedrawRequested(_) => {
-                let current_size = window.inner_size();
-                if current_size != size {
-                    size = current_size;
-                    let _ = pixels.resize_buffer(size.width, size.height);
-                    let _ = pixels.resize_surface(size.width, size.height);
-                    engine_state.frame.width = size.width;
-                    engine_state.frame.height = size.height;
-                    engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::RedrawRequested => {
+                let current_size = self.window.inner_size();
+                if current_size != self.size {
+                    self.size = current_size;
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                    self.engine_state.frame.width = self.size.width;
+                    self.engine_state.frame.height = self.size.height;
+                    self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
                 }
 
-                engine_state.frame.buffer.fill(0);
-                app.tick(&mut engine_state);
+                self.engine_state.frame.buffer.fill(0);
+                let _ = self.app.tick(&mut self.engine_state);
 
-                let frame = pixels.frame_mut();
-                if frame.len() == engine_state.frame.buffer.len() {
-                    frame.copy_from_slice(&engine_state.frame.buffer);
-                    let _ = pixels.render();
+                let frame = self.pixels.frame_mut();
+                if frame.len() == self.engine_state.frame.buffer.len() {
+                    frame.copy_from_slice(&self.engine_state.frame.buffer);
+                    let _ = self.pixels.render();
                 } else {
-                    engine_state.frame.buffer.resize(frame.len(), 0);
+                    self.engine_state.frame.buffer.resize(frame.len(), 0);
                     eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
                 }
             }
-            Event::MainEventsCleared => {
-                match engine_state.mouse.style.get() {
-                    CursorStyle::Hidden => {
-                        window.set_cursor_visible(false);
-                    }
-                    other => {
-                        window.set_cursor_visible(true);
-                        let icon = match other {
-                            CursorStyle::Default => CursorIcon::Default,
-                            CursorStyle::Text => CursorIcon::Text,
-                            CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
-                            CursorStyle::ResizeVertical => CursorIcon::NsResize,
-                            CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
-                            CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
-                            CursorStyle::Hand => CursorIcon::Hand,
-                            CursorStyle::Crosshair => CursorIcon::Crosshair,
-                            CursorStyle::Hidden => unreachable!(), // already handled above
-                        };
-                        window.set_cursor_icon(icon);
-                    }
-                }
-            
-                window.request_redraw();
+            WindowEvent::Resized(new_size) => {
+                self.size = new_size;
+                let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                self.engine_state.frame.width = self.size.width;
+                self.engine_state.frame.height = self.size.height;
+                self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
+                self.window.request_redraw();
             }
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                WindowEvent::Resized(new_size)
-                | WindowEvent::ScaleFactorChanged {
-                    new_inner_size: &mut new_size,
-                    ..
-                } => {
-                    size = new_size;
-                    let _ = pixels.resize_buffer(size.width, size.height);
-                    let _ = pixels.resize_surface(size.width, size.height);
-                    engine_state.frame.width = size.width;
-                    engine_state.frame.height = size.height;
-                    engine_state.frame.buffer = vec![0; (size.width * size.height * 4) as usize];
-                    window.request_redraw();
+            WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
+                let new_size = self.window.inner_size();
+                if new_size != self.size {
+                    self.size = new_size;
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                    self.engine_state.frame.width = self.size.width;
+                    self.engine_state.frame.height = self.size.height;
+                    self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
+                    self.window.request_redraw();
                 }
-                WindowEvent::CursorMoved { position, .. } => {
-                    let prev_x = engine_state.mouse.x;
-                    let prev_y = engine_state.mouse.y;
-                
-                    engine_state.mouse.x = position.x as f32;
-                    engine_state.mouse.y = position.y as f32;
-                
-                    engine_state.mouse.dx = engine_state.mouse.x - prev_x;
-                    engine_state.mouse.dy = engine_state.mouse.y - prev_y;
-                
-                    app.on_mouse_move(&mut engine_state);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let prev_x = self.engine_state.mouse.x;
+                let prev_y = self.engine_state.mouse.y;
+            
+                self.engine_state.mouse.x = position.x as f32;
+                self.engine_state.mouse.y = position.y as f32;
+            
+                self.engine_state.mouse.dx = self.engine_state.mouse.x - prev_x;
+                self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
+            
+                let _ = self.app.on_mouse_move(&mut self.engine_state);
+            }
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: MouseButton::Left,
+                ..
+            } => match button_state {
+                ElementState::Pressed => {
+                    self.engine_state.mouse.is_left_clicking = true;
+                    let _ = self.app.on_mouse_down(&mut self.engine_state);
                 }
-                WindowEvent::MouseInput {
-                    state: button_state,
-                    button: MouseButton::Left,
-                    ..
-                } => match button_state {
-                    ElementState::Pressed => {
-                        engine_state.mouse.is_left_clicking = true;
-                        app.on_mouse_down(&mut engine_state);
-                    }
-                    ElementState::Released => {
-                        engine_state.mouse.is_left_clicking = false;
-                        app.on_mouse_up(&mut engine_state);
-                    }
-                },
-                WindowEvent::MouseInput {
-                    state: button_state,
-                    button: MouseButton::Right,
-                    ..
-                } => match button_state {
-                    ElementState::Pressed => {
-                        engine_state.mouse.is_right_clicking = true;
-                    }
-                    ElementState::Released => {
-                        engine_state.mouse.is_right_clicking = false;
-                    }
+                ElementState::Released => {
+                    self.engine_state.mouse.is_left_clicking = false;
+                    let _ = self.app.on_mouse_up(&mut self.engine_state);
                 }
-                WindowEvent::MouseWheel { delta, .. } => {
-                    let (dx, dy) = match delta {
-                        MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
-                        MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
-                    };
-                    app.on_scroll(&mut engine_state, dx, dy);
-                }
-                WindowEvent::ReceivedCharacter(ch) => {
-                    app.on_key_char(&mut engine_state, ch);
-                }
-                WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Back),
-                            ..
-                        },
-                    ..
-                } => {
-                    app.on_key_char(&mut engine_state, '\u{8}');
-                }
-                _ => {}
             },
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: MouseButton::Right,
+                ..
+            } => match button_state {
+                ElementState::Pressed => {
+                    self.engine_state.mouse.is_right_clicking = true;
+                }
+                ElementState::Released => {
+                    self.engine_state.mouse.is_right_clicking = false;
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
+                    MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                };
+                let _ = self.app.on_scroll(&mut self.engine_state, dx, dy);
+            }
+            WindowEvent::Ime(ime) => {
+                match ime {
+                    winit::event::Ime::Commit(text) => {
+                        for ch in text.chars() {
+                            let _ = self.app.on_key_char(&mut self.engine_state, ch);
+                        }
+                    }
+                    winit::event::Ime::Preedit(_text, _) => {
+                        // Handle preedit text if needed (for IME composition)
+                        // For now, we can ignore it or handle it as needed
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    // Handle special keys
+                    match event.logical_key {
+                        Key::Named(NamedKey::Backspace) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{8}');
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\n');
+                        }
+                        Key::Named(NamedKey::Tab) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\t');
+                        }
+                        _ => {
+                            // Check if the event has text (for regular character input)
+                            // In winit 0.30, text input should come through IME, but we can also
+                            // check the text field as a fallback
+                            if let Some(text) = event.text.as_ref() {
+                                for ch in text.chars() {
+                                    if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
+                                        let _ = self.app.on_key_char(&mut self.engine_state, ch);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
-    });
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Update cursor style
+        match self.engine_state.mouse.style.get() {
+            CursorStyle::Hidden => {
+                self.window.set_cursor_visible(false);
+            }
+            other => {
+                self.window.set_cursor_visible(true);
+                let icon = match other {
+                    CursorStyle::Default => CursorIcon::Default,
+                    CursorStyle::Text => CursorIcon::Text,
+                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                    CursorStyle::Hand => CursorIcon::Pointer,
+                    CursorStyle::Crosshair => CursorIcon::Crosshair,
+                    CursorStyle::Hidden => unreachable!(), // already handled above
+                };
+                self.window.set_cursor(icon);
+            }
+        }
+        
+        self.window.request_redraw();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct AppStateWrapper {
+    app_state: Option<AppState>,
+    app: Box<dyn Application>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ApplicationHandler for AppStateWrapper {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.app_state.is_none() {
+            let window = match event_loop.create_window(Window::default_attributes().with_title("XOS Game")) {
+                Ok(w) => {
+                    // Enable IME for text input
+                    w.set_ime_allowed(true);
+                    w
+                },
+                Err(e) => {
+                    eprintln!("Failed to create window: {}", e);
+                    return;
+                }
+            };
+
+            let size = window.inner_size();
+            let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+            let pixels = match Pixels::new(size.width, size.height, surface_texture) {
+                Ok(p) => unsafe { std::mem::transmute(p) }, // SAFETY: window outlives pixels
+                Err(e) => {
+                    eprintln!("Failed to create pixels: {}", e);
+                    return;
+                }
+            };
+
+            let mut engine_state = EngineState {
+                frame: FrameState {
+                    width: size.width,
+                    height: size.height,
+                    buffer: vec![0; (size.width * size.height * 4) as usize],
+                },
+                mouse: MouseState {
+                    x: 0.0,
+                    y: 0.0,
+                    dx: 0.0,
+                    dy: 0.0,
+                    is_left_clicking: false,
+                    is_right_clicking: false,
+                    style: CursorStyleSetter::new(),
+                },
+            };
+
+            if let Err(e) = self.app.setup(&mut engine_state) {
+                eprintln!("Failed to setup app: {}", e);
+                return;
+            }
+
+            let app = std::mem::replace(&mut self.app, Box::new(crate::apps::blank::BlankApp::new()));
+            self.app_state = Some(AppState {
+                window,
+                pixels,
+                engine_state,
+                app,
+                size,
+            });
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        if let Some(ref mut app_state) = self.app_state {
+            app_state.window_event(event_loop, window_id, event);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(ref mut app_state) = self.app_state {
+            app_state.about_to_wait(event_loop);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+    let event_loop = EventLoop::new().unwrap();
+    
+    let mut wrapper = AppStateWrapper {
+        app_state: None,
+        app,
+    };
+    
+    event_loop.run_app(&mut wrapper)?;
+    Ok(())
 }
