@@ -62,9 +62,19 @@ impl MediaControlBar {
     /// Set position (for external updates from audio)
     pub fn set_position(&mut self, position: f32) {
         // Only update if not dragging and not just seeked - this prevents position from being reset during/after seek
+        // This is for automatic position updates from audio playback
         if !self.is_dragging && !self.just_seeked {
             self.position = position.max(0.0).min(1.0);
         }
+    }
+
+    /// Set position manually (for user seeking)
+    pub fn set_position_manual(&mut self, position: f32) {
+        // This is called when user manually seeks - always update and mark as just_seeked
+        self.position = position.max(0.0).min(1.0);
+        self.just_seeked = true;
+        self.frames_since_seek = 0;
+        self.last_update_position = -1.0; // Force visualization update
     }
 
     /// Check if position changed significantly (for forcing visualization update)
@@ -81,9 +91,10 @@ impl MediaControlBar {
         // Track frames since seek - keep just_seeked active for several frames
         if self.just_seeked {
             self.frames_since_seek += 1;
-            // Keep just_seeked true for 10 frames (about 1/6 second at 60fps)
+            // Keep just_seeked true for 30 frames (about 0.5 second at 60fps)
             // This prevents position from being reset immediately after seeking
-            if self.frames_since_seek > 10 {
+            // Longer duration ensures seeking works reliably
+            if self.frames_since_seek > 30 {
                 self.just_seeked = false;
                 self.frames_since_seek = 0;
             }
@@ -97,9 +108,12 @@ impl MediaControlBar {
             } else {
                 // Mouse released, stop dragging but keep position
                 self.is_dragging = false;
-                // Set just_seeked to prevent position from being reset immediately
-                self.just_seeked = true;
-                self.frames_since_seek = 0; // Reset counter
+                // Position is already set via set_position_manual in update_seek_position
+                // Just make sure just_seeked stays true
+                if !self.just_seeked {
+                    self.just_seeked = true;
+                    self.frames_since_seek = 0;
+                }
             }
         }
     }
@@ -177,10 +191,8 @@ impl MediaControlBar {
         let relative_x = (mouse_x - seek_x_start as f32).max(0.0).min(seek_width);
         let new_position = (relative_x / seek_width).max(0.0).min(1.0);
         
-        // Always update position when seeking (don't check is_dragging here)
-        self.position = new_position;
-        // Force visualization update on seek
-        self.last_update_position = -1.0;
+        // Use manual position setter to ensure it doesn't get overridden
+        self.set_position_manual(new_position);
     }
 
     /// Render the control bar
@@ -193,13 +205,13 @@ impl MediaControlBar {
             self.calculate_layout(width as f32, height as f32);
         let button_radius = (self.button_size / 2.0) as i32;
 
-        // Draw play/pause button with crystal UI style (smooth gradient circle)
+        // Draw play/pause button with crystal UI style (smooth gradient circle) - silver/white
         self.draw_crystal_circle(
             buffer, width, height, 
             button_center_x, button_center_y, 
             button_radius,
-            (100, 100, 110), // Base color (slightly blue-gray)
-            (60, 60, 70),    // Shadow color
+            (240, 240, 250), // Base color (super white silver)
+            (220, 220, 230), // Shadow color (slightly darker silver)
         );
 
         // Draw play or pause icon - smooth and clean

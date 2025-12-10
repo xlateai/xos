@@ -12,6 +12,9 @@ const IMAGE_HEIGHT: u32 = 64;
 const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
 
+// Steps per kernel update - only recalculate kernel every kth step
+const STEPS_PER_KERNEL: u32 = 5;
+
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
     /// Image buffer (width x height pixels, each pixel has RGB channels)
@@ -26,6 +29,8 @@ pub struct ConvolutionalWaveform {
     previous_kernel: Vec<f32>,
     /// Last seek position used for randomization
     last_seek_position: f32,
+    /// Step counter for kernel update throttling
+    step_counter: u32,
 }
 
 impl ConvolutionalWaveform {
@@ -68,6 +73,7 @@ impl ConvolutionalWaveform {
             kernel,
             previous_kernel,
             last_seek_position: -1.0,
+            step_counter: 0,
         }
     }
 
@@ -323,9 +329,16 @@ impl ConvolutionalWaveform {
 
     /// Update with new audio samples - updates kernel and applies convolution
     pub fn update_samples(&mut self, samples: &[f32]) {
-        // Update kernel from audio stream
-        self.update_kernel_from_audio(samples);
-        // Apply convolution with the new kernel
+        // Increment step counter
+        self.step_counter += 1;
+        
+        // Only update kernel every kth step (where k = STEPS_PER_KERNEL)
+        if self.step_counter % STEPS_PER_KERNEL == 0 {
+            // Update kernel from audio stream
+            self.update_kernel_from_audio(samples);
+        }
+        
+        // Always apply convolution with the current kernel
         self.apply_convolution();
     }
 
