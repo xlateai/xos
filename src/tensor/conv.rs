@@ -236,9 +236,16 @@ where
                             let iy = in_y + ky;
                             let ix = in_x + kx;
 
-                            // Check bounds
+                            // Get kernel value
+                            let kernel_idx = if kernel_shape.len() == 4 {
+                                ((c * 1 + 0) * kernel_h + ky) * kernel_w + kx
+                            } else {
+                                (c * kernel_h + ky) * kernel_w + kx
+                            };
+
+                            // Check if position is within actual input bounds (not in padding)
                             if iy >= pad_h && ix >= pad_w && iy < in_h + pad_h && ix < in_w + pad_w {
-                                // Actual input position
+                                // Actual input position (subtract padding offset)
                                 let actual_iy = iy - pad_h;
                                 let actual_ix = ix - pad_w;
 
@@ -249,17 +256,13 @@ where
                                     (c * in_h + actual_iy) * in_w + actual_ix
                                 };
 
-                                // Get kernel value
-                                let kernel_idx = if kernel_shape.len() == 4 {
-                                    ((c * 1 + 0) * kernel_h + ky) * kernel_w + kx
-                                } else {
-                                    (c * kernel_h + ky) * kernel_w + kx
-                                };
-
+                                // Add contribution: input * kernel (zero-padding means 0 if out of bounds)
                                 if input_idx < input_data.len() && kernel_idx < kernel_data.len() {
                                     sum = sum + input_data[input_idx] * kernel_data[kernel_idx];
                                 }
                             }
+                            // If position is in padding area, implicitly add 0 (zero-padding)
+                            // This is handled by not adding anything to sum
                         }
                     }
 

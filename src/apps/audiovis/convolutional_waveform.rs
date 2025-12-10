@@ -2,7 +2,7 @@ use crate::engine::EngineState;
 use crate::tensor::{Array, depthwise_conv2d, same_padding};
 
 const CHANNELS: usize = 3;
-const KERNEL_SIZE: usize = 3;
+const KERNEL_SIZE: usize = 5;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
