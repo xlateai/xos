@@ -1,6 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::ui::Selector;
 use crate::apps::audiovis::waveform::WaveformVisualizer;
+use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
@@ -22,6 +23,7 @@ pub struct AudiovisApp {
     _stream: Option<OutputStream>, // Keep the stream alive
     visual_type_selector: Selector,
     waveform: Option<WaveformVisualizer>,
+    convolutional_waveform: Option<ConvolutionalWaveform>,
     #[cfg(not(target_arch = "wasm32"))]
     audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
 }
@@ -38,6 +40,7 @@ impl AudiovisApp {
                 "convolution".to_string(),
             ]),
             waveform: None,
+            convolutional_waveform: None,
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
         }
@@ -142,6 +145,15 @@ impl Application for AudiovisApp {
                             self.waveform = Some(WaveformVisualizer::new());
                         }
                     }
+                    "convolution" => {
+                        // Initialize convolutional waveform if not already done
+                        if self.convolutional_waveform.is_none() {
+                            // Use a small window to avoid overheating
+                            let img_width = 64;
+                            let img_height = 64;
+                            self.convolutional_waveform = Some(ConvolutionalWaveform::new(img_width, img_height));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -150,40 +162,46 @@ impl Application for AudiovisApp {
             self.visual_type_selector.render(state);
         }
 
+        // Get audio samples for visualization
+        #[cfg(not(target_arch = "wasm32"))]
+        let audio_chunk = {
+            if let Some(sample_buffer) = &self.audio_samples {
+                let buffer = sample_buffer.lock().unwrap();
+                let buffer_len = buffer.len();
+                
+                if buffer_len > 0 {
+                    // Get the most recent 256 samples
+                    let start = buffer_len.saturating_sub(256);
+                    let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
+                    let mut chunk = vec![0.0; 256];
+                    let count = samples.len().min(256);
+                    chunk[..count].copy_from_slice(&samples[..count]);
+                    Some(chunk)
+                } else {
+                    Some(vec![0.0; 256])
+                }
+            } else {
+                Some(vec![0.0; 256])
+            }
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let audio_chunk = Some(vec![0.0; 256]);
+
         // If waveform is selected and initialized, render it
         if let Some(waveform) = &mut self.waveform {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Get live audio samples from the buffer
-                if let Some(sample_buffer) = &self.audio_samples {
-                    let buffer = sample_buffer.lock().unwrap();
-                    
-                    // Get the most recent 256 samples
-                    let mut waveform_samples = vec![0.0; 256];
-                    let buffer_len = buffer.len();
-                    
-                    if buffer_len > 0 {
-                        // Take the last 256 samples, or all if less than 256
-                        let start = buffer_len.saturating_sub(256);
-                        let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
-                        let count = samples.len().min(256);
-                        waveform_samples[..count].copy_from_slice(&samples[..count]);
-                    }
-                    
-                    waveform.update_samples(&waveform_samples);
-                } else {
-                    // No audio buffer, show silence
-                    waveform.update_samples(&vec![0.0; 256]);
-                }
+            if let Some(ref samples) = audio_chunk {
+                waveform.update_samples(samples);
             }
-            
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: show silence for now
-                waveform.update_samples(&vec![0.0; 256]);
-            }
-            
             waveform.tick(state);
+        }
+
+        // If convolutional waveform is selected and initialized, render it
+        if let Some(conv_waveform) = &mut self.convolutional_waveform {
+            if let Some(ref samples) = audio_chunk {
+                conv_waveform.update_samples(samples);
+            }
+            conv_waveform.tick(state);
         }
     }
 
