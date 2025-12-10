@@ -12,8 +12,10 @@ pub struct ConvolutionalWaveform {
     /// Image dimensions
     width: u32,
     height: u32,
-    /// Random convolution kernel (3x3x3 for RGB)
+    /// Current convolution kernel (3x3x3 for RGB)
     kernel: Vec<f32>,
+    /// Previous kernel for temporal smoothing
+    previous_kernel: Vec<f32>,
 }
 
 impl ConvolutionalWaveform {
@@ -47,12 +49,14 @@ impl ConvolutionalWaveform {
 
         // Generate random 3x3x3 convolution kernel
         let kernel = Self::generate_random_kernel();
+        let previous_kernel = kernel.clone(); // Initialize previous kernel to same as current
 
         Self {
             image,
             width,
             height,
             kernel,
+            previous_kernel,
         }
     }
 
@@ -251,19 +255,35 @@ impl ConvolutionalWaveform {
             vec![0.0; KERNEL_CELLS]
         };
         
-        // Clear and fill kernel with normalized cell averages
-        self.kernel.clear();
-        self.kernel.reserve(KERNEL_LEN);
+        // Build new kernel from normalized cell averages
+        let mut new_kernel = Vec::with_capacity(KERNEL_LEN);
         
         // Fill kernel with the 21 normalized cell averages
         for &value in normalized_cells.iter() {
-            self.kernel.push(value);
+            new_kernel.push(value);
         }
         
         // Pad remaining positions with zeros (27 - 21 = 6)
-        while self.kernel.len() < KERNEL_LEN {
-            self.kernel.push(0.0);
+        while new_kernel.len() < KERNEL_LEN {
+            new_kernel.push(0.0);
         }
+        
+        // Blend new kernel with previous kernel for smooth temporal transition
+        // Average between previous and new (50/50 blend for smooth transition)
+        const BLEND_FACTOR: f32 = 0.5; // 0.0 = no change, 1.0 = instant change
+        
+        // Ensure previous_kernel is the right size
+        if self.previous_kernel.len() != KERNEL_LEN {
+            self.previous_kernel = new_kernel.clone();
+        }
+        
+        // Blend: new_kernel = previous * (1 - blend) + new * blend
+        for i in 0..KERNEL_LEN {
+            self.kernel[i] = self.previous_kernel[i] * (1.0 - BLEND_FACTOR) + new_kernel[i] * BLEND_FACTOR;
+        }
+        
+        // Update previous kernel for next frame
+        self.previous_kernel = self.kernel.clone();
     }
 
     /// Update with new audio samples - updates kernel and applies convolution
