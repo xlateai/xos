@@ -22,8 +22,8 @@ impl MediaControlBar {
             is_paused: false,
             position: 0.0,
             is_dragging: false,
-            button_size: 60.0, // Larger button
-            handle_radius: 10.0, // Larger handle
+            button_size: 70.0, // Larger button
+            handle_radius: 12.0, // Larger handle
             last_update_position: -1.0,
         }
     }
@@ -81,6 +81,25 @@ impl MediaControlBar {
         }
     }
 
+    /// Calculate control bar layout (returns button center, seek bar bounds)
+    fn calculate_layout(&self, width: f32, height: f32) -> (i32, i32, i32, i32, i32) {
+        // Position at 10% from bottom
+        let bottom_offset = height * 0.1;
+        let control_y = (height - bottom_offset) as i32;
+        
+        // 80% width, centered
+        let bar_width_pct = 0.8;
+        let bar_width = (width * bar_width_pct) as i32;
+        let bar_x_start = ((width - bar_width as f32) / 2.0) as i32;
+        let bar_x_end = bar_x_start + bar_width;
+        
+        // Button is above the seek bar, centered horizontally
+        let button_center_x = (width / 2.0) as i32;
+        let button_center_y = control_y - 50; // 50px above the seek bar
+        
+        (button_center_x, button_center_y, bar_x_start, bar_x_end, control_y)
+    }
+
     /// Handle mouse down event
     pub fn on_mouse_down(&mut self, state: &mut EngineState) -> bool {
         let mouse_x = state.mouse.x;
@@ -88,24 +107,22 @@ impl MediaControlBar {
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
 
-        // Button is centered horizontally, slightly up from center
-        let button_center_x = width / 2.0;
-        let button_center_y = height / 2.0 - 40.0; // Slightly up from center
-        let button_dist = ((mouse_x - button_center_x).powi(2) + (mouse_y - button_center_y).powi(2)).sqrt();
+        let (button_center_x, button_center_y, seek_x_start, seek_x_end, seek_y) = 
+            self.calculate_layout(width, height);
+
+        // Check play/pause button
+        let button_dist = ((mouse_x - button_center_x as f32).powi(2) + 
+                          (mouse_y - button_center_y as f32).powi(2)).sqrt();
         
         if button_dist <= self.button_size / 2.0 {
             self.is_paused = !self.is_paused;
             return true;
         }
 
-        // Seek bar is horizontal line across the screen (no background)
-        let seek_y = height / 2.0 - 40.0; // Same Y as button
-        let seek_tolerance = 20.0; // Click tolerance around the line
-        let seek_x_start = 50.0; // Padding from edges
-        let seek_x_end = width - 50.0;
-
-        // Check if click is near the seek line
-        if (mouse_y - seek_y).abs() < seek_tolerance && mouse_x >= seek_x_start && mouse_x <= seek_x_end {
+        // Check seek bar area (with tolerance)
+        let seek_tolerance = 25.0; // Click tolerance around the line
+        if (mouse_y - seek_y as f32).abs() < seek_tolerance && 
+           mouse_x >= seek_x_start as f32 && mouse_x <= seek_x_end as f32 {
             // Start dragging
             self.is_dragging = true;
             self.update_seek_position(state);
@@ -119,13 +136,13 @@ impl MediaControlBar {
     fn update_seek_position(&mut self, state: &mut EngineState) {
         let mouse_x = state.mouse.x;
         let width = state.frame.width as f32;
+        let height = state.frame.height as f32;
 
-        let seek_x_start = 50.0;
-        let seek_x_end = width - 50.0;
-        let seek_width = seek_x_end - seek_x_start;
+        let (_, _, seek_x_start, seek_x_end, _) = self.calculate_layout(width, height);
+        let seek_width = (seek_x_end - seek_x_start) as f32;
 
         // Calculate position based on mouse X
-        let relative_x = (mouse_x - seek_x_start).max(0.0).min(seek_width);
+        let relative_x = (mouse_x - seek_x_start as f32).max(0.0).min(seek_width);
         self.position = (relative_x / seek_width).max(0.0).min(1.0);
         // Force visualization update on seek
         self.last_update_position = -1.0;
@@ -137,11 +154,11 @@ impl MediaControlBar {
         let width = state.frame.width;
         let height = state.frame.height;
 
-        let button_center_x = (width as f32 / 2.0) as i32;
-        let button_center_y = ((height as f32 / 2.0) - 40.0) as i32;
+        let (button_center_x, button_center_y, seek_x_start, seek_x_end, seek_y) = 
+            self.calculate_layout(width as f32, height as f32);
         let button_radius = (self.button_size / 2.0) as i32;
 
-        // Draw play/pause button (larger, centered)
+        // Draw play/pause button (above seek bar)
         let button_bg = (80, 80, 80); // Dark gray circle
         self.draw_circle(buffer, width, height, button_center_x, button_center_y, button_radius, button_bg);
 
@@ -149,7 +166,7 @@ impl MediaControlBar {
         let icon_color = (255, 255, 255);
         if self.is_paused {
             // Draw play triangle (pointing right)
-            let size = 18; // Larger icon
+            let size = 22; // Larger icon
             let tx = button_center_x;
             let ty = button_center_y;
             
@@ -177,9 +194,9 @@ impl MediaControlBar {
             }
         } else {
             // Draw pause icon (two vertical bars)
-            let bar_width = 5;
-            let bar_height = 20;
-            let bar_spacing = 8;
+            let bar_width = 6;
+            let bar_height = 24;
+            let bar_spacing = 10;
             
             // Left bar
             let left_bar_x = button_center_x - bar_spacing / 2 - bar_width;
@@ -215,11 +232,8 @@ impl MediaControlBar {
         }
 
         // Draw seek bar (plain white line, no background)
-        let seek_y = button_center_y;
-        let seek_x_start = 50;
-        let seek_x_end = (width as f32 - 50.0) as i32;
         let seek_width = seek_x_end - seek_x_start;
-        let line_height = 2; // Thin white line
+        let line_height = 3; // Slightly thicker line
 
         // Draw white line
         let line_color = (255, 255, 255);
@@ -239,7 +253,7 @@ impl MediaControlBar {
 
         // Draw seek handle (silver circle, raised up)
         let handle_x = seek_x_start + (seek_width as f32 * self.position) as i32;
-        let handle_y = seek_y - 5; // Raised up 5 pixels
+        let handle_y = seek_y - 6; // Raised up 6 pixels
         let handle_color = (192, 192, 192); // Silver color
         let handle_radius_i = self.handle_radius as i32;
         

@@ -337,9 +337,9 @@ impl ConvolutionalWaveform {
 
     /// Render with randomization based on seek position
     pub fn tick_with_seed(&mut self, state: &mut EngineState, seek_position: f32) {
-        // Reinitialize image if seek position changed significantly
+        // Reinitialize image if seek position changed (very sensitive for seeking)
         let position_delta = (seek_position - self.last_seek_position).abs();
-        if position_delta > 0.001 {
+        if position_delta > 0.0001 {
             // Convert seek position to a seed (0.0 to 1.0 -> 0 to u32::MAX)
             let seed = (seek_position * u32::MAX as f32) as u32;
             self.reinitialize_image_with_seed(seed);

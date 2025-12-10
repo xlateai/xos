@@ -289,26 +289,33 @@ impl Application for AudiovisApp {
             }
         }
 
-        // Render media control bar (always visible)
-        self.media_control_bar.render(state);
+        // Render media control bar only if a visualization is selected
+        let has_visualization = self.waveform.is_some() || self.convolutional_waveform.is_some();
+        if has_visualization {
+            self.media_control_bar.render(state);
+        }
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        // Try media control bar first
-        if self.media_control_bar.on_mouse_down(state) {
-            // Update pause state in audio sink
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if let Some(sink) = &self.sink {
-                    let sink = sink.lock().unwrap();
-                    if self.media_control_bar.is_paused() {
-                        sink.pause();
-                    } else {
-                        sink.play();
+        // Only handle control bar if visualization is selected
+        let has_visualization = self.waveform.is_some() || self.convolutional_waveform.is_some();
+        if has_visualization {
+            // Try media control bar first
+            if self.media_control_bar.on_mouse_down(state) {
+                // Update pause state in audio sink
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if let Some(sink) = &self.sink {
+                        let sink = sink.lock().unwrap();
+                        if self.media_control_bar.is_paused() {
+                            sink.pause();
+                        } else {
+                            sink.play();
+                        }
                     }
                 }
+                return;
             }
-            return;
         }
         // Forward mouse down to the selector
         self.visual_type_selector.on_mouse_down(state);
