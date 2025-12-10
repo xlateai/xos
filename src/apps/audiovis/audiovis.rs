@@ -6,6 +6,12 @@ use crate::apps::audiovis::waveform::WaveformVisualizer;
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 
@@ -16,7 +22,8 @@ pub struct AudiovisApp {
     _stream: Option<OutputStream>, // Keep the stream alive
     visual_type_selector: Selector,
     waveform: Option<WaveformVisualizer>,
-    frame_count: u32, // For generating test waveform data
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
 }
 
 impl AudiovisApp {
@@ -31,7 +38,8 @@ impl AudiovisApp {
                 "convolution".to_string(),
             ]),
             waveform: None,
-            frame_count: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_samples: None,
         }
     }
 }
@@ -65,7 +73,7 @@ impl Application for AudiovisApp {
                 
                 // Try to decode the audio file using the new API (rodio 0.21+)
                 // Decoder::try_from auto-detects the format
-                let source = Decoder::try_from(file)
+                let decoder = Decoder::try_from(file)
                     .map_err(|e| {
                         let extension = path.extension()
                             .and_then(|ext| ext.to_str())
@@ -78,8 +86,15 @@ impl Application for AudiovisApp {
                         )
                     })?;
 
+                // Create a buffer to capture live audio samples
+                let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(44100))); // ~1 second at 44.1kHz
+                self.audio_samples = Some(sample_buffer.clone());
+
+                // Wrap the decoder with our capturing source
+                let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
+
                 // Play the audio
-                sink.append(source);
+                sink.append(capturing_source);
                 sink.play();
 
                 // Store the sink and stream to keep them alive
@@ -137,17 +152,37 @@ impl Application for AudiovisApp {
 
         // If waveform is selected and initialized, render it
         if let Some(waveform) = &mut self.waveform {
-            // For now, generate test waveform data (256 samples)
-            // TODO: Replace with actual audio samples from rodio
-            self.frame_count += 1;
-            let time = self.frame_count as f32 * 0.1;
-            let mut samples = vec![0.0; 256];
-            for i in 0..256 {
-                let t = time + (i as f32 * 0.1);
-                // Simple sine wave for testing
-                samples[i] = (t * 2.0).sin() * 0.5;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Get live audio samples from the buffer
+                if let Some(sample_buffer) = &self.audio_samples {
+                    let buffer = sample_buffer.lock().unwrap();
+                    
+                    // Get the most recent 256 samples
+                    let mut waveform_samples = vec![0.0; 256];
+                    let buffer_len = buffer.len();
+                    
+                    if buffer_len > 0 {
+                        // Take the last 256 samples, or all if less than 256
+                        let start = buffer_len.saturating_sub(256);
+                        let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
+                        let count = samples.len().min(256);
+                        waveform_samples[..count].copy_from_slice(&samples[..count]);
+                    }
+                    
+                    waveform.update_samples(&waveform_samples);
+                } else {
+                    // No audio buffer, show silence
+                    waveform.update_samples(&vec![0.0; 256]);
+                }
             }
-            waveform.update_samples(&samples);
+            
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: show silence for now
+                waveform.update_samples(&vec![0.0; 256]);
+            }
+            
             waveform.tick(state);
         }
     }
