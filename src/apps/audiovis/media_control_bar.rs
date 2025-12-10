@@ -334,7 +334,6 @@ impl MediaControlBar {
         }
 
         let radius_f = radius as f32;
-        let radius_sq = radius_f * radius_f;
 
         // Draw with anti-aliasing for smooth edges
         for dy in -radius - 2..=radius + 2 {

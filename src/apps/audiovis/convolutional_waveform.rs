@@ -15,6 +15,9 @@ const KERNEL_MAX: f32 = 1.0;
 // Steps per kernel update - only recalculate kernel every kth step
 const STEPS_PER_KERNEL: u32 = 5;
 
+// Enable kernel blending - if true, interpolate between current and next kernel over steps
+const KERNEL_BLENDING: bool = true;
+
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
     /// Image buffer (width x height pixels, each pixel has RGB channels)
@@ -27,6 +30,10 @@ pub struct ConvolutionalWaveform {
     kernel: Vec<f32>,
     /// Previous kernel for temporal smoothing
     previous_kernel: Vec<f32>,
+    /// Base kernel at start of blending cycle (for interpolation)
+    base_kernel: Vec<f32>,
+    /// Next kernel to blend towards (for interpolation)
+    next_kernel: Vec<f32>,
     /// Last seek position used for randomization
     last_seek_position: f32,
     /// Step counter for kernel update throttling
@@ -66,12 +73,17 @@ impl ConvolutionalWaveform {
         let kernel = Self::generate_random_kernel();
         let previous_kernel = kernel.clone(); // Initialize previous kernel to same as current
 
+        let base_kernel = kernel.clone(); // Initialize base_kernel to same as current
+        let next_kernel = kernel.clone(); // Initialize next_kernel to same as current
+
         Self {
             image,
             width: IMAGE_WIDTH,
             height: IMAGE_HEIGHT,
             kernel,
             previous_kernel,
+            base_kernel,
+            next_kernel,
             last_seek_position: -1.0,
             step_counter: 0,
         }
@@ -247,16 +259,16 @@ impl ConvolutionalWaveform {
         self.width = out_w as u32;
     }
 
-    /// Update kernel from audio samples using de-interleaving approach
+    /// Calculate new kernel from audio samples (returns the kernel, doesn't update self.kernel)
     /// Distributes all audio samples across 21 kernel cells in round-robin fashion,
     /// then averages each cell. This makes the kernel more informationally dense.
-    fn update_kernel_from_audio(&mut self, samples: &[f32]) {
+    fn calculate_kernel_from_audio(&mut self, samples: &[f32]) -> Vec<f32> {
         const KERNEL_CELLS: usize = 21; // Number of cells to fill from audio
         const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS; // 27 total
         
         if samples.is_empty() {
-            // If no samples, keep existing kernel
-            return;
+            // If no samples, return the previous kernel (keep existing state)
+            return self.previous_kernel.clone();
         }
         
         // Initialize bins: sums and counts for each of the 21 cells
@@ -313,17 +325,33 @@ impl ConvolutionalWaveform {
         // Average between previous and new (50/50 blend for smooth transition)
         const BLEND_FACTOR: f32 = 0.5; // 0.0 = no change, 1.0 = instant change
         
+        // Blend: new_kernel = previous * (1 - blend) + new * blend
+        // Use previous_kernel if it's the right size, otherwise just return new_kernel
+        let mut blended_kernel = Vec::with_capacity(KERNEL_LEN);
+        if self.previous_kernel.len() == KERNEL_LEN {
+            for i in 0..KERNEL_LEN {
+                blended_kernel.push(self.previous_kernel[i] * (1.0 - BLEND_FACTOR) + new_kernel[i] * BLEND_FACTOR);
+            }
+        } else {
+            // If previous_kernel is wrong size, just return new_kernel
+            blended_kernel = new_kernel;
+        }
+        
+        blended_kernel
+    }
+
+    /// Update kernel from audio samples (legacy method for non-blending mode)
+    fn update_kernel_from_audio(&mut self, samples: &[f32]) {
+        let new_kernel = self.calculate_kernel_from_audio(samples);
+        const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS;
+        
         // Ensure previous_kernel is the right size
         if self.previous_kernel.len() != KERNEL_LEN {
             self.previous_kernel = new_kernel.clone();
         }
         
-        // Blend: new_kernel = previous * (1 - blend) + new * blend
-        for i in 0..KERNEL_LEN {
-            self.kernel[i] = self.previous_kernel[i] * (1.0 - BLEND_FACTOR) + new_kernel[i] * BLEND_FACTOR;
-        }
-        
-        // Update previous kernel for next frame
+        // Update kernel directly (non-blending mode)
+        self.kernel = new_kernel;
         self.previous_kernel = self.kernel.clone();
     }
 
@@ -334,8 +362,48 @@ impl ConvolutionalWaveform {
         
         // Only update kernel every kth step (where k = STEPS_PER_KERNEL)
         if self.step_counter % STEPS_PER_KERNEL == 0 {
-            // Update kernel from audio stream
-            self.update_kernel_from_audio(samples);
+            if KERNEL_BLENDING {
+                // Calculate new next_kernel from audio
+                let new_next_kernel = self.calculate_kernel_from_audio(samples);
+                const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS;
+                
+                // Ensure kernels are the right size
+                if self.base_kernel.len() != KERNEL_LEN {
+                    self.base_kernel = self.kernel.clone();
+                }
+                if self.next_kernel.len() != KERNEL_LEN {
+                    self.next_kernel = self.kernel.clone();
+                }
+                
+                // Update previous_kernel for temporal smoothing
+                self.previous_kernel = self.kernel.clone();
+                
+                // Start new blending cycle:
+                // base_kernel = current next_kernel (the target we just reached)
+                // next_kernel = new calculated kernel (new target to blend towards)
+                self.base_kernel = self.next_kernel.clone();
+                self.next_kernel = new_next_kernel;
+            } else {
+                // Non-blending mode: update kernel directly
+                self.update_kernel_from_audio(samples);
+            }
+        }
+        
+        // If blending is enabled, interpolate between base and next kernel
+        if KERNEL_BLENDING {
+            let step_in_cycle = self.step_counter % STEPS_PER_KERNEL;
+            let blend_factor = step_in_cycle as f32 / STEPS_PER_KERNEL as f32;
+            
+            // Interpolate: kernel = base * (1 - t) + next * t
+            // At step 0: blend_factor = 0, so 100% base, 0% next
+            // At step 4: blend_factor = 0.8, so 20% base, 80% next
+            // At step 5 (becomes 0): we update base = next, so we're at 100% base again
+            const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS;
+            for i in 0..KERNEL_LEN {
+                if i < self.base_kernel.len() && i < self.next_kernel.len() {
+                    self.kernel[i] = self.base_kernel[i] * (1.0 - blend_factor) + self.next_kernel[i] * blend_factor;
+                }
+            }
         }
         
         // Always apply convolution with the current kernel
