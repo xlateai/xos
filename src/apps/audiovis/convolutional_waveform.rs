@@ -162,8 +162,59 @@ impl ConvolutionalWaveform {
         self.width = out_w as u32;
     }
 
-    /// Update with new audio samples - applies convolution
-    pub fn update_samples(&mut self, _samples: &[f32]) {
+    /// Update kernel from audio samples and apply convolution
+    /// Uses the first 21 audio values to fill the RGB kernel (3x3x3 = 27 values)
+    /// Normalizes audio samples to [-1, 1] range before using them
+    fn update_kernel_from_audio(&mut self, samples: &[f32]) {
+        const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS; // 27
+        
+        if samples.is_empty() {
+            // If no samples, keep existing kernel or use zeros
+            return;
+        }
+        
+        // Use first 21 values as requested
+        let num_samples = samples.len().min(21);
+        let audio_slice = &samples[..num_samples];
+        
+        // Normalize audio samples to [-1, 1] range
+        // Find min and max values
+        let min_val = audio_slice.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_val = audio_slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        
+        // Normalize to [-1, 1] range
+        let normalized_samples: Vec<f32> = if (max_val - min_val).abs() > f32::EPSILON {
+            // Normal case: scale from [min, max] to [-1, 1]
+            audio_slice.iter().map(|&val| {
+                // Map from [min, max] to [-1, 1]
+                // Formula: 2 * (val - min) / (max - min) - 1
+                2.0 * (val - min_val) / (max_val - min_val) - 1.0
+            }).collect()
+        } else {
+            // Edge case: all values are the same, set to 0
+            vec![0.0; num_samples]
+        };
+        
+        // Clear and fill kernel
+        self.kernel.clear();
+        self.kernel.reserve(KERNEL_LEN);
+        
+        // Fill kernel with normalized audio samples
+        for &value in normalized_samples.iter() {
+            self.kernel.push(value);
+        }
+        
+        // Pad remaining positions with zeros (27 - 21 = 6)
+        while self.kernel.len() < KERNEL_LEN {
+            self.kernel.push(0.0);
+        }
+    }
+
+    /// Update with new audio samples - updates kernel and applies convolution
+    pub fn update_samples(&mut self, samples: &[f32]) {
+        // Update kernel from audio stream
+        self.update_kernel_from_audio(samples);
+        // Apply convolution with the new kernel
         self.apply_convolution();
     }
 
