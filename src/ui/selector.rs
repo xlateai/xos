@@ -1,4 +1,6 @@
 use crate::engine::EngineState;
+use crate::apps::text::geometric::GeometricText;
+use crate::text::fonts;
 
 /// A simple, reusable selector component for choosing between options
 pub struct Selector {
@@ -12,17 +14,36 @@ pub struct Selector {
     animation_progress: f32,
     /// Animation speed (how fast it opens/closes)
     animation_speed: f32,
+    /// Text renderers for each option
+    text_renderers: Vec<GeometricText>,
+    /// Font size for option text
+    font_size: f32,
 }
 
 impl Selector {
     /// Create a new selector with the given options
     pub fn new(options: Vec<String>) -> Self {
+        let font_size = 24.0;
+        
+        // Create a text renderer for each option
+        // Each renderer gets its own font instance (fontdue Font is not Clone)
+        let text_renderers: Vec<GeometricText> = options.iter()
+            .map(|option| {
+                let font = fonts::jetbrains_mono();
+                let mut renderer = GeometricText::new(font, font_size);
+                renderer.set_text(option.clone());
+                renderer
+            })
+            .collect();
+
         Self {
             is_open: false,
             selected: None,
             options,
             animation_progress: 0.0,
             animation_speed: 0.15, // Smooth animation speed
+            text_renderers,
+            font_size,
         }
     }
 
@@ -94,14 +115,20 @@ impl Selector {
         false
     }
 
-    /// Update the selector (handles animation)
-    pub fn update(&mut self) {
+    /// Update the selector (handles animation and text rendering)
+    pub fn update(&mut self, width: f32, height: f32) {
         if self.is_open {
             // Animate opening
             self.animation_progress = (self.animation_progress + self.animation_speed).min(1.0);
         } else {
             // Animate closing
             self.animation_progress = (self.animation_progress - self.animation_speed).max(0.0);
+        }
+
+        // Update text renderers with a wide enough width so text doesn't wrap
+        // Use a large width to ensure single-line rendering
+        for text_renderer in &mut self.text_renderers {
+            text_renderer.tick(10000.0, height); // Large width to prevent wrapping
         }
     }
 
@@ -232,13 +259,16 @@ impl Selector {
             }
         }
 
-        // Draw options (simplified - just draw rectangles for now, text rendering would need font support)
+        // Draw options with text
         let option_start_y = scaled_y + 20;
         let option_width = scaled_width - 40;
         let mouse_x = state.mouse.x as i32;
         let mouse_y = state.mouse.y as i32;
 
-        for (idx, _option) in self.options.iter().enumerate() {
+        // Text color (bright white for visibility)
+        let text_color = (255, 255, 255);
+
+        for (idx, option) in self.options.iter().enumerate() {
             let option_y = option_start_y + (idx as i32 * option_height as i32);
             let option_rect_y = option_y;
             let option_rect_height = option_height as i32 - 4;
@@ -264,6 +294,58 @@ impl Selector {
                             buffer[idx + 1] = ((option_bg.1 as f32 * blend_alpha) + (buffer[idx + 1] as f32 * (1.0 - blend_alpha))) as u8;
                             buffer[idx + 2] = ((option_bg.2 as f32 * blend_alpha) + (buffer[idx + 2] as f32 * (1.0 - blend_alpha))) as u8;
                             buffer[idx + 3] = 0xff;
+                        }
+                    }
+                }
+            }
+
+            // Render text for this option
+            if let Some(text_renderer) = self.text_renderers.get(idx) {
+                // Calculate text position (centered vertically in option, left-aligned with padding)
+                let text_x = (scaled_x + 20 + 10) as f32; // Left padding
+                
+                // Center text vertically in the option box
+                // The renderer's coordinate system: y=0 is top, y=ascent is first baseline
+                // character.y is the top of the character bitmap
+                let option_center_y = option_rect_y as f32 + option_rect_height as f32 / 2.0;
+                // We want the text baseline at the center, so offset by ascent
+                let text_top = option_center_y - text_renderer.ascent;
+
+                // Draw each character
+                for character in &text_renderer.characters {
+                    let px = (text_x + character.x) as i32;
+                    // character.y is relative to y=0 (top of text area in renderer's coords)
+                    // Add text_top to position it in the option box
+                    let py = (text_top + character.y) as i32;
+
+                    // Draw character bitmap (similar to text.rs)
+                    for y in 0..character.metrics.height {
+                        for x in 0..character.metrics.width {
+                            let val = character.bitmap[y * character.metrics.width + x];
+                            if val > 0 {
+                                let sx = px + x as i32;
+                                let sy = py + y as i32;
+
+                                if sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
+                                    let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
+                                    if idx + 3 < buffer.len() {
+                                        // Draw text directly (overwrite background)
+                                        // Apply alpha from both the bitmap value and animation
+                                        let bitmap_alpha = val as f32 / 255.0;
+                                        let final_alpha = (bitmap_alpha * alpha) as f32;
+                                        
+                                        // Blend text color with background
+                                        let bg_r = buffer[idx + 0] as f32;
+                                        let bg_g = buffer[idx + 1] as f32;
+                                        let bg_b = buffer[idx + 2] as f32;
+                                        
+                                        buffer[idx + 0] = ((text_color.0 as f32 * final_alpha) + (bg_r * (1.0 - final_alpha))) as u8;
+                                        buffer[idx + 1] = ((text_color.1 as f32 * final_alpha) + (bg_g * (1.0 - final_alpha))) as u8;
+                                        buffer[idx + 2] = ((text_color.2 as f32 * final_alpha) + (bg_b * (1.0 - final_alpha))) as u8;
+                                        buffer[idx + 3] = 0xff;
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -110,7 +110,7 @@ impl Application for AudiovisApp {
         }
 
         // Update and render the selector
-        self.visual_type_selector.update();
+        self.visual_type_selector.update(state.frame.width as f32, state.frame.height as f32);
         self.visual_type_selector.render(state);
 
         // Log selected option if one is chosen
