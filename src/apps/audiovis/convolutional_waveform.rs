@@ -1,11 +1,11 @@
 use crate::engine::EngineState;
-use crate::tensor::{Array, depthwise_conv2d};
+use crate::tensor::{Array, depthwise_conv2d, same_padding};
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
-const KERNEL_MIN: f32 = -0.75;
+const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
@@ -137,38 +137,66 @@ impl ConvolutionalWaveform {
         chw
     }
 
-    /// Add barely-visible noise to the image to keep it alive
-    fn add_noise(&mut self) {
-        const NOISE_AMOUNT: f32 = 0.01; // Small amount of noise (±1% in normalized range)
+    /// Check if the image has "died" (become too uniform or too low)
+    /// Returns true if the image should be reinitialized
+    fn is_image_dead(&self) -> bool {
+        if self.image.is_empty() {
+            return true;
+        }
+        
+        // Calculate variance to detect if image is too uniform
+        let mean: f32 = self.image.iter().sum::<f32>() / self.image.len() as f32;
+        let variance: f32 = self.image.iter()
+            .map(|&x| (x - mean) * (x - mean))
+            .sum::<f32>() / self.image.len() as f32;
+        
+        // Image is "dead" if variance is very low (too uniform) or mean is very low (too dark)
+        const MIN_VARIANCE: f32 = 0.0001; // Very low variance threshold
+        const MIN_MEAN: f32 = 0.05; // Very low mean threshold
+        
+        variance < MIN_VARIANCE || mean < MIN_MEAN
+    }
+
+    /// Reinitialize the image with random values
+    fn reinitialize_image(&mut self) {
+        let width = self.width as usize;
+        let height = self.height as usize;
+        let total_pixels = width * height;
+        
+        self.image.clear();
+        self.image.reserve(total_pixels * CHANNELS);
         
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
-            let mut rng = rand::rng();
-            for pixel_value in self.image.iter_mut() {
-                // Add small random noise: ±NOISE_AMOUNT
-                let noise = rng.random_range(-NOISE_AMOUNT..=NOISE_AMOUNT);
-                *pixel_value = (*pixel_value + noise).clamp(0.0, 1.0);
+            let mut rng = rand::thread_rng();
+            for _ in 0..total_pixels {
+                self.image.push(rng.gen::<f32>()); // R
+                self.image.push(rng.gen::<f32>()); // G
+                self.image.push(rng.gen::<f32>()); // B
             }
         }
         
         #[cfg(target_arch = "wasm32")]
         {
-            // WASM: use simple pseudo-random
             let mut seed = 12345u32;
-            for pixel_value in self.image.iter_mut() {
+            for _ in 0..total_pixels {
                 seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                // Generate noise in range [-NOISE_AMOUNT, NOISE_AMOUNT]
-                let noise = ((seed % 2000) as f32 / 1000.0 - 1.0) * NOISE_AMOUNT;
-                *pixel_value = (*pixel_value + noise).clamp(0.0, 1.0);
+                self.image.push((seed % 1000) as f32 / 1000.0); // R
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                self.image.push((seed % 1000) as f32 / 1000.0); // G
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                self.image.push((seed % 1000) as f32 / 1000.0); // B
             }
         }
     }
 
     /// Apply convolution using custom tensor library
     fn apply_convolution(&mut self) {
-        // Add barely-visible noise before convolution to keep image alive
-        self.add_noise();
+        // Check if image has died and reinitialize if needed
+        if self.is_image_dead() {
+            self.reinitialize_image();
+        }
         
         let h = self.height as usize;
         let w = self.width as usize;
@@ -181,8 +209,11 @@ impl ConvolutionalWaveform {
         let kernel_chw = self.kernel_to_chw(&self.kernel);
         let kernel_array = Array::new(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE]);
 
-        // Apply depthwise convolution with same padding (padding=1 for 3x3 kernel, stride=1)
-        let output_array = depthwise_conv2d(&image_array, &kernel_array, (1, 1), (1, 1));
+        // Calculate same padding for the kernel size (ensures output size = input size with stride=1)
+        let padding = same_padding(KERNEL_SIZE, KERNEL_SIZE);
+        
+        // Apply depthwise convolution with same padding and stride=1
+        let output_array = depthwise_conv2d(&image_array, &kernel_array, padding, (1, 1));
 
         // Output is [1, C, H, W], but since batch=1, the data is effectively [C, H, W]
         // The data layout is already [C, H, W] (batch dimension is just 1)

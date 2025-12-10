@@ -1,5 +1,39 @@
 use super::array::Array;
 
+/// Calculate "same" padding for a given kernel size
+/// 
+/// "Same" padding ensures that the output size equals the input size when stride = 1.
+/// The formula is: padding = (kernel_size - 1) / 2
+/// 
+/// # Arguments
+/// * `kernel_h` - Kernel height
+/// * `kernel_w` - Kernel width
+/// 
+/// # Returns
+/// Tuple of (pad_h, pad_w) for same padding
+/// 
+/// # Examples
+/// ```
+/// use xos::tensor::conv::same_padding;
+/// 
+/// // For a 3x3 kernel: (3-1)/2 = 1
+/// let (pad_h, pad_w) = same_padding(3, 3);
+/// assert_eq!(pad_h, 1);
+/// assert_eq!(pad_w, 1);
+/// 
+/// // For a 9x9 kernel: (9-1)/2 = 4
+/// let (pad_h, pad_w) = same_padding(9, 9);
+/// assert_eq!(pad_h, 4);
+/// assert_eq!(pad_w, 4);
+/// ```
+pub fn same_padding(kernel_h: usize, kernel_w: usize) -> (usize, usize) {
+    // For "same" padding with stride=1: padding = (kernel_size - 1) / 2
+    // This ensures output_size = input_size
+    let pad_h = (kernel_h - 1) / 2;
+    let pad_w = (kernel_w - 1) / 2;
+    (pad_h, pad_w)
+}
+
 /// Perform 2D convolution between input and kernel
 /// 
 /// # Arguments
