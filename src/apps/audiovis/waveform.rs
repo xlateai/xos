@@ -27,9 +27,28 @@ impl WaveformVisualizer {
 
     /// Render the waveform to the frame buffer
     pub fn tick(&mut self, state: &mut EngineState) {
+        self.tick_with_seed(state, 0.0);
+    }
+
+    /// Render the waveform to the frame buffer with randomization based on seek position
+    pub fn tick_with_seed(&mut self, state: &mut EngineState, seek_position: f32) {
         let buffer = &mut state.frame.buffer;
         let width = state.frame.width as f32;
         let height = state.frame.height as f32;
+
+        // Randomize samples based on seek position (more dramatic changes for seeking)
+        let seed = (seek_position * 1000000.0) as u32;
+        let mut randomized_samples = self.samples.clone();
+        
+        // Use a simple PRNG based on seed
+        let mut rng_state = seed;
+        for sample in &mut randomized_samples {
+            rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+            let random_value = ((rng_state % 2000) as f32 / 1000.0) - 1.0;
+            // More dramatic randomization when seeking (use seek position as primary driver)
+            let seek_factor = 0.7; // More influence from seek position
+            *sample = (*sample * (1.0 - seek_factor) + random_value * seek_factor).max(-1.0).min(1.0);
+        }
 
         // Draw waveform as a simple line graph
         // Center it vertically, use full width
@@ -38,13 +57,13 @@ impl WaveformVisualizer {
         let line_color = (180, 180, 180); // Light gray
 
         // Draw line connecting sample points
-        let step = width / (self.samples.len() as f32 - 1.0);
+        let step = width / (randomized_samples.len() as f32 - 1.0);
         
-        for i in 0..(self.samples.len() - 1) {
+        for i in 0..(randomized_samples.len() - 1) {
             let x0 = (i as f32 * step) as i32;
-            let y0 = (center_y - self.samples[i] * amplitude) as i32;
+            let y0 = (center_y - randomized_samples[i] * amplitude) as i32;
             let x1 = ((i + 1) as f32 * step) as i32;
-            let y1 = (center_y - self.samples[i + 1] * amplitude) as i32;
+            let y1 = (center_y - randomized_samples[i + 1] * amplitude) as i32;
 
             // Draw line between points (simple Bresenham-like)
             self.draw_line(buffer, width as u32, height as u32, x0, y0, x1, y1, line_color);

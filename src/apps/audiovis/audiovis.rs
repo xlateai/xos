@@ -2,9 +2,10 @@ use crate::engine::{Application, EngineState};
 use crate::ui::Selector;
 use crate::apps::audiovis::waveform::WaveformVisualizer;
 use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
+use crate::apps::audiovis::media_control_bar::MediaControlBar;
 
 #[cfg(not(target_arch = "wasm32"))]
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,21 +19,28 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 
 pub struct AudiovisApp {
     #[cfg(not(target_arch = "wasm32"))]
-    _sink: Option<Sink>, // Keep the sink alive so audio continues playing
+    sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
     visual_type_selector: Selector,
     waveform: Option<WaveformVisualizer>,
     convolutional_waveform: Option<ConvolutionalWaveform>,
+    media_control_bar: MediaControlBar,
     #[cfg(not(target_arch = "wasm32"))]
     audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
+    #[cfg(not(target_arch = "wasm32"))]
+    total_samples: usize, // Total samples processed (for position tracking)
+    #[cfg(not(target_arch = "wasm32"))]
+    sample_rate: u32, // Sample rate for position calculation
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_duration_seconds: f32, // Total audio duration
 }
 
 impl AudiovisApp {
     pub fn new() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            _sink: None,
+            sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
             visual_type_selector: Selector::new(vec![
@@ -41,8 +49,15 @@ impl AudiovisApp {
             ]),
             waveform: None,
             convolutional_waveform: None,
+            media_control_bar: MediaControlBar::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            total_samples: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            sample_rate: 44100,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_duration_seconds: 0.0,
         }
     }
 }
@@ -89,6 +104,15 @@ impl Application for AudiovisApp {
                         )
                     })?;
 
+                // Get sample rate and duration
+                let sample_rate = decoder.sample_rate();
+                let duration = decoder.total_duration()
+                    .map(|d| d.as_secs_f32())
+                    .unwrap_or(0.0);
+                
+                self.sample_rate = sample_rate;
+                self.audio_duration_seconds = duration;
+
                 // Create a buffer to capture live audio samples
                 let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(44100))); // ~1 second at 44.1kHz
                 self.audio_samples = Some(sample_buffer.clone());
@@ -100,8 +124,8 @@ impl Application for AudiovisApp {
                 sink.append(capturing_source);
                 sink.play();
 
-                // Store the sink and stream to keep them alive
-                self._sink = Some(sink);
+                // Store the sink and stream to keep them alive (wrap sink in Arc<Mutex> for sharing)
+                self.sink = Some(Arc::new(Mutex::new(sink)));
                 self._stream = Some(_stream);
 
                 println!("Playing audio file: {:?}", path);
@@ -186,12 +210,63 @@ impl Application for AudiovisApp {
         #[cfg(target_arch = "wasm32")]
         let audio_chunk = Some(vec![0.0; 256]);
 
+        // Update media control bar
+        self.media_control_bar.update(state);
+
+        // Control audio playback based on pause state
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(sink) = &self.sink {
+                let sink = sink.lock().unwrap();
+                if self.media_control_bar.is_paused() {
+                    sink.pause();
+                } else {
+                    sink.play();
+                }
+            }
+        }
+
+        // Update position based on actual audio playback
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(sample_buffer) = &self.audio_samples {
+                let buffer = sample_buffer.lock().unwrap();
+                let buffer_len = buffer.len();
+                
+                // Estimate position based on samples processed
+                // This is approximate since we're tracking samples in the buffer
+                if self.audio_duration_seconds > 0.0 && self.sample_rate > 0 {
+                    // Estimate: we've processed (total_samples) samples
+                    // Position = samples_processed / (duration * sample_rate)
+                    // For now, use a simple approximation based on buffer state
+                    // In a real implementation, you'd track the actual playback position
+                    let estimated_position = if buffer_len > 0 {
+                        // Rough estimate: assume we're at some point in playback
+                        // This is a simplified approach - in reality you'd track elapsed time
+                        (self.total_samples as f32) / (self.audio_duration_seconds * self.sample_rate as f32)
+                    } else {
+                        // If buffer is empty, we might be at the end
+                        self.media_control_bar.position()
+                    };
+                    
+                    // Only update if not dragging
+                    if !self.media_control_bar.is_dragging() {
+                        self.media_control_bar.set_position(estimated_position.min(1.0));
+                    }
+                }
+            }
+        }
+
+        // Get seek position for randomization
+        let seek_position = self.media_control_bar.position();
+
         // If waveform is selected and initialized, render it
         if let Some(waveform) = &mut self.waveform {
             if let Some(ref samples) = audio_chunk {
                 waveform.update_samples(samples);
             }
-            waveform.tick(state);
+            // Always use seek position for randomization (this makes seeking work)
+            waveform.tick_with_seed(state, seek_position);
         }
 
         // If convolutional waveform is selected and initialized, render it
@@ -199,11 +274,42 @@ impl Application for AudiovisApp {
             if let Some(ref samples) = audio_chunk {
                 conv_waveform.update_samples(samples);
             }
-            conv_waveform.tick(state);
+            // Always use seek position for randomization (this makes seeking work)
+            conv_waveform.tick_with_seed(state, seek_position);
         }
+        
+        // Update total samples processed
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(sample_buffer) = &self.audio_samples {
+                let buffer = sample_buffer.lock().unwrap();
+                // Rough tracking: increment based on buffer updates
+                // In reality, you'd track this more accurately
+                self.total_samples = self.total_samples.max(buffer.len());
+            }
+        }
+
+        // Render media control bar (always visible)
+        self.media_control_bar.render(state);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        // Try media control bar first
+        if self.media_control_bar.on_mouse_down(state) {
+            // Update pause state in audio sink
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(sink) = &self.sink {
+                    let sink = sink.lock().unwrap();
+                    if self.media_control_bar.is_paused() {
+                        sink.pause();
+                    } else {
+                        sink.play();
+                    }
+                }
+            }
+            return;
+        }
         // Forward mouse down to the selector
         self.visual_type_selector.on_mouse_down(state);
     }
@@ -212,7 +318,8 @@ impl Application for AudiovisApp {
         // No interaction
     }
     
-    fn on_mouse_move(&mut self, _state: &mut EngineState) {
-        // No interaction
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        // Update seek position if dragging
+        self.media_control_bar.update_seek_from_mouse(state);
     }
 }

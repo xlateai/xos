@@ -6,7 +6,7 @@ const KERNEL_SIZE: usize = 3;
 
 // Image resolution - tune these to adjust the visualization size
 const IMAGE_WIDTH: u32 = 128;
-const IMAGE_HEIGHT: u32 = 128;
+const IMAGE_HEIGHT: u32 = 64;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
@@ -24,6 +24,8 @@ pub struct ConvolutionalWaveform {
     kernel: Vec<f32>,
     /// Previous kernel for temporal smoothing
     previous_kernel: Vec<f32>,
+    /// Last seek position used for randomization
+    last_seek_position: f32,
 }
 
 impl ConvolutionalWaveform {
@@ -65,6 +67,7 @@ impl ConvolutionalWaveform {
             height: IMAGE_HEIGHT,
             kernel,
             previous_kernel,
+            last_seek_position: -1.0,
         }
     }
 
@@ -163,6 +166,11 @@ impl ConvolutionalWaveform {
 
     /// Reinitialize the image with random values
     fn reinitialize_image(&mut self) {
+        self.reinitialize_image_with_seed(12345u32);
+    }
+
+    /// Reinitialize the image with random values based on a seed
+    fn reinitialize_image_with_seed(&mut self, seed: u32) {
         let width = self.width as usize;
         let height = self.height as usize;
         let total_pixels = width * height;
@@ -170,28 +178,14 @@ impl ConvolutionalWaveform {
         self.image.clear();
         self.image.reserve(total_pixels * CHANNELS);
         
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rand::Rng;
-            let mut rng = rand::rng();
-            for _ in 0..total_pixels {
-                self.image.push(rng.random::<f32>()); // R
-                self.image.push(rng.random::<f32>()); // G
-                self.image.push(rng.random::<f32>()); // B
-            }
-        }
-        
-        #[cfg(target_arch = "wasm32")]
-        {
-            let mut seed = 12345u32;
-            for _ in 0..total_pixels {
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                self.image.push((seed % 1000) as f32 / 1000.0); // R
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                self.image.push((seed % 1000) as f32 / 1000.0); // G
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                self.image.push((seed % 1000) as f32 / 1000.0); // B
-            }
+        let mut rng_state = seed;
+        for _ in 0..total_pixels {
+            rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+            self.image.push((rng_state % 1000) as f32 / 1000.0); // R
+            rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+            self.image.push((rng_state % 1000) as f32 / 1000.0); // G
+            rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+            self.image.push((rng_state % 1000) as f32 / 1000.0); // B
         }
     }
 
@@ -338,6 +332,20 @@ impl ConvolutionalWaveform {
     /// Render the convolved image to the frame buffer with perfect square pixels
     /// Applies convolution each frame for dynamic visualization
     pub fn tick(&mut self, state: &mut EngineState) {
+        self.tick_with_seed(state, 0.0);
+    }
+
+    /// Render with randomization based on seek position
+    pub fn tick_with_seed(&mut self, state: &mut EngineState, seek_position: f32) {
+        // Reinitialize image if seek position changed significantly
+        let position_delta = (seek_position - self.last_seek_position).abs();
+        if position_delta > 0.001 {
+            // Convert seek position to a seed (0.0 to 1.0 -> 0 to u32::MAX)
+            let seed = (seek_position * u32::MAX as f32) as u32;
+            self.reinitialize_image_with_seed(seed);
+            self.last_seek_position = seek_position;
+        }
+
         // Apply convolution each frame
         self.apply_convolution();
         let buffer = &mut state.frame.buffer;
