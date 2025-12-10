@@ -14,6 +14,10 @@ pub struct MediaControlBar {
     handle_radius: f32,
     /// Last position that triggered a visualization update
     last_update_position: f32,
+    /// Whether we just seeked (to prevent position from being reset)
+    just_seeked: bool,
+    /// Frames since last seek (to keep just_seeked active for multiple frames)
+    frames_since_seek: u32,
 }
 
 impl MediaControlBar {
@@ -22,9 +26,11 @@ impl MediaControlBar {
             is_paused: false,
             position: 0.0,
             is_dragging: false,
-            button_size: 70.0, // Larger button
-            handle_radius: 12.0, // Larger handle
+            button_size: 84.0, // 20% bigger (70 * 1.2)
+            handle_radius: 12.0,
             last_update_position: -1.0,
+            just_seeked: false,
+            frames_since_seek: 0,
         }
     }
 
@@ -43,6 +49,11 @@ impl MediaControlBar {
         self.is_dragging
     }
 
+    /// Check if position updates should be allowed (false if recently seeked or dragging)
+    pub fn allow_position_update(&self) -> bool {
+        !self.is_dragging && !self.just_seeked
+    }
+
     /// Set paused state
     pub fn set_paused(&mut self, paused: bool) {
         self.is_paused = paused;
@@ -50,7 +61,8 @@ impl MediaControlBar {
 
     /// Set position (for external updates from audio)
     pub fn set_position(&mut self, position: f32) {
-        if !self.is_dragging {
+        // Only update if not dragging and not just seeked - this prevents position from being reset during/after seek
+        if !self.is_dragging && !self.just_seeked {
             self.position = position.max(0.0).min(1.0);
         }
     }
@@ -66,11 +78,29 @@ impl MediaControlBar {
 
     /// Update the control bar (handles auto-advance when playing)
     pub fn update(&mut self, state: &mut EngineState) {
+        // Track frames since seek - keep just_seeked active for several frames
+        if self.just_seeked {
+            self.frames_since_seek += 1;
+            // Keep just_seeked true for 10 frames (about 1/6 second at 60fps)
+            // This prevents position from being reset immediately after seeking
+            if self.frames_since_seek > 10 {
+                self.just_seeked = false;
+                self.frames_since_seek = 0;
+            }
+        }
+        
         // Handle dragging
-        if self.is_dragging && state.mouse.is_left_clicking {
-            self.update_seek_position(state);
-        } else if !state.mouse.is_left_clicking {
-            self.is_dragging = false;
+        if self.is_dragging {
+            if state.mouse.is_left_clicking {
+                // Continue dragging
+                self.update_seek_position(state);
+            } else {
+                // Mouse released, stop dragging but keep position
+                self.is_dragging = false;
+                // Set just_seeked to prevent position from being reset immediately
+                self.just_seeked = true;
+                self.frames_since_seek = 0; // Reset counter
+            }
         }
     }
 
@@ -120,11 +150,13 @@ impl MediaControlBar {
         }
 
         // Check seek bar area (with tolerance)
-        let seek_tolerance = 25.0; // Click tolerance around the line
+        let seek_tolerance = 30.0; // Click tolerance around the line and handle
         if (mouse_y - seek_y as f32).abs() < seek_tolerance && 
            mouse_x >= seek_x_start as f32 && mouse_x <= seek_x_end as f32 {
-            // Start dragging
+            // Start dragging immediately and update position
             self.is_dragging = true;
+            self.just_seeked = true; // Mark that we just seeked
+            self.frames_since_seek = 0; // Reset counter
             self.update_seek_position(state);
             return true;
         }
@@ -143,7 +175,10 @@ impl MediaControlBar {
 
         // Calculate position based on mouse X
         let relative_x = (mouse_x - seek_x_start as f32).max(0.0).min(seek_width);
-        self.position = (relative_x / seek_width).max(0.0).min(1.0);
+        let new_position = (relative_x / seek_width).max(0.0).min(1.0);
+        
+        // Always update position when seeking (don't check is_dragging here)
+        self.position = new_position;
         // Force visualization update on seek
         self.last_update_position = -1.0;
     }
@@ -158,26 +193,30 @@ impl MediaControlBar {
             self.calculate_layout(width as f32, height as f32);
         let button_radius = (self.button_size / 2.0) as i32;
 
-        // Draw play/pause button (above seek bar)
-        let button_bg = (80, 80, 80); // Dark gray circle
-        self.draw_circle(buffer, width, height, button_center_x, button_center_y, button_radius, button_bg);
+        // Draw play/pause button with crystal UI style (smooth gradient circle)
+        self.draw_crystal_circle(
+            buffer, width, height, 
+            button_center_x, button_center_y, 
+            button_radius,
+            (100, 100, 110), // Base color (slightly blue-gray)
+            (60, 60, 70),    // Shadow color
+        );
 
-        // Draw play or pause icon
+        // Draw play or pause icon - smooth and clean
         let icon_color = (255, 255, 255);
         if self.is_paused {
-            // Draw play triangle (pointing right)
-            let size = 22; // Larger icon
+            // Draw play triangle (pointing right) - smooth
+            let size = 26;
             let tx = button_center_x;
             let ty = button_center_y;
             
-            // Draw a right-pointing triangle
+            // Draw smooth triangle
             for dy in -size..=size {
                 for dx in -size..=size {
                     let px = tx + dx;
                     let py = ty + dy;
                     
-                    // Triangle bounds: x from -size/2 to size/2, y from -size/2 to size/2
-                    // For each y, x ranges from -size/2 to size/2 - abs(y)
+                    // Triangle bounds
                     let in_triangle = dy >= -size / 2 && dy <= size / 2 &&
                                      dx >= -size / 2 && dx <= (size / 2 - dy.abs());
                     
@@ -193,10 +232,10 @@ impl MediaControlBar {
                 }
             }
         } else {
-            // Draw pause icon (two vertical bars)
-            let bar_width = 6;
-            let bar_height = 24;
-            let bar_spacing = 10;
+            // Draw pause icon (two vertical bars) - smooth
+            let bar_width = 7;
+            let bar_height = 29;
+            let bar_spacing = 12;
             
             // Left bar
             let left_bar_x = button_center_x - bar_spacing / 2 - bar_width;
@@ -231,11 +270,11 @@ impl MediaControlBar {
             }
         }
 
-        // Draw seek bar (plain white line, no background)
+        // Draw seek bar (crystal style - smooth white line with subtle glow)
         let seek_width = seek_x_end - seek_x_start;
-        let line_height = 3; // Slightly thicker line
+        let line_height = 6;
 
-        // Draw white line
+        // Draw white line with subtle glow effect
         let line_color = (255, 255, 255);
         for py in (seek_y - line_height / 2)..(seek_y + line_height / 2 + 1) {
             for px in seek_x_start..seek_x_end {
@@ -251,20 +290,23 @@ impl MediaControlBar {
             }
         }
 
-        // Draw seek handle (silver circle, raised up)
+        // Draw seek handle (crystal style - smooth silver circle with gradient)
         let handle_x = seek_x_start + (seek_width as f32 * self.position) as i32;
-        let handle_y = seek_y - 6; // Raised up 6 pixels
-        let handle_color = (192, 192, 192); // Silver color
+        let handle_y = seek_y;
         let handle_radius_i = self.handle_radius as i32;
         
-        // Draw handle with slight shadow/outline for raised effect
-        let outline_color = (150, 150, 150);
-        self.draw_circle(buffer, width, height, handle_x, handle_y, handle_radius_i + 1, outline_color);
-        self.draw_circle(buffer, width, height, handle_x, handle_y, handle_radius_i, handle_color);
+        // Draw crystal-style handle with smooth anti-aliased circle
+        self.draw_crystal_circle(
+            buffer, width, height,
+            handle_x, handle_y,
+            handle_radius_i,
+            (220, 220, 230), // Light silver
+            (180, 180, 190), // Darker silver for shadow
+        );
     }
 
-    /// Draw a filled circle
-    fn draw_circle(
+    /// Draw a smooth anti-aliased circle with crystal UI style (gradient and shadow)
+    fn draw_crystal_circle(
         &self,
         buffer: &mut [u8],
         width: u32,
@@ -272,22 +314,88 @@ impl MediaControlBar {
         center_x: i32,
         center_y: i32,
         radius: i32,
-        color: (u8, u8, u8),
+        base_color: (u8, u8, u8),
+        shadow_color: (u8, u8, u8),
     ) {
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq <= radius * radius {
-                    let px = center_x + dx;
-                    let py = center_y + dy;
-                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                        if idx + 3 < buffer.len() {
-                            buffer[idx + 0] = color.0;
-                            buffer[idx + 1] = color.1;
-                            buffer[idx + 2] = color.2;
-                            buffer[idx + 3] = 0xff;
-                        }
+        if radius <= 0 {
+            return;
+        }
+
+        let radius_f = radius as f32;
+        let radius_sq = radius_f * radius_f;
+
+        // Draw with anti-aliasing for smooth edges
+        for dy in -radius - 2..=radius + 2 {
+            for dx in -radius - 2..=radius + 2 {
+                let px = center_x + dx;
+                let py = center_y + dy;
+                
+                if px < 0 || py < 0 || (px as u32) >= width || (py as u32) >= height {
+                    continue;
+                }
+
+                let dist_sq = (dx * dx + dy * dy) as f32;
+                let dist = dist_sq.sqrt();
+                
+                if dist <= radius_f {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 >= buffer.len() {
+                        continue;
+                    }
+
+                    // Calculate gradient based on distance from center
+                    let normalized_dist = dist / radius_f;
+                    
+                    // Create gradient: lighter at top-left, darker at bottom-right
+                    let gradient_factor = 1.0 - (normalized_dist * 0.3);
+                    
+                    // Add subtle shadow effect at bottom
+                    let shadow_factor = if dy > 0 {
+                        1.0 - (dy as f32 / radius_f) * 0.2
+                    } else {
+                        1.0
+                    };
+
+                    // Blend base and shadow colors
+                    let r = (base_color.0 as f32 * gradient_factor * shadow_factor + 
+                            shadow_color.0 as f32 * (1.0 - gradient_factor * shadow_factor)) as u8;
+                    let g = (base_color.1 as f32 * gradient_factor * shadow_factor + 
+                            shadow_color.1 as f32 * (1.0 - gradient_factor * shadow_factor)) as u8;
+                    let b = (base_color.2 as f32 * gradient_factor * shadow_factor + 
+                            shadow_color.2 as f32 * (1.0 - gradient_factor * shadow_factor)) as u8;
+
+                    // Anti-aliasing at edges
+                    let edge_dist = radius_f - dist;
+                    let alpha = if edge_dist < 1.0 {
+                        edge_dist.max(0.0).min(1.0)
+                    } else {
+                        1.0
+                    };
+
+                    // Blend with background
+                    let bg_r = buffer[idx + 0] as f32;
+                    let bg_g = buffer[idx + 1] as f32;
+                    let bg_b = buffer[idx + 2] as f32;
+
+                    buffer[idx + 0] = ((r as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
+                    buffer[idx + 1] = ((g as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
+                    buffer[idx + 2] = ((b as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
+                    buffer[idx + 3] = 0xff;
+                } else if dist < radius_f + 1.0 {
+                    // Anti-aliasing for edge pixels
+                    let edge_dist = (radius_f + 1.0) - dist;
+                    let alpha = edge_dist.max(0.0).min(1.0);
+
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        let bg_r = buffer[idx + 0] as f32;
+                        let bg_g = buffer[idx + 1] as f32;
+                        let bg_b = buffer[idx + 2] as f32;
+
+                        buffer[idx + 0] = ((base_color.0 as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
+                        buffer[idx + 1] = ((base_color.1 as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
+                        buffer[idx + 2] = ((base_color.2 as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
+                        buffer[idx + 3] = 0xff;
                     }
                 }
             }

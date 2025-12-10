@@ -249,8 +249,9 @@ impl Application for AudiovisApp {
                         self.media_control_bar.position()
                     };
                     
-                    // Only update if not dragging
-                    if !self.media_control_bar.is_dragging() {
+                    // Only auto-update position when playing and position updates are allowed
+                    // This prevents position from snapping back after user seeks
+                    if !self.media_control_bar.is_paused() && self.media_control_bar.allow_position_update() {
                         self.media_control_bar.set_position(estimated_position.min(1.0));
                     }
                 }
