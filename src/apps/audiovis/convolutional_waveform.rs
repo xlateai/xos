@@ -1,5 +1,5 @@
 use crate::engine::EngineState;
-use crate::tensor::{Array, Device, ConvParams, depthwise_conv2d};
+use crate::tensor::{Array, Device, ConvParams, depthwise_conv2d, conv2d};
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
@@ -259,6 +259,7 @@ impl ConvolutionalWaveform {
 
         // Perform depthwise convolution - automatically routes to correct backend based on device
         depthwise_conv2d(&input, &kernel, &mut output, params);
+        // conv2d(&input, &kernel, &mut output, params);
 
         // Extract output data (device-aware arrays handle the data access)
         // For Metal arrays, we need to transfer to CPU to read the data
