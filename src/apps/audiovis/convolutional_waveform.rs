@@ -5,8 +5,8 @@ const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
 // Image resolution - tune these to adjust the visualization size
-const IMAGE_WIDTH: u32 = 1000;
-const IMAGE_HEIGHT: u32 = 500;
+const IMAGE_WIDTH: u32 = 512;
+const IMAGE_HEIGHT: u32 = 256;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
