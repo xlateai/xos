@@ -1,11 +1,48 @@
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use metal;
 
-mod device;
-mod storage;
+/// Device where array data resides
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Device {
+    /// CPU memory
+    Cpu,
+    /// Metal GPU (macOS/iOS only)
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    Metal,
+}
 
-pub use device::Device;
-use storage::Storage;
+impl Device {
+    /// Get the default device (const function for use in const contexts)
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub const fn default() -> Self {
+        Device::Metal  // Default to Metal on Apple platforms
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub const fn default() -> Self {
+        Device::Cpu  // Default to CPU on other platforms
+    }
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Self::default()
+    }
+}
+
+/// Internal storage for array data - can be CPU or Metal GPU memory
+#[derive(Debug)]
+pub(crate) enum Storage<T> {
+    /// CPU memory storage
+    Cpu(Vec<T>),
+    /// Metal GPU buffer storage (macOS/iOS only)
+    /// Stores the buffer and the number of elements (for length calculations)
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    Metal {
+        buffer: metal::Buffer,
+        len: usize,
+    },
+}
 
 /// A typed array of numbers with a shape and device
 #[derive(Debug)]
