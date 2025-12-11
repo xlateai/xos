@@ -32,14 +32,26 @@ pub fn depthwise_conv2d(
     params: ConvParams,
 ) {
     // Use the input's device to determine backend
-    let backend = get_backend(input.device());
-    
-    // Extract data slices
-    let input_data = input.data();
-    let kernel_data = kernel.data();
-    let output_data = output.data_mut();
-    
-    backend.depthwise_conv2d(input_data, kernel_data, output_data, params);
+    match input.device() {
+        Device::Cpu => {
+            let backend = get_backend(Device::Cpu);
+            let input_data = input.data();
+            let kernel_data = kernel.data();
+            let output_data = output.data_mut();
+            backend.depthwise_conv2d(input_data, kernel_data, output_data, params);
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Device::Metal => {
+            // Metal arrays - use pre-allocated buffers (zero-copy)
+            // Assume all arrays are Metal and have valid buffers
+            let input_buf = input.metal_buffer();
+            let kernel_buf = kernel.metal_buffer();
+            let output_buf = output.metal_buffer();
+            
+            // Call Metal backend directly with buffers
+            METAL_BACKEND.depthwise_conv2d_with_buffers(input_buf, kernel_buf, output_buf, params);
+        }
+    }
 }
 
 /// Perform standard convolution, automatically routing to the correct backend based on input device
@@ -50,12 +62,24 @@ pub fn conv2d(
     params: ConvParams,
 ) {
     // Use the input's device to determine backend
-    let backend = get_backend(input.device());
-    
-    // Extract data slices
-    let input_data = input.data();
-    let kernel_data = kernel.data();
-    let output_data = output.data_mut();
-    
-    backend.conv2d(input_data, kernel_data, output_data, params);
+    match input.device() {
+        Device::Cpu => {
+            let backend = get_backend(Device::Cpu);
+            let input_data = input.data();
+            let kernel_data = kernel.data();
+            let output_data = output.data_mut();
+            backend.conv2d(input_data, kernel_data, output_data, params);
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        Device::Metal => {
+            // Metal arrays - use pre-allocated buffers (zero-copy)
+            // Assume all arrays are Metal and have valid buffers
+            let input_buf = input.metal_buffer();
+            let kernel_buf = kernel.metal_buffer();
+            let output_buf = output.metal_buffer();
+            
+            // Call Metal backend directly with buffers
+            METAL_BACKEND.conv2d_with_buffers(input_buf, kernel_buf, output_buf, params);
+        }
+    }
 }

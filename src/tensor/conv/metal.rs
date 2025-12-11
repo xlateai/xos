@@ -91,6 +91,70 @@ impl MetalBackend {
         })
     }
 
+    /// Run kernel with pre-allocated Metal buffers (zero-copy, assumes data is already on device)
+    fn run_kernel_with_buffers(
+        &self,
+        pipeline: &ComputePipelineState,
+        input_buf: &Buffer,
+        kernel_buf: &Buffer,
+        output_buf: &Buffer,
+        params: ConvParams,
+    ) {
+        let mparams: MetalConvParams = params.into();
+
+        autoreleasepool(|| {
+            let params_len_bytes = (std::mem::size_of::<MetalConvParams>()) as u64;
+
+            let params_buf = self.device.new_buffer_with_data(
+                &mparams as *const _ as *const _,
+                params_len_bytes,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            let command_buffer = self.queue.new_command_buffer();
+            let encoder = command_buffer.new_compute_command_encoder();
+
+            encoder.set_compute_pipeline_state(pipeline);
+            encoder.set_buffer(0, Some(input_buf), 0);
+            encoder.set_buffer(1, Some(kernel_buf), 0);
+            encoder.set_buffer(2, Some(output_buf), 0);
+            encoder.set_buffer(3, Some(&params_buf), 0);
+
+            // One thread per output element (b, oc/c, oy, ox).
+            let out_w = mparams.out_w as u64;
+            let out_h = mparams.out_h as u64;
+            let depth = (mparams.batch * mparams.out_channels) as u64;
+
+            // Use optimal threadgroup size for GPU utilization
+            // Metal recommends threadgroup sizes that are multiples of the SIMD width (typically 32)
+            // For 2D work, 16x16 = 256 threads is a good default
+            // This is MUCH better than the previous 1x1x1 which was severely underutilizing the GPU
+            let threadgroup_width = 16u64;
+            let threadgroup_height = 16u64;
+            
+            let threads_per_threadgroup = MTLSize {
+                width: threadgroup_width,
+                height: threadgroup_height,
+                depth: 1,
+            };
+
+            // Calculate grid size in threadgroups (round up to cover all threads)
+            let threadgroups_per_grid = MTLSize {
+                width: (out_w + threadgroup_width - 1) / threadgroup_width,
+                height: (out_h + threadgroup_height - 1) / threadgroup_height,
+                depth: depth,
+            };
+
+            encoder.dispatch_thread_groups(threadgroups_per_grid, threads_per_threadgroup);
+            encoder.end_encoding();
+
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+        });
+    }
+
+    /// Run kernel with CPU slices (creates buffers - used for CPU arrays or fallback)
+    /// This should NOT be used for Metal arrays - use run_kernel_with_buffers instead
     fn run_kernel(
         &self,
         pipeline: &ComputePipelineState,
@@ -111,8 +175,7 @@ impl MetalBackend {
             let params_len_bytes =
                 (std::mem::size_of::<MetalConvParams>()) as u64;
 
-            // For now, create buffers each time - the main optimization is threadgroup size
-            // Buffer reuse can be added later if needed
+            // Create buffers from CPU data (this is a copy - only used for CPU arrays)
             let input_buf = self.device.new_buffer_with_data(
                 input.as_ptr() as *const _,
                 input_len_bytes,
@@ -184,6 +247,28 @@ impl MetalBackend {
                 );
             }
         });
+    }
+    
+    /// Conv2d with pre-allocated Metal buffers (zero-copy)
+    pub fn conv2d_with_buffers(
+        &self,
+        input_buf: &Buffer,
+        kernel_buf: &Buffer,
+        output_buf: &Buffer,
+        params: ConvParams,
+    ) {
+        self.run_kernel_with_buffers(&self.conv_pipeline, input_buf, kernel_buf, output_buf, params);
+    }
+    
+    /// Depthwise conv2d with pre-allocated Metal buffers (zero-copy)
+    pub fn depthwise_conv2d_with_buffers(
+        &self,
+        input_buf: &Buffer,
+        kernel_buf: &Buffer,
+        output_buf: &Buffer,
+        params: ConvParams,
+    ) {
+        self.run_kernel_with_buffers(&self.depthwise_pipeline, input_buf, kernel_buf, output_buf, params);
     }
 }
 
