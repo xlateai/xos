@@ -70,13 +70,13 @@ impl MetalBackend {
                 .get_function("depthwise_conv2d_kernel", None)
                 .expect("Failed to get depthwise_conv2d_kernel");
 
-            let mut conv_descriptor = ComputePipelineDescriptor::new();
+            let conv_descriptor = ComputePipelineDescriptor::new();
             conv_descriptor.set_compute_function(Some(&conv_fn));
             let conv_pipeline = device
                 .new_compute_pipeline_state(&conv_descriptor)
                 .expect("Failed to create conv2d pipeline");
 
-            let mut depthwise_descriptor = ComputePipelineDescriptor::new();
+            let depthwise_descriptor = ComputePipelineDescriptor::new();
             depthwise_descriptor.set_compute_function(Some(&depthwise_fn));
             let depthwise_pipeline = device
                 .new_compute_pipeline_state(&depthwise_descriptor)
@@ -223,11 +223,11 @@ struct ConvParams {
 
 // Standard conv2d kernel (NCHW layout)
 // input:  [batch, in_channels, in_h, in_w]
-// kernel: [out_channels, in_channels, kernel_h, kernel_w]
+// weights: [out_channels, in_channels, kernel_h, kernel_w]
 // output: [batch, out_channels, out_h, out_w]
 kernel void conv2d_kernel(
     const device float* input   [[ buffer(0) ]],
-    const device float* kernel  [[ buffer(1) ]],
+    const device float* weights [[ buffer(1) ]],
     device float* output        [[ buffer(2) ]],
     constant ConvParams& p      [[ buffer(3) ]],
     uint3 gid                   [[ thread_position_in_grid ]]
@@ -269,10 +269,10 @@ kernel void conv2d_kernel(
                 uint input_idx =
                     ((b * p.in_channels + ic) * p.in_h + actual_iy) * p.in_w + actual_ix;
 
-                uint kernel_idx =
+                uint weights_idx =
                     ((oc * p.in_channels + ic) * p.kernel_h + ky) * p.kernel_w + kx;
 
-                sum += input[input_idx] * kernel[kernel_idx];
+                sum += input[input_idx] * weights[weights_idx];
             }
         }
     }
@@ -285,11 +285,11 @@ kernel void conv2d_kernel(
 
 // Depthwise conv2d (channel-wise) kernel (NCHW)
 // input:  [batch, channels, in_h, in_w]
-// kernel: [channels, kernel_h, kernel_w]
+// weights: [channels, kernel_h, kernel_w]
 // output: [batch, channels, out_h, out_w]
 kernel void depthwise_conv2d_kernel(
     const device float* input   [[ buffer(0) ]],
-    const device float* kernel  [[ buffer(1) ]],
+    const device float* weights [[ buffer(1) ]],
     device float* output        [[ buffer(2) ]],
     constant ConvParams& p      [[ buffer(3) ]],
     uint3 gid                   [[ thread_position_in_grid ]]
@@ -330,10 +330,10 @@ kernel void depthwise_conv2d_kernel(
             uint input_idx =
                 ((b * channels + c) * p.in_h + actual_iy) * p.in_w + actual_ix;
 
-            uint kernel_idx =
+            uint weights_idx =
                 (c * p.kernel_h + ky) * p.kernel_w + kx;
 
-            sum += input[input_idx] * kernel[kernel_idx];
+            sum += input[input_idx] * weights[weights_idx];
         }
     }
 

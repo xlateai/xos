@@ -6,15 +6,15 @@ const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
 // Image resolution - tune these to adjust the visualization size
-const IMAGE_WIDTH: u32 = 128;
-const IMAGE_HEIGHT: u32 = 64;
+const IMAGE_WIDTH: u32 = 512;
+const IMAGE_HEIGHT: u32 = 256;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
 
 // Steps per kernel update - only recalculate kernel every kth step
-const STEPS_PER_KERNEL: u32 = 10;
+const STEPS_PER_KERNEL: u32 = 1;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
