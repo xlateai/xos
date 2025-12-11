@@ -27,6 +27,8 @@ enum Commands {
         #[command(subcommand)]
         app: AppCommands,
     },
+    /// Build xos
+    Build,
 }
 
 fn prompt_rebuild() -> bool {
@@ -39,6 +41,23 @@ fn prompt_rebuild() -> bool {
     
     // Default to yes if empty, otherwise check for 'n' or 'no'
     input.is_empty() || (!input.starts_with('n'))
+}
+
+fn build() {
+    println!("🔨 Building xos...");
+    
+    let mut cargo_cmd = Command::new("cargo");
+    cargo_cmd.args(&["install", "--path", "."]);
+    cargo_cmd.stdout(Stdio::inherit());
+    cargo_cmd.stderr(Stdio::inherit());
+    
+    let status = cargo_cmd.status().expect("Failed to run cargo install");
+    if !status.success() {
+        eprintln!("❌ Build failed. Exiting.");
+        std::process::exit(1);
+    }
+    
+    println!("✅ Build complete.");
 }
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
@@ -82,6 +101,12 @@ fn main() {
     // Parse CLI to check for -y/-n flags
     let cli = Cli::parse();
     
+    // Handle Build command separately - skip rebuild prompt since user explicitly wants to build
+    if let Some(Commands::Build) = &cli.command {
+        build();
+        return;
+    }
+    
     // Only prompt if there's actually a command to run and no flags were provided
     if original_args.len() > 1 && !cli.yes && !cli.no {
         if prompt_rebuild() {
@@ -98,6 +123,11 @@ fn main() {
     match cli.command {
         Some(Commands::App { app }) => {
             run_app_command(app);
+        }
+        Some(Commands::Build) => {
+            // This should never be reached due to early return above,
+            // but Rust requires exhaustive matching
+            build();
         }
         None => {
             eprintln!("❗ No command provided.\n");
