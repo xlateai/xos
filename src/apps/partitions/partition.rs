@@ -79,20 +79,31 @@ impl Partition {
         let bottom = self.bottom * h;
         let near = 8.0;
 
-        let near_left = (mx - left).abs() <= near;
-        let near_right = (mx - right).abs() <= near;
-        let near_top = (my - top).abs() <= near;
-        let near_bottom = (my - bottom).abs() <= near;
+        // Check if mouse is within the bounds of the partition (with some tolerance)
+        let within_horizontal = mx >= (left - near) && mx <= (right + near);
+        let within_vertical = my >= (top - near) && my <= (bottom + near);
+        
+        // Check proximity to edges, but only if mouse is within the partition bounds
+        let near_left = (mx - left).abs() <= near && my >= (top - near) && my <= (bottom + near);
+        let near_right = (mx - right).abs() <= near && my >= (top - near) && my <= (bottom + near);
+        let near_top = (my - top).abs() <= near && mx >= (left - near) && mx <= (right + near);
+        let near_bottom = (my - bottom).abs() <= near && mx >= (left - near) && mx <= (right + near);
 
-        match (near_left, near_right, near_top, near_bottom) {
-            (true, false, true, false) => DragRegion::TopLeft,
-            (false, true, true, false) => DragRegion::TopRight,
-            (true, false, false, true) => DragRegion::BottomLeft,
-            (false, true, false, true) => DragRegion::BottomRight,
-            (true, false, false, false) => DragRegion::Left,
-            (false, true, false, false) => DragRegion::Right,
-            (false, false, true, false) => DragRegion::Top,
-            (false, false, false, true) => DragRegion::Bottom,
+        // Check corners (must be near both edges)
+        let near_top_left = (mx - left).abs() <= near && (my - top).abs() <= near;
+        let near_top_right = (mx - right).abs() <= near && (my - top).abs() <= near;
+        let near_bottom_left = (mx - left).abs() <= near && (my - bottom).abs() <= near;
+        let near_bottom_right = (mx - right).abs() <= near && (my - bottom).abs() <= near;
+
+        match (near_top_left, near_top_right, near_bottom_left, near_bottom_right, near_left, near_right, near_top, near_bottom) {
+            (true, false, false, false, _, _, _, _) => DragRegion::TopLeft,
+            (false, true, false, false, _, _, _, _) => DragRegion::TopRight,
+            (false, false, true, false, _, _, _, _) => DragRegion::BottomLeft,
+            (false, false, false, true, _, _, _, _) => DragRegion::BottomRight,
+            (false, false, false, false, true, false, false, false) => DragRegion::Left,
+            (false, false, false, false, false, true, false, false) => DragRegion::Right,
+            (false, false, false, false, false, false, true, false) => DragRegion::Top,
+            (false, false, false, false, false, false, false, true) => DragRegion::Bottom,
             _ if mx > left && mx < right && my > top && my < bottom => DragRegion::Center,
             _ => DragRegion::None,
         }
