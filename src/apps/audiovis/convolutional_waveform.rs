@@ -13,10 +13,7 @@ const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
 
 // Steps per kernel update - only recalculate kernel every kth step
-const STEPS_PER_KERNEL: u32 = 5;
-
-// Enable kernel blending - if true, interpolate between current and next kernel over steps
-const KERNEL_BLENDING: bool = true;
+const STEPS_PER_KERNEL: u32 = 3;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -30,10 +27,6 @@ pub struct ConvolutionalWaveform {
     kernel: Vec<f32>,
     /// Previous kernel for temporal smoothing
     previous_kernel: Vec<f32>,
-    /// Base kernel at start of blending cycle (for interpolation)
-    base_kernel: Vec<f32>,
-    /// Next kernel to blend towards (for interpolation)
-    next_kernel: Vec<f32>,
     /// Last seek position used for randomization
     last_seek_position: f32,
     /// Step counter for kernel update throttling
@@ -73,17 +66,12 @@ impl ConvolutionalWaveform {
         let kernel = Self::generate_random_kernel();
         let previous_kernel = kernel.clone(); // Initialize previous kernel to same as current
 
-        let base_kernel = kernel.clone(); // Initialize base_kernel to same as current
-        let next_kernel = kernel.clone(); // Initialize next_kernel to same as current
-
         Self {
             image,
             width: IMAGE_WIDTH,
             height: IMAGE_HEIGHT,
             kernel,
             previous_kernel,
-            base_kernel,
-            next_kernel,
             last_seek_position: -1.0,
             step_counter: 0,
         }
@@ -362,48 +350,7 @@ impl ConvolutionalWaveform {
         
         // Only update kernel every kth step (where k = STEPS_PER_KERNEL)
         if self.step_counter % STEPS_PER_KERNEL == 0 {
-            if KERNEL_BLENDING {
-                // Calculate new next_kernel from audio
-                let new_next_kernel = self.calculate_kernel_from_audio(samples);
-                const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS;
-                
-                // Ensure kernels are the right size
-                if self.base_kernel.len() != KERNEL_LEN {
-                    self.base_kernel = self.kernel.clone();
-                }
-                if self.next_kernel.len() != KERNEL_LEN {
-                    self.next_kernel = self.kernel.clone();
-                }
-                
-                // Update previous_kernel for temporal smoothing
-                self.previous_kernel = self.kernel.clone();
-                
-                // Start new blending cycle:
-                // base_kernel = current next_kernel (the target we just reached)
-                // next_kernel = new calculated kernel (new target to blend towards)
-                self.base_kernel = self.next_kernel.clone();
-                self.next_kernel = new_next_kernel;
-            } else {
-                // Non-blending mode: update kernel directly
-                self.update_kernel_from_audio(samples);
-            }
-        }
-        
-        // If blending is enabled, interpolate between base and next kernel
-        if KERNEL_BLENDING {
-            let step_in_cycle = self.step_counter % STEPS_PER_KERNEL;
-            let blend_factor = step_in_cycle as f32 / STEPS_PER_KERNEL as f32;
-            
-            // Interpolate: kernel = base * (1 - t) + next * t
-            // At step 0: blend_factor = 0, so 100% base, 0% next
-            // At step 4: blend_factor = 0.8, so 20% base, 80% next
-            // At step 5 (becomes 0): we update base = next, so we're at 100% base again
-            const KERNEL_LEN: usize = KERNEL_SIZE * KERNEL_SIZE * CHANNELS;
-            for i in 0..KERNEL_LEN {
-                if i < self.base_kernel.len() && i < self.next_kernel.len() {
-                    self.kernel[i] = self.base_kernel[i] * (1.0 - blend_factor) + self.next_kernel[i] * blend_factor;
-                }
-            }
+            self.update_kernel_from_audio(samples);
         }
         
         // Always apply convolution with the current kernel
