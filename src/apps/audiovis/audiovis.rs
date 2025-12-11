@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
+const BUFFER_SIZE: usize = 512; // Number of audio samples to process per frame
 
 pub struct AudiovisApp {
     #[cfg(not(target_arch = "wasm32"))]
@@ -277,23 +278,23 @@ impl Application for AudiovisApp {
                 let buffer_len = buffer.len();
                 
                 if buffer_len > 0 {
-                    // Get the most recent 256 samples
-                    let start = buffer_len.saturating_sub(256);
+                    // Get the most recent BUFFER_SIZE samples
+                    let start = buffer_len.saturating_sub(BUFFER_SIZE);
                     let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
-                    let mut chunk = vec![0.0; 256];
-                    let count = samples.len().min(256);
+                    let mut chunk = vec![0.0; BUFFER_SIZE];
+                    let count = samples.len().min(BUFFER_SIZE);
                     chunk[..count].copy_from_slice(&samples[..count]);
                     Some(chunk)
                 } else {
-                    Some(vec![0.0; 256])
+                    Some(vec![0.0; BUFFER_SIZE])
                 }
             } else {
-                Some(vec![0.0; 256])
+                Some(vec![0.0; BUFFER_SIZE])
             }
         };
 
         #[cfg(target_arch = "wasm32")]
-        let audio_chunk = Some(vec![0.0; 256]);
+        let audio_chunk = Some(vec![0.0; BUFFER_SIZE]);
 
         // Update media control bar
         self.media_control_bar.update(state);
