@@ -1,5 +1,6 @@
 use crate::engine::EngineState;
-use crate::tensor::{Array, depthwise_conv2d, same_padding};
+use crate::tensor::conv::{ConvParams, ConvBackend};
+use crate::tensor::conv::metal::MetalBackend;
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
@@ -13,7 +14,7 @@ const KERNEL_MIN: f32 = -1.0;
 const KERNEL_MAX: f32 = 1.0;
 
 // Steps per kernel update - only recalculate kernel every kth step
-const STEPS_PER_KERNEL: u32 = 3;
+const STEPS_PER_KERNEL: u32 = 10;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -31,6 +32,8 @@ pub struct ConvolutionalWaveform {
     last_seek_position: f32,
     /// Step counter for kernel update throttling
     step_counter: u32,
+    /// Metal backend for convolution
+    backend: MetalBackend,
 }
 
 impl ConvolutionalWaveform {
@@ -66,6 +69,9 @@ impl ConvolutionalWaveform {
         let kernel = Self::generate_random_kernel();
         let previous_kernel = kernel.clone(); // Initialize previous kernel to same as current
 
+        // Initialize Metal backend
+        let backend = MetalBackend::new();
+
         Self {
             image,
             width: IMAGE_WIDTH,
@@ -74,6 +80,7 @@ impl ConvolutionalWaveform {
             previous_kernel,
             last_seek_position: -1.0,
             step_counter: 0,
+            backend,
         }
     }
 
@@ -195,41 +202,62 @@ impl ConvolutionalWaveform {
         }
     }
 
-    /// Apply convolution using custom tensor library
+    /// Apply convolution using Metal backend
     fn apply_convolution(&mut self) {
         // Check if image has died and reinitialize if needed
         if self.is_image_dead() {
             self.reinitialize_image();
         }
         
-        let h = self.height as usize;
-        let w = self.width as usize;
+        let h = self.height as u32;
+        let w = self.width as u32;
 
-        // Convert image from [H, W, C] to [C, H, W]
+        // Convert image from [H, W, C] to [C, H, W] (NCHW format: [batch, channels, height, width])
         let image_chw = self.image_to_chw(&self.image);
-        let image_array = Array::new(image_chw, vec![CHANNELS, h, w]);
+        // Input format: [batch=1, channels=3, height, width]
+        let input = image_chw;
 
         // Convert kernel from [H, W, C] to [C, H, W] for depthwise convolution
+        // Depthwise kernel format: [channels, kernel_h, kernel_w]
         let kernel_chw = self.kernel_to_chw(&self.kernel);
-        let kernel_array = Array::new(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE]);
+        let kernel = kernel_chw;
 
-        // Calculate same padding for the kernel size (ensures output size = input size with stride=1)
-        let padding = same_padding(KERNEL_SIZE, KERNEL_SIZE);
-        
-        // Apply depthwise convolution with same padding and stride=1
-        let output_array = depthwise_conv2d(&image_array, &kernel_array, padding, (1, 1));
+        // Calculate same padding: (kernel_size - 1) / 2
+        // For 3x3 kernel with stride 1: (3 - 1) / 2 = 1
+        let pad = (KERNEL_SIZE - 1) / 2;
+        let pad_h = pad as u32;
+        let pad_w = pad as u32;
 
-        // Output is [1, C, H, W], but since batch=1, the data is effectively [C, H, W]
-        // The data layout is already [C, H, W] (batch dimension is just 1)
-        let output_shape = output_array.shape();
-        let output_data = output_array.data();
-        
-        // Extract output dimensions (should match input with same padding)
-        let out_h = output_shape[2];
-        let out_w = output_shape[3];
-        
-        // Convert from [C, H, W] back to [H, W, C]
-        let mut image_data = self.image_from_chw(output_data, out_h, out_w);
+        // With same padding and stride=1, output size equals input size
+        let out_h = h;
+        let out_w = w;
+
+        // Set up convolution parameters
+        let params = ConvParams {
+            batch: 1,
+            in_channels: CHANNELS as u32,
+            out_channels: CHANNELS as u32, // For depthwise, out_channels = in_channels
+            in_h: h,
+            in_w: w,
+            kernel_h: KERNEL_SIZE as u32,
+            kernel_w: KERNEL_SIZE as u32,
+            stride_h: 1,
+            stride_w: 1,
+            pad_h,
+            pad_w,
+            out_h,
+            out_w,
+        };
+
+        // Allocate output buffer: [batch, channels, out_h, out_w]
+        let output_size = (params.batch * params.out_channels * params.out_h * params.out_w) as usize;
+        let mut output = vec![0.0f32; output_size];
+
+        // Perform depthwise convolution
+        self.backend.depthwise_conv2d(&input, &kernel, &mut output, params);
+
+        // Output is in [C, H, W] format (batch=1), convert back to [H, W, C]
+        let mut image_data = self.image_from_chw(&output, out_h as usize, out_w as usize);
         
         // Clamp pixel values to ensure they never go below minimum threshold
         // This prevents the screen from going completely black
@@ -243,8 +271,8 @@ impl ConvolutionalWaveform {
         self.image = image_data;
         
         // Update dimensions (should be same with padding=1, but update to be safe)
-        self.height = out_h as u32;
-        self.width = out_w as u32;
+        self.height = out_h;
+        self.width = out_w;
     }
 
     /// Calculate new kernel from audio samples (returns the kernel, doesn't update self.kernel)
