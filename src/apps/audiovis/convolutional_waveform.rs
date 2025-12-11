@@ -5,8 +5,8 @@ const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
 // Image resolution - tune these to adjust the visualization size
-const IMAGE_WIDTH: u32 = 2000;
-const IMAGE_HEIGHT: u32 = 1000;
+const IMAGE_WIDTH: u32 = 1000;
+const IMAGE_HEIGHT: u32 = 500;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
@@ -41,6 +41,9 @@ pub struct ConvolutionalWaveform {
 
 impl ConvolutionalWaveform {
     pub fn new() -> Self {
+        // Print the current device being used
+        println!("Current device: {:?}", DEVICE);
+        
         // Initialize random colored image mask (RGB channels)
         let mut image = Vec::with_capacity(IMAGE_WIDTH as usize * IMAGE_HEIGHT as usize * CHANNELS);
         
@@ -258,7 +261,13 @@ impl ConvolutionalWaveform {
         depthwise_conv2d(&input, &kernel, &mut output, params);
 
         // Extract output data (device-aware arrays handle the data access)
-        let output_slice = output.data();
+        // For Metal arrays, we need to transfer to CPU to read the data
+        let output_cpu = if output.device() == Device::Metal {
+            output.to_device(Device::Cpu)
+        } else {
+            output
+        };
+        let output_slice = output_cpu.data();
         
         // Output is in [C, H, W] format (batch=1), convert back to [H, W, C]
         let mut image_data = self.image_from_chw(output_slice, out_h as usize, out_w as usize);
