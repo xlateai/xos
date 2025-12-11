@@ -1,13 +1,16 @@
 use crate::engine::EngineState;
 use crate::tensor::conv::{ConvParams, ConvBackend};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crate::tensor::conv::metal::MetalBackend;
+use crate::tensor::conv::cpu::CpuBackend;
+use once_cell::sync::Lazy;
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
 
 // Image resolution - tune these to adjust the visualization size
-const IMAGE_WIDTH: u32 = 512;
-const IMAGE_HEIGHT: u32 = 256;
+const IMAGE_WIDTH: u32 = 2000;
+const IMAGE_HEIGHT: u32 = 1000;
 
 // Kernel normalization range - tune these to adjust kernel value distribution
 const KERNEL_MIN: f32 = -1.0;
@@ -15,6 +18,23 @@ const KERNEL_MAX: f32 = 1.0;
 
 // Steps per kernel update - only recalculate kernel every kth step
 const STEPS_PER_KERNEL: u32 = 1;
+
+// Global backend - easily swap between CPU and Metal for performance testing
+// Uncomment the one you want to use:
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+static CONV_BACKEND: Lazy<Box<dyn ConvBackend + Send + Sync>> = Lazy::new(|| {
+    // Metal backend (GPU-accelerated, default)
+    Box::new(MetalBackend::new())
+    
+    // CPU backend (for comparison/testing)
+    // Box::new(CpuBackend::new())
+});
+
+// Fallback to CPU backend on non-Apple platforms
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+static CONV_BACKEND: Lazy<Box<dyn ConvBackend + Send + Sync>> = Lazy::new(|| {
+    Box::new(CpuBackend::new())
+});
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -32,8 +52,6 @@ pub struct ConvolutionalWaveform {
     last_seek_position: f32,
     /// Step counter for kernel update throttling
     step_counter: u32,
-    /// Metal backend for convolution
-    backend: MetalBackend,
 }
 
 impl ConvolutionalWaveform {
@@ -69,9 +87,6 @@ impl ConvolutionalWaveform {
         let kernel = Self::generate_random_kernel();
         let previous_kernel = kernel.clone(); // Initialize previous kernel to same as current
 
-        // Initialize Metal backend
-        let backend = MetalBackend::new();
-
         Self {
             image,
             width: IMAGE_WIDTH,
@@ -80,7 +95,6 @@ impl ConvolutionalWaveform {
             previous_kernel,
             last_seek_position: -1.0,
             step_counter: 0,
-            backend,
         }
     }
 
@@ -253,8 +267,8 @@ impl ConvolutionalWaveform {
         let output_size = (params.batch * params.out_channels * params.out_h * params.out_w) as usize;
         let mut output = vec![0.0f32; output_size];
 
-        // Perform depthwise convolution
-        self.backend.depthwise_conv2d(&input, &kernel, &mut output, params);
+        // Perform depthwise convolution using global backend
+        CONV_BACKEND.depthwise_conv2d(&input, &kernel, &mut output, params);
 
         // Output is in [C, H, W] format (batch=1), convert back to [H, W, C]
         let mut image_data = self.image_from_chw(&output, out_h as usize, out_w as usize);

@@ -111,6 +111,8 @@ impl MetalBackend {
             let params_len_bytes =
                 (std::mem::size_of::<MetalConvParams>()) as u64;
 
+            // For now, create buffers each time - the main optimization is threadgroup size
+            // Buffer reuse can be added later if needed
             let input_buf = self.device.new_buffer_with_data(
                 input.as_ptr() as *const _,
                 input_len_bytes,
@@ -123,9 +125,10 @@ impl MetalBackend {
                 MTLResourceOptions::StorageModeShared,
             );
 
-            let output_buf = self
-                .device
-                .new_buffer(output_len_bytes, MTLResourceOptions::StorageModeShared);
+            let output_buf = self.device.new_buffer(
+                output_len_bytes,
+                MTLResourceOptions::StorageModeShared,
+            );
 
             let params_buf = self.device.new_buffer_with_data(
                 &mparams as *const _ as *const _,
@@ -147,20 +150,27 @@ impl MetalBackend {
             let out_h = mparams.out_h as u64;
             let depth = (mparams.batch * mparams.out_channels) as u64;
 
-            let threads_per_grid = MTLSize {
-                width: out_w,
-                height: out_h,
-                depth,
-            };
-
-            // Super simple threadgroup size; you can tune this later.
+            // Use optimal threadgroup size for GPU utilization
+            // Metal recommends threadgroup sizes that are multiples of the SIMD width (typically 32)
+            // For 2D work, 16x16 = 256 threads is a good default
+            // This is MUCH better than the previous 1x1x1 which was severely underutilizing the GPU
+            let threadgroup_width = 16u64;
+            let threadgroup_height = 16u64;
+            
             let threads_per_threadgroup = MTLSize {
-                width: 1,
-                height: 1,
+                width: threadgroup_width,
+                height: threadgroup_height,
                 depth: 1,
             };
 
-            encoder.dispatch_threads(threads_per_grid, threads_per_threadgroup);
+            // Calculate grid size in threadgroups (round up to cover all threads)
+            let threadgroups_per_grid = MTLSize {
+                width: (out_w + threadgroup_width - 1) / threadgroup_width,
+                height: (out_h + threadgroup_height - 1) / threadgroup_height,
+                depth: depth,
+            };
+
+            encoder.dispatch_thread_groups(threadgroups_per_grid, threads_per_threadgroup);
             encoder.end_encoding();
 
             command_buffer.commit();
