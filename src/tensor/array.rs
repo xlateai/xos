@@ -8,15 +8,22 @@ pub enum Device {
     Metal,
 }
 
-impl Default for Device {
+impl Device {
+    /// Get the default device (const function for use in const contexts)
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    fn default() -> Self {
+    pub const fn default() -> Self {
         Device::Metal  // Default to Metal on Apple platforms
     }
     
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    fn default() -> Self {
+    pub const fn default() -> Self {
         Device::Cpu  // Default to CPU on other platforms
+    }
+}
+
+impl Default for Device {
+    fn default() -> Self {
+        Self::default()
     }
 }
 
@@ -34,11 +41,11 @@ pub struct Array<T> {
 impl<T> Array<T> {
     /// Create a new array from data and shape on the default device
     pub fn new(data: Vec<T>, shape: Vec<usize>) -> Self {
-        Self::new_with_device(data, shape, Device::default())
+        Self::new_on_device(data, shape, Device::default())
     }
 
     /// Create a new array from data and shape on a specific device
-    pub fn new_with_device(data: Vec<T>, shape: Vec<usize>, device: Device) -> Self {
+    pub fn new_on_device(data: Vec<T>, shape: Vec<usize>, device: Device) -> Self {
         let expected_len: usize = shape.iter().product();
         assert_eq!(
             data.len(),
@@ -115,11 +122,11 @@ impl<T> Array<T> {
 impl<T: Clone> Array<T> {
     /// Create an array filled with a value on the default device
     pub fn filled(value: T, shape: Vec<usize>) -> Self {
-        Self::filled_with_device(value, shape, Device::default())
+        Self::filled_on_device(value, shape, Device::default())
     }
 
     /// Create an array filled with a value on a specific device
-    pub fn filled_with_device(value: T, shape: Vec<usize>, device: Device) -> Self {
+    pub fn filled_on_device(value: T, shape: Vec<usize>, device: Device) -> Self {
         let len: usize = shape.iter().product();
         Self {
             data: vec![value; len],

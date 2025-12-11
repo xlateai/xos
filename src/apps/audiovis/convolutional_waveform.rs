@@ -15,14 +15,11 @@ const KERNEL_MAX: f32 = 1.0;
 // Steps per kernel update - only recalculate kernel every kth step
 const STEPS_PER_KERNEL: u32 = 1;
 
-// Device selection - easily swap between CPU and Metal for performance testing
-// Change this to Device::Cpu to benchmark CPU performance
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const CONV_DEVICE: Device = Device::Metal;  // Default to Metal (GPU-accelerated)
-// const CONV_DEVICE: Device = Device::Cpu;  // Uncomment to use CPU backend
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-const CONV_DEVICE: Device = Device::Cpu;  // CPU only on non-Apple platforms
+// Device selection - easily swap between CPU and Metal for performance testing
+const DEVICE: Device = Device::default();
+// const DEVICE: Device = Device::Metal;
+// const DEVICE: Device = Device::Cpu;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -218,12 +215,12 @@ impl ConvolutionalWaveform {
         let image_chw = self.image_to_chw(&self.image);
         // Input format: [batch=1, channels=3, height, width]
         // Create device-aware array on the selected device
-        let input = Array::new_with_device(image_chw, vec![CHANNELS, h as usize, w as usize], CONV_DEVICE);
+        let input = Array::new_on_device(image_chw, vec![CHANNELS, h as usize, w as usize], DEVICE);
 
         // Convert kernel from [H, W, C] to [C, H, W] for depthwise convolution
         // Depthwise kernel format: [channels, kernel_h, kernel_w]
         let kernel_chw = self.kernel_to_chw(&self.kernel);
-        let kernel = Array::new_with_device(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE], CONV_DEVICE);
+        let kernel = Array::new_on_device(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE], DEVICE);
 
         // Calculate same padding: (kernel_size - 1) / 2
         // For 3x3 kernel with stride 1: (3 - 1) / 2 = 1
@@ -255,7 +252,7 @@ impl ConvolutionalWaveform {
         // Allocate output buffer: [batch, channels, out_h, out_w]
         let output_size = (params.batch * params.out_channels * params.out_h * params.out_w) as usize;
         let output_data = vec![0.0f32; output_size];
-        let mut output = Array::new_with_device(output_data, vec![CHANNELS, out_h as usize, out_w as usize], CONV_DEVICE);
+        let mut output = Array::new_on_device(output_data, vec![CHANNELS, out_h as usize, out_w as usize], DEVICE);
 
         // Perform depthwise convolution - automatically routes to correct backend based on device
         depthwise_conv2d(&input, &kernel, &mut output, params);
