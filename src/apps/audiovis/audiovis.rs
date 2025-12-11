@@ -9,6 +9,8 @@ use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
@@ -34,6 +36,10 @@ pub struct AudiovisApp {
     sample_rate: u32, // Sample rate for position calculation
     #[cfg(not(target_arch = "wasm32"))]
     audio_duration_seconds: f32, // Total audio duration
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
+    #[cfg(not(target_arch = "wasm32"))]
+    last_seek_position: f32, // Last position we seeked to (to detect new seeks)
 }
 
 impl AudiovisApp {
@@ -58,7 +64,82 @@ impl AudiovisApp {
             sample_rate: 44100,
             #[cfg(not(target_arch = "wasm32"))]
             audio_duration_seconds: 0.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_file_path: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            last_seek_position: -1.0,
         }
+    }
+
+    /// Seek to a specific position in the audio (0.0 to 1.0)
+    /// Note: This implementation skips samples by consuming them, which can be slow for large seeks.
+    /// Rodio's decoder doesn't support native seeking, so this is the best we can do.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn seek_audio(&mut self, position: f32) -> Result<(), String> {
+        let position = position.max(0.0).min(1.0);
+        
+        // Get the file path
+        let file_path = match &self.audio_file_path {
+            Some(path) => path.clone(),
+            None => return Err("No audio file loaded".to_string()),
+        };
+
+        // Calculate target time in seconds
+        let target_time_seconds = position * self.audio_duration_seconds;
+        let target_samples = (target_time_seconds * self.sample_rate as f32) as usize;
+
+        // Stop and clear the current sink
+        if let Some(sink) = &self.sink {
+            let sink = sink.lock().unwrap();
+            sink.stop();
+            sink.clear();
+        }
+
+        // Clear the sample buffer
+        if let Some(sample_buffer) = &self.audio_samples {
+            let mut buffer = sample_buffer.lock().unwrap();
+            buffer.clear();
+        }
+
+        // Reload the audio file
+        let file = File::open(&file_path)
+            .map_err(|e| format!("Failed to open audio file for seeking: {}", e))?;
+        
+        let mut decoder = Decoder::try_from(file)
+            .map_err(|e| format!("Failed to decode audio file for seeking: {}", e))?;
+
+        // Skip samples to reach the target position
+        // This may be slow for large files, but it's the only way with rodio
+        let channels = decoder.channels() as usize;
+        let samples_to_skip = target_samples * channels;
+        
+        // Skip samples - this will take time for large seeks but at least it works
+        let mut skipped = 0;
+        for _ in 0..samples_to_skip {
+            if decoder.next().is_none() {
+                // Reached end of file, break early
+                break;
+            }
+            skipped += 1;
+        }
+
+        // Update total_samples to reflect the seek position
+        self.total_samples = if skipped > 0 { skipped / channels } else { 0 };
+
+        // Create a new capturing source from the remaining decoder
+        let sample_buffer = self.audio_samples.as_ref().unwrap().clone();
+        let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
+
+        // Append to sink and play
+        if let Some(sink) = &self.sink {
+            let sink = sink.lock().unwrap();
+            sink.append(capturing_source);
+            if !self.media_control_bar.is_paused() {
+                sink.play();
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -77,6 +158,9 @@ impl Application for AudiovisApp {
 
             if let Some(path) = file {
                 println!("Selected file: {:?}", path);
+                
+                // Store the file path for seeking
+                self.audio_file_path = Some(path.clone());
                 
                 // Get an output stream handle to the default physical sound device
                 let _stream = OutputStreamBuilder::open_default_stream()
@@ -127,6 +211,7 @@ impl Application for AudiovisApp {
                 // Store the sink and stream to keep them alive (wrap sink in Arc<Mutex> for sharing)
                 self.sink = Some(Arc::new(Mutex::new(sink)));
                 self._stream = Some(_stream);
+                self.last_seek_position = 0.0;
 
                 println!("Playing audio file: {:?}", path);
             } else {
@@ -212,6 +297,8 @@ impl Application for AudiovisApp {
 
         // Update media control bar
         self.media_control_bar.update(state);
+
+        // Note: Seeking is handled in on_mouse_up to avoid blocking during drag
 
         // Control audio playback based on pause state
         #[cfg(not(target_arch = "wasm32"))]
@@ -306,17 +393,21 @@ impl Application for AudiovisApp {
         if has_visualization {
             // Try media control bar first
             if self.media_control_bar.on_mouse_down(state) {
-                // Update pause state in audio sink
+                // Update pause state if play/pause button was clicked
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    if let Some(sink) = &self.sink {
-                        let sink = sink.lock().unwrap();
-                        if self.media_control_bar.is_paused() {
-                            sink.pause();
-                        } else {
-                            sink.play();
+                    if !self.media_control_bar.is_dragging() {
+                        // User clicked play/pause button - update pause state
+                        if let Some(sink) = &self.sink {
+                            let sink = sink.lock().unwrap();
+                            if self.media_control_bar.is_paused() {
+                                sink.pause();
+                            } else {
+                                sink.play();
+                            }
                         }
                     }
+                    // If dragging, we'll seek on mouse up instead
                 }
                 return;
             }
@@ -326,7 +417,22 @@ impl Application for AudiovisApp {
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
-        // No interaction
+        // When user releases mouse after dragging or clicking seek bar, seek to final position
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let position = self.media_control_bar.position();
+            let position_changed = (self.last_seek_position - position).abs() > 0.001;
+            
+            // Seek if position changed significantly (user clicked or dragged seek bar)
+            if position_changed && !self.media_control_bar.allow_position_update() {
+                // User just finished seeking - seek to final position
+                if let Err(e) = self.seek_audio(position) {
+                    eprintln!("Failed to seek audio: {}", e);
+                } else {
+                    self.last_seek_position = position;
+                }
+            }
+        }
     }
     
     fn on_mouse_move(&mut self, state: &mut EngineState) {
