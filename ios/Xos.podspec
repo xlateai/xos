@@ -16,7 +16,9 @@ Pod::Spec.new do |s|
 
   # Rust library - vendored_libraries automatically links it
   s.vendored_libraries = "libs/libxos.a"
-  s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
+  # Only include files from XosModule directory (not the main app)
+  s.source_files = "XosModule/**/*.{h,m,mm,swift,hpp,cpp}"
+  s.public_header_files = "XosModule/**/*.h"
   
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

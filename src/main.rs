@@ -84,10 +84,37 @@ fn build_ios() {
         std::process::exit(1);
     }
     
-    println!("✅ iOS build complete.");
+    println!("✅ Rust library built successfully.");
+    
+    // Automatically run pod install
+    println!("📦 Running pod install...");
+    let ios_dir = std::path::Path::new("ios");
+    if !ios_dir.exists() {
+        eprintln!("❌ ios/ directory not found.");
+        std::process::exit(1);
+    }
+    
+    let mut pod_cmd = Command::new("pod");
+    pod_cmd.arg("install");
+    pod_cmd.current_dir(ios_dir);
+    pod_cmd.stdout(Stdio::inherit());
+    pod_cmd.stderr(Stdio::inherit());
+    
+    // Set UTF-8 encoding for CocoaPods
+    pod_cmd.env("LANG", "en_US.UTF-8");
+    
+    let pod_status = pod_cmd.status().expect("Failed to run pod install");
+    if !pod_status.success() {
+        eprintln!("⚠️  pod install failed, but Rust library was built successfully.");
+        eprintln!("   You can manually run: cd ios && pod install");
+        // Don't exit with error - the Rust build succeeded
+    } else {
+        println!("✅ Pod installation complete.");
+    }
+    
     println!("📱 Next steps:");
-    println!("   1. cd ios && pod install");
-    println!("   2. Open xos.xcworkspace in Xcode");
+    println!("   1. Open xos.xcworkspace in Xcode (or use: xed ios/)");
+    println!("   2. Configure code signing in Xcode");
     println!("   3. Build and run on device or simulator");
 }
 
