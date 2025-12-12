@@ -42,14 +42,22 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    open xos.xcworkspace
    ```
 
-5. **Build and run:**
+5. **Set up code signing (first time only):**
+   - Open `xos.xcworkspace` in Xcode
+   - Select the `xos` project in the navigator
+   - Go to "Signing & Capabilities" tab
+   - Check "Automatically manage signing"
+   - Select your Team (your Apple ID or development team)
+   - Xcode will automatically configure provisioning
+
+6. **Build and run:**
    
    **Option A: From command line (requires ios-deploy):**
    ```bash
    cd ios
    ./launch-device.sh
    # Or from xos root:
-   xos ios <app-name>
+   xos app <app-name> --ios
    ```
    
    **Option B: From Xcode:**
