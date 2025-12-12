@@ -148,8 +148,9 @@ impl MediaControlBar {
     pub fn on_mouse_down(&mut self, state: &mut EngineState) -> bool {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
-        let width = state.frame.width() as f32;
-        let height = state.frame.height() as f32;
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
 
         let (button_center_x, button_center_y, seek_x_start, seek_x_end, seek_y) = 
             self.calculate_layout(width, height);
@@ -181,8 +182,9 @@ impl MediaControlBar {
     /// Update seek position based on mouse position
     fn update_seek_position(&mut self, state: &mut EngineState) {
         let mouse_x = state.mouse.x;
-        let width = state.frame.width() as f32;
-        let height = state.frame.height() as f32;
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
 
         let (_, _, seek_x_start, seek_x_end, _) = self.calculate_layout(width, height);
         let seek_width = (seek_x_end - seek_x_start) as f32;
@@ -197,9 +199,10 @@ impl MediaControlBar {
 
     /// Render the control bar
     pub fn render(&self, state: &mut EngineState) {
-        let width = state.frame.width();
-        let height = state.frame.height();
-        let buffer = state.frame.buffer_mut();
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let buffer = state.frame_buffer_mut();
 
         let (button_center_x, button_center_y, seek_x_start, seek_x_end, seek_y) = 
             self.calculate_layout(width as f32, height as f32);

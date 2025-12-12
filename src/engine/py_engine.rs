@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyByteArray;
 
 use crate::engine::{Application, EngineState};
+use crate::tensor::array::Storage;
 
 pub struct PyApplicationWrapper {
     py_app: PyObject,
@@ -37,7 +38,7 @@ impl Application for PyApplicationWrapper {
                     .downcast::<pyo3::types::PyBytes>()
                     .map_err(PyErr::from)?; // clean and compiler-safe
                 let data = pybytes.as_bytes();
-                let dst = &mut state.frame.buffer;
+                let dst = state.frame_buffer_mut();
                 let len = dst.len().min(data.len());
                 dst[..len].copy_from_slice(&data[..len]);
                 Ok(())
@@ -79,8 +80,8 @@ pub struct PyFrameState {
     pub width: u32,
     #[pyo3(get)]
     pub height: u32,
-    // Store a direct pointer to the Vec<u8>
-    rust_buffer: *mut Vec<u8>,
+    // Store a pointer to the EngineState so we can access frame_buffer_mut()
+    engine_state_ptr: *mut EngineState,
 }
 
 #[pymethods]
@@ -88,9 +89,10 @@ impl PyFrameState {
     #[getter]
     fn buffer<'py>(&self, py: Python<'py>) -> PyResult<Py<PyByteArray>> {
         unsafe {
-            // Get direct access to the Vec<u8>
-            let buffer = &mut *self.rust_buffer;
-            let byte_array = PyByteArray::new_bound(py, buffer.as_mut_slice());
+            // Get access to the frame buffer through EngineState
+            let engine_state = &mut *self.engine_state_ptr;
+            let buffer = engine_state.frame_buffer_mut();
+            let byte_array = PyByteArray::new_bound(py, buffer);
             Ok(byte_array.unbind())
         }
     }
@@ -98,7 +100,8 @@ impl PyFrameState {
     // Debug method that can be called from Python
     fn debug_print(&self) -> PyResult<()> {
         unsafe {
-            let buffer = &*self.rust_buffer;
+            let engine_state = &mut *self.engine_state_ptr;
+            let buffer = engine_state.frame_buffer_mut();
             println!("Buffer pointer: {:p}, len: {}", buffer.as_ptr(), buffer.len());
             println!("First few bytes: {:?}", &buffer[..buffer.len().min(16)]);
         }
@@ -126,13 +129,13 @@ pub struct PyEngineState {
 
 impl PyEngineState {
     fn new(py: Python, state: &mut EngineState) -> Py<Self> {
-        // Store a pointer to the actual Vec<u8>
-        let buffer_ptr = &mut state.frame.buffer as *mut Vec<u8>;
+        // Store a pointer to the EngineState so we can access frame_buffer_mut() later
+        let engine_state_ptr = state as *mut EngineState;
         
         let frame_state = PyFrameState {
-            width: state.frame.width,
-            height: state.frame.height,
-            rust_buffer: buffer_ptr,
+            width: state.frame.shape()[1] as u32,
+            height: state.frame.shape()[0] as u32,
+            engine_state_ptr,
         };
         
         let mouse_state = PyMouseState {

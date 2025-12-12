@@ -18,4 +18,4 @@ pub use wasm_engine::run_web;
 #[cfg(feature = "python")]
 pub use py_engine::PyApplicationWrapper;
 
-pub use engine::{Application, EngineState, FrameState, MouseState};
+pub use engine::{Application, EngineState, MouseState};

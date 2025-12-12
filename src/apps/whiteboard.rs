@@ -123,15 +123,17 @@ impl Whiteboard {
 
 impl Application for Whiteboard {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        self.cached_width = state.frame.width();
-        self.cached_height = state.frame.height();
+        let shape = state.frame.shape();
+        self.cached_width = shape[1] as u32;
+        self.cached_height = shape[0] as u32;
         self.cached_canvas = vec![0; (self.cached_width * self.cached_height * 4) as usize];
         self.needs_redraw = true;
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let (width, height) = (state.frame.width(), state.frame.height());
+        let shape = state.frame.shape();
+        let (width, height) = (shape[1] as u32, shape[0] as u32);
 
         if width != self.cached_width || height != self.cached_height {
             self.cached_width = width;
@@ -179,32 +181,36 @@ impl Application for Whiteboard {
         }
 
         // Push final canvas
-        state.frame.buffer_mut().copy_from_slice(&self.cached_canvas);
+        state.frame_buffer_mut().copy_from_slice(&self.cached_canvas);
 
         // Live preview stroke
         if let Some((first, rest)) = self.current_stroke.split_first() {
             let (x0, y0) = self.world_to_screen(first.0, first.1);
             if rest.is_empty() {
-                draw_circle(state.frame.buffer_mut(), width, height, x0, y0, STROKE_WIDTH);
+                draw_circle(state.frame_buffer_mut(), width, height, x0, y0, STROKE_WIDTH);
             } else {
                 let mut last = *first;
                 for &point in rest {
                     let (x1, y1) = self.world_to_screen(point.0, point.1);
-                    draw_line(state.frame.buffer_mut(), width, height, last.0 * self.zoom + self.offset_x, last.1 * self.zoom + self.offset_y, x1, y1);
+                    draw_line(state.frame_buffer_mut(), width, height, last.0 * self.zoom + self.offset_x, last.1 * self.zoom + self.offset_y, x1, y1);
                     last = point;
                 }
             }
         }
 
         // Cursor
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        let is_left = state.mouse.is_left_clicking;
+        let is_right = state.mouse.is_right_clicking;
         draw_cursor_dot(
-            state.frame.buffer_mut(),
+            state.frame_buffer_mut(),
             width,
             height,
-            state.mouse.x,
-            state.mouse.y,
-            state.mouse.is_left_clicking,
-            state.mouse.is_right_clicking,
+            mouse_x,
+            mouse_y,
+            is_left,
+            is_right,
         );
     }
 

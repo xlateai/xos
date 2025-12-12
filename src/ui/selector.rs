@@ -90,8 +90,9 @@ impl Selector {
 
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
-        let width = state.frame.width() as f32;
-        let height = state.frame.height() as f32;
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
 
         // Calculate selector position (centered)
         let selector_width = 300.0;
@@ -143,9 +144,12 @@ impl Selector {
             return; // Fully closed, don't render
         }
 
-        let width = state.frame.width();
-        let height = state.frame.height();
-        let buffer = state.frame.buffer_mut();
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let mouse_x = state.mouse.x as i32;
+        let mouse_y = state.mouse.y as i32;
+        let buffer = state.frame_buffer_mut();
 
         // Calculate selector dimensions and position
         let selector_width = 300.0;
@@ -267,8 +271,6 @@ impl Selector {
         // Draw options with text
         let option_start_y = scaled_y + 20;
         let option_width = scaled_width - 40;
-        let mouse_x = state.mouse.x as i32;
-        let mouse_y = state.mouse.y as i32;
 
         // Text color (bright white for visibility)
         let text_color = (255, 255, 255);

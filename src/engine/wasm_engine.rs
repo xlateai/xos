@@ -4,7 +4,8 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
+use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter};
+use crate::tensor::array::{Array, Device};
 
 
 #[cfg(target_arch = "wasm32")]
@@ -41,10 +42,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     
     let state_ptr = Box::into_raw(Box::new(WasmState {
         engine_state: EngineState {
-            frame: FrameState {
-                width,
-                height,
-                buffer: vec![0; (width * height * 4) as usize],
+            frame: {
+                let shape = vec![height as usize, width as usize, 4];
+                let data = vec![0u8; (width * height * 4) as usize];
+                Array::new_on_device(data, shape, Device::Cpu)
             },
             mouse: MouseState {
                 x: 0.0,
@@ -318,25 +319,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let height = anim_state.canvas.height();
                 
                 // Update dimensions if canvas size changed
-                if state.engine_state.frame.width != width || state.engine_state.frame.height != height {
-                    state.engine_state.frame.width = width;
-                    state.engine_state.frame.height = height;
-                    state.engine_state.frame.buffer = vec![0; (width * height * 4) as usize];
+                let shape = state.engine_state.frame.shape();
+                if shape[1] as u32 != width || shape[0] as u32 != height {
+                    state.engine_state.resize_frame(width, height);
                 }
                 
                 // Update game state
-                state.engine_state.frame.buffer.fill(0);
+                state.engine_state.frame_buffer_mut().fill(0);
                 state.app.tick(&mut state.engine_state);
                 
                 // Render to canvas
-                // validate_frame_dimensions(
-                //     "wasm tick", 
-                //     width, 
-                //     height, 
-                //     &state.engine_state.frame.buffer
-                // );
-                
-                let data = wasm_bindgen::Clamped(&state.engine_state.frame.buffer[..]);
+                let buffer = state.engine_state.frame_buffer_mut();
+                let data = wasm_bindgen::Clamped(buffer);
                 let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
                     .expect("Failed to create ImageData");
                     

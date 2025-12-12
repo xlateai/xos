@@ -20,10 +20,10 @@ tuneables! {
 
 // Rectangle 2
 tuneables! {
-    rect2_left: f32 = 0.2;
-    rect2_right: f32 = 0.7;
-    rect2_top: f32 = 0.65;
-    rect2_bottom: f32 = 0.9;
+    rect2_left: f32 = 0.2889232;
+    rect2_right: f32 = 0.78892314;
+    rect2_top: f32 = 0.61378366;
+    rect2_bottom: f32 = 0.86378366;
 }
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
@@ -100,16 +100,17 @@ impl Application for Partitions {
             self.sync_partition_from_tuneables(i);
         }
 
-        state.frame.buffer_mut().chunks_exact_mut(4).for_each(|p| {
+        state.frame_buffer_mut().chunks_exact_mut(4).for_each(|p| {
             p[0] = BACKGROUND_COLOR.0;
             p[1] = BACKGROUND_COLOR.1;
             p[2] = BACKGROUND_COLOR.2;
             p[3] = 0xff;
         });
 
-        let width = state.frame.width();
-        let height = state.frame.height();
-        let buffer = state.frame.buffer_mut();
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let buffer = state.frame_buffer_mut();
         for partition in &self.partitions {
             partition.draw(buffer, width, height);
         }
@@ -118,8 +119,9 @@ impl Application for Partitions {
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let w = state.frame.width() as f32;
-        let h = state.frame.height() as f32;
+        let shape = state.frame.shape();
+        let w = shape[1] as f32;
+        let h = shape[0] as f32;
 
         // Check if any partition is being dragged
         let mut any_dragging = false;
@@ -178,8 +180,9 @@ impl Application for Partitions {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let w = state.frame.width() as f32;
-        let h = state.frame.height() as f32;
+        let shape = state.frame.shape();
+        let w = shape[1] as f32;
+        let h = shape[0] as f32;
         let mx = state.mouse.x;
         let my = state.mouse.y;
 

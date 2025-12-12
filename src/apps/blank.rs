@@ -19,7 +19,7 @@ impl Application for BlankApp {
         // Change this line:
         // From: let mut buffer = &state.frame.buffer;
         // To: let buffer = &mut state.frame.buffer;
-        let buffer = state.frame.buffer_mut();
+        let buffer = state.frame_buffer_mut();
         let len = buffer.len();
 
         for i in (0..len).step_by(4) {

@@ -19,9 +19,12 @@ impl Application for CursorApp {
     fn tick(&mut self, state: &mut EngineState) {
         // state.mouse.style.hidden();
 
-        let width = state.frame.width();
-        let height = state.frame.height();
-        let buffer = state.frame.buffer_mut();
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let mx = state.mouse.x.round() as i32;
+        let my = state.mouse.y.round() as i32;
+        let buffer = state.frame_buffer_mut();
 
         // Fill background
         for i in (0..buffer.len()).step_by(4) {
@@ -32,8 +35,6 @@ impl Application for CursorApp {
         }
 
         // Draw white dot at mouse location
-        let mx = state.mouse.x.round() as i32;
-        let my = state.mouse.y.round() as i32;
         let radius = 2;
 
         for dy in -radius..=radius {

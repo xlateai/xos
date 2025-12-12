@@ -1,52 +1,5 @@
 use crate::tensor::array::{Array, Device};
 
-#[derive(Debug)]
-pub struct FrameState {
-    /// Array with shape [height, width, 4] for RGBA pixels
-    array: Array<u8>,
-}
-
-impl FrameState {
-    /// Create a new FrameState with the given dimensions
-    pub fn new(width: u32, height: u32) -> Self {
-        let shape = vec![height as usize, width as usize, 4];
-        let data = vec![0u8; (width * height * 4) as usize];
-        Self {
-            array: Array::new_on_device(data, shape, Device::Cpu),
-        }
-    }
-
-    /// Get the width of the frame
-    pub fn width(&self) -> u32 {
-        let shape = self.array.shape();
-        shape[1] as u32
-    }
-
-    /// Get the height of the frame
-    pub fn height(&self) -> u32 {
-        let shape = self.array.shape();
-        shape[0] as u32
-    }
-
-    /// Get mutable access to the buffer (zero-copy for CPU arrays)
-    /// Panics if the array is on a non-CPU device
-    pub fn buffer_mut(&mut self) -> &mut [u8] {
-        self.array.data_mut()
-    }
-
-    /// Get the underlying array
-    pub fn array(&self) -> &Array<u8> {
-        &self.array
-    }
-
-    /// Resize the frame to new dimensions
-    pub fn resize(&mut self, width: u32, height: u32) {
-        let shape = vec![height as usize, width as usize, 4];
-        let data = vec![0u8; (width * height * 4) as usize];
-        self.array = Array::new_on_device(data, shape, Device::Cpu);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorStyle {
     Default,
@@ -123,8 +76,24 @@ pub struct MouseState {
 
 #[derive(Debug)]
 pub struct EngineState {
-    pub frame: FrameState,
+    /// Frame buffer array with shape [height, width, 4] for RGBA pixels
+    pub frame: Array<u8>,
     pub mouse: MouseState,
+}
+
+impl EngineState {
+    /// Get mutable access to the frame buffer (zero-copy for CPU arrays)
+    /// Panics if the array is on a non-CPU device
+    pub fn frame_buffer_mut(&mut self) -> &mut [u8] {
+        self.frame.data_mut()
+    }
+
+    /// Resize the frame to new dimensions
+    pub fn resize_frame(&mut self, width: u32, height: u32) {
+        let shape = vec![height as usize, width as usize, 4];
+        let data = vec![0u8; (width * height * 4) as usize];
+        self.frame = Array::new_on_device(data, shape, Device::Cpu);
+    }
 }
 
 pub trait Application {

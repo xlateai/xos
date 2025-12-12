@@ -95,9 +95,10 @@ impl TextApp {
         let cx = self.smooth_cursor_x.round() as i32;
         
         for y in cursor_top..cursor_bottom {
-            if y >= 0 && y < state.frame.height() as i32 && cx >= 0 && cx < state.frame.width() as i32 {
-                let idx = ((y as u32 * state.frame.width() as u32 + cx as u32) * 4) as usize;
-                let buffer = state.frame.buffer_mut();
+            let shape = state.frame.shape();
+            if y >= 0 && y < shape[0] as i32 && cx >= 0 && cx < shape[1] as i32 {
+                let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
+                let buffer = state.frame_buffer_mut();
                 buffer[idx + 0] = CURSOR_COLOR.0;
                 buffer[idx + 1] = CURSOR_COLOR.1;
                 buffer[idx + 2] = CURSOR_COLOR.2;
@@ -113,9 +114,10 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let width = state.frame.width() as f32;
-        let height = state.frame.height() as f32;
-        let buffer = state.frame.buffer_mut();
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let buffer = state.frame_buffer_mut();
     
         self.text_engine.tick(width, height);
     

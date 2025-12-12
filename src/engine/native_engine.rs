@@ -9,7 +9,8 @@ use winit::{
     window::{CursorIcon, Window, WindowId},
 };
 
-use super::engine::{Application, EngineState, FrameState, MouseState, CursorStyle, CursorStyleSetter};
+use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter};
+use crate::tensor::array::{Array, Device};
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -37,22 +38,22 @@ impl ApplicationHandler for AppState {
                     self.size = current_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.frame.resize(self.size.width, self.size.height);
+                    self.engine_state.resize_frame(self.size.width, self.size.height);
                 }
 
                 // Clear the frame buffer
-                self.engine_state.frame.buffer_mut().fill(0);
+                self.engine_state.frame_buffer_mut().fill(0);
                 let _ = self.app.tick(&mut self.engine_state);
 
                 let frame = self.pixels.frame_mut();
-                let buffer = self.engine_state.frame.buffer_mut();
+                let buffer = self.engine_state.frame_buffer_mut();
                 if frame.len() == buffer.len() {
                     frame.copy_from_slice(buffer);
                     let _ = self.pixels.render();
                 } else {
                     // Resize if there's a mismatch
-                    self.engine_state.frame.resize(self.size.width, self.size.height);
-                    let buffer = self.engine_state.frame.buffer_mut();
+                    self.engine_state.resize_frame(self.size.width, self.size.height);
+                    let buffer = self.engine_state.frame_buffer_mut();
                     frame.copy_from_slice(buffer);
                     eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
                 }
@@ -61,7 +62,7 @@ impl ApplicationHandler for AppState {
                 self.size = new_size;
                 let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                 let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                self.engine_state.frame.resize(self.size.width, self.size.height);
+                self.engine_state.resize_frame(self.size.width, self.size.height);
                 self.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
@@ -70,7 +71,7 @@ impl ApplicationHandler for AppState {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.frame.resize(self.size.width, self.size.height);
+                    self.engine_state.resize_frame(self.size.width, self.size.height);
                     self.window.request_redraw();
                 }
             }
@@ -224,8 +225,10 @@ impl ApplicationHandler for AppStateWrapper {
                 }
             };
 
+            let shape = vec![size.height as usize, size.width as usize, 4];
+            let data = vec![0u8; (size.width * size.height * 4) as usize];
             let mut engine_state = EngineState {
-                frame: FrameState::new(size.width, size.height),
+                frame: Array::new_on_device(data, shape, Device::Cpu),
                 mouse: MouseState {
                     x: 0.0,
                     y: 0.0,
