@@ -1,7 +1,7 @@
 #[cfg(target_os = "ios")]
 use std::ffi::CString;
 #[cfg(target_os = "ios")]
-use std::os::raw::{c_char, c_void};
+use std::os::raw::c_char;
 #[cfg(target_os = "ios")]
 use std::ptr;
 #[cfg(target_os = "ios")]
@@ -17,6 +17,8 @@ use crate::engine::engine::CursorStyleSetter;
 use crate::tensor::array::{Array, Device};
 
 // Global engine state for iOS
+// Note: We use unsafe Send impl because Application trait objects are not Send,
+// but in practice iOS FFI calls are single-threaded from the main thread
 #[cfg(target_os = "ios")]
 static ENGINE_STATE: Mutex<Option<IosEngineState>> = Mutex::new(None);
 
@@ -27,6 +29,10 @@ struct IosEngineState {
     width: u32,
     height: u32,
 }
+
+// Unsafe Send implementation - safe because iOS FFI is called from main thread only
+#[cfg(target_os = "ios")]
+unsafe impl Send for IosEngineState {}
 
 /// Initialize the engine with an app name
 /// Returns error message as C string on failure, null on success
@@ -45,7 +51,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         }
     };
 
-    let app = match apps::get_app(app_name_str) {
+    let mut app = match apps::get_app(app_name_str) {
         Some(a) => a,
         None => {
             return CString::new(format!("App '{}' not found", app_name_str))
@@ -132,7 +138,12 @@ pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
     };
 
     if let Some(ref ios_state) = *state {
-        ios_state.engine_state.frame.data()
+        let data = ios_state.engine_state.frame.data();
+        if data.is_empty() {
+            ptr::null()
+        } else {
+            data.as_ptr()
+        }
     } else {
         ptr::null()
     }

@@ -5,7 +5,9 @@ use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
 use crate::apps::audiovis::media_control_bar::MediaControlBar;
 
 #[cfg(not(target_arch = "wasm32"))]
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStream, Sink, Source};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use rodio::OutputStreamBuilder;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
@@ -149,7 +151,7 @@ impl Application for AudiovisApp {
         // Open the selector on startup
         self.visual_type_selector.open();
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
         {
             // Open file picker for audio files
             let file = rfd::FileDialog::new()
@@ -219,6 +221,13 @@ impl Application for AudiovisApp {
                 // No audio file selected - close the app
                 return Err("No audio file selected. Application will close.".to_string());
             }
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            // iOS file picker would go here
+            // For now, just log that we're in iOS mode
+            println!("File picker not yet implemented for iOS");
         }
 
         #[cfg(target_arch = "wasm32")]
