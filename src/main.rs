@@ -28,9 +28,11 @@ enum Commands {
         app: AppCommands,
     },
     /// Build xos
-    Build,
-    /// Build Rust library for iOS
-    BuildIos,
+    Build {
+        /// Build Rust library for iOS
+        #[arg(long)]
+        ios: bool,
+    },
     /// Launch iOS app (requires Xcode project setup)
     Ios {
         /// App name to run
@@ -98,7 +100,7 @@ fn build_ios() {
 fn launch_ios(app_name: &str) {
     println!("📱 Launching iOS app: {}", app_name);
     println!("⚠️  iOS launch requires Xcode project setup.");
-    println!("   Please run: xos build-ios && cd ios && pod install");
+    println!("   Please run: xos build --ios && cd ios && pod install");
     println!("   Then open xos.xcworkspace in Xcode to build and run.");
 }
 
@@ -144,8 +146,12 @@ fn main() {
     let cli = Cli::parse();
     
     // Handle Build command separately - skip rebuild prompt since user explicitly wants to build
-    if let Some(Commands::Build) = &cli.command {
-        build();
+    if let Some(Commands::Build { ios }) = &cli.command {
+        if *ios {
+            build_ios();
+        } else {
+            build();
+        }
         return;
     }
     
@@ -166,13 +172,14 @@ fn main() {
         Some(Commands::App { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Build) => {
+        Some(Commands::Build { ios }) => {
             // This should never be reached due to early return above,
             // but Rust requires exhaustive matching
-            build();
-        }
-        Some(Commands::BuildIos) => {
-            build_ios();
+            if ios {
+                build_ios();
+            } else {
+                build();
+            }
         }
         Some(Commands::Ios { app }) => {
             launch_ios(&app);

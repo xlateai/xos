@@ -7,7 +7,7 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
 1. **Build the Rust library for iOS:**
    ```bash
    cd /path/to/xos
-   xos build-ios
+   xos build --ios
    # Or manually:
    ./build-ios.sh
    ```

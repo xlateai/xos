@@ -29,11 +29,16 @@ delaunator = "1.0"
 rand = "0.9.2"
 getrandom = "0.3.4"
 rand_pcg = "0.9.0"
-nokhwa = { version = "0.10.7", features = ["input-native"] }
 image = { version = "0.25", features = ["default-formats"] }
 pyo3 = { version = "0.27.2", optional = true, features = ["extension-module"] }
 rfd = "0.16.0"
 rodio = { version = "0.21.1", features = ["mp3", "flac", "vorbis", "wav"] }
+
+# -------------------------------------------------------------------
+# Desktop-only dependencies (exclude iOS)
+# -------------------------------------------------------------------
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
+nokhwa = { version = "0.10.7", features = ["input-native"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
