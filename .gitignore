@@ -12,6 +12,7 @@
 # iOS build artifacts
 *.a
 **/Pods/*
+**/ios/build/*
 
 # Xcode project files
 *.xcodeproj
