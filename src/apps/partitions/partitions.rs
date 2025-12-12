@@ -1,65 +1,111 @@
 use crate::engine::{Application, EngineState};
 use crate::tuneables;
-use super::partition::{Partition, DragRegion};
+use super::partition::{Partition, PartitionSetters, DragRegion};
+use super::partition_viewports::{PartitionA, PartitionB, PartitionC};
 
 // Rectangle 0
 tuneables! {
-    rect0_left: f32 = 0.1;
-    rect0_right: f32 = 0.4;
-    rect0_top: f32 = 0.15;
-    rect0_bottom: f32 = 0.5;
+    rect0_left: f32 = 0.18222387;
+    rect0_right: f32 = 0.48222387;
+    rect0_top: f32 = 0.16110823;
+    rect0_bottom: f32 = 0.5111084;
 }
 
 // Rectangle 1
 tuneables! {
-    rect1_left: f32 = 0.55;
-    rect1_right: f32 = 0.85;
-    rect1_top: f32 = 0.2;
-    rect1_bottom: f32 = 0.6;
+    rect1_left: f32 = 0.5177809;
+    rect1_right: f32 = 0.8177809;
+    rect1_top: f32 = 0.11311597;
+    rect1_bottom: f32 = 0.5131161;
 }
 
 // Rectangle 2
 tuneables! {
-    rect2_left: f32 = 0.2889232;
-    rect2_right: f32 = 0.78892314;
-    rect2_top: f32 = 0.61378366;
-    rect2_bottom: f32 = 0.86378366;
+    rect2_left: f32 = 0.2345478;
+    rect2_right: f32 = 0.7345477;
+    rect2_top: f32 = 0.57679886;
+    rect2_bottom: f32 = 0.82679886;
 }
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
-const RECT_COLOR_0: (u8, u8, u8) = (100, 150, 255);
-const RECT_COLOR_1: (u8, u8, u8) = (255, 150, 100);
-const RECT_COLOR_2: (u8, u8, u8) = (150, 255, 100);
+
+struct Rect0Setters;
+
+impl PartitionSetters for Rect0Setters {
+    fn set_left(&self, v: f32) {
+        rect0_left().set(v);
+    }
+    fn set_right(&self, v: f32) {
+        rect0_right().set(v);
+    }
+    fn set_top(&self, v: f32) {
+        rect0_top().set(v);
+    }
+    fn set_bottom(&self, v: f32) {
+        rect0_bottom().set(v);
+    }
+}
+
+struct Rect1Setters;
+
+impl PartitionSetters for Rect1Setters {
+    fn set_left(&self, v: f32) {
+        rect1_left().set(v);
+    }
+    fn set_right(&self, v: f32) {
+        rect1_right().set(v);
+    }
+    fn set_top(&self, v: f32) {
+        rect1_top().set(v);
+    }
+    fn set_bottom(&self, v: f32) {
+        rect1_bottom().set(v);
+    }
+}
+
+struct Rect2Setters;
+
+impl PartitionSetters for Rect2Setters {
+    fn set_left(&self, v: f32) {
+        rect2_left().set(v);
+    }
+    fn set_right(&self, v: f32) {
+        rect2_right().set(v);
+    }
+    fn set_top(&self, v: f32) {
+        rect2_top().set(v);
+    }
+    fn set_bottom(&self, v: f32) {
+        rect2_bottom().set(v);
+    }
+}
 
 pub struct Partitions {
-    partitions: Vec<Partition>,
+    partitions: Vec<Box<dyn Partition>>,
 }
 
 impl Partitions {
     pub fn new() -> Self {
         Self {
             partitions: vec![
-                Partition::new(
+                Box::new(PartitionA::new(
                     rect0_left().get(),
                     rect0_right().get(),
                     rect0_top().get(),
                     rect0_bottom().get(),
-                    RECT_COLOR_0,
-                ),
-                Partition::new(
+                )),
+                Box::new(PartitionB::new(
                     rect1_left().get(),
                     rect1_right().get(),
                     rect1_top().get(),
                     rect1_bottom().get(),
-                    RECT_COLOR_1,
-                ),
-                Partition::new(
+                )),
+                Box::new(PartitionC::new(
                     rect2_left().get(),
                     rect2_right().get(),
                     rect2_top().get(),
                     rect2_bottom().get(),
-                    RECT_COLOR_2,
-                ),
+                )),
             ],
         }
     }
@@ -67,22 +113,22 @@ impl Partitions {
     fn sync_partition_from_tuneables(&mut self, idx: usize) {
         match idx {
             0 => {
-                self.partitions[0].left = rect0_left().get();
-                self.partitions[0].right = rect0_right().get();
-                self.partitions[0].top = rect0_top().get();
-                self.partitions[0].bottom = rect0_bottom().get();
+                self.partitions[0].set_left(rect0_left().get());
+                self.partitions[0].set_right(rect0_right().get());
+                self.partitions[0].set_top(rect0_top().get());
+                self.partitions[0].set_bottom(rect0_bottom().get());
             }
             1 => {
-                self.partitions[1].left = rect1_left().get();
-                self.partitions[1].right = rect1_right().get();
-                self.partitions[1].top = rect1_top().get();
-                self.partitions[1].bottom = rect1_bottom().get();
+                self.partitions[1].set_left(rect1_left().get());
+                self.partitions[1].set_right(rect1_right().get());
+                self.partitions[1].set_top(rect1_top().get());
+                self.partitions[1].set_bottom(rect1_bottom().get());
             }
             2 => {
-                self.partitions[2].left = rect2_left().get();
-                self.partitions[2].right = rect2_right().get();
-                self.partitions[2].top = rect2_top().get();
-                self.partitions[2].bottom = rect2_bottom().get();
+                self.partitions[2].set_left(rect2_left().get());
+                self.partitions[2].set_right(rect2_right().get());
+                self.partitions[2].set_top(rect2_top().get());
+                self.partitions[2].set_bottom(rect2_bottom().get());
             }
             _ => {}
         }
@@ -126,35 +172,17 @@ impl Application for Partitions {
         // Check if any partition is being dragged
         let mut any_dragging = false;
         for (idx, partition) in self.partitions.iter_mut().enumerate() {
-            if partition.dragging {
+            if partition.dragging() {
                 any_dragging = true;
                 match idx {
                     0 => {
-                        partition.on_mouse_move(
-                            mx, my, w, h,
-                            |v| rect0_left().set(v),
-                            |v| rect0_right().set(v),
-                            |v| rect0_top().set(v),
-                            |v| rect0_bottom().set(v),
-                        );
+                        partition.on_mouse_move(mx, my, w, h, &Rect0Setters);
                     }
                     1 => {
-                        partition.on_mouse_move(
-                            mx, my, w, h,
-                            |v| rect1_left().set(v),
-                            |v| rect1_right().set(v),
-                            |v| rect1_top().set(v),
-                            |v| rect1_bottom().set(v),
-                        );
+                        partition.on_mouse_move(mx, my, w, h, &Rect1Setters);
                     }
                     2 => {
-                        partition.on_mouse_move(
-                            mx, my, w, h,
-                            |v| rect2_left().set(v),
-                            |v| rect2_right().set(v),
-                            |v| rect2_top().set(v),
-                            |v| rect2_bottom().set(v),
-                        );
+                        partition.on_mouse_move(mx, my, w, h, &Rect2Setters);
                     }
                     _ => {}
                 }
@@ -189,7 +217,7 @@ impl Application for Partitions {
         // Find which partition (if any) is under the mouse
         for partition in &mut self.partitions {
             partition.on_mouse_down(mx, my, w, h);
-            if partition.dragging {
+            if partition.dragging() {
                 break; // Only allow dragging one partition at a time
             }
         }
