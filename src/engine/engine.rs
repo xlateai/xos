@@ -1,4 +1,4 @@
-use crate::tensor::array::Array;
+use crate::tensor::array::{Array, Device};
 
 #[derive(Debug)]
 pub struct FrameState {
@@ -12,7 +12,7 @@ impl FrameState {
         let shape = vec![height as usize, width as usize, 4];
         let data = vec![0u8; (width * height * 4) as usize];
         Self {
-            array: Array::new(data, shape),
+            array: Array::new_on_device(data, shape, Device::Cpu),
         }
     }
 
@@ -43,7 +43,7 @@ impl FrameState {
     pub fn resize(&mut self, width: u32, height: u32) {
         let shape = vec![height as usize, width as usize, 4];
         let data = vec![0u8; (width * height * 4) as usize];
-        self.array = Array::new(data, shape);
+        self.array = Array::new_on_device(data, shape, Device::Cpu);
     }
 }
 
