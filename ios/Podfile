@@ -32,6 +32,10 @@ post_install do |installer|
           unless existing_flags.any? { |flag| flag.to_s.include?('AudioToolbox') }
             config.build_settings['OTHER_LDFLAGS'] = existing_flags + ['-framework', 'AudioToolbox']
           end
+          # Set default app name (can be overridden via command line)
+          unless config.build_settings['XOS_DEFAULT_APP']
+            config.build_settings['XOS_DEFAULT_APP'] = 'blank'
+          end
         end
       end
     end

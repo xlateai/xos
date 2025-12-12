@@ -55,7 +55,7 @@ fn prompt_rebuild_ios() -> RebuildOption {
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select rebuild option (use arrow keys)")
         .items(&options)
-        .default(3) // Default to no-rebuild (last option)
+        .default(0) // Default to rebuild-all
         .interact()
         .unwrap();
     

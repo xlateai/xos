@@ -64,6 +64,7 @@ xcodebuild -workspace xos.xcworkspace \
     -derivedDataPath build \
     -allowProvisioningUpdates \
     CODE_SIGN_STYLE=Automatic \
+    XOS_DEFAULT_APP="$APP_NAME" \
     build 2>&1 | tee "$BUILD_OUTPUT"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e  # Re-enable exit on error

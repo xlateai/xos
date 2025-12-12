@@ -48,6 +48,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>XOSDefaultApp</key>
+	<string>$(XOS_DEFAULT_APP)</string>
 </dict>
 </plist>
 

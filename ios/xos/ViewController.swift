@@ -3,7 +3,15 @@ import Xos
 
 class ViewController: UIViewController {
     private var viewportView: XosViewportView!
-    private var appName: String = "blank"
+    private var appName: String = {
+        // Try to get app name from Info.plist (set during build)
+        if let defaultApp = Bundle.main.infoDictionary?["XOSDefaultApp"] as? String,
+           !defaultApp.isEmpty && defaultApp != "$(XOS_DEFAULT_APP)" {
+            return defaultApp
+        }
+        // Fallback to blank
+        return "blank"
+    }()
     
     override func viewDidLoad() {
         super.viewDidLoad()
