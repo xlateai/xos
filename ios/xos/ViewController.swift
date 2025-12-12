@@ -1,4 +1,5 @@
 import UIKit
+import Xos
 
 class ViewController: UIViewController {
     private var viewportView: XosViewportView!

@@ -75,20 +75,35 @@ if [ $BUILD_STATUS -ne 0 ]; then
         echo "❌ Code signing is not configured."
         echo ""
         echo "📋 Please set up code signing in Xcode:"
-        echo "   1. Open the workspace:"
-        echo "      open xos.xcworkspace"
         echo ""
-        echo "   2. In Xcode:"
-        echo "      - Select the 'xos' project in the left navigator"
-        echo "      - Select the 'xos' target"
-        echo "      - Go to the 'Signing & Capabilities' tab"
-        echo "      - Check 'Automatically manage signing'"
-        echo "      - Select your Team (your Apple ID)"
+        echo "   You can open the workspace with:"
+        echo "      xed ios/"
+        echo "   Or:"
+        echo "      open ios/xos.xcworkspace"
         echo ""
-        echo "   3. If you don't have a team:"
-        echo "      - Xcode > Settings > Accounts"
-        echo "      - Click '+' to add your Apple ID"
-        echo "      - Then go back to Signing & Capabilities and select it"
+        echo "   In Xcode:"
+        echo "   1. Select the 'xos' project in the left navigator"
+        echo "   2. Select the 'xos' target"
+        echo "   3. Go to the 'Signing & Capabilities' tab"
+        echo "   4. Check 'Automatically manage signing'"
+        echo "   5. Select your Team (your Apple ID)"
+        echo ""
+        echo "   If you don't have a team:"
+        echo "   - Xcode > Settings > Accounts"
+        echo "   - Click '+' to add your Apple ID"
+        echo "   - Then go back to Signing & Capabilities and select it"
+        echo ""
+        
+        # Offer to open Xcode
+        if command -v xed &> /dev/null; then
+            echo "   Would you like me to open the workspace in Xcode? (Y/n): "
+            read -r response
+            if [[ -z "$response" || "$response" =~ ^[Yy] ]]; then
+                echo "   Opening workspace in Xcode..."
+                xed ios/ 2>/dev/null || open ios/xos.xcworkspace 2>/dev/null
+            fi
+        fi
+        
         echo ""
         echo "   After setting up signing, run this command again."
         rm -f "$BUILD_OUTPUT"

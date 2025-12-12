@@ -4,14 +4,14 @@ import MetalKit
 import QuartzCore
 
 /// High-performance Metal-based viewport renderer for XOS engine
-class XosViewportRenderer {
+public class XosViewportRenderer {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private var texture: MTLTexture?
     private var textureWidth: Int = 0
     private var textureHeight: Int = 0
     
-    init() {
+    public init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal is not supported on this device")
         }
@@ -80,17 +80,17 @@ class XosViewportRenderer {
 }
 
 /// Native view component for XOS engine rendering
-class XosViewportView: UIView {
+public class XosViewportView: UIView {
     private var metalLayer: CAMetalLayer?
     private let metalRenderer: XosViewportRenderer
     private var displayLink: CADisplayLink?
     private var appName: String = "blank"
     
-    required init?(coder: NSCoder) {
+    public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
     
-    override init(frame: CGRect) {
+    public override init(frame: CGRect) {
         self.metalRenderer = XosViewportRenderer()
         super.init(frame: frame)
         clipsToBounds = true
@@ -123,7 +123,7 @@ class XosViewportView: UIView {
         }
     }
     
-    func setAppName(_ name: String) {
+    public func setAppName(_ name: String) {
         appName = name
         xosEngineCleanup()
         initializeEngine()
