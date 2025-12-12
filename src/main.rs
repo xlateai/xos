@@ -29,6 +29,14 @@ enum Commands {
     },
     /// Build xos
     Build,
+    /// Build Rust library for iOS
+    BuildIos,
+    /// Launch iOS app (requires Xcode project setup)
+    Ios {
+        /// App name to run
+        #[arg(default_value = "blank")]
+        app: String,
+    },
 }
 
 fn prompt_rebuild() -> bool {
@@ -58,6 +66,40 @@ fn build() {
     }
     
     println!("✅ Build complete.");
+}
+
+fn build_ios() {
+    println!("🦀 Building Rust library for iOS...");
+    
+    let script_path = std::path::Path::new("build-ios.sh");
+    if !script_path.exists() {
+        eprintln!("❌ build-ios.sh not found. Make sure you're in the xos root directory.");
+        std::process::exit(1);
+    }
+    
+    let mut build_cmd = Command::new("bash");
+    build_cmd.arg(script_path);
+    build_cmd.stdout(Stdio::inherit());
+    build_cmd.stderr(Stdio::inherit());
+    
+    let status = build_cmd.status().expect("Failed to run build-ios.sh");
+    if !status.success() {
+        eprintln!("❌ iOS build failed. Exiting.");
+        std::process::exit(1);
+    }
+    
+    println!("✅ iOS build complete.");
+    println!("📱 Next steps:");
+    println!("   1. cd ios && pod install");
+    println!("   2. Open xos.xcworkspace in Xcode");
+    println!("   3. Build and run on device or simulator");
+}
+
+fn launch_ios(app_name: &str) {
+    println!("📱 Launching iOS app: {}", app_name);
+    println!("⚠️  iOS launch requires Xcode project setup.");
+    println!("   Please run: xos build-ios && cd ios && pod install");
+    println!("   Then open xos.xcworkspace in Xcode to build and run.");
 }
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
@@ -128,6 +170,12 @@ fn main() {
             // This should never be reached due to early return above,
             // but Rust requires exhaustive matching
             build();
+        }
+        Some(Commands::BuildIos) => {
+            build_ios();
+        }
+        Some(Commands::Ios { app }) => {
+            launch_ios(&app);
         }
         None => {
             eprintln!("❗ No command provided.\n");
