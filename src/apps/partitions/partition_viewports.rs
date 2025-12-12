@@ -1,17 +1,28 @@
 use super::partition::{Partition, PartitionData};
+use crate::apps::text::geometric::GeometricText;
+use fontdue::{Font, FontSettings};
+use std::cell::RefCell;
 
 const COLOR_A: (u8, u8, u8) = (100, 150, 255);
 const COLOR_B: (u8, u8, u8) = (255, 150, 100);
 const COLOR_C: (u8, u8, u8) = (150, 255, 100);
+const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 
 pub struct PartitionA {
     pub data: PartitionData,
+    text_engine: RefCell<GeometricText>,
 }
 
 impl PartitionA {
     pub fn new(left: f32, right: f32, top: f32, bottom: f32) -> Self {
+        let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
+        let mut text_engine = GeometricText::new(font, 24.0);
+        text_engine.set_text("Hello, welcome to the partition view display demo. I hope this finds you well, as it's become a priority of xos to make simple and powerful design tooling available at all levels of the system.".to_string());
+
         Self {
             data: PartitionData::new(left, right, top, bottom, COLOR_A),
+            text_engine: RefCell::new(text_engine),
         }
     }
 }
@@ -37,6 +48,7 @@ impl Partition for PartitionA {
         let rect_w = (x1 - x0).max(0) as u32;
         let rect_h = (y1 - y0).max(0) as u32;
 
+        // Draw the partition background
         for dy in 0..rect_h {
             for dx in 0..rect_w {
                 let sx = x0 + dx as i32;
@@ -48,6 +60,61 @@ impl Partition for PartitionA {
                     buffer[idx + 1] = COLOR_A.1;
                     buffer[idx + 2] = COLOR_A.2;
                     buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+
+        // Draw centered text
+        let mut text_engine = self.text_engine.borrow_mut();
+        text_engine.tick(rect_w as f32, rect_h as f32);
+
+        // Calculate text bounding box
+        let mut text_min_x = f32::MAX;
+        let mut text_max_x = f32::MIN;
+        let mut text_min_y = f32::MAX;
+        let mut text_max_y = f32::MIN;
+
+        for character in &text_engine.characters {
+            text_min_x = text_min_x.min(character.x);
+            text_max_x = text_max_x.max(character.x + character.width);
+            text_min_y = text_min_y.min(character.y);
+            text_max_y = text_max_y.max(character.y + character.height);
+        }
+
+        if text_engine.characters.is_empty() {
+            return;
+        }
+
+        let text_width = text_max_x - text_min_x;
+        let text_height = text_max_y - text_min_y;
+
+        // Calculate centering offset
+        let offset_x = (rect_w as f32 - text_width) / 2.0 - text_min_x;
+        let offset_y = (rect_h as f32 - text_height) / 2.0 - text_min_y;
+
+        // Draw each character
+        for character in &text_engine.characters {
+            let px = x0 + (character.x + offset_x) as i32;
+            let py = y0 + (character.y + offset_y) as i32;
+
+            for y in 0..character.metrics.height {
+                for x in 0..character.metrics.width {
+                    let val = character.bitmap[y * character.metrics.width + x];
+
+                    if val == 0 {
+                        continue;
+                    }
+
+                    let sx = px + x as i32;
+                    let sy = py + y as i32;
+
+                    if sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
+                        let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
+                        buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * val as u16) / 255) as u8;
+                        buffer[idx + 1] = ((TEXT_COLOR.1 as u16 * val as u16) / 255) as u8;
+                        buffer[idx + 2] = ((TEXT_COLOR.2 as u16 * val as u16) / 255) as u8;
+                        buffer[idx + 3] = val;
+                    }
                 }
             }
         }
