@@ -137,13 +137,38 @@ echo "✅ App built successfully: $APP_BUNDLE"
 # Install and launch using ios-deploy if available
 if command -v ios-deploy &> /dev/null; then
     echo "📲 Installing and launching app on device..."
-    ios-deploy --bundle "$APP_BUNDLE" --justlaunch
-    echo "✅ App launched!"
-elif command -v xcrun &> /dev/null && xcrun devicectl &> /dev/null; then
+    # Try to install and launch, but don't fail if launch doesn't work
+    if ios-deploy --bundle "$APP_BUNDLE" --justlaunch 2>&1 | tee /tmp/ios-deploy-output.log; then
+        echo "✅ App launched!"
+    else
+        # Check if install succeeded but launch failed
+        if grep -q "InstallComplete\|Installed package" /tmp/ios-deploy-output.log 2>/dev/null; then
+            echo "✅ App installed successfully!"
+            echo "⚠️  Launch failed (this is a known ios-deploy issue with newer iOS versions)"
+            echo "   The app is installed on your device - please launch it manually from the home screen."
+            echo ""
+            echo "   To launch from command line, try:"
+            echo "   xcrun devicectl device process launch --device $DEVICE_UDID com.xlate.xos"
+        else
+            echo "⚠️  Installation may have failed. Check the output above."
+        fi
+        rm -f /tmp/ios-deploy-output.log
+    fi
+elif command -v xcrun &> /dev/null && xcrun devicectl &> /dev/null 2>&1; then
     echo "📲 Installing app using xcrun devicectl..."
     # Modern iOS deployment (Xcode 15+)
-    xcrun devicectl device install app --device "$DEVICE_UDID" "$APP_BUNDLE"
-    echo "✅ App installed! Launch manually from device."
+    if xcrun devicectl device install app --device "$DEVICE_UDID" "$APP_BUNDLE"; then
+        echo "✅ App installed!"
+        echo "📲 Attempting to launch app..."
+        if xcrun devicectl device process launch --device "$DEVICE_UDID" com.xlate.xos 2>/dev/null; then
+            echo "✅ App launched!"
+        else
+            echo "⚠️  App installed but couldn't launch automatically."
+            echo "   Please launch it manually from your device's home screen."
+        fi
+    else
+        echo "⚠️  Installation failed. Check the error messages above."
+    fi
 else
     echo "⚠️  ios-deploy not found. App is built but not installed."
     echo "   Install with: brew install ios-deploy"
