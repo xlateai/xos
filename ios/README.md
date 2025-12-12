@@ -43,8 +43,23 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    ```
 
 5. **Build and run:**
+   
+   **Option A: From command line (requires ios-deploy):**
+   ```bash
+   cd ios
+   ./launch-device.sh
+   # Or from xos root:
+   xos ios <app-name>
+   ```
+   
+   **Option B: From Xcode:**
    - Select your target device or simulator
    - Press Cmd+R to build and run
+   
+   **Note:** For command line deployment, install ios-deploy:
+   ```bash
+   brew install ios-deploy
+   ```
 
 ## Project Structure
 

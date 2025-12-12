@@ -33,12 +33,6 @@ enum Commands {
         #[arg(long)]
         ios: bool,
     },
-    /// Launch iOS app (requires Xcode project setup)
-    Ios {
-        /// App name to run
-        #[arg(default_value = "blank")]
-        app: String,
-    },
 }
 
 fn prompt_rebuild() -> bool {
@@ -97,12 +91,6 @@ fn build_ios() {
     println!("   3. Build and run on device or simulator");
 }
 
-fn launch_ios(app_name: &str) {
-    println!("📱 Launching iOS app: {}", app_name);
-    println!("⚠️  iOS launch requires Xcode project setup.");
-    println!("   Please run: xos build --ios && cd ios && pod install");
-    println!("   Then open xos.xcworkspace in Xcode to build and run.");
-}
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
     println!("🔨 Rebuilding xos...");
@@ -180,9 +168,6 @@ fn main() {
             } else {
                 build();
             }
-        }
-        Some(Commands::Ios { app }) => {
-            launch_ios(&app);
         }
         None => {
             eprintln!("❗ No command provided.\n");
