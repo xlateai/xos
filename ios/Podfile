@@ -15,5 +15,27 @@ post_install do |installer|
       config.build_settings['SWIFT_VERSION'] = '5.9'
     end
   end
+  
+  # Add AudioToolbox framework to main app target for CoreAudio support
+  # The Xos pod already links it, but the main app target also needs it
+  # since it links against libxos.a which uses CoreAudio APIs
+  main_project_path = installer.sandbox.project_path.dirname + 'xos.xcodeproj'
+  if File.exist?(main_project_path)
+    require 'xcodeproj'
+    project = Xcodeproj::Project.open(main_project_path)
+    project.targets.each do |target|
+      if target.name == 'xos'
+        target.build_configurations.each do |config|
+          # Add AudioToolbox framework to linker flags
+          existing_flags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          existing_flags = [existing_flags] unless existing_flags.is_a?(Array)
+          unless existing_flags.any? { |flag| flag.to_s.include?('AudioToolbox') }
+            config.build_settings['OTHER_LDFLAGS'] = existing_flags + ['-framework', 'AudioToolbox']
+          end
+        end
+      end
+    end
+    project.save
+  end
 end
 

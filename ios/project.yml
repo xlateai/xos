@@ -15,3 +15,4 @@ targets:
       SWIFT_VERSION: "5.9"
       INFOPLIST_FILE: xos/Info.plist
       CODE_SIGN_IDENTITY: "Apple Development"
+      OTHER_LDFLAGS: ["$(inherited)", "-framework", "AudioToolbox"]
