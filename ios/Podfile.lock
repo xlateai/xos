@@ -1,0 +1,16 @@
+PODS:
+  - Xos (0.1.23)
+
+DEPENDENCIES:
+  - Xos (from `.`)
+
+EXTERNAL SOURCES:
+  Xos:
+    :path: "."
+
+SPEC CHECKSUMS:
+  Xos: 6ff1d20facbfa1ea565463aa98db0c9bf328b4aa
+
+PODFILE CHECKSUM: 111445db52066c9ae12ee8fae450ff6515626c8c
+
+COCOAPODS: 1.16.2

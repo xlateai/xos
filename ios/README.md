@@ -12,18 +12,37 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    ./build-ios.sh
    ```
 
-2. **Install CocoaPods dependencies:**
+2. **Create Xcode project (if not exists):**
+   
+   **Option A: Using xcodegen (recommended):**
+   ```bash
+   brew install xcodegen
+   cd ios
+   ./create-xcode-project.sh
+   ```
+   
+   **Option B: Manual creation in Xcode:**
+   - Open Xcode
+   - File > New > Project
+   - Choose "iOS" > "App"
+   - Product Name: `xos`
+   - Interface: Storyboard
+   - Language: Swift
+   - Save to the `ios/` directory
+   - Make sure the project is named `xos.xcodeproj`
+
+3. **Install CocoaPods dependencies:**
    ```bash
    cd ios
    pod install
    ```
 
-3. **Open the workspace in Xcode:**
+4. **Open the workspace in Xcode:**
    ```bash
    open xos.xcworkspace
    ```
 
-4. **Build and run:**
+5. **Build and run:**
    - Select your target device or simulator
    - Press Cmd+R to build and run
 
@@ -60,4 +79,3 @@ You can change which app runs by:
 1. Modifying the `appName` variable in `ViewController.swift`
 2. Using the "Change App" button in the UI (if enabled)
 3. Available apps: `blank`, `ball`, `tracers`, `camera`, `whiteboard`, `waveform`, `scroll`, `text`, `wireframe`, `triangles`, `cursor`, `audiovis`, `partitions`
-

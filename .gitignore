@@ -9,6 +9,14 @@
 # Debug artifacts
 *.pdb
 
+# iOS build artifacts
+*.a
+**/Pods/*
+
+# Xcode project files
+*.xcodeproj
+*.xcworkspace
+
 # Cargo.lock is recommended to be included for binaries and excluded for libraries
 # Uncomment this line if you're developing a library
 # Cargo.lock
