@@ -142,16 +142,16 @@ impl CameraApp {
 
 impl Application for CameraApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        self.last_width = state.frame.width;
-        self.last_height = state.frame.height;
+        self.last_width = state.frame.width();
+        self.last_height = state.frame.height();
 
         webcam::init_camera();
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
 
         if width != self.last_width || height != self.last_height {
             self.last_width = width;
@@ -161,7 +161,7 @@ impl Application for CameraApp {
         let rgb_frame = self.capture_frame(width, height);
 
         // Fix: Get a mutable reference to the buffer
-        let rgba = &mut state.frame.buffer;
+        let rgba = state.frame.buffer_mut();
         rgba.fill(0); // Optional: black background for areas not filled
         Self::copy_rgb_to_rgba(&rgb_frame, rgba);
     }

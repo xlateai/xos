@@ -128,9 +128,9 @@ impl Application for TrianglesApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let width = state.frame.width as f64;
-        let height = state.frame.height as f64;
-        let buffer = &mut state.frame.buffer;
+        let width = state.frame.width() as f64;
+        let height = state.frame.height() as f64;
+        let buffer = state.frame.buffer_mut();
 
         for chunk in buffer.chunks_exact_mut(4) {
             chunk[0] = BACKGROUND_COLOR.0;

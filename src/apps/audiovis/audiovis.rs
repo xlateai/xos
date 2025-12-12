@@ -232,7 +232,7 @@ impl Application for AudiovisApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let buffer = &mut state.frame.buffer;
+        let buffer = state.frame.buffer_mut();
         let len = buffer.len();
 
         // Clear background
@@ -244,7 +244,7 @@ impl Application for AudiovisApp {
         }
 
         // Update and render the selector
-        self.visual_type_selector.update(state.frame.width as f32, state.frame.height as f32);
+        self.visual_type_selector.update(state.frame.width() as f32, state.frame.height() as f32);
         
         // Check if selector is closed and we have a selection
         if !self.visual_type_selector.is_open() {

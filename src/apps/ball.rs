@@ -105,10 +105,9 @@ impl BallGame {
         cy: f32,
         radius: f32,
     ) {
-        let buffer = &mut state.frame.buffer;
-        
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
         let radius_squared = radius * radius;
 
         let start_x = (cx - radius).max(0.0) as u32;
@@ -137,13 +136,13 @@ impl BallGame {
 impl Application for BallGame {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.balls
-            .push(BallState::new(state.frame.width as f32, state.frame.height as f32, BALL_RADIUS));
+            .push(BallState::new(state.frame.width() as f32, state.frame.height() as f32, BALL_RADIUS));
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
         for ball in &mut self.balls {
-            ball.update(state.frame.width as f32, state.frame.height as f32);
+            ball.update(state.frame.width() as f32, state.frame.height() as f32);
         }
 
         for ball in &self.balls {

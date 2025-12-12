@@ -87,9 +87,9 @@ impl WireframeText {
     }
 
     fn draw_text(&mut self, state: &mut EngineState, tx: i32, ty: i32, tw: u32, th: u32) {
-        let buffer = &mut state.frame.buffer;
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
         self.text_engine.tick(tw as f32, th as f32);
 
         for character in &self.text_engine.characters {
@@ -152,22 +152,24 @@ impl Application for WireframeText {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.buffer.chunks_exact_mut(4).for_each(|p| {
+        state.frame.buffer_mut().chunks_exact_mut(4).for_each(|p| {
             p[0] = BACKGROUND_COLOR.0;
             p[1] = BACKGROUND_COLOR.1;
             p[2] = BACKGROUND_COLOR.2;
             p[3] = 0xff;
         });
 
-        let (x0, y0, w, h) = self.draw_square_from_edges(&mut state.frame.buffer, state.frame.width, state.frame.height);
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let (x0, y0, w, h) = self.draw_square_from_edges(state.frame.buffer_mut(), width, height);
         self.draw_text(state, x0, y0, w, h);
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let w = state.frame.width as f32;
-        let h = state.frame.height as f32;
+        let w = state.frame.width() as f32;
+        let h = state.frame.height() as f32;
     
         if self.dragging != DragRegion::None {
             match self.dragging {
@@ -248,8 +250,8 @@ impl Application for WireframeText {
     
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let w = state.frame.width as f32;
-        let h = state.frame.height as f32;
+        let w = state.frame.width() as f32;
+        let h = state.frame.height() as f32;
         self.dragging = Self::region_under_mouse(state.mouse.x, state.mouse.y, w, h);
         self.drag_offset_x = state.mouse.x;
         self.drag_offset_y = state.mouse.y;

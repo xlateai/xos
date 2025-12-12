@@ -100,27 +100,26 @@ impl Application for Partitions {
             self.sync_partition_from_tuneables(i);
         }
 
-        state.frame.buffer.chunks_exact_mut(4).for_each(|p| {
+        state.frame.buffer_mut().chunks_exact_mut(4).for_each(|p| {
             p[0] = BACKGROUND_COLOR.0;
             p[1] = BACKGROUND_COLOR.1;
             p[2] = BACKGROUND_COLOR.2;
             p[3] = 0xff;
         });
 
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
         for partition in &self.partitions {
-            partition.draw(
-                &mut state.frame.buffer,
-                state.frame.width,
-                state.frame.height,
-            );
+            partition.draw(buffer, width, height);
         }
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let w = state.frame.width as f32;
-        let h = state.frame.height as f32;
+        let w = state.frame.width() as f32;
+        let h = state.frame.height() as f32;
 
         // Check if any partition is being dragged
         let mut any_dragging = false;
@@ -179,8 +178,8 @@ impl Application for Partitions {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let w = state.frame.width as f32;
-        let h = state.frame.height as f32;
+        let w = state.frame.width() as f32;
+        let h = state.frame.height() as f32;
         let mx = state.mouse.x;
         let my = state.mouse.y;
 

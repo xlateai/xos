@@ -90,8 +90,8 @@ impl Selector {
 
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
-        let width = state.frame.width as f32;
-        let height = state.frame.height as f32;
+        let width = state.frame.width() as f32;
+        let height = state.frame.height() as f32;
 
         // Calculate selector position (centered)
         let selector_width = 300.0;
@@ -143,9 +143,9 @@ impl Selector {
             return; // Fully closed, don't render
         }
 
-        let buffer = &mut state.frame.buffer;
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
 
         // Calculate selector dimensions and position
         let selector_width = 300.0;

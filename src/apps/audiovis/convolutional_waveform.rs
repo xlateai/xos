@@ -1,5 +1,5 @@
 use crate::engine::EngineState;
-use crate::tensor::{Array, Device, ConvParams, depthwise_conv2d, conv2d};
+use crate::tensor::{Array, Device, ConvParams, depthwise_conv2d};
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
@@ -418,9 +418,9 @@ impl ConvolutionalWaveform {
 
         // Apply convolution each frame
         self.apply_convolution();
-        let buffer = &mut state.frame.buffer;
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
 
         // Calculate pixel size to maintain square pixels
         // Use the smaller dimension to determine pixel size

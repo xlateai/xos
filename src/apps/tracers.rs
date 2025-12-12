@@ -11,7 +11,7 @@ const TRAIL_LENGTH: usize = (TRAIL_DURATION_SECONDS * FRAME_RATE) as usize;
 
 
 fn draw_circle(
-    buffer: &mut Vec<u8>,
+    buffer: &mut [u8],
     width: u32,
     height: u32,
     cx: f32,
@@ -60,23 +60,23 @@ impl Application for TracersApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         for _ in 0..PARTICLE_COUNT {
             self.particles.push(Particle::new(
-                state.frame.width as f32,
-                state.frame.height as f32,
+                state.frame.width() as f32,
+                state.frame.height() as f32,
             ));
         }
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
 
         for particle in &mut self.particles {
             particle.update(width as f32, height as f32);
 
             for (i, &(x, y)) in particle.trail.iter().enumerate() {
                 let alpha = ((i + 1) as f32 / particle.trail.len() as f32 * 255.0) as u8;
-                draw_circle(&mut state.frame.buffer, width, height, x, y, PARTICLE_RADIUS, alpha);
+                draw_circle(state.frame.buffer_mut(), width, height, x, y, PARTICLE_RADIUS, alpha);
             }
         }
     }

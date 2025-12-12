@@ -19,9 +19,9 @@ impl Application for CursorApp {
     fn tick(&mut self, state: &mut EngineState) {
         // state.mouse.style.hidden();
 
-        let buffer = &mut state.frame.buffer;
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
 
         // Fill background
         for i in (0..buffer.len()).step_by(4) {

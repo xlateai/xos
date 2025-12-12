@@ -79,10 +79,6 @@ impl Partition {
         let bottom = self.bottom * h;
         let near = 8.0;
 
-        // Check if mouse is within the bounds of the partition (with some tolerance)
-        let within_horizontal = mx >= (left - near) && mx <= (right + near);
-        let within_vertical = my >= (top - near) && my <= (bottom + near);
-        
         // Check proximity to edges, but only if mouse is within the partition bounds
         let near_left = (mx - left).abs() <= near && my >= (top - near) && my <= (bottom + near);
         let near_right = (mx - right).abs() <= near && my >= (top - near) && my <= (bottom + near);

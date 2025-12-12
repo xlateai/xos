@@ -37,20 +37,23 @@ impl ApplicationHandler for AppState {
                     self.size = current_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.frame.width = self.size.width;
-                    self.engine_state.frame.height = self.size.height;
-                    self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
+                    self.engine_state.frame.resize(self.size.width, self.size.height);
                 }
 
-                self.engine_state.frame.buffer.fill(0);
+                // Clear the frame buffer
+                self.engine_state.frame.buffer_mut().fill(0);
                 let _ = self.app.tick(&mut self.engine_state);
 
                 let frame = self.pixels.frame_mut();
-                if frame.len() == self.engine_state.frame.buffer.len() {
-                    frame.copy_from_slice(&self.engine_state.frame.buffer);
+                let buffer = self.engine_state.frame.buffer_mut();
+                if frame.len() == buffer.len() {
+                    frame.copy_from_slice(buffer);
                     let _ = self.pixels.render();
                 } else {
-                    self.engine_state.frame.buffer.resize(frame.len(), 0);
+                    // Resize if there's a mismatch
+                    self.engine_state.frame.resize(self.size.width, self.size.height);
+                    let buffer = self.engine_state.frame.buffer_mut();
+                    frame.copy_from_slice(buffer);
                     eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
                 }
             }
@@ -58,9 +61,7 @@ impl ApplicationHandler for AppState {
                 self.size = new_size;
                 let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                 let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                self.engine_state.frame.width = self.size.width;
-                self.engine_state.frame.height = self.size.height;
-                self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
+                self.engine_state.frame.resize(self.size.width, self.size.height);
                 self.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
@@ -69,9 +70,7 @@ impl ApplicationHandler for AppState {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.frame.width = self.size.width;
-                    self.engine_state.frame.height = self.size.height;
-                    self.engine_state.frame.buffer = vec![0; (self.size.width * self.size.height * 4) as usize];
+                    self.engine_state.frame.resize(self.size.width, self.size.height);
                     self.window.request_redraw();
                 }
             }
@@ -226,11 +225,7 @@ impl ApplicationHandler for AppStateWrapper {
             };
 
             let mut engine_state = EngineState {
-                frame: FrameState {
-                    width: size.width,
-                    height: size.height,
-                    buffer: vec![0; (size.width * size.height * 4) as usize],
-                },
+                frame: FrameState::new(size.width, size.height),
                 mouse: MouseState {
                     x: 0.0,
                     y: 0.0,

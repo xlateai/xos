@@ -1,8 +1,50 @@
-#[derive(Debug, Clone)]
+use crate::tensor::array::Array;
+
+#[derive(Debug)]
 pub struct FrameState {
-    pub width: u32,
-    pub height: u32,
-    pub buffer: Vec<u8>,
+    /// Array with shape [height, width, 4] for RGBA pixels
+    array: Array<u8>,
+}
+
+impl FrameState {
+    /// Create a new FrameState with the given dimensions
+    pub fn new(width: u32, height: u32) -> Self {
+        let shape = vec![height as usize, width as usize, 4];
+        let data = vec![0u8; (width * height * 4) as usize];
+        Self {
+            array: Array::new(data, shape),
+        }
+    }
+
+    /// Get the width of the frame
+    pub fn width(&self) -> u32 {
+        let shape = self.array.shape();
+        shape[1] as u32
+    }
+
+    /// Get the height of the frame
+    pub fn height(&self) -> u32 {
+        let shape = self.array.shape();
+        shape[0] as u32
+    }
+
+    /// Get mutable access to the buffer (zero-copy for CPU arrays)
+    /// Panics if the array is on a non-CPU device
+    pub fn buffer_mut(&mut self) -> &mut [u8] {
+        self.array.data_mut()
+    }
+
+    /// Get the underlying array
+    pub fn array(&self) -> &Array<u8> {
+        &self.array
+    }
+
+    /// Resize the frame to new dimensions
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let shape = vec![height as usize, width as usize, 4];
+        let data = vec![0u8; (width * height * 4) as usize];
+        self.array = Array::new(data, shape);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

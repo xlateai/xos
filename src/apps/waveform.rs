@@ -82,9 +82,9 @@ impl Application for Waveform {
 
     fn tick(&mut self, state: &mut EngineState) {
         let Some(listener) = &self.listener else { return };
-        let buffer = &mut state.frame.buffer;
-        let width = state.frame.width;
-        let height = state.frame.height;
+        let width = state.frame.width();
+        let height = state.frame.height();
+        let buffer = state.frame.buffer_mut();
 
         for pixel in buffer.chunks_exact_mut(4) {
             pixel[0] = 16;

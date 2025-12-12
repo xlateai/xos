@@ -123,15 +123,15 @@ impl Whiteboard {
 
 impl Application for Whiteboard {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        self.cached_width = state.frame.width;
-        self.cached_height = state.frame.height;
+        self.cached_width = state.frame.width();
+        self.cached_height = state.frame.height();
         self.cached_canvas = vec![0; (self.cached_width * self.cached_height * 4) as usize];
         self.needs_redraw = true;
         Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let (width, height) = (state.frame.width, state.frame.height);
+        let (width, height) = (state.frame.width(), state.frame.height());
 
         if width != self.cached_width || height != self.cached_height {
             self.cached_width = width;
@@ -179,18 +179,18 @@ impl Application for Whiteboard {
         }
 
         // Push final canvas
-        state.frame.buffer.copy_from_slice(&self.cached_canvas);
+        state.frame.buffer_mut().copy_from_slice(&self.cached_canvas);
 
         // Live preview stroke
         if let Some((first, rest)) = self.current_stroke.split_first() {
             let (x0, y0) = self.world_to_screen(first.0, first.1);
             if rest.is_empty() {
-                draw_circle(&mut state.frame.buffer, width, height, x0, y0, STROKE_WIDTH);
+                draw_circle(state.frame.buffer_mut(), width, height, x0, y0, STROKE_WIDTH);
             } else {
                 let mut last = *first;
                 for &point in rest {
                     let (x1, y1) = self.world_to_screen(point.0, point.1);
-                    draw_line(&mut state.frame.buffer, width, height, last.0 * self.zoom + self.offset_x, last.1 * self.zoom + self.offset_y, x1, y1);
+                    draw_line(state.frame.buffer_mut(), width, height, last.0 * self.zoom + self.offset_x, last.1 * self.zoom + self.offset_y, x1, y1);
                     last = point;
                 }
             }
@@ -198,7 +198,7 @@ impl Application for Whiteboard {
 
         // Cursor
         draw_cursor_dot(
-            &mut state.frame.buffer,
+            state.frame.buffer_mut(),
             width,
             height,
             state.mouse.x,
