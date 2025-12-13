@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
@@ -80,11 +81,46 @@ fn prompt_rebuild() -> bool {
     input.is_empty() || (!input.starts_with('n'))
 }
 
+/// Find the xos project root directory by searching for marker files
+/// (Cargo.toml or build-ios.sh) by walking up from the current directory
+fn find_project_root() -> PathBuf {
+    // First, try using CARGO_MANIFEST_DIR if available (when building from source)
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let path = PathBuf::from(manifest_dir);
+        if path.join("build-ios.sh").exists() {
+            return path;
+        }
+    }
+    
+    // Otherwise, search from current working directory
+    let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+    
+    loop {
+        // Check for marker files that indicate this is the project root
+        if current_dir.join("build-ios.sh").exists() || 
+           current_dir.join("Cargo.toml").exists() {
+            return current_dir;
+        }
+        
+        // Move up one directory
+        match current_dir.parent() {
+            Some(parent) => current_dir = parent.to_path_buf(),
+            None => {
+                eprintln!("❌ Could not find xos project root. Make sure you're in or below the xos directory.");
+                eprintln!("   Looking for: build-ios.sh or Cargo.toml");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 fn build() {
     println!("🔨 Building xos...");
     
+    let project_root = find_project_root();
+    
     let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", "."]);
+    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
     cargo_cmd.stdout(Stdio::inherit());
     cargo_cmd.stderr(Stdio::inherit());
     
@@ -100,14 +136,17 @@ fn build() {
 fn build_ios_rust() {
     println!("🦀 Building Rust library for iOS...");
     
-    let script_path = std::path::Path::new("build-ios.sh");
+    let project_root = find_project_root();
+    let script_path = project_root.join("build-ios.sh");
+    
     if !script_path.exists() {
-        eprintln!("❌ build-ios.sh not found. Make sure you're in the xos root directory.");
+        eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
         std::process::exit(1);
     }
     
     let mut build_cmd = Command::new("bash");
-    build_cmd.arg(script_path);
+    build_cmd.arg(&script_path);
+    build_cmd.current_dir(&project_root);
     build_cmd.stdout(Stdio::inherit());
     build_cmd.stderr(Stdio::inherit());
     
@@ -122,9 +161,12 @@ fn build_ios_rust() {
 
 fn build_ios_swift() {
     println!("📦 Running pod install...");
-    let ios_dir = std::path::Path::new("ios");
+    
+    let project_root = find_project_root();
+    let ios_dir = project_root.join("ios");
+    
     if !ios_dir.exists() {
-        eprintln!("❌ ios/ directory not found.");
+        eprintln!("❌ ios/ directory not found at: {}", ios_dir.display());
         std::process::exit(1);
     }
     
@@ -132,7 +174,8 @@ fn build_ios_swift() {
     let pod_script = ios_dir.join("pod-install.sh");
     let mut pod_cmd = if pod_script.exists() {
         let mut cmd = Command::new("bash");
-        cmd.arg(&pod_script);
+        // Use relative path since we're setting current_dir to ios_dir
+        cmd.arg("./pod-install.sh");
         cmd
     } else {
         // Fallback to direct pod install with UTF-8 encoding
@@ -143,14 +186,14 @@ fn build_ios_swift() {
         cmd
     };
     
-    pod_cmd.current_dir(ios_dir);
+    pod_cmd.current_dir(&ios_dir);
     pod_cmd.stdout(Stdio::inherit());
     pod_cmd.stderr(Stdio::inherit());
     
     let pod_status = pod_cmd.status().expect("Failed to run pod install");
     if !pod_status.success() {
         eprintln!("⚠️  pod install failed.");
-        eprintln!("   You can manually run: cd ios && ./pod-install.sh");
+        eprintln!("   You can manually run: cd {} && ./pod-install.sh", ios_dir.display());
         std::process::exit(1);
     } else {
         println!("✅ Pod installation complete.");
@@ -171,8 +214,10 @@ fn build_ios() {
 fn rebuild_and_reexecute(original_args: Vec<String>) {
     println!("🔨 Rebuilding xos...");
     
+    let project_root = find_project_root();
+    
     let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", "."]);
+    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
     cargo_cmd.stdout(Stdio::inherit());
     cargo_cmd.stderr(Stdio::inherit());
     
@@ -236,8 +281,9 @@ fn main() {
                 }
                 RebuildOption::RebuildAll => {
                     println!("🔨 Rebuilding Rust CLI...");
+                    let project_root = find_project_root();
                     let mut cargo_cmd = Command::new("cargo");
-                    cargo_cmd.args(&["install", "--path", "."]);
+                    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
                     cargo_cmd.stdout(Stdio::inherit());
                     cargo_cmd.stderr(Stdio::inherit());
                     let status = cargo_cmd.status().expect("Failed to run cargo install");
