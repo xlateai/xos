@@ -5,8 +5,25 @@ import Darwin
 // Global signal handler storage
 private var previousSignalHandlers: [Int32: sig_t] = [:]
 
+// Global flag to prevent recursive signal handling
+private var isHandlingCrash = false
+
 // C-compatible signal handler function
 private func signalHandler(_ signal: Int32) {
+    // Prevent recursive calls
+    guard !isHandlingCrash else {
+        // If we're already handling a crash, restore default handler and abort
+        if let previous = previousSignalHandlers[signal] {
+            Darwin.signal(signal, previous)
+        } else {
+            Darwin.signal(signal, SIG_DFL)
+        }
+        Darwin.raise(signal)
+        return
+    }
+    
+    isHandlingCrash = true
+    
     let signalName: String
     switch signal {
     case SIGABRT: signalName = "SIGABRT (Abort - fatalError/assertion)"
@@ -27,17 +44,35 @@ private func signalHandler(_ signal: Int32) {
     print("CRASH: [Swift Crash] \(errorMsg)")
     
     // Post notification to show crash overlay
-    DispatchQueue.main.async {
+    // Use sync dispatch to main queue to ensure notification is posted before termination
+    if Thread.isMainThread {
         NotificationCenter.default.post(
             name: NSNotification.Name("XosSwiftCrashed"),
             object: nil,
-            userInfo: ["type": "Swift Crash", "message": errorMsg]
+            userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
         )
+        // Give UI a moment to display
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    } else {
+        DispatchQueue.main.sync {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("XosSwiftCrashed"),
+                object: nil,
+                userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
+            )
+            // Give UI a moment to display
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        }
     }
     
-    // Restore previous handler and re-raise signal
+    // For fatal signals (SIGSEGV, SIGBUS, SIGILL, SIGFPE), the process is in a bad state
+    // and cannot safely continue. We must terminate.
+    // For SIGABRT and SIGTRAP, we might be able to continue in some cases, but it's safer to terminate.
+    // Restore previous handler and re-raise signal to allow normal crash reporting
     if let previous = previousSignalHandlers[signal] {
         Darwin.signal(signal, previous)
+    } else {
+        Darwin.signal(signal, SIG_DFL)
     }
     Darwin.raise(signal)
 }
@@ -53,16 +88,24 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Set up exception handler for Objective-C exceptions
         NSSetUncaughtExceptionHandler { exception in
             let errorMsg = "Uncaught Objective-C Exception: \(exception.name.rawValue)\nReason: \(exception.reason ?? "Unknown")\nStack: \(exception.callStackSymbols.prefix(10).joined(separator: "\n"))"
-            ConsoleManager.shared.addLog("CRASH: [Objective-C Exception] \(errorMsg)")
-            print("CRASH: [Objective-C Exception] \(errorMsg)")
+            ConsoleManager.shared.addLog("CRASH: [Swift Crash] \(errorMsg)")
+            print("CRASH: [Swift Crash] \(errorMsg)")
             
-            // Post notification
-            DispatchQueue.main.async {
+            // Post notification (sync on main thread to ensure it's posted)
+            if Thread.isMainThread {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("XosSwiftCrashed"),
                     object: nil,
-                    userInfo: ["type": "Objective-C Exception", "message": errorMsg]
+                    userInfo: ["type": "Swift Crash", "message": errorMsg]
                 )
+            } else {
+                DispatchQueue.main.sync {
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("XosSwiftCrashed"),
+                        object: nil,
+                        userInfo: ["type": "Swift Crash", "message": errorMsg]
+                    )
+                }
             }
         }
         

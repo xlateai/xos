@@ -87,6 +87,7 @@ public class XosViewportView: UIView {
     private var appName: String = "blank"
     private var isEngineInitialized = false
     private var pendingAppName: String?
+    private var crashOverlay: UIView?
     
     public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
@@ -110,7 +111,21 @@ public class XosViewportView: UIView {
         // Set up Rust logging callback once
         setupRustLogging()
         
+        // Listen for Swift crashes to show overlay in isolated frame
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSwiftCrashNotification(_:)),
+            name: NSNotification.Name("XosSwiftCrashed"),
+            object: nil
+        )
+        
         // Engine will be initialized when setAppName is called and view has valid bounds
+    }
+    
+    @objc private func handleSwiftCrashNotification(_ notification: Notification) {
+        // Show crash overlay in this view (isolated application frame)
+        showCrashOverlay(crashType: "Swift crash", appName: nil)
+        stopAnimation()
     }
     
     private func initializeEngine() {
@@ -133,13 +148,16 @@ public class XosViewportView: UIView {
             isEngineInitialized = true
             pendingAppName = nil // Clear pending app name since we've initialized
             hasCrashed = false // Reset crash state on successful init
+            hideCrashOverlay() // Hide any crash overlay on successful init
             ConsoleManager.shared.addLog("Engine initialized: \(appName) (\(width)x\(height))")
             startAnimation()
         } catch {
             let errorMsg = "Failed to initialize XOS engine: \(error.localizedDescription)"
             ConsoleManager.shared.addLog("ERROR: \(errorMsg)")
             print(errorMsg)
-            handleEngineCrash(errorMsg)
+            // Show Swift crash overlay since this is a Swift-side error
+            showCrashOverlay(crashType: "Swift crash", appName: nil)
+            stopAnimation()
         }
     }
     
@@ -159,6 +177,7 @@ public class XosViewportView: UIView {
     public func setAppName(_ name: String) {
         appName = name
         hasCrashed = false // Reset crash state when changing apps
+        hideCrashOverlay() // Hide crash overlay when changing apps
         
         // If engine is already initialized, cleanup and reinitialize
         if isEngineInitialized {
@@ -226,7 +245,10 @@ public class XosViewportView: UIView {
         stopAnimation()
         ConsoleManager.shared.addLog("ERROR: \(message)")
         
-        // Notify that engine has crashed
+        // Show crash overlay in this view (isolated application frame)
+        showCrashOverlay(crashType: "Rust crash", appName: appName)
+        
+        // Notify that engine has crashed (for console auto-open, etc.)
         NotificationCenter.default.post(
             name: NSNotification.Name("XosEngineCrashed"),
             object: nil,
@@ -234,61 +256,114 @@ public class XosViewportView: UIView {
         )
     }
     
+    /// Show crash overlay in the isolated application frame
+    public func showCrashOverlay(crashType: String, appName: String?) {
+        // Remove existing overlay if any
+        hideCrashOverlay()
+        
+        // Create crash overlay
+        let overlay = UIView()
+        overlay.backgroundColor = .black
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(overlay)
+        
+        // Create crash message label
+        let label = UILabel()
+        if let appName = appName {
+            label.text = "\(crashType)\n\(appName)"
+        } else {
+            label.text = crashType
+        }
+        label.textColor = .white
+        label.font = UIFont.systemFont(ofSize: 24, weight: .medium)
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(label)
+        
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+            
+            label.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: overlay.centerYAnchor)
+        ])
+        
+        crashOverlay = overlay
+    }
+    
+    /// Hide crash overlay
+    public func hideCrashOverlay() {
+        crashOverlay?.removeFromSuperview()
+        crashOverlay = nil
+    }
+    
     @objc private func renderFrame() {
-        // Tick the engine
-        guard xosEngineTick() else {
-            // Engine tick failed - this might indicate a crash
-            handleEngineCrash("Engine tick failed - engine may have crashed")
-            return
+        // Wrap in do-catch to catch any Swift exceptions
+        do {
+            // Tick the engine
+            guard xosEngineTick() else {
+                // Engine tick failed - this might indicate a crash
+                handleEngineCrash("Engine tick failed - engine may have crashed")
+                return
+            }
+            
+            // Get frame buffer from engine
+            guard let frameBuffer = xosEngineGetFrameBuffer(),
+                  let size = xosEngineGetFrameSize() else {
+                // Frame buffer unavailable - might be a crash
+                handleEngineCrash("Failed to get frame buffer - engine may have crashed")
+                return
+            }
+            
+            let width = Int(size.width)
+            let height = Int(size.height)
+            
+            // Update Metal texture
+            metalRenderer.updateTexture(
+                width: width,
+                height: height,
+                rgbaData: frameBuffer
+            )
+            
+            // Render using Metal
+            guard let metalLayer = metalLayer,
+                  let drawable = metalLayer.nextDrawable(),
+                  let sourceTexture = metalRenderer.getTexture() else {
+                return
+            }
+            
+            // Use blit encoder for fast texture copy
+            guard let commandBuffer = metalRenderer.getCommandQueue().makeCommandBuffer(),
+                  let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
+                return
+            }
+            
+            // Copy source texture to drawable
+            blitEncoder.copy(
+                from: sourceTexture,
+                sourceSlice: 0,
+                sourceLevel: 0,
+                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: width, height: height, depth: 1),
+                to: drawable.texture,
+                destinationSlice: 0,
+                destinationLevel: 0,
+                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+            )
+            
+            blitEncoder.endEncoding()
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+        } catch {
+            // Catch any Swift exceptions during rendering
+            let errorMsg = "Swift exception during rendering: \(error.localizedDescription)"
+            ConsoleManager.shared.addLog("CRASH: [Swift Crash] \(errorMsg)")
+            showCrashOverlay(crashType: "Swift crash", appName: nil)
+            stopAnimation()
         }
-        
-        // Get frame buffer from engine
-        guard let frameBuffer = xosEngineGetFrameBuffer(),
-              let size = xosEngineGetFrameSize() else {
-            // Frame buffer unavailable - might be a crash
-            handleEngineCrash("Failed to get frame buffer - engine may have crashed")
-            return
-        }
-        
-        let width = Int(size.width)
-        let height = Int(size.height)
-        
-        // Update Metal texture
-        metalRenderer.updateTexture(
-            width: width,
-            height: height,
-            rgbaData: frameBuffer
-        )
-        
-        // Render using Metal
-        guard let metalLayer = metalLayer,
-              let drawable = metalLayer.nextDrawable(),
-              let sourceTexture = metalRenderer.getTexture() else {
-            return
-        }
-        
-        // Use blit encoder for fast texture copy
-        guard let commandBuffer = metalRenderer.getCommandQueue().makeCommandBuffer(),
-              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
-            return
-        }
-        
-        // Copy source texture to drawable
-        blitEncoder.copy(
-            from: sourceTexture,
-            sourceSlice: 0,
-            sourceLevel: 0,
-            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-            sourceSize: MTLSize(width: width, height: height, depth: 1),
-            to: drawable.texture,
-            destinationSlice: 0,
-            destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-        )
-        
-        blitEncoder.endEncoding()
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
     }
     
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -331,6 +406,7 @@ public class XosViewportView: UIView {
     }
     
     deinit {
+        NotificationCenter.default.removeObserver(self)
         stopAnimation()
         xosEngineCleanup()
     }
