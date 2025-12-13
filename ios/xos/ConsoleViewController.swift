@@ -5,6 +5,7 @@ class ConsoleViewController: UIViewController, UIScrollViewDelegate, UITextViewD
     private var textView: UITextView!
     private var logs: [String] = []
     private var isScrolledToBottom = true
+    private var timestampButton: UIButton!
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -44,6 +45,17 @@ class ConsoleViewController: UIViewController, UIScrollViewDelegate, UITextViewD
         clearButton.addTarget(self, action: #selector(clearTapped), for: .touchUpInside)
         view.addSubview(clearButton)
         
+        // Add timestamp toggle button
+        timestampButton = UIButton(type: .system)
+        timestampButton.setTitle("Show Timestamps", for: .normal)
+        timestampButton.setTitleColor(.white, for: .normal)
+        timestampButton.backgroundColor = UIColor(white: 0.2, alpha: 0.8)
+        timestampButton.layer.cornerRadius = 8
+        timestampButton.translatesAutoresizingMaskIntoConstraints = false
+        timestampButton.addTarget(self, action: #selector(timestampTapped), for: .touchUpInside)
+        updateTimestampButton(timestampButton)
+        view.addSubview(timestampButton)
+        
         NSLayoutConstraint.activate([
             textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 50),
             textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -58,6 +70,10 @@ class ConsoleViewController: UIViewController, UIScrollViewDelegate, UITextViewD
             clearButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
             clearButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 10),
             clearButton.heightAnchor.constraint(equalToConstant: 40),
+            
+            timestampButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            timestampButton.leadingAnchor.constraint(equalTo: clearButton.trailingAnchor, constant: 10),
+            timestampButton.heightAnchor.constraint(equalToConstant: 40),
         ])
         
         // Register with console manager
@@ -84,6 +100,16 @@ class ConsoleViewController: UIViewController, UIScrollViewDelegate, UITextViewD
     
     @objc private func clearTapped() {
         ConsoleManager.shared.clearLogs()
+    }
+    
+    @objc private func timestampTapped(_ sender: UIButton) {
+        ConsoleManager.shared.showTimestamps.toggle()
+        updateTimestampButton(sender)
+    }
+    
+    private func updateTimestampButton(_ button: UIButton) {
+        let showTimestamps = ConsoleManager.shared.showTimestamps
+        button.setTitle(showTimestamps ? "Hide Timestamps" : "Show Timestamps", for: .normal)
     }
     
     /// Update logs from ConsoleManager

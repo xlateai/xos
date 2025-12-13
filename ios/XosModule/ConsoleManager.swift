@@ -10,35 +10,55 @@ public protocol ConsoleLogReceiver: AnyObject {
 public class ConsoleManager {
     public static let shared = ConsoleManager()
     
-    private var logs: [String] = []
+    private var rawLogs: [(message: String, timestamp: Date)] = []
     private let maxLogs = 1000
     private weak var consoleReceiver: ConsoleLogReceiver?
+    public var showTimestamps: Bool = false {
+        didSet {
+            // Update console view when timestamp setting changes
+            consoleReceiver?.updateLogs(getFormattedLogs())
+        }
+    }
     
     private init() {}
     
     /// Add a log message to the console
     public func addLog(_ message: String) {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        let logEntry = "[\(timestamp)] \(message)"
+        let timestamp = Date()
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.logs.append(logEntry)
+            self.rawLogs.append((message: message, timestamp: timestamp))
             
             // Limit log count
-            if self.logs.count > self.maxLogs {
-                self.logs.removeFirst(self.logs.count - self.maxLogs)
+            if self.rawLogs.count > self.maxLogs {
+                self.rawLogs.removeFirst(self.rawLogs.count - self.maxLogs)
             }
             
             // Update console view if it exists
-            self.consoleReceiver?.updateLogs(self.logs)
+            self.consoleReceiver?.updateLogs(self.getFormattedLogs())
+        }
+    }
+    
+    /// Get formatted logs based on timestamp setting
+    private func getFormattedLogs() -> [String] {
+        if showTimestamps {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .medium
+            return rawLogs.map { log in
+                let timestamp = formatter.string(from: log.timestamp)
+                return "[\(timestamp)] \(log.message)"
+            }
+        } else {
+            return rawLogs.map { $0.message }
         }
     }
     
     /// Register a console receiver to receive log updates
     public func registerConsole(_ receiver: ConsoleLogReceiver) {
         consoleReceiver = receiver
-        receiver.updateLogs(logs)
+        receiver.updateLogs(getFormattedLogs())
     }
     
     /// Unregister console receiver
@@ -46,15 +66,15 @@ public class ConsoleManager {
         consoleReceiver = nil
     }
     
-    /// Get all current logs
+    /// Get all current logs (formatted based on timestamp setting)
     public func getLogs() -> [String] {
-        return logs
+        return getFormattedLogs()
     }
     
     /// Clear all logs
     public func clearLogs() {
-        logs.removeAll()
-        consoleReceiver?.updateLogs(logs)
+        rawLogs.removeAll()
+        consoleReceiver?.updateLogs(getFormattedLogs())
     }
 }
 

@@ -85,6 +85,8 @@ public class XosViewportView: UIView {
     private let metalRenderer: XosViewportRenderer
     private var displayLink: CADisplayLink?
     private var appName: String = "blank"
+    private var isEngineInitialized = false
+    private var pendingAppName: String?
     
     public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
@@ -105,21 +107,31 @@ public class XosViewportView: UIView {
         self.layer.addSublayer(metalLayer)
         self.metalLayer = metalLayer
         
-        // Initialize engine when view is ready
-        DispatchQueue.main.async { [weak self] in
-            self?.initializeEngine()
-        }
+        // Set up Rust logging callback once
+        setupRustLogging()
+        
+        // Engine will be initialized when setAppName is called and view has valid bounds
     }
     
     private func initializeEngine() {
-        // Set up Rust logging callback before initializing engine
-        setupRustLogging()
-        
+        // Don't initialize if bounds are invalid (zero width or height)
         let width = UInt32(bounds.width * UIScreen.main.scale)
         let height = UInt32(bounds.height * UIScreen.main.scale)
         
+        guard width > 0 && height > 0 else {
+            // View hasn't been laid out yet, will initialize in layoutSubviews
+            return
+        }
+        
+        // Don't initialize if already initialized with the same app
+        guard !isEngineInitialized else {
+            return
+        }
+        
         do {
             try xosEngineInit(appName: appName, width: width, height: height)
+            isEngineInitialized = true
+            pendingAppName = nil // Clear pending app name since we've initialized
             hasCrashed = false // Reset crash state on successful init
             ConsoleManager.shared.addLog("Engine initialized: \(appName) (\(width)x\(height))")
             startAnimation()
@@ -147,8 +159,19 @@ public class XosViewportView: UIView {
     public func setAppName(_ name: String) {
         appName = name
         hasCrashed = false // Reset crash state when changing apps
-        ConsoleManager.shared.addLog("Changing app to: \(name)")
-        xosEngineCleanup()
+        
+        // If engine is already initialized, cleanup and reinitialize
+        if isEngineInitialized {
+            ConsoleManager.shared.addLog("Changing app to: \(name)")
+            stopAnimation()
+            xosEngineCleanup()
+            isEngineInitialized = false
+        } else {
+            // Engine not initialized yet, will initialize when view is laid out
+            pendingAppName = name
+        }
+        
+        // Try to initialize (will only work if bounds are valid)
         initializeEngine()
     }
     
@@ -164,11 +187,18 @@ public class XosViewportView: UIView {
                 height: bounds.height * scale
             )
             
-            // Resize engine frame buffer
-            let width = UInt32(bounds.width * scale)
-            let height = UInt32(bounds.height * scale)
-            if !xosEngineResize(width: width, height: height) {
-                ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(width)x\(height))")
+            // If we have a pending app name and engine isn't initialized, initialize now
+            if let pendingName = pendingAppName, !isEngineInitialized {
+                appName = pendingName
+                pendingAppName = nil
+                initializeEngine()
+            } else if isEngineInitialized {
+                // Resize engine frame buffer if already initialized
+                let width = UInt32(bounds.width * scale)
+                let height = UInt32(bounds.height * scale)
+                if !xosEngineResize(width: width, height: height) {
+                    ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(width)x\(height))")
+                }
             }
         }
     }
@@ -191,6 +221,7 @@ public class XosViewportView: UIView {
     private func handleEngineCrash(_ message: String) {
         guard !hasCrashed else { return } // Only handle once
         hasCrashed = true
+        isEngineInitialized = false // Reset initialization state
         
         stopAnimation()
         ConsoleManager.shared.addLog("ERROR: \(message)")
