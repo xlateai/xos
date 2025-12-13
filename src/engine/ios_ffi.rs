@@ -129,9 +129,21 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         
         match result {
             Ok(_) => 0,
-            Err(_) => {
-                // Panic occurred - return error code
-                // The Swift side will detect this and show the crash overlay
+            Err(panic_info) => {
+                // Panic occurred - try to extract the message
+                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    format!("Rust panic: {}", s)
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    format!("Rust panic: {}", s)
+                } else {
+                    "Rust panic: <unknown>".to_string()
+                };
+                
+                // Log the panic message
+                eprintln!("{}", panic_msg);
+                println!("{}", panic_msg);
+                
+                // Return error code - Swift side will detect this and show crash overlay
                 1
             }
         }

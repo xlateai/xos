@@ -138,6 +138,7 @@ impl Application for BallGame {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.balls
             .push(BallState::new(state.frame.shape()[1] as f32, state.frame.shape()[0] as f32, BALL_RADIUS));
+        println!("+1 ball (initial spawn)");
         Ok(())
     }
 
@@ -158,5 +159,6 @@ impl Application for BallGame {
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         self.balls.push(BallState::new_at_position(state.mouse.x, state.mouse.y, BALL_RADIUS));
+        println!("+1 ball (click spawn)");
     }
 }
