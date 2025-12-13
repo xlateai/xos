@@ -65,16 +65,19 @@ private func signalHandler(_ signal: Int32) {
         }
     }
     
-    // For fatal signals (SIGSEGV, SIGBUS, SIGILL, SIGFPE), the process is in a bad state
-    // and cannot safely continue. We must terminate.
-    // For SIGABRT and SIGTRAP, we might be able to continue in some cases, but it's safer to terminate.
-    // Restore previous handler and re-raise signal to allow normal crash reporting
-    if let previous = previousSignalHandlers[signal] {
-        Darwin.signal(signal, previous)
-    } else {
-        Darwin.signal(signal, SIG_DFL)
-    }
-    Darwin.raise(signal)
+    // Don't immediately re-raise the signal - let the UI show the crash overlay
+    // The app will stay alive so the user can see the crash message in the console
+    // Only re-raise for truly fatal signals that we can't recover from
+    // For now, we'll ignore the signal to keep the app alive
+    // Note: This means the app might be in an unstable state, but at least the crash is visible
+    
+    // Set signal to be ignored so the app doesn't terminate immediately
+    // This allows the crash overlay and console to be visible
+    Darwin.signal(signal, SIG_IGN)
+    
+    // For truly fatal signals, we might want to exit after a delay
+    // But for now, let's keep the app alive so the user can see the crash
+    // The crash overlay will be visible and the console will show the error
 }
 
 @main
@@ -117,6 +120,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let viewController = ViewController()
         window?.rootViewController = viewController
         window?.makeKeyAndVisible()
+        
+        // Set initial app name in console manager
+        if let defaultApp = Bundle.main.infoDictionary?["XOSDefaultApp"] as? String,
+           !defaultApp.isEmpty && defaultApp != "$(XOS_DEFAULT_APP)" {
+            ConsoleManager.shared.setCurrentApp(defaultApp)
+        } else {
+            ConsoleManager.shared.setCurrentApp("blank")
+        }
         
         ConsoleManager.shared.addLog("App launched")
         

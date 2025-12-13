@@ -175,13 +175,21 @@ public class XosViewportView: UIView {
     }
     
     public func setAppName(_ name: String) {
+        // Only archive and update app name if it's actually changing
+        if name != appName {
+            // Notify console manager of app change (this will archive current logs if any exist)
+            ConsoleManager.shared.setCurrentApp(name)
+            if isEngineInitialized {
+                ConsoleManager.shared.addLog("Changing app to: \(name)")
+            }
+        }
+        
         appName = name
         hasCrashed = false // Reset crash state when changing apps
         hideCrashOverlay() // Hide crash overlay when changing apps
         
         // If engine is already initialized, cleanup and reinitialize
         if isEngineInitialized {
-            ConsoleManager.shared.addLog("Changing app to: \(name)")
             stopAnimation()
             xosEngineCleanup()
             isEngineInitialized = false
