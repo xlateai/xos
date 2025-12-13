@@ -112,6 +112,9 @@ public class XosViewportView: UIView {
     }
     
     private func initializeEngine() {
+        // Set up Rust logging callback before initializing engine
+        setupRustLogging()
+        
         let width = UInt32(bounds.width * UIScreen.main.scale)
         let height = UInt32(bounds.height * UIScreen.main.scale)
         
@@ -126,6 +129,19 @@ public class XosViewportView: UIView {
             print(errorMsg)
             handleEngineCrash(errorMsg)
         }
+    }
+    
+    private func setupRustLogging() {
+        // Set up callback to receive Rust log messages
+        let callback: @convention(c) (UnsafePointer<CChar>?) -> Void = { messagePtr in
+            guard let messagePtr = messagePtr else { return }
+            let message = String(cString: messagePtr)
+            // Forward to console manager on main thread
+            DispatchQueue.main.async {
+                ConsoleManager.shared.addLog(message)
+            }
+        }
+        xos_set_log_callback(callback)
     }
     
     public func setAppName(_ name: String) {

@@ -20,6 +20,33 @@ pub mod apps;
 pub mod ui;
 pub mod tensor;
 
+// Override println! and eprintln! macros for iOS to forward to Swift console
+#[cfg(target_os = "ios")]
+#[macro_export]
+macro_rules! println {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            $crate::engine::ios_ffi::log_to_ios(&message);
+            // Also print to stderr for Xcode console (use std::eprintln to avoid recursion)
+            std::eprintln!("{}", message);
+        }
+    };
+}
+
+#[cfg(target_os = "ios")]
+#[macro_export]
+macro_rules! eprintln {
+    ($($arg:tt)*) => {
+        {
+            let message = format!($($arg)*);
+            $crate::engine::ios_ffi::log_to_ios(&message);
+            // Also print to stderr for Xcode console (use std::eprintln to avoid recursion)
+            std::eprintln!("{}", message);
+        }
+    };
+}
+
 #[cfg(feature = "python")]
 mod py_engine;
 
