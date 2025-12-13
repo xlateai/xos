@@ -20,6 +20,25 @@ pub mod apps;
 pub mod ui;
 pub mod tensor;
 
+// XOS namespace module for standardized APIs (external use)
+pub mod xos {
+    pub use crate::print;
+}
+
+/// Print a message (works on all platforms)
+/// On iOS, forwards to Swift's console; otherwise uses standard println!
+pub fn print(message: &str) {
+    #[cfg(target_os = "ios")]
+    {
+        crate::engine::ios_ffi::log_to_ios(message);
+    }
+    
+    #[cfg(not(target_os = "ios"))]
+    {
+        std::println!("{}", message);
+    }
+}
+
 #[cfg(feature = "python")]
 mod py_engine;
 

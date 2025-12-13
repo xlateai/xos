@@ -160,7 +160,7 @@ impl Application for AudiovisApp {
                 .pick_file();
 
             if let Some(path) = file {
-                println!("Selected file: {:?}", path);
+                crate::print(&format!("Selected file: {:?}", path));
                 
                 // Store the file path for seeking
                 self.audio_file_path = Some(path.clone());
@@ -216,7 +216,7 @@ impl Application for AudiovisApp {
                 self._stream = Some(_stream);
                 self.last_seek_position = 0.0;
 
-                println!("Playing audio file: {:?}", path);
+                crate::print(&format!("Playing audio file: {:?}", path));
             } else {
                 // No audio file selected - close the app
                 return Err("No audio file selected. Application will close.".to_string());
@@ -227,14 +227,14 @@ impl Application for AudiovisApp {
         {
             // iOS file picker would go here
             // For now, just log that we're in iOS mode
-            println!("File picker not yet implemented for iOS");
+            crate::print("File picker not yet implemented for iOS");
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             // WASM file picker would go here
             // For now, just log that we're in WASM mode
-            println!("File picker not yet implemented for WASM");
+            crate::print("File picker not yet implemented for WASM");
         }
 
         Ok(())
@@ -438,7 +438,7 @@ impl Application for AudiovisApp {
             if position_changed && !self.media_control_bar.allow_position_update() {
                 // User just finished seeking - seek to final position
                 if let Err(e) = self.seek_audio(position) {
-                    eprintln!("Failed to seek audio: {}", e);
+                    crate::print(&format!("Failed to seek audio: {}", e));
                 } else {
                     self.last_seek_position = position;
                 }

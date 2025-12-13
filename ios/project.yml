@@ -15,4 +15,7 @@ targets:
       SWIFT_VERSION: "5.9"
       INFOPLIST_FILE: xos/Info.plist
       CODE_SIGN_IDENTITY: "Apple Development"
+      CODE_SIGN_STYLE: Automatic
       OTHER_LDFLAGS: ["$(inherited)", "-framework", "AudioToolbox"]
+      # Preserve development team if set (from .xcode-signing-config or environment)
+      DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}

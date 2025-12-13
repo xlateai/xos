@@ -1,11 +1,15 @@
 #[cfg(target_os = "ios")]
 use std::ffi::CString;
 #[cfg(target_os = "ios")]
+use std::io::{self, Write};
+#[cfg(target_os = "ios")]
 use std::os::raw::c_char;
+#[cfg(target_os = "ios")]
+use std::panic;
 #[cfg(target_os = "ios")]
 use std::ptr;
 #[cfg(target_os = "ios")]
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "ios")]
 use crate::apps;
@@ -33,6 +37,80 @@ struct IosEngineState {
 // Unsafe Send implementation - safe because iOS FFI is called from main thread only
 #[cfg(target_os = "ios")]
 unsafe impl Send for IosEngineState {}
+
+// FFI function pointer for logging (set by Swift)
+#[cfg(target_os = "ios")]
+static LOG_CALLBACK: OnceLock<extern "C" fn(*const c_char)> = OnceLock::new();
+
+/// Set the logging callback function (called from Swift)
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_set_log_callback(callback: extern "C" fn(*const c_char)) {
+    let _ = LOG_CALLBACK.set(callback);
+}
+
+/// Helper function to log a message to Swift's console
+#[cfg(target_os = "ios")]
+pub fn log_to_ios(message: &str) {
+    if let Some(callback) = LOG_CALLBACK.get() {
+        if let Ok(c_str) = CString::new(message) {
+            callback(c_str.as_ptr());
+        }
+    }
+    // Note: We don't also print to stderr here to avoid duplicates
+    // The Swift console manager handles all logging
+}
+
+/// Custom writer that forwards to Swift's logging system
+#[cfg(target_os = "ios")]
+struct IosLogWriter {
+    buffer: Vec<u8>,
+}
+
+#[cfg(target_os = "ios")]
+impl IosLogWriter {
+    fn new() -> Self {
+        Self { buffer: Vec::new() }
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl Write for IosLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.buffer.is_empty() {
+            let text = String::from_utf8_lossy(&self.buffer);
+            log_to_ios(&text);
+            self.buffer.clear();
+        }
+        Ok(())
+    }
+}
+
+/// Initialize stdout/stderr redirection to iOS logging
+#[cfg(target_os = "ios")]
+fn setup_logging() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    
+    INIT.call_once(|| {
+        // Set up panic hook to log panics
+        std::panic::set_hook(Box::new(|panic_info| {
+            let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                format!("Rust panic: {}", s)
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                format!("Rust panic: {}", s)
+            } else {
+                "Rust panic: <unknown>".to_string()
+            };
+            log_to_ios(&message);
+        }));
+    });
+}
 
 /// Initialize the engine with an app name
 /// Returns error message as C string on failure, null on success
@@ -89,6 +167,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
 
     let mut state = ENGINE_STATE.lock().unwrap();
     *state = Some(ios_state);
+    
+    // Set up logging redirection
+    setup_logging();
 
     ptr::null_mut()
 }
@@ -118,9 +199,21 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // Clear frame buffer
         ios_state.engine_state.frame_buffer_mut().fill(0);
         
-        // Run tick
-        ios_state.app.tick(&mut ios_state.engine_state);
-        0
+        // Run tick with panic handling
+        // We use AssertUnwindSafe because we know the FFI boundary is safe
+        // and we're catching panics to prevent them from crossing the boundary unsafely
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            ios_state.app.tick(&mut ios_state.engine_state);
+        }));
+        
+        match result {
+            Ok(_) => 0,
+            Err(_) => {
+                // Panic occurred - the panic hook already logged it
+                // Just return error code - Swift side will detect this and show crash overlay
+                1
+            }
+        }
     } else {
         1
     }

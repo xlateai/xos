@@ -21,7 +21,7 @@ Pod::Spec.new do |s|
   s.public_header_files = "XosModule/**/*.h"
   
   # Required frameworks for CoreAudio support (used by Rust library)
-  s.frameworks = 'AudioToolbox'
+  s.frameworks = 'AudioToolbox', 'AVFoundation'
   
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
