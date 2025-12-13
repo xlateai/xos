@@ -1,0 +1,18 @@
+name: xos
+options:
+  bundleIdPrefix: com.xlate
+  deploymentTarget:
+    iOS: "15.1"
+targets:
+  xos:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.1"
+    sources:
+      - path: xos
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.xlate.xos
+      SWIFT_VERSION: "5.9"
+      INFOPLIST_FILE: xos/Info.plist
+      CODE_SIGN_IDENTITY: "Apple Development"
+      OTHER_LDFLAGS: ["$(inherited)", "-framework", "AudioToolbox"]

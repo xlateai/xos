@@ -6,6 +6,9 @@ pub mod native_engine;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_engine;
 
+#[cfg(target_os = "ios")]
+pub mod ios_ffi;
+
 #[cfg(feature = "python")]
 pub mod py_engine;
 

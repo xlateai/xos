@@ -165,6 +165,74 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Launch iOS app on connected device
+pub fn launch_ios_app(app_name: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        println!("⚠️  iOS launch not available in WASM mode");
+        return;
+    }
+    
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+    use std::process::{Command, Stdio};
+    
+    println!("📱 Launching iOS app: {}", app_name);
+    
+    // Try multiple strategies to find the script
+    let script_path = std::env::current_dir()
+        .ok()
+        .map(|d| d.join("ios").join("launch-device.sh"))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            // Try relative to CARGO_MANIFEST_DIR (when building from source)
+            option_env!("CARGO_MANIFEST_DIR")
+                .map(|d| std::path::PathBuf::from(d).join("ios").join("launch-device.sh"))
+                .filter(|p| p.exists())
+        })
+        .or_else(|| {
+            // Try from executable location (when installed via cargo install)
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    // For cargo-installed binaries, try to find the source
+                    // Look for common cargo bin locations and work backwards
+                    exe.parent()
+                        .and_then(|p| p.parent())
+                        .and_then(|p| p.parent())
+                        .map(|p| p.join("xos").join("ios").join("launch-device.sh"))
+                        .filter(|p| p.exists())
+                })
+        })
+        .unwrap_or_else(|| {
+            // Last resort: relative path from current dir
+            std::path::PathBuf::from("ios/launch-device.sh")
+        });
+    
+    if script_path.exists() {
+        println!("🚀 Building and launching on connected device...");
+        
+        let mut launch_cmd = Command::new("bash");
+        launch_cmd.arg(&script_path);
+        launch_cmd.stdout(Stdio::inherit());
+        launch_cmd.stderr(Stdio::inherit());
+        
+        // Set app name as environment variable for the script to use
+        launch_cmd.env("XOS_APP_NAME", app_name);
+        
+        let status = launch_cmd.status().expect("Failed to run launch-device.sh");
+        if !status.success() {
+            eprintln!("❌ iOS launch failed.");
+            std::process::exit(1);
+        }
+    } else {
+        println!("⚠️  iOS launch script not found at: {:?}", script_path);
+        println!("   Please run: xos build --ios && cd ios && pod install");
+        println!("   Then open xos.xcworkspace in Xcode to build and run.");
+    }
+    }
+}
+
 #[cfg(feature = "python")]
 #[pyfunction(name = "version")]
 fn version_py() -> &'static str {

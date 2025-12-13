@@ -1,0 +1,45 @@
+platform :ios, '15.1'
+use_frameworks! :linkage => :static
+
+# If project doesn't exist, CocoaPods will create it
+# But we need at least a basic project structure
+project 'xos.xcodeproj'
+
+target 'xos' do
+  pod 'Xos', :path => '.'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['SWIFT_VERSION'] = '5.9'
+    end
+  end
+  
+  # Add AudioToolbox framework to main app target for CoreAudio support
+  # The Xos pod already links it, but the main app target also needs it
+  # since it links against libxos.a which uses CoreAudio APIs
+  main_project_path = installer.sandbox.project_path.dirname + 'xos.xcodeproj'
+  if File.exist?(main_project_path)
+    require 'xcodeproj'
+    project = Xcodeproj::Project.open(main_project_path)
+    project.targets.each do |target|
+      if target.name == 'xos'
+        target.build_configurations.each do |config|
+          # Add AudioToolbox framework to linker flags
+          existing_flags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          existing_flags = [existing_flags] unless existing_flags.is_a?(Array)
+          unless existing_flags.any? { |flag| flag.to_s.include?('AudioToolbox') }
+            config.build_settings['OTHER_LDFLAGS'] = existing_flags + ['-framework', 'AudioToolbox']
+          end
+          # Set default app name (can be overridden via command line)
+          unless config.build_settings['XOS_DEFAULT_APP']
+            config.build_settings['XOS_DEFAULT_APP'] = 'blank'
+          end
+        end
+      end
+    end
+    project.save
+  end
+end
+
