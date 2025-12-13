@@ -117,17 +117,20 @@ public class XosViewportView: UIView {
         
         do {
             try xosEngineInit(appName: appName, width: width, height: height)
+            hasCrashed = false // Reset crash state on successful init
             ConsoleManager.shared.addLog("Engine initialized: \(appName) (\(width)x\(height))")
             startAnimation()
         } catch {
             let errorMsg = "Failed to initialize XOS engine: \(error.localizedDescription)"
             ConsoleManager.shared.addLog("ERROR: \(errorMsg)")
             print(errorMsg)
+            handleEngineCrash(errorMsg)
         }
     }
     
     public func setAppName(_ name: String) {
         appName = name
+        hasCrashed = false // Reset crash state when changing apps
         ConsoleManager.shared.addLog("Changing app to: \(name)")
         xosEngineCleanup()
         initializeEngine()
@@ -167,12 +170,28 @@ public class XosViewportView: UIView {
         displayLink = nil
     }
     
+    private var hasCrashed = false
+    
+    private func handleEngineCrash(_ message: String) {
+        guard !hasCrashed else { return } // Only handle once
+        hasCrashed = true
+        
+        stopAnimation()
+        ConsoleManager.shared.addLog("ERROR: \(message)")
+        
+        // Notify that engine has crashed
+        NotificationCenter.default.post(
+            name: NSNotification.Name("XosEngineCrashed"),
+            object: nil,
+            userInfo: ["appName": appName, "message": message]
+        )
+    }
+    
     @objc private func renderFrame() {
         // Tick the engine
         guard xosEngineTick() else {
             // Engine tick failed - this might indicate a crash
-            ConsoleManager.shared.addLog("ERROR: Engine tick failed - engine may have crashed")
-            stopAnimation()
+            handleEngineCrash("Engine tick failed - engine may have crashed")
             return
         }
         
@@ -180,8 +199,7 @@ public class XosViewportView: UIView {
         guard let frameBuffer = xosEngineGetFrameBuffer(),
               let size = xosEngineGetFrameSize() else {
             // Frame buffer unavailable - might be a crash
-            ConsoleManager.shared.addLog("ERROR: Failed to get frame buffer - engine may have crashed")
-            stopAnimation()
+            handleEngineCrash("Failed to get frame buffer - engine may have crashed")
             return
         }
         

@@ -3,6 +3,9 @@ import Xos
 
 class ViewController: UIViewController {
     private var viewportView: XosViewportView!
+    private var crashOverlay: UIView?
+    private var changeAppButton: UIButton!
+    private var consoleButton: UIButton!
     private var appName: String = {
         // Try to get app name from Info.plist (set during build)
         if let defaultApp = Bundle.main.infoDictionary?["XOSDefaultApp"] as? String,
@@ -25,14 +28,14 @@ class ViewController: UIViewController {
         view.addSubview(viewportView)
         
         // Add app selector button (optional, for testing different apps)
-        let changeAppButton = UIButton(type: .system)
+        changeAppButton = UIButton(type: .system)
         changeAppButton.setTitle("Change App", for: .normal)
         changeAppButton.addTarget(self, action: #selector(changeApp), for: .touchUpInside)
         changeAppButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(changeAppButton)
         
         // Add console button
-        let consoleButton = UIButton(type: .system)
+        consoleButton = UIButton(type: .system)
         consoleButton.setTitle("Console", for: .normal)
         consoleButton.addTarget(self, action: #selector(showConsole), for: .touchUpInside)
         consoleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -45,16 +48,103 @@ class ViewController: UIViewController {
             consoleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             consoleButton.trailingAnchor.constraint(equalTo: changeAppButton.leadingAnchor, constant: -10)
         ])
+        
+        // Listen for engine crashes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleEngineCrash(_:)),
+            name: NSNotification.Name("XosEngineCrashed"),
+            object: nil
+        )
+        
+        // Listen for Swift crashes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSwiftCrash(_:)),
+            name: NSNotification.Name("XosSwiftCrashed"),
+            object: nil
+        )
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    @objc private func handleEngineCrash(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let crashedAppName = userInfo["appName"] as? String else {
+            return
+        }
+        
+        // Show crash overlay
+        showCrashOverlay(appName: crashedAppName)
+        
+        // Automatically open console after a brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showConsole()
+        }
+    }
+    
+    @objc private func handleSwiftCrash(_ notification: Notification) {
+        // Show crash overlay with generic "Swift crashed" message
+        showCrashOverlay(appName: "Swift")
+        
+        // Automatically open console after a brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.showConsole()
+        }
+    }
+    
+    private func showCrashOverlay(appName: String) {
+        // Remove existing overlay if any
+        crashOverlay?.removeFromSuperview()
+        
+        // Create crash overlay
+        let overlay = UIView()
+        overlay.backgroundColor = .black
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        
+        // Add crash message label
+        let label = UILabel()
+        label.text = "\(appName) crashed"
+        label.textColor = .white
+        label.font = UIFont.systemFont(ofSize: 24, weight: .medium)
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(label)
+        
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            
+            label.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: overlay.centerYAnchor)
+        ])
+        
+        crashOverlay = overlay
+        
+        // Ensure buttons stay on top of the overlay
+        view.bringSubviewToFront(changeAppButton)
+        view.bringSubviewToFront(consoleButton)
+    }
+    
+    private func hideCrashOverlay() {
+        crashOverlay?.removeFromSuperview()
+        crashOverlay = nil
     }
     
     @objc private func changeApp() {
         let alert = UIAlertController(title: "Select App", message: nil, preferredStyle: .actionSheet)
         
-        let apps = ["blank", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "partitions"]
+        let apps = ["blank", "crash", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "partitions"]
         
         for app in apps {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in
                 self?.appName = app
+                self?.hideCrashOverlay() // Hide crash overlay when changing apps
                 self?.viewportView.setAppName(app)
             })
         }

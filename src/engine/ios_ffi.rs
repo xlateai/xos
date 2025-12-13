@@ -3,6 +3,8 @@ use std::ffi::CString;
 #[cfg(target_os = "ios")]
 use std::os::raw::c_char;
 #[cfg(target_os = "ios")]
+use std::panic;
+#[cfg(target_os = "ios")]
 use std::ptr;
 #[cfg(target_os = "ios")]
 use std::sync::Mutex;
@@ -118,9 +120,21 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // Clear frame buffer
         ios_state.engine_state.frame_buffer_mut().fill(0);
         
-        // Run tick
-        ios_state.app.tick(&mut ios_state.engine_state);
-        0
+        // Run tick with panic handling
+        // We use AssertUnwindSafe because we know the FFI boundary is safe
+        // and we're catching panics to prevent them from crossing the boundary unsafely
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            ios_state.app.tick(&mut ios_state.engine_state);
+        }));
+        
+        match result {
+            Ok(_) => 0,
+            Err(_) => {
+                // Panic occurred - return error code
+                // The Swift side will detect this and show the crash overlay
+                1
+            }
+        }
     } else {
         1
     }

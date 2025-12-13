@@ -1,7 +1,5 @@
 use crate::engine::{Application, EngineState};
 
-const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
-
 pub struct CrashApp;
 
 impl CrashApp {
@@ -15,7 +13,7 @@ impl Application for CrashApp {
         Ok(())
     }
 
-    fn tick(&mut self, state: &mut EngineState) {
+    fn tick(&mut self, _state: &mut EngineState) {
         // Deliberately crash the app
         panic!("CrashApp: Deliberate crash for testing crash detection!");
     }
