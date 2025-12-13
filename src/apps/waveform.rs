@@ -65,9 +65,9 @@ impl Application for Waveform {
             return Err("⚠️ No audio input devices found.".to_string());
         }
 
-        println!("🔊 Available devices:");
+        crate::print("🔊 Available devices:");
         for (i, d) in devices.iter().enumerate() {
-            println!("  [{}] {}", i, d.name);
+            crate::print(&format!("  [{}] {}", i, d.name));
         }
 
         let device_index = 0;

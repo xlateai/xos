@@ -42,7 +42,7 @@ pub struct ConvolutionalWaveform {
 impl ConvolutionalWaveform {
     pub fn new() -> Self {
         // Print the current device being used
-        println!("Current device: {:?}", DEVICE);
+        crate::print(&format!("Current device: {:?}", DEVICE));
         
         // Initialize random colored image mask (RGB channels)
         let mut image = Vec::with_capacity(IMAGE_WIDTH as usize * IMAGE_HEIGHT as usize * CHANNELS);

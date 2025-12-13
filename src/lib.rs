@@ -20,31 +20,23 @@ pub mod apps;
 pub mod ui;
 pub mod tensor;
 
-// Override println! and eprintln! macros for iOS to forward to Swift console
-#[cfg(target_os = "ios")]
-#[macro_export]
-macro_rules! println {
-    ($($arg:tt)*) => {
-        {
-            let message = format!($($arg)*);
-            $crate::engine::ios_ffi::log_to_ios(&message);
-            // Also print to stderr for Xcode console (use std::eprintln to avoid recursion)
-            std::eprintln!("{}", message);
-        }
-    };
+// XOS namespace module for standardized APIs (external use)
+pub mod xos {
+    pub use crate::print;
 }
 
-#[cfg(target_os = "ios")]
-#[macro_export]
-macro_rules! eprintln {
-    ($($arg:tt)*) => {
-        {
-            let message = format!($($arg)*);
-            $crate::engine::ios_ffi::log_to_ios(&message);
-            // Also print to stderr for Xcode console (use std::eprintln to avoid recursion)
-            std::eprintln!("{}", message);
-        }
-    };
+/// Print a message (works on all platforms)
+/// On iOS, forwards to Swift's console; otherwise uses standard println!
+pub fn print(message: &str) {
+    #[cfg(target_os = "ios")]
+    {
+        crate::engine::ios_ffi::log_to_ios(message);
+    }
+    
+    #[cfg(not(target_os = "ios"))]
+    {
+        std::println!("{}", message);
+    }
 }
 
 #[cfg(feature = "python")]
