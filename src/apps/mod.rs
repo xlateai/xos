@@ -53,6 +53,7 @@ define_apps! {
     Camera => camera::CameraApp,
     Whiteboard => whiteboard::Whiteboard,
     Blank => blank::BlankApp,
+    Crash => crash::CrashApp,
     Waveform => waveform::Waveform,
     Scroll => scroll::ScrollApp,
     Text => text::TextApp,
