@@ -57,8 +57,8 @@ pub fn log_to_ios(message: &str) {
             callback(c_str.as_ptr());
         }
     }
-    // Also print to standard output as fallback (for Xcode console)
-    eprintln!("{}", message);
+    // Note: We don't also print to stderr here to avoid duplicates
+    // The Swift console manager handles all logging
 }
 
 /// Custom writer that forwards to Swift's logging system
@@ -208,20 +208,9 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         
         match result {
             Ok(_) => 0,
-            Err(panic_info) => {
-                // Panic occurred - try to extract the message
-                let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    format!("Rust panic: {}", s)
-                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                    format!("Rust panic: {}", s)
-                } else {
-                    "Rust panic: <unknown>".to_string()
-                };
-                
-                // Log the panic message to iOS console
-                log_to_ios(&panic_msg);
-                
-                // Return error code - Swift side will detect this and show crash overlay
+            Err(_) => {
+                // Panic occurred - the panic hook already logged it
+                // Just return error code - Swift side will detect this and show crash overlay
                 1
             }
         }
