@@ -117,14 +117,18 @@ public class XosViewportView: UIView {
         
         do {
             try xosEngineInit(appName: appName, width: width, height: height)
+            ConsoleManager.shared.addLog("Engine initialized: \(appName) (\(width)x\(height))")
             startAnimation()
         } catch {
-            print("Failed to initialize XOS engine: \(error)")
+            let errorMsg = "Failed to initialize XOS engine: \(error.localizedDescription)"
+            ConsoleManager.shared.addLog("ERROR: \(errorMsg)")
+            print(errorMsg)
         }
     }
     
     public func setAppName(_ name: String) {
         appName = name
+        ConsoleManager.shared.addLog("Changing app to: \(name)")
         xosEngineCleanup()
         initializeEngine()
     }
@@ -144,7 +148,9 @@ public class XosViewportView: UIView {
             // Resize engine frame buffer
             let width = UInt32(bounds.width * scale)
             let height = UInt32(bounds.height * scale)
-            _ = xosEngineResize(width: width, height: height)
+            if !xosEngineResize(width: width, height: height) {
+                ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(width)x\(height))")
+            }
         }
     }
     
@@ -164,12 +170,18 @@ public class XosViewportView: UIView {
     @objc private func renderFrame() {
         // Tick the engine
         guard xosEngineTick() else {
+            // Engine tick failed - this might indicate a crash
+            ConsoleManager.shared.addLog("ERROR: Engine tick failed - engine may have crashed")
+            stopAnimation()
             return
         }
         
         // Get frame buffer from engine
         guard let frameBuffer = xosEngineGetFrameBuffer(),
               let size = xosEngineGetFrameSize() else {
+            // Frame buffer unavailable - might be a crash
+            ConsoleManager.shared.addLog("ERROR: Failed to get frame buffer - engine may have crashed")
+            stopAnimation()
             return
         }
         
@@ -219,8 +231,12 @@ public class XosViewportView: UIView {
         if let touch = touches.first {
             let location = touch.location(in: self)
             let scale = UIScreen.main.scale
-            _ = xosEngineUpdateMouse(x: Float(location.x * scale), y: Float(location.y * scale))
-            _ = xosEngineMouseDown()
+            if !xosEngineUpdateMouse(x: Float(location.x * scale), y: Float(location.y * scale)) {
+                ConsoleManager.shared.addLog("WARNING: Failed to update mouse position")
+            }
+            if !xosEngineMouseDown() {
+                ConsoleManager.shared.addLog("WARNING: Failed to handle mouse down")
+            }
         }
     }
     
@@ -229,18 +245,24 @@ public class XosViewportView: UIView {
         if let touch = touches.first {
             let location = touch.location(in: self)
             let scale = UIScreen.main.scale
-            _ = xosEngineUpdateMouse(x: Float(location.x * scale), y: Float(location.y * scale))
+            if !xosEngineUpdateMouse(x: Float(location.x * scale), y: Float(location.y * scale)) {
+                ConsoleManager.shared.addLog("WARNING: Failed to update mouse position")
+            }
         }
     }
     
     public override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
-        _ = xosEngineMouseUp()
+        if !xosEngineMouseUp() {
+            ConsoleManager.shared.addLog("WARNING: Failed to handle mouse up")
+        }
     }
     
     public override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
-        _ = xosEngineMouseUp()
+        if !xosEngineMouseUp() {
+            ConsoleManager.shared.addLog("WARNING: Failed to handle mouse up")
+        }
     }
     
     deinit {

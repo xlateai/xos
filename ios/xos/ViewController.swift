@@ -25,15 +25,25 @@ class ViewController: UIViewController {
         view.addSubview(viewportView)
         
         // Add app selector button (optional, for testing different apps)
-        let button = UIButton(type: .system)
-        button.setTitle("Change App", for: .normal)
-        button.addTarget(self, action: #selector(changeApp), for: .touchUpInside)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(button)
+        let changeAppButton = UIButton(type: .system)
+        changeAppButton.setTitle("Change App", for: .normal)
+        changeAppButton.addTarget(self, action: #selector(changeApp), for: .touchUpInside)
+        changeAppButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(changeAppButton)
+        
+        // Add console button
+        let consoleButton = UIButton(type: .system)
+        consoleButton.setTitle("Console", for: .normal)
+        consoleButton.addTarget(self, action: #selector(showConsole), for: .touchUpInside)
+        consoleButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(consoleButton)
         
         NSLayoutConstraint.activate([
-            button.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            button.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20)
+            changeAppButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            changeAppButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+            
+            consoleButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            consoleButton.trailingAnchor.constraint(equalTo: changeAppButton.leadingAnchor, constant: -10)
         ])
     }
     
@@ -52,6 +62,12 @@ class ViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         
         present(alert, animated: true)
+    }
+    
+    @objc private func showConsole() {
+        let consoleVC = ConsoleViewController()
+        consoleVC.modalPresentationStyle = UIModalPresentationStyle.fullScreen
+        present(consoleVC, animated: true)
     }
 }
 
