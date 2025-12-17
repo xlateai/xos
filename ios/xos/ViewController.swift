@@ -3,7 +3,6 @@ import Xos
 
 class ViewController: UIViewController {
     private var viewportView: XosViewportView!
-    private var crashOverlay: UIView?
     private var changeAppButton: UIButton!
     private var consoleButton: UIButton!
     private var appName: String = {
@@ -76,8 +75,8 @@ class ViewController: UIViewController {
             return
         }
         
-        // Show crash overlay
-        showCrashOverlay(appName: crashedAppName)
+        // Show crash overlay in the viewport view (isolated application frame)
+        viewportView.showCrashOverlay(crashType: "Rust crash", appName: crashedAppName)
         
         // Automatically open console after a brief delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -86,54 +85,13 @@ class ViewController: UIViewController {
     }
     
     @objc private func handleSwiftCrash(_ notification: Notification) {
-        // Show crash overlay with generic "Swift crashed" message
-        showCrashOverlay(appName: "Swift")
+        // Show crash overlay in the viewport view (isolated application frame)
+        viewportView.showCrashOverlay(crashType: "Swift crash", appName: nil)
         
         // Automatically open console after a brief delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.showConsole()
         }
-    }
-    
-    private func showCrashOverlay(appName: String) {
-        // Remove existing overlay if any
-        crashOverlay?.removeFromSuperview()
-        
-        // Create crash overlay
-        let overlay = UIView()
-        overlay.backgroundColor = .black
-        overlay.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(overlay)
-        
-        // Add crash message label
-        let label = UILabel()
-        label.text = "\(appName) crashed"
-        label.textColor = .white
-        label.font = UIFont.systemFont(ofSize: 24, weight: .medium)
-        label.textAlignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        overlay.addSubview(label)
-        
-        NSLayoutConstraint.activate([
-            overlay.topAnchor.constraint(equalTo: view.topAnchor),
-            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            
-            label.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: overlay.centerYAnchor)
-        ])
-        
-        crashOverlay = overlay
-        
-        // Ensure buttons stay on top of the overlay
-        view.bringSubviewToFront(changeAppButton)
-        view.bringSubviewToFront(consoleButton)
-    }
-    
-    private func hideCrashOverlay() {
-        crashOverlay?.removeFromSuperview()
-        crashOverlay = nil
     }
     
     @objc private func changeApp() {
@@ -144,7 +102,7 @@ class ViewController: UIViewController {
         for app in apps {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in
                 self?.appName = app
-                self?.hideCrashOverlay() // Hide crash overlay when changing apps
+                self?.viewportView.hideCrashOverlay() // Hide crash overlay when changing apps
                 self?.viewportView.setAppName(app)
             })
         }

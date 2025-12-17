@@ -5,8 +5,25 @@ import Darwin
 // Global signal handler storage
 private var previousSignalHandlers: [Int32: sig_t] = [:]
 
+// Global flag to prevent recursive signal handling
+private var isHandlingCrash = false
+
 // C-compatible signal handler function
 private func signalHandler(_ signal: Int32) {
+    // Prevent recursive calls
+    guard !isHandlingCrash else {
+        // If we're already handling a crash, restore default handler and abort
+        if let previous = previousSignalHandlers[signal] {
+            Darwin.signal(signal, previous)
+        } else {
+            Darwin.signal(signal, SIG_DFL)
+        }
+        Darwin.raise(signal)
+        return
+    }
+    
+    isHandlingCrash = true
+    
     let signalName: String
     switch signal {
     case SIGABRT: signalName = "SIGABRT (Abort - fatalError/assertion)"
@@ -27,19 +44,40 @@ private func signalHandler(_ signal: Int32) {
     print("CRASH: [Swift Crash] \(errorMsg)")
     
     // Post notification to show crash overlay
-    DispatchQueue.main.async {
+    // Use sync dispatch to main queue to ensure notification is posted before termination
+    if Thread.isMainThread {
         NotificationCenter.default.post(
             name: NSNotification.Name("XosSwiftCrashed"),
             object: nil,
-            userInfo: ["type": "Swift Crash", "message": errorMsg]
+            userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
         )
+        // Give UI a moment to display
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    } else {
+        DispatchQueue.main.sync {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("XosSwiftCrashed"),
+                object: nil,
+                userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
+            )
+            // Give UI a moment to display
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        }
     }
     
-    // Restore previous handler and re-raise signal
-    if let previous = previousSignalHandlers[signal] {
-        Darwin.signal(signal, previous)
-    }
-    Darwin.raise(signal)
+    // Don't immediately re-raise the signal - let the UI show the crash overlay
+    // The app will stay alive so the user can see the crash message in the console
+    // Only re-raise for truly fatal signals that we can't recover from
+    // For now, we'll ignore the signal to keep the app alive
+    // Note: This means the app might be in an unstable state, but at least the crash is visible
+    
+    // Set signal to be ignored so the app doesn't terminate immediately
+    // This allows the crash overlay and console to be visible
+    Darwin.signal(signal, SIG_IGN)
+    
+    // For truly fatal signals, we might want to exit after a delay
+    // But for now, let's keep the app alive so the user can see the crash
+    // The crash overlay will be visible and the console will show the error
 }
 
 @main
@@ -53,16 +91,24 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Set up exception handler for Objective-C exceptions
         NSSetUncaughtExceptionHandler { exception in
             let errorMsg = "Uncaught Objective-C Exception: \(exception.name.rawValue)\nReason: \(exception.reason ?? "Unknown")\nStack: \(exception.callStackSymbols.prefix(10).joined(separator: "\n"))"
-            ConsoleManager.shared.addLog("CRASH: [Objective-C Exception] \(errorMsg)")
-            print("CRASH: [Objective-C Exception] \(errorMsg)")
+            ConsoleManager.shared.addLog("CRASH: [Swift Crash] \(errorMsg)")
+            print("CRASH: [Swift Crash] \(errorMsg)")
             
-            // Post notification
-            DispatchQueue.main.async {
+            // Post notification (sync on main thread to ensure it's posted)
+            if Thread.isMainThread {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("XosSwiftCrashed"),
                     object: nil,
-                    userInfo: ["type": "Objective-C Exception", "message": errorMsg]
+                    userInfo: ["type": "Swift Crash", "message": errorMsg]
                 )
+            } else {
+                DispatchQueue.main.sync {
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("XosSwiftCrashed"),
+                        object: nil,
+                        userInfo: ["type": "Swift Crash", "message": errorMsg]
+                    )
+                }
             }
         }
         
@@ -74,6 +120,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let viewController = ViewController()
         window?.rootViewController = viewController
         window?.makeKeyAndVisible()
+        
+        // Set initial app name in console manager
+        if let defaultApp = Bundle.main.infoDictionary?["XOSDefaultApp"] as? String,
+           !defaultApp.isEmpty && defaultApp != "$(XOS_DEFAULT_APP)" {
+            ConsoleManager.shared.setCurrentApp(defaultApp)
+        } else {
+            ConsoleManager.shared.setCurrentApp("blank")
+        }
         
         ConsoleManager.shared.addLog("App launched")
         

@@ -138,6 +138,7 @@ final class AudioListenerManager {
         nextListenerId += 1
         
         do {
+            print("[AudioListenerManager] Creating listener ID=\(listenerId), deviceId=\(deviceId), sampleRate=\(sampleRate), channels=\(channels)")
             let listener = try AudioListener(
                 deviceId: deviceId,
                 listenerId: listenerId,
@@ -146,9 +147,17 @@ final class AudioListenerManager {
                 bufferDuration: bufferDuration
             )
             listeners[listenerId] = listener
+            print("[AudioListenerManager] Successfully created listener ID=\(listenerId)")
             return listenerId
         } catch {
-            print("[AudioListenerManager] Failed to create listener: \(error.localizedDescription)")
+            print("[AudioListenerManager] Failed to create listener ID=\(listenerId): \(error.localizedDescription)")
+            if let nsError = error as NSError? {
+                print("[AudioListenerManager] Error domain: \(nsError.domain), code: \(nsError.code)")
+                let userInfo = nsError.userInfo
+                if !userInfo.isEmpty {
+                    print("[AudioListenerManager] Error userInfo: \(userInfo)")
+                }
+            }
             return nil
         }
     }
@@ -202,36 +211,80 @@ final class AudioListener {
         
         // If not already granted, request permission
         if currentStatus != .granted {
-            if Thread.isMainThread {
+            let semaphore = DispatchSemaphore(value: 0)
+            var permissionGranted = false
+            var permissionError: Error?
+            
+            // Request permission - must be on main thread
+            // Use a background queue to wait, but request on main thread
+            let requestPermission = {
                 audioSession.requestRecordPermission { granted in
-                    print("[AudioListener] requestRecordPermission callback (main-thread path), granted=\(granted)")
-                }
-                throw NSError(
-                    domain: "AudioListener",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Microphone permission request in progress; please retry after the user responds"]
-                )
-            } else {
-                let semaphore = DispatchSemaphore(value: 0)
-                var permissionGranted = false
-                
-                DispatchQueue.main.async {
-                    audioSession.requestRecordPermission { granted in
-                        print("[AudioListener] requestRecordPermission callback, granted=\(granted)")
-                        permissionGranted = granted
-                        semaphore.signal()
+                    print("[AudioListener] requestRecordPermission callback, granted=\(granted)")
+                    permissionGranted = granted
+                    if !granted {
+                        permissionError = NSError(
+                            domain: "AudioListener",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied by user"]
+                        )
                     }
+                    semaphore.signal()
+                }
+            }
+            
+            // Always dispatch permission request to main thread
+            // Then wait on current thread (which might be background)
+            DispatchQueue.main.async {
+                requestPermission()
+            }
+            
+            // Wait for permission response (with timeout)
+            // If we're on main thread, this will deadlock, so we need to handle it differently
+            if Thread.isMainThread {
+                // On main thread - use RunLoop to process events while waiting
+                let deadline = Date(timeIntervalSinceNow: 10.0)
+                var timedOut = true
+                
+                while Date() < deadline {
+                    // Check if semaphore is available without blocking
+                    let result = semaphore.wait(timeout: .now() + 0.1)
+                    if result == .success {
+                        timedOut = false
+                        break
+                    }
+                    // Process run loop events to allow async blocks and callbacks to execute
+                    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
                 }
                 
-                // Wait for permission response (with timeout)
-                let timeout = semaphore.wait(timeout: .now() + 10.0)
-                if timeout == .timedOut || !permissionGranted {
+                if timedOut {
                     throw NSError(
                         domain: "AudioListener",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied or request timed out"]
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "Microphone permission request timed out"]
                     )
                 }
+            } else {
+                // Not on main thread - can safely wait on semaphore
+                let timeout = semaphore.wait(timeout: .now() + 10.0)
+                if timeout == .timedOut {
+                    throw NSError(
+                        domain: "AudioListener",
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "Microphone permission request timed out"]
+                    )
+                }
+            }
+            
+            // Check results
+            if let error = permissionError {
+                throw error
+            }
+            if !permissionGranted {
+                throw NSError(
+                    domain: "AudioListener",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied"]
+                )
             }
         }
         
@@ -278,19 +331,40 @@ final class AudioListener {
             inputNode.removeTap(onBus: 0)
             
             inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
-                guard let self = self, let channelData = buffer.floatChannelData else { return }
+                guard let self = self else { return }
+                
+                // Get channel data (non-interleaved format)
+                guard let channelData = buffer.floatChannelData else {
+                    print("[AudioListener] Warning: buffer.floatChannelData is nil")
+                    return
+                }
                 
                 let frameLength = Int(buffer.frameLength)
                 let channelCount = Int(buffer.format.channelCount)
                 
-                // Extract samples from buffer (non-interleaved format)
+                // Safety check
+                guard frameLength > 0 && channelCount > 0 else {
+                    print("[AudioListener] Warning: invalid frameLength=\(frameLength) or channelCount=\(channelCount)")
+                    return
+                }
+                
+                // Extract samples - for mono, just use first channel
+                // For multi-channel, we'll interleave them for the callback
+                // The callback expects: [ch0_sample0, ch1_sample0, ch0_sample1, ch1_sample1, ...]
                 var samples: [Float] = []
+                samples.reserveCapacity(frameLength * channelCount)
+                
                 if channelCount == 1 {
                     // Mono: just read from first channel
-                    samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+                    let channelPtr = channelData[0]
+                    samples = Array(UnsafeBufferPointer(start: channelPtr, count: frameLength))
                 } else {
-                    // Multi-channel: take first channel for now
-                    samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+                    // Multi-channel: interleave samples
+                    for frame in 0..<frameLength {
+                        for channel in 0..<channelCount {
+                            samples.append(channelData[channel][frame])
+                        }
+                    }
                 }
                 
                 // Call the Rust callback if set
@@ -391,8 +465,10 @@ func xos_audio_listener_init(
         channels: channels,
         bufferDuration: bufferDuration
     ) else {
+        print("[xos_audio_listener_init] Failed to create listener (createListener returned nil)")
         return UInt32.max
     }
+    print("[xos_audio_listener_init] Successfully created listener with ID: \(listenerId)")
     return listenerId
 }
 
