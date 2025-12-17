@@ -77,6 +77,46 @@ pub fn get_frame() -> Vec<u8> {
     }
 }
 
+/// Gets the number of available cameras
+pub fn get_camera_count() -> usize {
+    let _lock = CAMERA_LOCK.lock().unwrap();
+    unsafe { xos_webcam_get_camera_count() as usize }
+}
+
+/// Gets the name of a camera at the given index
+pub fn get_camera_name(index: usize) -> Option<String> {
+    let _lock = CAMERA_LOCK.lock().unwrap();
+    
+    let mut buffer = vec![0u8; 256];
+    let result = unsafe {
+        xos_webcam_get_camera_name(
+            index as i32,
+            buffer.as_mut_ptr() as *mut i8,
+            buffer.len() as i32,
+        )
+    };
+    
+    if result > 0 {
+        // Find null terminator
+        let len = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+        String::from_utf8(buffer[..len].to_vec()).ok()
+    } else {
+        None
+    }
+}
+
+/// Switches to a different camera by index
+pub fn switch_camera(index: usize) -> bool {
+    let _lock = CAMERA_LOCK.lock().unwrap();
+    unsafe { xos_webcam_switch_camera(index as i32) == 0 }
+}
+
+/// Gets the current camera index
+pub fn get_current_camera_index() -> usize {
+    let _lock = CAMERA_LOCK.lock().unwrap();
+    unsafe { xos_webcam_get_current_camera_index() as usize }
+}
+
 // FFI declarations for iOS webcam functions
 #[cfg(target_os = "ios")]
 extern "C" {
@@ -100,5 +140,29 @@ extern "C" {
         buffer: *mut u8,
         buffer_size: usize,
     ) -> std::os::raw::c_int;
+    
+    /// Get the number of available cameras
+    /// Returns the count of available cameras
+    fn xos_webcam_get_camera_count() -> std::os::raw::c_int;
+    
+    /// Get the name of a camera at the given index
+    /// index: Camera index
+    /// buffer: Buffer to write the camera name (null-terminated C string)
+    /// bufferSize: Size of the buffer
+    /// Returns the number of bytes written (excluding null terminator)
+    fn xos_webcam_get_camera_name(
+        index: std::os::raw::c_int,
+        buffer: *mut std::os::raw::c_char,
+        bufferSize: std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+    
+    /// Switch to a different camera by index
+    /// index: Camera index to switch to
+    /// Returns 0 on success, non-zero on error
+    fn xos_webcam_switch_camera(index: std::os::raw::c_int) -> std::os::raw::c_int;
+    
+    /// Get the current camera index
+    /// Returns the current camera index
+    fn xos_webcam_get_current_camera_index() -> std::os::raw::c_int;
 }
 

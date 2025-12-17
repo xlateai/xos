@@ -1,9 +1,13 @@
 use crate::engine::{Application, EngineState};
 use crate::video::webcam;
+use crate::ui::selector::Selector;
 
 pub struct CameraApp {
     last_width: u32,
     last_height: u32,
+    selector: Selector,
+    camera_names: Vec<String>,
+    cameras_initialized: bool,
 }
 
 impl CameraApp {
@@ -11,6 +15,104 @@ impl CameraApp {
         Self {
             last_width: 0,
             last_height: 0,
+            selector: Selector::new(vec![]), // Will be populated in setup
+            camera_names: vec![],
+            cameras_initialized: false,
+        }
+    }
+    
+    fn initialize_cameras(&mut self) {
+        if self.cameras_initialized {
+            return;
+        }
+        
+        let count = webcam::get_camera_count();
+        self.camera_names.clear();
+        
+        for i in 0..count {
+            if let Some(name) = webcam::get_camera_name(i) {
+                self.camera_names.push(name);
+            } else {
+                self.camera_names.push(format!("Camera {}", i));
+            }
+        }
+        
+        if !self.camera_names.is_empty() {
+            // Recreate selector with camera names
+            self.selector = Selector::new(self.camera_names.clone());
+            self.cameras_initialized = true;
+        }
+    }
+    
+    fn draw_camera_button(&self, state: &mut EngineState, width: u32, height: u32) {
+        let button_width = 200.0;
+        let button_height = 50.0;
+        let button_x = (width as f32 - button_width) / 2.0;
+        let button_y = height as f32 - button_height - 20.0;
+        
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        let is_hovered = mouse_x >= button_x && mouse_x <= button_x + button_width &&
+                        mouse_y >= button_y && mouse_y <= button_y + button_height;
+        
+        let buffer = state.frame_buffer_mut();
+        let bg_color = if is_hovered {
+            (80, 80, 100)
+        } else {
+            (60, 60, 80)
+        };
+        
+        // Draw button background
+        for py in (button_y as i32)..(button_y as i32 + button_height as i32) {
+            for px in (button_x as i32)..(button_x as i32 + button_width as i32) {
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = bg_color.0;
+                        buffer[idx + 1] = bg_color.1;
+                        buffer[idx + 2] = bg_color.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+        
+        // Draw button text (simple "Camera" text)
+        let text = if self.cameras_initialized {
+            format!("Camera ({})", webcam::get_current_camera_index() + 1)
+        } else {
+            "Camera".to_string()
+        };
+        
+        // Simple text rendering - just draw "Camera" text
+        // For now, we'll use a simple approach - you could use the text renderer here
+        let text_x = button_x as i32 + 10;
+        let text_y = button_y as i32 + 30;
+        
+        // Draw simple "Camera" text (very basic)
+        let text_bytes = text.as_bytes();
+        for (i, &_byte) in text_bytes.iter().enumerate() {
+            let char_x = text_x + (i as i32 * 8);
+            if char_x < (button_x + button_width) as i32 && char_x >= 0 {
+                // Draw a simple character representation (very basic)
+                // In a real implementation, you'd use a font renderer
+                for y in 0..10 {
+                    for x in 0..6 {
+                        let px = char_x + x;
+                        let py = text_y + y;
+                        if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                            let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                            if idx + 3 < buffer.len() {
+                                buffer[idx + 0] = 255;
+                                buffer[idx + 1] = 255;
+                                buffer[idx + 2] = 255;
+                                buffer[idx + 3] = 0xff;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -158,6 +260,10 @@ impl Application for CameraApp {
         self.last_height = shape[0] as u32;
 
         webcam::init_camera();
+        
+        // Initialize cameras list after a short delay to allow camera to initialize
+        // We'll do this in tick instead
+        
         Ok(())
     }
 
@@ -170,6 +276,14 @@ impl Application for CameraApp {
             self.last_width = width;
             self.last_height = height;
         }
+        
+        // Initialize cameras if not done yet (wait for camera to be ready)
+        if !self.cameras_initialized && webcam::get_resolution() != (0, 0) {
+            self.initialize_cameras();
+        }
+        
+        // Update selector
+        self.selector.update(width as f32, height as f32);
 
         let rgb_frame = self.capture_frame(width, height);
 
@@ -177,10 +291,43 @@ impl Application for CameraApp {
         let rgba = state.frame_buffer_mut();
         rgba.fill(0); // Optional: black background for areas not filled
         Self::copy_rgb_to_rgba(&rgb_frame, rgba);
+        
+        // Render selector on top
+        self.selector.render(state);
+        
+        // Draw camera selector button at bottom center
+        self.draw_camera_button(state, width, height);
     }
-
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {
-        // Empty implementation
+    
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        
+        // Check if selector handled the click
+        if self.selector.on_mouse_down(state) {
+            // Camera was selected
+            if let Some(selected_idx) = self.selector.selected_index() {
+                if webcam::switch_camera(selected_idx) {
+                    crate::print(&format!("[Camera] Switched to camera: {}", self.camera_names[selected_idx]));
+                }
+            }
+            return;
+        }
+        
+        // Check if camera button was clicked
+        let button_width = 200.0;
+        let button_height = 50.0;
+        let button_x = (width as f32 - button_width) / 2.0;
+        let button_y = height as f32 - button_height - 20.0;
+        
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        if mouse_x >= button_x && mouse_x <= button_x + button_width &&
+           mouse_y >= button_y && mouse_y <= button_y + button_height {
+            self.selector.toggle();
+        }
     }
     
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
