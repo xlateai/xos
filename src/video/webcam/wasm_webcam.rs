@@ -94,3 +94,23 @@ pub fn get_frame() -> Vec<u8> {
 
     pixel_data
 }
+
+/// Gets the number of available cameras
+pub fn get_camera_count() -> usize {
+    1 // Stub: return 1 for now
+}
+
+/// Gets the name of a camera at the given index
+pub fn get_camera_name(_index: usize) -> Option<String> {
+    Some("Default Camera".to_string())
+}
+
+/// Switches to a different camera by index
+pub fn switch_camera(_index: usize) -> bool {
+    false // Stub: not implemented
+}
+
+/// Gets the current camera index
+pub fn get_current_camera_index() -> usize {
+    0
+}

@@ -50,6 +50,8 @@
 	</array>
 	<key>XOSDefaultApp</key>
 	<string>$(XOS_DEFAULT_APP)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs access to the camera to display video feed.</string>
 </dict>
 </plist>
 

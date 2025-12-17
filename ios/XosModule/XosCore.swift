@@ -120,3 +120,5 @@ public enum XosError: Error {
     case engineNotInitialized
 }
 
+// Webcam FFI functions are now in XosWebcamModule.swift
+
