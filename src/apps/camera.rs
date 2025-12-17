@@ -16,7 +16,18 @@ impl CameraApp {
 
     fn capture_frame(&self, width: u32, height: u32) -> Vec<u8> {
         let (native_w, native_h) = webcam::get_resolution();
+        
+        // If camera is not ready yet (resolution is 0x0), return black frame
+        if native_w == 0 || native_h == 0 {
+            return vec![0; (width * height * 3) as usize];
+        }
+        
         let frame = webcam::get_frame();
+        
+        // If no frame data available yet, return black frame
+        if frame.is_empty() {
+            return vec![0; (width * height * 3) as usize];
+        }
 
         let (dst_w, dst_h, offset_x, offset_y) =
             Self::calculate_dimensions(native_w, native_h, width, height);

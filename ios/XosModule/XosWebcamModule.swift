@@ -12,87 +12,122 @@ final class WebcamManager: NSObject {
     private var latestResolution: (width: UInt32, height: UInt32) = (0, 0)
     private let lock = NSLock()
     private var isInitialized = false
+    private var isInitializing = false
     
     private override init() {
         super.init()
     }
     
-    func initialize() throws {
+    func initialize() {
         lock.lock()
-        defer { lock.unlock() }
+        let shouldInit = !isInitialized && !isInitializing
+        if shouldInit {
+            isInitializing = true
+        }
+        lock.unlock()
         
-        guard !isInitialized else {
-            return // Already initialized
+        guard shouldInit else {
+            return // Already initialized or initializing
         }
         
-        // Request camera permission
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        if status == .notDetermined {
-            // Request permission synchronously
-            let semaphore = DispatchSemaphore(value: 0)
-            var granted = false
-            AVCaptureDevice.requestAccess(for: .video) { accessGranted in
-                granted = accessGranted
-                semaphore.signal()
-            }
-            semaphore.wait()
-            
-            if !granted {
-                throw NSError(domain: "WebcamManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Camera permission denied"])
-            }
-        } else if status != .authorized {
-            throw NSError(domain: "WebcamManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Camera permission not granted"])
-        }
-        
-        // Create capture session
-        let session = AVCaptureSession()
-        session.sessionPreset = .high // Use high quality preset
-        
-        // Get default video device (back camera)
-        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
-                                AVCaptureDevice.default(for: .video) else {
-            throw NSError(domain: "WebcamManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera device found"])
-        }
-        
-        // Create input
-        let videoInput: AVCaptureDeviceInput
-        do {
-            videoInput = try AVCaptureDeviceInput(device: videoDevice)
-        } catch {
-            throw NSError(domain: "WebcamManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create camera input: \(error.localizedDescription)"])
-        }
-        
-        guard session.canAddInput(videoInput) else {
-            throw NSError(domain: "WebcamManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot add camera input to session"])
-        }
-        session.addInput(videoInput)
-        
-        // Create video output
-        let output = AVCaptureVideoDataOutput()
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
-        output.alwaysDiscardsLateVideoFrames = true
-        
-        // Set up queue for video output
-        let queue = DispatchQueue(label: "com.xos.webcam.queue")
-        output.setSampleBufferDelegate(self, queue: queue)
-        
-        guard session.canAddOutput(output) else {
-            throw NSError(domain: "WebcamManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Cannot add video output to session"])
-        }
-        session.addOutput(output)
-        
-        // Store references
-        self.captureSession = session
-        self.videoOutput = output
-        
-        // Start session on background queue
+        // Initialize asynchronously to avoid blocking the UI
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.captureSession?.startRunning()
+            guard let self = self else { return }
+            
+            do {
+                // Request camera permission (async)
+                let status = AVCaptureDevice.authorizationStatus(for: .video)
+                if status == .notDetermined {
+                    // Request permission asynchronously
+                    AVCaptureDevice.requestAccess(for: .video) { accessGranted in
+                        if accessGranted {
+                            self.setupCamera()
+                        } else {
+                            self.lock.lock()
+                            self.isInitializing = false
+                            self.lock.unlock()
+                            print("[WebcamManager] Camera permission denied")
+                        }
+                    }
+                    return // Will continue in callback
+                } else if status != .authorized {
+                    self.lock.lock()
+                    self.isInitializing = false
+                    self.lock.unlock()
+                    print("[WebcamManager] Camera permission not granted")
+                    return
+                }
+                
+                // Permission already granted, set up camera
+                self.setupCamera()
+            }
         }
-        
-        isInitialized = true
+    }
+    
+    private func setupCamera() {
+        do {
+            // Create capture session
+            let session = AVCaptureSession()
+            session.sessionPreset = .high // Use high quality preset
+            
+            // Get default video device (back camera)
+            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
+                                    AVCaptureDevice.default(for: .video) else {
+                throw NSError(domain: "WebcamManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera device found"])
+            }
+            
+            // Create input
+            let videoInput: AVCaptureDeviceInput
+            do {
+                videoInput = try AVCaptureDeviceInput(device: videoDevice)
+            } catch {
+                throw NSError(domain: "WebcamManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to create camera input: \(error.localizedDescription)"])
+            }
+            
+            guard session.canAddInput(videoInput) else {
+                throw NSError(domain: "WebcamManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot add camera input to session"])
+            }
+            session.addInput(videoInput)
+            
+            // Create video output
+            let output = AVCaptureVideoDataOutput()
+            output.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            output.alwaysDiscardsLateVideoFrames = true
+            
+            // Set up queue for video output
+            let queue = DispatchQueue(label: "com.xos.webcam.queue")
+            output.setSampleBufferDelegate(self, queue: queue)
+            
+            guard session.canAddOutput(output) else {
+                throw NSError(domain: "WebcamManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "Cannot add video output to session"])
+            }
+            session.addOutput(output)
+            
+            // Set up video orientation connection - always use portrait for consistency
+            // The camera app will handle rotation in the Rust code
+            if let connection = output.connection(with: .video) {
+                connection.videoOrientation = .portrait
+            }
+            
+            // Store references
+            self.lock.lock()
+            self.captureSession = session
+            self.videoOutput = output
+            self.isInitialized = true
+            self.isInitializing = false
+            self.lock.unlock()
+            
+            // Start session
+            session.startRunning()
+            print("[WebcamManager] Camera initialized successfully")
+        } catch {
+            self.lock.lock()
+            self.isInitializing = false
+            self.lock.unlock()
+            print("[WebcamManager] Camera setup error: \(error.localizedDescription)")
+        }
     }
     
     func getResolution() -> (width: UInt32, height: UInt32) {
@@ -178,9 +213,15 @@ extension WebcamManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         let height = UInt32(CVPixelBufferGetHeight(pixelBuffer))
         
         lock.lock()
+        let wasEmpty = latestPixelBuffer == nil
         latestPixelBuffer = pixelBuffer
         latestResolution = (width, height)
         lock.unlock()
+        
+        // Log when first frame arrives
+        if wasEmpty {
+            print("[WebcamManager] First frame received: \(width)x\(height)")
+        }
     }
 }
 
@@ -188,13 +229,8 @@ extension WebcamManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
 @_cdecl("xos_webcam_init")
 func xos_webcam_init() -> Int32 {
-    do {
-        try WebcamManager.shared.initialize()
-        return 0 // Success
-    } catch {
-        print("[xos_webcam_init] Error: \(error.localizedDescription)")
-        return 1 // Error
-    }
+    WebcamManager.shared.initialize()
+    return 0 // Always return success - initialization is async
 }
 
 @_cdecl("xos_webcam_get_resolution")

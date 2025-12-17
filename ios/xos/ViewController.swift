@@ -25,6 +25,15 @@ class ViewController: UIViewController {
         viewportView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         viewportView.setAppName(appName)
         view.addSubview(viewportView)
+    }
+    
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        
+        // Handle orientation changes - the viewport will resize in layoutSubviews
+        coordinator.animate(alongsideTransition: { _ in
+            // Viewport will automatically resize via layoutSubviews
+        }, completion: nil)
         
         // Add app selector button (optional, for testing different apps)
         changeAppButton = UIButton(type: .system)

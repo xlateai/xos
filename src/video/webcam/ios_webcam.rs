@@ -3,42 +3,24 @@ use std::sync::Mutex;
 
 use crate::print;
 
-// Thread-local storage for camera state
-thread_local! {
-    static CAMERA_INITIALIZED: RefCell<bool> = RefCell::new(false);
-}
-
 // Global mutex to ensure thread-safe camera access
 // Note: iOS FFI calls are typically from the main thread, but we use a mutex for safety
 static CAMERA_LOCK: Mutex<()> = Mutex::new(());
 
 /// Initializes the camera (must be called before using `get_frame` or `get_resolution`)
+/// Note: This is now async and non-blocking. The camera will initialize in the background.
 pub fn init_camera() {
     let _lock = CAMERA_LOCK.lock().unwrap();
     
-    print("[Webcam] Initializing camera...");
-    let result = unsafe { xos_webcam_init() };
-    if result == 0 {
-        CAMERA_INITIALIZED.with(|cell| {
-            *cell.borrow_mut() = true;
-        });
-        print("[Webcam] Camera initialized successfully");
-    } else {
-        panic!("Failed to initialize camera on iOS");
-    }
+    print("[Webcam] Starting camera initialization (async)...");
+    // Init returns immediately - actual setup happens async in Swift
+    unsafe { xos_webcam_init() };
 }
 
 /// Gets the current camera resolution
+/// Returns (0, 0) if camera is not initialized or not ready
 pub fn get_resolution() -> (u32, u32) {
     let _lock = CAMERA_LOCK.lock().unwrap();
-    
-    let is_initialized = CAMERA_INITIALIZED.with(|cell| {
-        *cell.borrow()
-    });
-    
-    if !is_initialized {
-        return (0, 0);
-    }
     
     let mut width: u32 = 0;
     let mut height: u32 = 0;
@@ -47,7 +29,7 @@ pub fn get_resolution() -> (u32, u32) {
         xos_webcam_get_resolution(&mut width, &mut height)
     };
     
-    if result == 0 {
+    if result == 0 && width > 0 && height > 0 {
         (width, height)
     } else {
         (0, 0)
@@ -55,19 +37,11 @@ pub fn get_resolution() -> (u32, u32) {
 }
 
 /// Captures the latest frame from the camera
+/// Returns empty vector if camera is not initialized or no frame is available
 pub fn get_frame() -> Vec<u8> {
     let _lock = CAMERA_LOCK.lock().unwrap();
     
-    let is_initialized = CAMERA_INITIALIZED.with(|cell| {
-        *cell.borrow()
-    });
-    
-    if !is_initialized {
-        return vec![];
-    }
-    
     // First, get the resolution to know how much data we need
-    // We need to get resolution without locking again (we already have the lock)
     let mut width: u32 = 0;
     let mut height: u32 = 0;
     
@@ -75,6 +49,7 @@ pub fn get_frame() -> Vec<u8> {
         xos_webcam_get_resolution(&mut width, &mut height)
     };
     
+    // If resolution is 0 or error, camera is not ready yet
     if res_result != 0 || width == 0 || height == 0 {
         return vec![];
     }

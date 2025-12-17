@@ -130,8 +130,9 @@ public class XosViewportView: UIView {
     
     private func initializeEngine() {
         // Don't initialize if bounds are invalid (zero width or height)
-        let width = UInt32(bounds.width * UIScreen.main.scale)
-        let height = UInt32(bounds.height * UIScreen.main.scale)
+        let scale = UIScreen.main.scale
+        let width = UInt32(bounds.width * scale)
+        let height = UInt32(bounds.height * scale)
         
         guard width > 0 && height > 0 else {
             // View hasn't been laid out yet, will initialize in layoutSubviews
@@ -209,10 +210,12 @@ public class XosViewportView: UIView {
         if let metalLayer = metalLayer {
             let scale = UIScreen.main.scale
             metalLayer.frame = bounds
-            metalLayer.drawableSize = CGSize(
-                width: bounds.width * scale,
-                height: bounds.height * scale
-            )
+            
+            // Use actual view bounds - they should be correct for current orientation
+            let width = bounds.width * scale
+            let height = bounds.height * scale
+            
+            metalLayer.drawableSize = CGSize(width: width, height: height)
             
             // If we have a pending app name and engine isn't initialized, initialize now
             if let pendingName = pendingAppName, !isEngineInitialized {
@@ -221,10 +224,10 @@ public class XosViewportView: UIView {
                 initializeEngine()
             } else if isEngineInitialized {
                 // Resize engine frame buffer if already initialized
-                let width = UInt32(bounds.width * scale)
-                let height = UInt32(bounds.height * scale)
-                if !xosEngineResize(width: width, height: height) {
-                    ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(width)x\(height))")
+                let engineWidth = UInt32(width)
+                let engineHeight = UInt32(height)
+                if !xosEngineResize(width: engineWidth, height: engineHeight) {
+                    ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(engineWidth)x\(engineHeight))")
                 }
             }
         }
@@ -350,12 +353,18 @@ public class XosViewportView: UIView {
             }
             
             // Copy source texture to drawable
+            // Handle orientation - ensure we copy correctly regardless of device orientation
+            let drawableWidth = Int(drawable.texture.width)
+            let drawableHeight = Int(drawable.texture.height)
+            
+            // If dimensions don't match, we might need to handle orientation
+            // For now, just copy what we have - the camera app will handle rotation
             blitEncoder.copy(
                 from: sourceTexture,
                 sourceSlice: 0,
                 sourceLevel: 0,
                 sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: width, height: height, depth: 1),
+                sourceSize: MTLSize(width: min(width, drawableWidth), height: min(height, drawableHeight), depth: 1),
                 to: drawable.texture,
                 destinationSlice: 0,
                 destinationLevel: 0,
