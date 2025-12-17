@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::sync::Mutex;
 
+use crate::print;
+
 // Thread-local storage for camera state
 thread_local! {
     static CAMERA_INITIALIZED: RefCell<bool> = RefCell::new(false);
@@ -14,11 +16,13 @@ static CAMERA_LOCK: Mutex<()> = Mutex::new(());
 pub fn init_camera() {
     let _lock = CAMERA_LOCK.lock().unwrap();
     
+    print("[Webcam] Initializing camera...");
     let result = unsafe { xos_webcam_init() };
     if result == 0 {
         CAMERA_INITIALIZED.with(|cell| {
             *cell.borrow_mut() = true;
         });
+        print("[Webcam] Camera initialized successfully");
     } else {
         panic!("Failed to initialize camera on iOS");
     }
