@@ -120,3 +120,32 @@ public enum XosError: Error {
     case engineNotInitialized
 }
 
+// C-compatible FFI functions for webcam (iOS)
+// TODO: Implement full AVFoundation camera support
+
+@_cdecl("xos_webcam_init")
+func xos_webcam_init() -> Int32 {
+    // TODO: Implement camera initialization with AVFoundation
+    // For now, return success (0) to prevent panic, but camera won't actually work
+    print("[xos_webcam_init] Camera initialization stub - returning success (not yet implemented)")
+    return 0
+}
+
+@_cdecl("xos_webcam_get_resolution")
+func xos_webcam_get_resolution(_ width: UnsafeMutablePointer<UInt32>?, _ height: UnsafeMutablePointer<UInt32>?) -> Int32 {
+    // TODO: Implement getting camera resolution from AVFoundation
+    // For now, return safe empty values
+    if let width = width, let height = height {
+        width.pointee = 0
+        height.pointee = 0
+    }
+    return 0  // Return success but with 0x0 resolution
+}
+
+@_cdecl("xos_webcam_get_frame")
+func xos_webcam_get_frame(_ buffer: UnsafeMutablePointer<UInt8>?, _ bufferSize: Int) -> Int32 {
+    // TODO: Implement getting frame from AVFoundation and converting to RGB
+    // For now, return 0 bytes written (safe - won't crash, just no frame data)
+    return 0
+}
+
