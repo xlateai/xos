@@ -63,4 +63,5 @@ define_apps! {
     Cursor => cursor::CursorApp,
     Audiovis => audiovis::AudiovisApp,
     Partitions => partitions::Partitions,
+    Coder => coder::CoderApp,
 }
