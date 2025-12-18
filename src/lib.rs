@@ -20,6 +20,9 @@ pub mod apps;
 pub mod ui;
 pub mod tensor;
 
+#[cfg(feature = "python")]
+pub mod python;
+
 // XOS namespace module for standardized APIs (external use)
 pub mod xos {
     pub use crate::print;
