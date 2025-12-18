@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
-use std::io::{self, Write};
+use std::io::{self, Write, BufRead};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
@@ -34,6 +34,11 @@ enum Commands {
         /// Build Rust library for iOS
         #[arg(long)]
         ios: bool,
+    },
+    /// Run Python code
+    Python {
+        /// Python file to execute (if not provided, starts interactive console)
+        file: Option<PathBuf>,
     },
 }
 
@@ -248,6 +253,142 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+fn run_python_file(file_path: &PathBuf) {
+    use rustpython_vm::Interpreter;
+    use std::fs;
+    
+    // Read the Python file
+    let code = match fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("❌ Error reading file {}: {}", file_path.display(), e);
+            std::process::exit(1);
+        }
+    };
+    
+    // Create interpreter
+    let interpreter = Interpreter::with_init(Default::default(), |_vm| {
+        // Standard library is initialized by default
+    });
+    
+    // Execute the code
+    let result = interpreter.enter(|vm| {
+        let scope = vm.new_scope_with_builtins();
+        vm.run_code_string(scope, &code, file_path.to_string_lossy().to_string())
+    });
+    
+    match result {
+        Ok(_) => {
+            // Execution successful
+        }
+        Err(e) => {
+            eprintln!("Python Error: {:?}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_python_interactive() {
+    use rustpython_vm::Interpreter;
+    
+    println!("🐍 Python Interactive Console");
+    println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
+    
+    // Create interpreter
+    let interpreter = Interpreter::with_init(Default::default(), |_vm| {
+        // Standard library is initialized by default
+    });
+    
+    let stdin = io::stdin();
+    let mut code_buffer = String::new();
+    let mut continuation = false;
+    
+    loop {
+        // Print prompt
+        if continuation {
+            print!("... ");
+        } else {
+            print!(">>> ");
+        }
+        io::stdout().flush().unwrap();
+        
+        // Read line
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) => {
+                // EOF (Ctrl+D)
+                println!("\nExiting...");
+                break;
+            }
+            Ok(_) => {
+                let trimmed = line.trim_end();
+                
+                // Check for exit commands
+                if trimmed == "exit()" || trimmed == "quit()" {
+                    break;
+                }
+                
+                // Skip empty lines unless we're in continuation mode
+                if trimmed.is_empty() && !continuation {
+                    continue;
+                }
+                
+                // Add line to buffer
+                if continuation {
+                    code_buffer.push_str(&line);
+                } else {
+                    code_buffer = line.clone();
+                }
+                
+                // Try to execute the code
+                // For interactive mode, we'll wrap it to try eval first, then exec
+                let code_to_try = code_buffer.trim();
+                let wrapped_code = format!(
+                    r#"try:
+    __result = eval({:?})
+    if __result is not None:
+        print(repr(__result))
+except:
+    exec({:?})"#,
+                    code_to_try,
+                    code_to_try
+                );
+                
+                let result = interpreter.enter(|vm| {
+                    let scope = vm.new_scope_with_builtins();
+                    vm.run_code_string(scope, &wrapped_code, "<stdin>".to_string())
+                });
+                
+                match result {
+                    Ok(_) => {
+                        continuation = false;
+                        code_buffer.clear();
+                    }
+                    Err(e) => {
+                        let error_str = format!("{:?}", e);
+                        // Check if this is a continuation case (incomplete statement)
+                        if error_str.contains("unexpected EOF") || 
+                           error_str.contains("incomplete") ||
+                           error_str.contains("EOL") ||
+                           error_str.contains("EOF") ||
+                           error_str.contains("SyntaxError") && error_str.contains("EOF") {
+                            continuation = true;
+                        } else {
+                            eprintln!("Error: {:?}", e);
+                            continuation = false;
+                            code_buffer.clear();
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break;
+            }
+        }
+    }
+}
+
 fn main() {
     let original_args: Vec<String> = std::env::args().collect();
     
@@ -372,6 +513,13 @@ fn main() {
                 build_ios();
             } else {
                 build();
+            }
+        }
+        Some(Commands::Python { file }) => {
+            if let Some(file_path) = file {
+                run_python_file(&file_path);
+            } else {
+                run_python_interactive();
             }
         }
         None => {
