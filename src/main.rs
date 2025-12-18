@@ -253,6 +253,42 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// Try to extract readable error details from rustpython error strings
+fn extract_error_details(error_str: &str) -> Option<String> {
+    // Look for common Python error patterns in the error string
+    if error_str.contains("NameError") {
+        if let Some(start) = error_str.find("NameError") {
+            let remaining = &error_str[start..];
+            if let Some(msg_start) = remaining.find("name") {
+                let msg = &remaining[msg_start..];
+                // Try to extract the variable name
+                if let Some(quote_start) = msg.find('\'') {
+                    if let Some(quote_end) = msg[quote_start+1..].find('\'') {
+                        let var_name = &msg[quote_start+1..quote_start+1+quote_end];
+                        return Some(format!("NameError: name '{}' is not defined", var_name));
+                    }
+                }
+            }
+        }
+    }
+    
+    if error_str.contains("SyntaxError") {
+        if let Some(start) = error_str.find("SyntaxError") {
+            let remaining = &error_str[start..];
+            // Try to extract the message
+            if let Some(msg_start) = remaining.find(':') {
+                let msg = &remaining[msg_start+1..].trim();
+                if !msg.is_empty() && msg.len() < 200 {
+                    return Some(format!("SyntaxError: {}", msg));
+                }
+            }
+        }
+    }
+    
+    // If we can't extract details, return None to use the full error
+    None
+}
+
 fn run_python_file(file_path: &PathBuf) {
     use rustpython_vm::Interpreter;
     use std::fs;
@@ -343,19 +379,46 @@ fn run_python_interactive() {
                 // Try to execute the code
                 // For interactive mode, we'll wrap it to try eval first, then exec
                 let code_to_try = code_buffer.trim();
-                let wrapped_code = format!(
-                    r#"try:
+                
+                // First, try to execute directly to catch syntax errors early
+                // This helps us detect incomplete statements like "for i in range(10):"
+                let result = interpreter.enter(|vm| {
+                    let scope = vm.new_scope_with_builtins();
+                    
+                    // Try to execute with error handling inside Python
+                    let wrapped_code = format!(
+                        r#"
+import sys
+import traceback
+
+try:
+    # Try as expression first
     __result = eval({:?})
     if __result is not None:
         print(repr(__result))
-except:
-    exec({:?})"#,
-                    code_to_try,
-                    code_to_try
-                );
-                
-                let result = interpreter.enter(|vm| {
-                    let scope = vm.new_scope_with_builtins();
+except (NameError, SyntaxError):
+    # If eval fails, try as statement
+    try:
+        exec({:?})
+    except SyntaxError as e:
+        # Syntax errors (like incomplete statements) - check if it's incomplete
+        error_msg = str(e)
+        if 'EOF' in error_msg or 'unexpected EOF' in error_msg or 'incomplete' in error_msg.lower():
+            # This is an incomplete statement - re-raise so we can handle it as continuation
+            raise
+        # Otherwise, print the syntax error
+        traceback.print_exc()
+    except Exception as e:
+        # Other runtime errors - print with traceback
+        traceback.print_exc()
+except Exception as e:
+    # Other exceptions from eval - print with traceback
+    traceback.print_exc()
+"#,
+                        code_to_try,
+                        code_to_try
+                    );
+                    
                     vm.run_code_string(scope, &wrapped_code, "<stdin>".to_string())
                 });
                 
@@ -366,15 +429,28 @@ except:
                     }
                     Err(e) => {
                         let error_str = format!("{:?}", e);
+                        
                         // Check if this is a continuation case (incomplete statement)
-                        if error_str.contains("unexpected EOF") || 
-                           error_str.contains("incomplete") ||
-                           error_str.contains("EOL") ||
-                           error_str.contains("EOF") ||
-                           error_str.contains("SyntaxError") && error_str.contains("EOF") {
+                        // Look for various indicators of incomplete statements
+                        let is_incomplete = error_str.contains("unexpected EOF") || 
+                                           error_str.contains("incomplete") ||
+                                           error_str.contains("EOL") ||
+                                           error_str.contains("EOF") ||
+                                           error_str.contains("SyntaxError") ||
+                                           // Check for common incomplete patterns
+                                           (code_to_try.ends_with(':') && !code_to_try.contains('\n')) ||
+                                           (code_to_try.ends_with('\\') && !code_to_try.contains('\n'));
+                        
+                        if is_incomplete {
                             continuation = true;
                         } else {
-                            eprintln!("Error: {:?}", e);
+                            // Try to extract and display the actual Python error
+                            // The error might contain useful information
+                            if let Some(error_details) = extract_error_details(&error_str) {
+                                eprintln!("{}", error_details);
+                            } else {
+                                eprintln!("Error: {:?}", e);
+                            }
                             continuation = false;
                             code_buffer.clear();
                         }
