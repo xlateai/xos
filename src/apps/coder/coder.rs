@@ -1,5 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::geometric::GeometricText;
+use crate::apps::coder::button::Button;
 use fontdue::{Font, FontSettings};
 use std::collections::HashMap;
 use rustpython_vm::Interpreter;
@@ -15,6 +16,7 @@ pub struct CoderApp {
     pub fade_map: HashMap<(char, u32, u32), f32>,
     pub cursor_position: usize, // Character index in the text
     pub interpreter: Interpreter,
+    pub run_button: Button,
 }
 
 impl CoderApp {
@@ -30,6 +32,9 @@ impl CoderApp {
             // Standard library is initialized by default
         });
 
+        // Create run button (position will be updated in tick)
+        let run_button = Button::new(0, 0, 80, 30, "Run".to_string());
+
         Self {
             text_engine,
             scroll_y: 0.0,
@@ -37,10 +42,11 @@ impl CoderApp {
             fade_map: HashMap::new(),
             cursor_position: 0,
             interpreter,
+            run_button,
         }
     }
 
-    fn tick_cursor(&mut self, state: &mut EngineState) {
+    fn tick_cursor(&mut self, buffer: &mut [u8], width: u32, height: u32) {
         // Calculate cursor position based on cursor_position
         let text = &self.text_engine.text;
         let chars: Vec<char> = text.chars().collect();
@@ -95,10 +101,8 @@ impl CoderApp {
         let cx = self.smooth_cursor_x.round() as i32;
         
         for y in cursor_top..cursor_bottom {
-            let shape = state.frame.shape();
-            if y >= 0 && y < shape[0] as i32 && cx >= 0 && cx < shape[1] as i32 {
-                let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
-                let buffer = state.frame_buffer_mut();
+            if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
+                let idx = ((y as u32 * width + cx as u32) * 4) as usize;
                 buffer[idx + 0] = CURSOR_COLOR.0;
                 buffer[idx + 1] = CURSOR_COLOR.1;
                 buffer[idx + 2] = CURSOR_COLOR.2;
@@ -127,6 +131,7 @@ impl CoderApp {
             }
         }
     }
+
 }
 
 impl Application for CoderApp {
@@ -138,6 +143,11 @@ impl Application for CoderApp {
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
+        
+        // Get mouse coordinates before mutable borrow
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
         let buffer = state.frame_buffer_mut();
     
         self.text_engine.tick(width, height);
@@ -180,7 +190,23 @@ impl Application for CoderApp {
             }
         }
     
-        self.tick_cursor(state);
+        // Get dimensions
+        let width_u32 = width as u32;
+        let height_u32 = height as u32;
+        
+        // Update button position (bottom right)
+        let padding = 10;
+        self.run_button.x = (width_u32 as i32) - (self.run_button.width as i32) - padding;
+        self.run_button.y = (height_u32 as i32) - (self.run_button.height as i32) - padding;
+        
+        // Check if mouse is hovering over button
+        let is_hovered = self.run_button.contains_point(mouse_x, mouse_y);
+        
+        // Draw cursor
+        self.tick_cursor(buffer, width_u32, height_u32);
+        
+        // Draw run button
+        self.run_button.draw(buffer, width_u32, height_u32, is_hovered);
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
@@ -210,35 +236,6 @@ impl Application for CoderApp {
                 }
             }
             '\r' | '\n' => {
-                // Check if we should execute Python code
-                // For now, execute if the line starts with ">>> "
-                let text = &self.text_engine.text;
-                let lines: Vec<&str> = text.lines().collect();
-                if let Some(current_line) = lines.last() {
-                    if current_line.trim() == ">>>" || current_line.trim().starts_with(">>> ") {
-                        // Execute all code (excluding the ">>> " prompts)
-                        let code: String = text
-                            .lines()
-                            .filter_map(|line| {
-                                let trimmed = line.trim();
-                                if trimmed == ">>>" {
-                                    None
-                                } else if trimmed.starts_with(">>> ") {
-                                    Some(trimmed[4..].to_string() + "\n")
-                                } else if !trimmed.is_empty() {
-                                    Some(line.to_string() + "\n")
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !code.trim().is_empty() {
-                            self.execute_python_code(&code);
-                        }
-                        return;
-                    }
-                }
-                
                 // Insert newline at cursor position
                 let text = &mut self.text_engine.text;
                 let chars: Vec<char> = text.chars().collect();
@@ -292,6 +289,20 @@ impl Application for CoderApp {
                         self.cursor_position += 1;
                     }
                 }
+            }
+        }
+    }
+
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        // Check if click is on the run button
+        if self.run_button.contains_point(mouse_x, mouse_y) {
+            // Execute the Python code
+            let code = self.text_engine.text.clone();
+            if !code.trim().is_empty() {
+                self.execute_python_code(&code);
             }
         }
     }
