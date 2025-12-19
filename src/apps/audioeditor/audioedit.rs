@@ -1,5 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
+use crate::shapes::basic_shapes;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -205,106 +206,55 @@ impl AudioEditApp {
         let buffer = state.frame_buffer_mut();
 
         // Position button at center of screen
-        let button_center_x = (width / 2) as i32;
-        let button_center_y = (height / 2) as i32;
-        let button_radius = (self.button_size / 2.0) as i32;
+        let button_center_x = (width / 2) as f32;
+        let button_center_y = (height / 2) as f32;
+        let button_radius = self.button_size / 2.0;
 
-        // Draw button circle
+        // Draw button circle with anti-aliasing
         let button_color = (100, 100, 120); // Dark gray-blue
-        for dy in -button_radius..=button_radius {
-            for dx in -button_radius..=button_radius {
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq <= button_radius * button_radius {
-                    let px = button_center_x + dx;
-                    let py = button_center_y + dy;
-                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                        if idx + 3 < buffer.len() {
-                            buffer[idx + 0] = button_color.0;
-                            buffer[idx + 1] = button_color.1;
-                            buffer[idx + 2] = button_color.2;
-                            buffer[idx + 3] = 0xff;
-                        }
-                    }
-                }
-            }
-        }
+        basic_shapes::draw_circle(
+            buffer,
+            width,
+            height,
+            button_center_x,
+            button_center_y,
+            button_radius,
+            button_color,
+            true, // Enable anti-aliasing
+        );
 
         // Draw play or pause icon
         let icon_color = (255, 255, 255);
-        #[cfg(target_arch = "wasm32")]
-        {
-            // On WASM, draw perfect equilateral triangle pointing right
-            let size: i32 = 20;
-            let half_height = (size as f32 * 0.866) as i32;
-            let left_x = button_center_x - size / 2;
-            
-            for dy in -half_height..=half_height {
-                for dx in -size..=size {
-                    let px = button_center_x + dx;
-                    let py = button_center_y + dy;
-                    let rel_x = (px - left_x) as f32;
-                    let rel_y = (py - button_center_y) as f32;
-                    let in_triangle = rel_x >= 0.0 && 
-                                     rel_x <= size as f32 &&
-                                     rel_y.abs() <= (half_height as f32 * (1.0 - rel_x / size as f32));
-                    
-                    if in_triangle && px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                        if idx + 3 < buffer.len() {
-                            buffer[idx + 0] = icon_color.0;
-                            buffer[idx + 1] = icon_color.1;
-                            buffer[idx + 2] = icon_color.2;
-                            buffer[idx + 3] = 0xff;
-                        }
-                    }
-                }
-            }
-        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.is_paused {
-            // Draw perfect equilateral triangle pointing right
-            // Triangle vertices: left point, top-right, bottom-right
-            let size: i32 = 20; // Size of triangle
-            let half_height = (size as f32 * 0.866) as i32; // sqrt(3)/2 for equilateral triangle
-            let left_x = button_center_x - size / 2;
-            
-            for dy in -half_height..=half_height {
-                for dx in -size..=size {
-                    let px = button_center_x + dx;
-                    let py = button_center_y + dy;
-                    
-                    // Check if point is inside triangle
-                    // Triangle: left point at (left_x, center_y), top at (right_x, center_y - half_height), bottom at (right_x, center_y + half_height)
-                    let rel_x = (px - left_x) as f32;
-                    let rel_y = (py - button_center_y) as f32;
-                    
-                    // Check if point is to the right of left edge and within triangle bounds
-                    let in_triangle = rel_x >= 0.0 && 
-                                     rel_x <= size as f32 &&
-                                     rel_y.abs() <= (half_height as f32 * (1.0 - rel_x / size as f32));
-                    
-                    if in_triangle && px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                        if idx + 3 < buffer.len() {
-                            buffer[idx + 0] = icon_color.0;
-                            buffer[idx + 1] = icon_color.1;
-                            buffer[idx + 2] = icon_color.2;
-                            buffer[idx + 3] = 0xff;
-                        }
-                    }
-                }
-            }
+            // Draw isosceles triangle pointing right (play icon) with anti-aliasing
+            let triangle_width = 20.0;
+            let triangle_height = 24.0; // Slightly taller for isosceles triangle
+            basic_shapes::draw_triangle_right(
+                buffer,
+                width,
+                height,
+                button_center_x,
+                button_center_y,
+                triangle_width,
+                triangle_height,
+                icon_color,
+                true, // Enable anti-aliasing
+            );
         } else {
             // Draw pause icon (two vertical bars)
-            let bar_width = 4;
-            let bar_height = 18;
-            let bar_spacing = 8;
+            let bar_width = 4.0;
+            let bar_height = 18.0;
+            let bar_spacing = 8.0;
             
             // Left bar
-            let left_bar_x = button_center_x - bar_spacing / 2 - bar_width;
-            for py in (button_center_y - bar_height / 2)..(button_center_y + bar_height / 2) {
-                for px in left_bar_x..(left_bar_x + bar_width) {
+            let left_bar_x = (button_center_x - bar_spacing / 2.0 - bar_width) as i32;
+            let bar_start_y = (button_center_y - bar_height / 2.0) as i32;
+            let bar_end_y = (button_center_y + bar_height / 2.0) as i32;
+            let bar_width_i = bar_width as i32;
+            
+            for py in bar_start_y..bar_end_y {
+                for px in left_bar_x..(left_bar_x + bar_width_i) {
                     if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
                         let idx = ((py as u32 * width + px as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
@@ -318,9 +268,9 @@ impl AudioEditApp {
             }
             
             // Right bar
-            let right_bar_x = button_center_x + bar_spacing / 2;
-            for py in (button_center_y - bar_height / 2)..(button_center_y + bar_height / 2) {
-                for px in right_bar_x..(right_bar_x + bar_width) {
+            let right_bar_x = (button_center_x + bar_spacing / 2.0) as i32;
+            for py in bar_start_y..bar_end_y {
+                for px in right_bar_x..(right_bar_x + bar_width_i) {
                     if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
                         let idx = ((py as u32 * width + px as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
@@ -332,6 +282,23 @@ impl AudioEditApp {
                     }
                 }
             }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // On WASM, draw isosceles triangle pointing right (play icon) with anti-aliasing
+            let triangle_width = 20.0;
+            let triangle_height = 24.0;
+            basic_shapes::draw_triangle_right(
+                buffer,
+                width,
+                height,
+                button_center_x,
+                button_center_y,
+                triangle_width,
+                triangle_height,
+                icon_color,
+                true, // Enable anti-aliasing
+            );
         }
     }
 

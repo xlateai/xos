@@ -20,6 +20,7 @@ pub mod apps;
 pub mod ui;
 pub mod tensor;
 pub mod python;
+pub mod shapes;
 
 // XOS namespace module for standardized APIs (external use)
 pub mod xos {
