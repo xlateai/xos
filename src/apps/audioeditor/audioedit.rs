@@ -211,7 +211,7 @@ impl AudioEditApp {
         let button_radius = self.button_size / 2.0;
 
         // Draw button circle with anti-aliasing
-        let button_color = (100, 100, 120); // Dark gray-blue
+        let button_color = (255, 255, 255); // White
         basic_shapes::draw_circle(
             buffer,
             width,
@@ -224,7 +224,7 @@ impl AudioEditApp {
         );
 
         // Draw play or pause icon
-        let icon_color = (255, 255, 255);
+        let icon_color = (0, 0, 0); // Black
         #[cfg(not(target_arch = "wasm32"))]
         if self.is_paused {
             // Draw isosceles triangle pointing right (play icon) with anti-aliasing
