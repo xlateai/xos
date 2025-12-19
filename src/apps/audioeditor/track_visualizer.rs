@@ -24,7 +24,7 @@ impl TrackVisualizer {
 
     /// Render the waveform background and waveform at the bottom of the screen
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn render(&self, state: &mut EngineState, playback_position: f32) {
+    pub fn render(&self, state: &mut EngineState, playback_position: f32, zoom_level: f32, zoom_center: f32) {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
@@ -53,14 +53,30 @@ impl TrackVisualizer {
 
         let waveform_y_center = waveform_y_start + waveform_height / 2;
 
+        // Calculate visible range based on zoom
+        // At zoom 1.0x: visible range is [0.0, 1.0] (entire waveform)
+        // At zoom 100x: visible range is [center - 0.005, center + 0.005]
+        let visible_range = 1.0 / zoom_level;
+        let visible_start = (zoom_center - visible_range / 2.0).max(0.0).min(1.0);
+        let visible_end = (zoom_center + visible_range / 2.0).max(0.0).min(1.0);
+        let visible_width = visible_end - visible_start;
+
         // Draw waveform
         let num_samples = self.full_audio_samples.len();
-        let samples_per_pixel = (num_samples as f32 / width as f32).max(1.0);
         let amplitude = (waveform_height as f32 * 0.4) as i32; // Use 40% of waveform height for amplitude
 
+        // Calculate samples per pixel based on visible range
+        let samples_per_pixel = (num_samples as f32 * visible_width / width as f32).max(1.0);
+
         for x in 0..width {
-            let sample_start = (x as f32 * samples_per_pixel) as usize;
-            let sample_end = ((x + 1) as f32 * samples_per_pixel) as usize;
+            // Map screen x coordinate to position in visible range
+            let position_in_visible = (x as f32 / width as f32) * visible_width + visible_start;
+            let position_in_visible = position_in_visible.max(0.0).min(1.0);
+            
+            // Map position to sample index range
+            let sample_start_f = position_in_visible * num_samples as f32;
+            let sample_start = sample_start_f as usize;
+            let sample_end = (sample_start_f + samples_per_pixel) as usize;
             
             // Find min/max in this pixel range
             let range_end = sample_end.min(num_samples);
@@ -85,7 +101,13 @@ impl TrackVisualizer {
         }
 
         // Draw vertical playback position line
-        let position_x = (playback_position * width as f32) as u32;
+        // Map playback position to screen x coordinate based on visible range
+        let position_in_visible = if visible_width > 0.0 {
+            ((playback_position - visible_start) / visible_width).max(0.0).min(1.0)
+        } else {
+            0.5
+        };
+        let position_x = (position_in_visible * width as f32) as u32;
         let line_color = (255, 100, 100); // Red line
 
         // Draw vertical line from top of waveform area to bottom

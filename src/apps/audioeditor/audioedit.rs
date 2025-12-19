@@ -50,6 +50,12 @@ pub struct AudioEditApp {
     playback_start_time: Option<Instant>, // When current playback segment started
     #[cfg(not(target_arch = "wasm32"))]
     playback_start_position: f32, // Position when current playback segment started (0.0 to 1.0)
+    #[cfg(not(target_arch = "wasm32"))]
+    zoom_level: f32, // Zoom level (1.0 to 100.0)
+    #[cfg(not(target_arch = "wasm32"))]
+    zoom_center: f32, // Center position of zoom (0.0 to 1.0)
+    #[cfg(not(target_arch = "wasm32"))]
+    is_dragging_zoom_slider: bool, // Whether user is dragging the zoom slider
     button_size: f32, // Size of play/pause button
 }
 
@@ -83,6 +89,12 @@ impl AudioEditApp {
             playback_start_time: None,
             #[cfg(not(target_arch = "wasm32"))]
             playback_start_position: 0.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            zoom_level: 1.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            zoom_center: 0.5,
+            #[cfg(not(target_arch = "wasm32"))]
+            is_dragging_zoom_slider: false,
             button_size: 60.0,
         }
     }
@@ -317,6 +329,116 @@ impl AudioEditApp {
         }
     }
 
+    /// Render the zoom slider above the waveform area
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_zoom_slider(&self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let buffer = state.frame_buffer_mut();
+
+        // Get waveform area bounds
+        let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width as f32, height as f32);
+        
+        // Slider is above waveform, centered horizontally
+        let slider_height = 30.0;
+        let slider_y_start = waveform_y_start - slider_height;
+        let slider_y_end = waveform_y_start;
+        let slider_width = (width as f32 * 0.4).min(400.0); // 40% of screen width, max 400px
+        let slider_x_start = (width as f32 - slider_width) / 2.0;
+        let slider_x_end = slider_x_start + slider_width;
+
+        // Draw slider background (dark gray)
+        let slider_bg_color = (40, 40, 40);
+        for y in (slider_y_start as u32)..(slider_y_end as u32) {
+            for x in (slider_x_start as u32)..(slider_x_end as u32) {
+                let idx = ((y * width + x) * 4) as usize;
+                if idx + 3 < buffer.len() {
+                    buffer[idx + 0] = slider_bg_color.0;
+                    buffer[idx + 1] = slider_bg_color.1;
+                    buffer[idx + 2] = slider_bg_color.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+
+        // Draw slider track (lighter gray line)
+        let track_color = (100, 100, 100);
+        let track_y = (slider_y_start + slider_height / 2.0) as u32;
+        for x in (slider_x_start as u32)..(slider_x_end as u32) {
+            let idx = ((track_y * width + x) * 4) as usize;
+            if idx + 3 < buffer.len() {
+                buffer[idx + 0] = track_color.0;
+                buffer[idx + 1] = track_color.1;
+                buffer[idx + 2] = track_color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+
+        // Draw slider knob
+        // Map zoom level (1.0 to 100.0) to slider position (0.0 to 1.0)
+        // Use logarithmic scale for better control
+        let zoom_normalized = ((self.zoom_level.ln() - 1.0f32.ln()) / (100.0f32.ln() - 1.0f32.ln())).max(0.0).min(1.0);
+        let knob_x = slider_x_start + zoom_normalized * slider_width;
+        let knob_size = 12.0;
+        let knob_color = (200, 200, 255);
+
+        // Draw knob circle
+        let knob_y = slider_y_start + slider_height / 2.0;
+        for dy in -(knob_size as i32)..=(knob_size as i32) {
+            for dx in -(knob_size as i32)..=(knob_size as i32) {
+                let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                if dist <= knob_size {
+                    let x = (knob_x as i32 + dx).max(0).min((width - 1) as i32) as u32;
+                    let y = (knob_y as i32 + dy).max(0).min((height - 1) as i32) as u32;
+                    let idx = ((y * width + x) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = knob_color.0;
+                        buffer[idx + 1] = knob_color.1;
+                        buffer[idx + 2] = knob_color.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if mouse is over the zoom slider and handle dragging
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_zoom_slider_interaction(&mut self, state: &mut EngineState) -> bool {
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as u32;
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+
+        // Get waveform area bounds
+        let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width, height as f32);
+        
+        // Slider area
+        let slider_height = 30.0;
+        let slider_y_start = waveform_y_start - slider_height;
+        let slider_y_end = waveform_y_start;
+        let slider_width = (width * 0.4).min(400.0);
+        let slider_x_start = (width - slider_width) / 2.0;
+        let slider_x_end = slider_x_start + slider_width;
+
+        // Check if mouse is in slider area
+        if mouse_y >= slider_y_start && mouse_y <= slider_y_end &&
+           mouse_x >= slider_x_start && mouse_x <= slider_x_end {
+            if state.mouse.is_left_clicking {
+                self.is_dragging_zoom_slider = true;
+                // Map mouse x to zoom level (logarithmic)
+                let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
+                let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
+                self.zoom_level = zoom.max(1.0).min(100.0);
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Check if mouse is over the position line and handle dragging
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_position_line_interaction(&mut self, state: &mut EngineState) -> bool {
@@ -451,6 +573,7 @@ impl Application for AudioEditApp {
                 self.playback_position = 0.0;
                 self.playback_start_position = 0.0;
                 self.playback_start_time = Some(Instant::now());
+                self.zoom_center = 0.0; // Start zoomed at the beginning
 
                 crate::print(&format!("Playing audio file: {:?}", path));
             } else {
@@ -486,6 +609,28 @@ impl Application for AudioEditApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Handle dragging zoom slider
+            if self.is_dragging_zoom_slider {
+                if state.mouse.is_left_clicking {
+                    // Continue dragging
+                    let shape = state.frame.shape();
+                    let width = shape[1] as f32;
+                    let mouse_x = state.mouse.x;
+                    
+                    // Get slider area
+                    let slider_width = (width * 0.4).min(400.0);
+                    let slider_x_start = (width - slider_width) / 2.0;
+                    
+                    // Map mouse x to zoom level (logarithmic)
+                    let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
+                    let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
+                    self.zoom_level = zoom.max(1.0).min(100.0);
+                } else {
+                    // Mouse released
+                    self.is_dragging_zoom_slider = false;
+                }
+            }
+
             // Handle dragging position line
             if self.is_dragging_position {
                 if state.mouse.is_left_clicking {
@@ -541,8 +686,16 @@ impl Application for AudioEditApp {
                 }
             }
 
+            // Update zoom center to follow playback position when playing
+            if !self.is_paused && !self.is_dragging_zoom_slider {
+                self.zoom_center = self.playback_position;
+            }
+
+            // Render zoom slider
+            self.render_zoom_slider(state);
+
             // Render waveform and position line
-            self.track_visualizer.render(state, self.playback_position);
+            self.track_visualizer.render(state, self.playback_position, self.zoom_level, self.zoom_center);
         }
 
         // Render play/pause button
@@ -575,6 +728,11 @@ impl Application for AudioEditApp {
                     // Pausing: clear timer so position doesn't update
                     self.playback_start_time = None;
                 }
+                return;
+            }
+
+            // Check zoom slider interaction
+            if self.handle_zoom_slider_interaction(state) {
                 return;
             }
 
@@ -633,6 +791,22 @@ impl Application for AudioEditApp {
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Update zoom slider if dragging
+            if self.is_dragging_zoom_slider && state.mouse.is_left_clicking {
+                let shape = state.frame.shape();
+                let width = shape[1] as f32;
+                let mouse_x = state.mouse.x;
+                
+                // Get slider area
+                let slider_width = (width * 0.4).min(400.0);
+                let slider_x_start = (width - slider_width) / 2.0;
+                
+                // Map mouse x to zoom level (logarithmic)
+                let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
+                let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
+                self.zoom_level = zoom.max(1.0).min(100.0);
+            }
+            
             // Update position if dragging
             if self.is_dragging_position && state.mouse.is_left_clicking {
                 let shape = state.frame.shape();
