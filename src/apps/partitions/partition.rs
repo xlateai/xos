@@ -251,3 +251,4 @@ pub trait Partition {
         }
     }
 }
+

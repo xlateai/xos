@@ -8,3 +8,4 @@ export LC_ALL=en_US.UTF-8
 # Run pod install
 pod install "$@"
 
+

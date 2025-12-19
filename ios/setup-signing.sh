@@ -86,3 +86,4 @@ else
     echo "   Team will be set when you regenerate the project."
 fi
 
+

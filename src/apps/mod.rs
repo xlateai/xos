@@ -62,6 +62,7 @@ define_apps! {
     Triangles => triangles::TrianglesApp,
     Cursor => cursor::CursorApp,
     Audiovis => audiovis::AudiovisApp,
+    AudioEdit => audioeditor::AudioEditApp,
     Partitions => partitions::Partitions,
     Coder => coder::CoderApp,
 }

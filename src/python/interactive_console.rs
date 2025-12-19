@@ -78,8 +78,44 @@ pub fn run_python_interactive() {
     println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
     
     // Create interpreter
-    let interpreter = Interpreter::with_init(Default::default(), |_vm| {
+    let interpreter = Interpreter::with_init(Default::default(), |vm| {
         // Standard library is initialized by default
+        // Set up stdout capture only - let stderr go through directly for errors
+        let setup_code = r#"
+import sys
+import io
+import traceback
+
+class OutputCapture:
+    def __init__(self):
+        self.buffer = []
+        
+    def write(self, text):
+        self.buffer.append(text)
+        return len(text)
+        
+    def flush(self):
+        pass
+        
+    def getvalue(self):
+        result = ''.join(self.buffer)
+        self.buffer.clear()
+        return result
+
+_stdout_capture = OutputCapture()
+# Don't capture stderr - let it go through directly so errors are visible
+# Store original stderr in case we need it
+_original_stderr = sys.stderr
+sys.stdout = _stdout_capture
+
+def get_output():
+    return _stdout_capture.getvalue()
+
+def clear_output():
+    _stdout_capture.buffer.clear()
+"#;
+        let scope = vm.new_scope_with_builtins();
+        let _ = vm.run_code_string(scope, setup_code, "<init>".to_string());
     });
     
     let stdin = io::stdin();
@@ -143,20 +179,18 @@ pub fn run_python_interactive() {
                 let result = interpreter.enter(|vm| {
                     let scope = vm.new_scope_with_builtins();
                     
+                    // Clear previous output
+                    let _ = vm.run_code_string(scope.clone(), "clear_output()", "<clear>".to_string());
+                    
                     // Wrap all code execution in proper error handling to get Python-style error messages
-                    // We'll use a code object approach to safely handle the user's code
                     let wrapped_code = if is_multiline {
                         // For multi-line code, use compile + exec with error handling
-                        // This gives us better error messages
                         let code_escaped = code_to_try
                             .replace('\\', r"\\")
                             .replace('"', r#"\""#)
                             .replace('\n', r"\n");
                         format!(
                             r#"
-import sys
-import traceback
-
 try:
     code_source = "{}"
     code_obj = compile(code_source, '<stdin>', 'exec')
@@ -167,10 +201,12 @@ except SyntaxError as e:
     if 'EOF' in error_msg or 'unexpected EOF' in error_msg or 'incomplete' in error_msg.lower():
         # Re-raise incomplete statements so we can handle continuation
         raise
-    # Otherwise, print the full traceback
+    # Otherwise, print the full traceback to stderr
+    import traceback
     traceback.print_exc()
 except Exception as e:
     # Print full traceback for all other errors
+    import traceback
     traceback.print_exc()
 "#,
                             code_escaped
@@ -182,9 +218,6 @@ except Exception as e:
                             .replace('"', r#"\""#);
                         format!(
                             r#"
-import sys
-import traceback
-
 try:
     # Try as expression first
     __result = eval("{}")
@@ -201,12 +234,15 @@ except (NameError, SyntaxError):
             # Re-raise incomplete statements so we can handle continuation
             raise
         # Otherwise, print the full traceback
+        import traceback
         traceback.print_exc()
     except Exception as e:
         # Print full traceback for all other errors
+        import traceback
         traceback.print_exc()
 except Exception as e:
     # Other exceptions from eval - print with traceback
+    import traceback
     traceback.print_exc()
 "#,
                             code_escaped,
@@ -214,7 +250,21 @@ except Exception as e:
                         )
                     };
                     
-                    vm.run_code_string(scope, &wrapped_code, "<stdin>".to_string())
+                    // Execute the wrapped code
+                    let exec_result = vm.run_code_string(scope.clone(), &wrapped_code, "<stdin>".to_string());
+                    
+                    // Get captured stdout output and print it
+                    let output_code = r#"
+try:
+    output = get_output()
+    if output:
+        print(output, end='')
+except:
+    pass
+"#;
+                    let _ = vm.run_code_string(scope.clone(), output_code, "<get_output>".to_string());
+                    
+                    exec_result
                 });
                 
                 match result {
@@ -223,30 +273,28 @@ except Exception as e:
                         code_buffer.clear();
                     }
                     Err(e) => {
+                        // Errors should have been printed to stderr directly by traceback.print_exc()
+                        // since we're not capturing stderr
                         let error_str = format!("{:?}", e);
                         
                         // Check if this is a continuation case (incomplete statement)
-                        // Look for various indicators of incomplete statements
                         let is_incomplete = error_str.contains("unexpected EOF") || 
                                            error_str.contains("incomplete") ||
                                            error_str.contains("EOL") ||
                                            error_str.contains("EOF") ||
                                            (error_str.contains("SyntaxError") && error_str.contains("EOF")) ||
-                                           // Check for common incomplete patterns
                                            (code_to_try.trim().ends_with(':') && !code_to_try.contains('\n')) ||
                                            (code_to_try.trim().ends_with('\\') && !code_to_try.contains('\n'));
                         
                         if is_incomplete {
                             continuation = true;
                         } else {
-                            // The Python traceback should have been printed by our wrapper code
-                            // But if the exception escaped (which shouldn't happen), show the Rust error
-                            // Try to extract readable error details as fallback
+                            // The Python traceback should have been printed to stderr by traceback.print_exc()
+                            // But if it wasn't, try to extract readable error details as fallback
                             if let Some(error_details) = extract_error_details(&error_str) {
                                 eprintln!("{}", error_details);
                             } else {
-                                // If we get here, the exception escaped our Python handler
-                                // This shouldn't happen, but provide a fallback message
+                                // Show the full error as last resort
                                 eprintln!("Error: {:?}", e);
                             }
                             continuation = false;

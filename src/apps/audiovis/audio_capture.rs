@@ -108,3 +108,4 @@ impl ToF32 for u16 {
         (self as f32 / u16::MAX as f32) * 2.0 - 1.0
     }
 }
+
