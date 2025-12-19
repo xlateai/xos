@@ -89,8 +89,6 @@ fn apply_box_blur(
     radius: i32,
 ) {
     let radius = radius.max(1);
-    let kernel_size = radius * 2 + 1;
-    let kernel_area = (kernel_size * kernel_size) as f32;
     
     for y in 0..height as i32 {
         for x in 0..width as i32 {
@@ -142,15 +140,20 @@ pub fn draw_triangle_right(
     color: (u8, u8, u8),
     anti_alias: bool,
 ) {
-    let half_width = triangle_width / 2.0;
     let half_height = triangle_height / 2.0;
 
     // Triangle vertices (isosceles triangle pointing right):
-    // Left-top: (center_x - half_width, center_y - half_height)
-    // Left-bottom: (center_x - half_width, center_y + half_height)
-    // Right point: (center_x + half_width, center_y)
-    let left_x = center_x - half_width;
-    let tip_x = center_x + half_width;
+    // To center the triangle properly, the centroid should be at (center_x, center_y)
+    // Centroid = ((left_x + left_x + tip_x) / 3, (top_y + bottom_y + tip_y) / 3)
+    // For centroid at (center_x, center_y):
+    // (2*left_x + tip_x) / 3 = center_x  =>  2*left_x + tip_x = 3*center_x
+    // (top_y + bottom_y + tip_y) / 3 = center_y  =>  top_y + bottom_y + tip_y = 3*center_y
+    // Since tip_y = center_y: top_y + bottom_y = 2*center_y
+    // With symmetric heights: top_y = center_y - half_height, bottom_y = center_y + half_height ✓
+    // For x: tip_x - left_x = triangle_width, and 2*left_x + tip_x = 3*center_x
+    // Solving: left_x = center_x - triangle_width/3, tip_x = center_x + 2*triangle_width/3
+    let left_x = center_x - triangle_width / 3.0;
+    let tip_x = center_x + 2.0 * triangle_width / 3.0;
     let tip_y = center_y;
     let top_y = center_y - half_height;
     let bottom_y = center_y + half_height;
@@ -196,9 +199,9 @@ pub fn draw_triangle_right(
             }
         }
         
-        // Apply blur to temp buffer
+        // Apply blur to temp buffer (reduced by ~10%)
         let mut blurred_buffer = vec![0u8; temp_size];
-        apply_box_blur(&temp_buffer, &mut blurred_buffer, region_width, region_height, 2);
+        apply_box_blur(&temp_buffer, &mut blurred_buffer, region_width, region_height, 1);
         
         // Composite blurred triangle onto main buffer
         for py in min_y..=max_y {
