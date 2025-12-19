@@ -456,8 +456,19 @@ impl AudioEditApp {
             return false;
         }
 
-        // Calculate position line X coordinate
-        let position_x = self.playback_position * width;
+        // Calculate visible range for zoom
+        let visible_range = 1.0 / self.zoom_level;
+        let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
+        let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
+        let visible_width = visible_end - visible_start;
+        
+        // Map playback position to screen x coordinate
+        let position_in_visible = if visible_width > 0.0 {
+            ((self.playback_position - visible_start) / visible_width).max(0.0).min(1.0)
+        } else {
+            0.5
+        };
+        let position_x = position_in_visible * width;
         let line_tolerance = 10.0; // Pixels of tolerance for clicking the line
 
         // Check if mouse is near the position line
@@ -465,8 +476,9 @@ impl AudioEditApp {
             if state.mouse.is_left_clicking {
                 // Start or continue dragging
                 self.is_dragging_position = true;
-                // Update position based on mouse X
-                let new_position = (mouse_x / width).max(0.0).min(1.0);
+                // Map mouse_x from screen coordinates to actual audio position accounting for zoom
+                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
+                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
                 self.playback_position = new_position;
                 return true;
             }
@@ -634,11 +646,20 @@ impl Application for AudioEditApp {
             // Handle dragging position line
             if self.is_dragging_position {
                 if state.mouse.is_left_clicking {
-                    // Continue dragging
+                    // Continue dragging - map mouse_x to actual audio position accounting for zoom
                     let shape = state.frame.shape();
                     let width = shape[1] as f32;
                     let mouse_x = state.mouse.x;
-                    let new_position = (mouse_x / width).max(0.0).min(1.0);
+                    
+                    // Calculate visible range for zoom
+                    let visible_range = 1.0 / self.zoom_level;
+                    let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
+                    let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
+                    let visible_width = visible_end - visible_start;
+                    
+                    // Map mouse_x from screen coordinates to actual audio position
+                    let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
+                    let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
                     self.playback_position = new_position;
                 } else {
                     // Mouse released, seek to position
@@ -744,7 +765,17 @@ impl Application for AudioEditApp {
             // Also allow clicking anywhere in the waveform area to seek
             let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width, height);
             if mouse_y >= waveform_y_start {
-                let new_position = (mouse_x / width).max(0.0).min(1.0);
+                // Map mouse_x from screen coordinates to actual audio position accounting for zoom
+                let visible_range = 1.0 / self.zoom_level;
+                let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
+                let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
+                let visible_width = visible_end - visible_start;
+                
+                // Map screen x (0.0 to width) to position within visible range (0.0 to 1.0)
+                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
+                // Convert to actual audio position
+                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
+                
                 self.playback_position = new_position;
                 self.is_dragging_position = true;
             }
@@ -807,12 +838,21 @@ impl Application for AudioEditApp {
                 self.zoom_level = zoom.max(1.0).min(100.0);
             }
             
-            // Update position if dragging
+            // Update position if dragging - map mouse_x to actual audio position accounting for zoom
             if self.is_dragging_position && state.mouse.is_left_clicking {
                 let shape = state.frame.shape();
                 let width = shape[1] as f32;
                 let mouse_x = state.mouse.x;
-                let new_position = (mouse_x / width).max(0.0).min(1.0);
+                
+                // Calculate visible range for zoom
+                let visible_range = 1.0 / self.zoom_level;
+                let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
+                let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
+                let visible_width = visible_end - visible_start;
+                
+                // Map mouse_x from screen coordinates to actual audio position
+                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
+                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
                 self.playback_position = new_position;
             }
         }
