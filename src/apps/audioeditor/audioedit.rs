@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
@@ -44,6 +46,10 @@ pub struct AudioEditApp {
     is_dragging_position: bool, // Whether user is dragging the position line
     #[cfg(not(target_arch = "wasm32"))]
     last_seek_position: f32, // Last position we seeked to (to detect new seeks)
+    #[cfg(not(target_arch = "wasm32"))]
+    playback_start_time: Option<Instant>, // When current playback segment started
+    #[cfg(not(target_arch = "wasm32"))]
+    playback_start_position: f32, // Position when current playback segment started (0.0 to 1.0)
     button_size: f32, // Size of play/pause button
 }
 
@@ -73,6 +79,10 @@ impl AudioEditApp {
             is_dragging_position: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_seek_position: -1.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            playback_start_time: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            playback_start_position: 0.0,
             button_size: 60.0,
         }
     }
@@ -182,6 +192,10 @@ impl AudioEditApp {
 
         // Update total_samples to reflect the seek position
         self.total_samples = if skipped > 0 { skipped / channels } else { 0 };
+        
+        // Reset playback timing for the new position
+        self.playback_start_position = position;
+        self.playback_start_time = Some(Instant::now());
 
         // Create a new capturing source from the remaining decoder
         let sample_buffer = self.audio_samples.as_ref().unwrap().clone();
@@ -435,6 +449,8 @@ impl Application for AudioEditApp {
                 self._stream = Some(_stream);
                 self.last_seek_position = 0.0;
                 self.playback_position = 0.0;
+                self.playback_start_position = 0.0;
+                self.playback_start_time = Some(Instant::now());
 
                 crate::print(&format!("Playing audio file: {:?}", path));
             } else {
@@ -493,22 +509,18 @@ impl Application for AudioEditApp {
                 }
             }
 
-            // Update playback position based on actual audio playback
-            if let Some(sample_buffer) = &self.audio_samples {
-                let buffer = sample_buffer.lock().unwrap();
-                let buffer_len = buffer.len();
-                
-                if self.audio_duration_seconds > 0.0 && self.sample_rate > 0 && !self.is_dragging_position {
-                    // Estimate position based on samples processed
-                    let estimated_position = if buffer_len > 0 {
-                        (self.total_samples as f32) / (self.audio_duration_seconds * self.sample_rate as f32)
-                    } else {
-                        self.playback_position
-                    };
-                    
-                    // Only auto-update position when playing and not dragging
-                    if !self.is_paused {
-                        self.playback_position = estimated_position.min(1.0);
+            // Update playback position based on elapsed time
+            if !self.is_dragging_position && !self.is_paused {
+                if let Some(start_time) = self.playback_start_time {
+                    if self.audio_duration_seconds > 0.0 {
+                        // Calculate elapsed time since playback started
+                        let elapsed_seconds = start_time.elapsed().as_secs_f32();
+                        
+                        // Calculate current position: start position + elapsed time as percentage
+                        let elapsed_position = elapsed_seconds / self.audio_duration_seconds;
+                        let current_position = (self.playback_start_position + elapsed_position).min(1.0);
+                        
+                        self.playback_position = current_position;
                     }
                 }
             }
@@ -520,13 +532,13 @@ impl Application for AudioEditApp {
                     sink.pause();
                 } else {
                     sink.play();
+                    // When resuming, reset start time and position to current position
+                    // This accounts for the pause duration
+                    if self.playback_start_time.is_none() {
+                        self.playback_start_position = self.playback_position;
+                        self.playback_start_time = Some(Instant::now());
+                    }
                 }
-            }
-
-            // Update total samples processed
-            if let Some(sample_buffer) = &self.audio_samples {
-                let buffer = sample_buffer.lock().unwrap();
-                self.total_samples = self.total_samples.max(buffer.len());
             }
 
             // Render waveform and position line
@@ -554,6 +566,15 @@ impl Application for AudioEditApp {
             
             if button_dist <= self.button_size / 2.0 {
                 self.is_paused = !self.is_paused;
+                // When toggling pause, reset timing to current position
+                if !self.is_paused {
+                    // Resuming: set start position to current and reset timer
+                    self.playback_start_position = self.playback_position;
+                    self.playback_start_time = Some(Instant::now());
+                } else {
+                    // Pausing: clear timer so position doesn't update
+                    self.playback_start_time = None;
+                }
                 return;
             }
 
@@ -578,6 +599,15 @@ impl Application for AudioEditApp {
             // Spacebar toggles play/pause
             if ch == ' ' {
                 self.is_paused = !self.is_paused;
+                // When toggling pause, reset timing to current position
+                if !self.is_paused {
+                    // Resuming: set start position to current and reset timer
+                    self.playback_start_position = self.playback_position;
+                    self.playback_start_time = Some(Instant::now());
+                } else {
+                    // Pausing: clear timer so position doesn't update
+                    self.playback_start_time = None;
+                }
             }
         }
     }
