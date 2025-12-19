@@ -7,6 +7,8 @@ const WAVEFORM_COLOR: (u8, u8, u8) = (57, 255, 20); // Neon green (#39ff14)
 pub struct TrackVisualizer {
     #[cfg(not(target_arch = "wasm32"))]
     full_audio_samples: Vec<f32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    original_sample_count: usize, // Original sample count before downsampling
 }
 
 impl TrackVisualizer {
@@ -14,12 +16,19 @@ impl TrackVisualizer {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             full_audio_samples: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            original_sample_count: 0,
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_samples(&mut self, samples: Vec<f32>) {
         self.full_audio_samples = samples;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_original_sample_count(&mut self, count: usize) {
+        self.original_sample_count = count;
     }
 
     /// Render the waveform background and waveform at the bottom of the screen
@@ -54,9 +63,10 @@ impl TrackVisualizer {
         let waveform_y_center = waveform_y_start + waveform_height / 2;
 
         // Calculate visible range based on zoom
-        // At zoom 1.0x: visible range is [0.0, 1.0] (entire waveform)
-        // At zoom 100x: visible range is [center - 0.005, center + 0.005]
-        let visible_range = 1.0 / zoom_level;
+        // Zoom level represents: 1.0 = full audio, max = 1 second window
+        // This is handled in calculate_visible_range() in audioedit.rs
+        // For rendering, we just use the zoom_level directly
+        let visible_range = 1.0 / zoom_level.max(1.0);
         let visible_start = (zoom_center - visible_range / 2.0).max(0.0).min(1.0);
         let visible_end = (zoom_center + visible_range / 2.0).max(0.0).min(1.0);
         let visible_width = visible_end - visible_start;
@@ -65,18 +75,34 @@ impl TrackVisualizer {
         let num_samples = self.full_audio_samples.len();
         let amplitude = (waveform_height as f32 * 0.4) as i32; // Use 40% of waveform height for amplitude
 
+        // Use original sample count for accurate position mapping
+        // This ensures alignment even if waveform was downsampled
+        let effective_sample_count = if self.original_sample_count > 0 {
+            self.original_sample_count
+        } else {
+            num_samples
+        };
+
         // Calculate samples per pixel based on visible range
-        let samples_per_pixel = (num_samples as f32 * visible_width / width as f32).max(1.0);
+        let samples_per_pixel = (effective_sample_count as f32 * visible_width / width as f32).max(1.0);
 
         for x in 0..width {
             // Map screen x coordinate to position in visible range
             let position_in_visible = (x as f32 / width as f32) * visible_width + visible_start;
             let position_in_visible = position_in_visible.max(0.0).min(1.0);
             
-            // Map position to sample index range
-            let sample_start_f = position_in_visible * num_samples as f32;
+            // Map position to sample index in original (non-downsampled) space
+            let original_sample_index_f = position_in_visible * effective_sample_count as f32;
+            
+            // Map back to downsampled index
+            let downsample_ratio = if effective_sample_count > 0 && num_samples > 0 {
+                num_samples as f32 / effective_sample_count as f32
+            } else {
+                1.0
+            };
+            let sample_start_f = original_sample_index_f * downsample_ratio;
             let sample_start = sample_start_f as usize;
-            let sample_end = (sample_start_f + samples_per_pixel) as usize;
+            let sample_end = (sample_start_f + samples_per_pixel * downsample_ratio) as usize;
             
             // Find min/max in this pixel range
             let range_end = sample_end.min(num_samples);
@@ -84,9 +110,14 @@ impl TrackVisualizer {
                 let min_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::INFINITY, |a, &b| a.min(b));
                 let max_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
                 
-                // Draw vertical line from min to max
-                let y_min = (waveform_y_center as i32 - (max_val * amplitude as f32) as i32).max(waveform_y_start as i32);
-                let y_max = (waveform_y_center as i32 - (min_val * amplitude as f32) as i32).min((height - 1) as i32);
+                // Use absolute values to ensure we show both positive and negative peaks
+                // Scale to make quieter sounds more visible (use RMS-like approach)
+                let peak_val = max_val.abs().max(min_val.abs());
+                
+                // Draw vertical line from center, showing the peak amplitude
+                let y_offset = (peak_val * amplitude as f32) as i32;
+                let y_min = (waveform_y_center as i32 - y_offset).max(waveform_y_start as i32);
+                let y_max = (waveform_y_center as i32 + y_offset).min((height - 1) as i32);
                 
                 for y in y_min..=y_max {
                     let idx = ((y as u32 * width + x) * 4) as usize;

@@ -35,6 +35,8 @@ pub struct AudioEditApp {
     #[cfg(not(target_arch = "wasm32"))]
     sample_rate: u32, // Sample rate for position calculation
     #[cfg(not(target_arch = "wasm32"))]
+    original_sample_count: usize, // Original number of samples before downsampling (for alignment)
+    #[cfg(not(target_arch = "wasm32"))]
     audio_duration_seconds: f32, // Total audio duration
     #[cfg(not(target_arch = "wasm32"))]
     audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
@@ -51,7 +53,7 @@ pub struct AudioEditApp {
     #[cfg(not(target_arch = "wasm32"))]
     playback_start_position: f32, // Position when current playback segment started (0.0 to 1.0)
     #[cfg(not(target_arch = "wasm32"))]
-    zoom_level: f32, // Zoom level (1.0 to 100.0)
+    zoom_level: f32, // Zoom level (1.0 = full audio, max = 1 second window)
     #[cfg(not(target_arch = "wasm32"))]
     zoom_center: f32, // Center position of zoom (0.0 to 1.0)
     #[cfg(not(target_arch = "wasm32"))]
@@ -72,7 +74,9 @@ impl AudioEditApp {
             #[cfg(not(target_arch = "wasm32"))]
             total_samples: 0,
             #[cfg(not(target_arch = "wasm32"))]
-            sample_rate: 44100,
+            sample_rate: 0, // Will be set when audio is loaded
+            #[cfg(not(target_arch = "wasm32"))]
+            original_sample_count: 0,
             #[cfg(not(target_arch = "wasm32"))]
             audio_duration_seconds: 0.0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -111,6 +115,16 @@ impl AudioEditApp {
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels() as usize;
         
+        // Get the actual duration from the decoder first
+        // This should match the duration we get when loading for playback
+        let decoder_duration = decoder.total_duration()
+            .map(|d| d.as_secs_f32())
+            .unwrap_or(0.0);
+        
+        // Store duration early so it's available
+        self.audio_duration_seconds = decoder_duration;
+        self.sample_rate = sample_rate;
+        
         // Collect all samples and average channels
         let mut all_samples = Vec::new();
         let mut channel_buffer = Vec::with_capacity(channels);
@@ -136,6 +150,22 @@ impl AudioEditApp {
             }
         }
         
+        // Calculate expected sample count from duration
+        // This is more accurate than counting samples, especially if we break early
+        let expected_sample_count = if decoder_duration > 0.0 && sample_rate > 0 {
+            (decoder_duration * sample_rate as f32) as usize
+        } else {
+            sample_count
+        };
+        
+        // Store original sample count before downsampling
+        // Use expected count from duration if we broke early, otherwise use actual count
+        let original_count = if sample_count >= 10_000_000 {
+            expected_sample_count
+        } else {
+            all_samples.len()
+        };
+        
         // Downsample if needed (take every Nth sample to fit in reasonable memory)
         let final_samples = if all_samples.len() > 1_000_000 {
             let downsample_factor = (all_samples.len() / 1_000_000) + 1;
@@ -148,9 +178,13 @@ impl AudioEditApp {
         };
         
         #[cfg(not(target_arch = "wasm32"))]
-        self.track_visualizer.set_samples(final_samples);
+        {
+            self.track_visualizer.set_samples(final_samples);
+            self.track_visualizer.set_original_sample_count(original_count);
+        }
         
         self.sample_rate = sample_rate;
+        self.original_sample_count = original_count;
         Ok(())
     }
 
@@ -208,10 +242,14 @@ impl AudioEditApp {
         // Reset playback timing for the new position
         self.playback_start_position = position;
         self.playback_start_time = Some(Instant::now());
+        
+        // Update zoom center to the new position when seeking
+        // This ensures the view follows the seek
+        self.zoom_center = position;
 
         // Create a new capturing source from the remaining decoder
         let sample_buffer = self.audio_samples.as_ref().unwrap().clone();
-        let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
+        let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, self.sample_rate as usize);
 
         // Append to sink and play
         if let Some(sink) = &self.sink {
@@ -376,9 +414,18 @@ impl AudioEditApp {
         }
 
         // Draw slider knob
-        // Map zoom level (1.0 to 100.0) to slider position (0.0 to 1.0)
+        // Map zoom level (1.0 to max_zoom) to slider position (0.0 to 1.0)
         // Use logarithmic scale for better control
-        let zoom_normalized = ((self.zoom_level.ln() - 1.0f32.ln()) / (100.0f32.ln() - 1.0f32.ln())).max(0.0).min(1.0);
+        let max_zoom = if self.audio_duration_seconds > 0.0 {
+            self.audio_duration_seconds
+        } else {
+            100.0 // Fallback
+        };
+        let zoom_normalized = if max_zoom > 1.0 {
+            ((self.zoom_level.ln() - 1.0f32.ln()) / (max_zoom.ln() - 1.0f32.ln())).max(0.0).min(1.0)
+        } else {
+            0.0
+        };
         let knob_x = slider_x_start + zoom_normalized * slider_width;
         let knob_size = 12.0;
         let knob_color = (200, 200, 255);
@@ -430,13 +477,97 @@ impl AudioEditApp {
                 self.is_dragging_zoom_slider = true;
                 // Map mouse x to zoom level (logarithmic)
                 let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
-                let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
-                self.zoom_level = zoom.max(1.0).min(100.0);
+                let max_zoom = if self.audio_duration_seconds > 0.0 {
+                    self.audio_duration_seconds
+                } else {
+                    100.0 // Fallback
+                };
+                let zoom = if max_zoom > 1.0 {
+                    (1.0f32.ln() + normalized * (max_zoom.ln() - 1.0f32.ln())).exp()
+                } else {
+                    1.0
+                };
+                self.zoom_level = zoom.max(1.0).min(max_zoom);
                 return true;
             }
         }
 
         false
+    }
+
+    /// Calculate the visible range based on zoom level and center
+    /// Zoom level now represents: 1.0 = full audio, max = 1 second window
+    /// Returns (visible_start, visible_end, visible_width)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn calculate_visible_range(&self) -> (f32, f32, f32) {
+        if self.audio_duration_seconds <= 0.0 {
+            return (0.0, 1.0, 1.0);
+        }
+        
+        // Calculate max zoom (1 second window)
+        let max_zoom = self.audio_duration_seconds;
+        
+        // Clamp zoom level
+        let zoom = self.zoom_level.max(1.0).min(max_zoom);
+        
+        // Calculate visible window in seconds
+        // At zoom 1.0: visible_window = audio_duration_seconds (full audio)
+        // At zoom max_zoom: visible_window = 1.0 second
+        let visible_window_seconds = self.audio_duration_seconds / zoom;
+        
+        // Convert to position range (0.0 to 1.0)
+        let visible_range = visible_window_seconds / self.audio_duration_seconds;
+        
+        let ideal_start = self.zoom_center - visible_range / 2.0;
+        let ideal_end = self.zoom_center + visible_range / 2.0;
+        
+        // Clamp to [0.0, 1.0] and adjust center if needed to maintain range size
+        let visible_start = ideal_start.max(0.0);
+        let visible_end = ideal_end.min(1.0);
+        let visible_width = visible_end - visible_start;
+        
+        (visible_start, visible_end, visible_width)
+    }
+
+    /// Convert screen x coordinate to audio position (0.0 to 1.0) accounting for zoom
+    #[cfg(not(target_arch = "wasm32"))]
+    fn screen_x_to_audio_position(&self, screen_x: f32, screen_width: f32) -> f32 {
+        let (visible_start, _, visible_width) = self.calculate_visible_range();
+        
+        // Normalize screen_x to [0.0, 1.0] within screen width
+        let normalized_screen_x = (screen_x / screen_width).max(0.0).min(1.0);
+        
+        // Map to position within visible range
+        let position_in_visible = if visible_width > 0.0 {
+            normalized_screen_x
+        } else {
+            0.5 // Fallback if width is zero
+        };
+        
+        // Convert to actual audio position
+        let audio_position = visible_start + position_in_visible * visible_width;
+        
+        // Clamp to valid range
+        audio_position.max(0.0).min(1.0)
+    }
+
+    /// Convert audio position (0.0 to 1.0) to screen x coordinate accounting for zoom
+    #[cfg(not(target_arch = "wasm32"))]
+    fn audio_position_to_screen_x(&self, audio_position: f32, screen_width: f32) -> f32 {
+        let (visible_start, visible_end, visible_width) = self.calculate_visible_range();
+        
+        // Clamp audio position to visible range
+        let clamped_position = audio_position.max(visible_start).min(visible_end);
+        
+        // Map to position within visible range [0.0, 1.0]
+        let position_in_visible = if visible_width > 0.0 {
+            (clamped_position - visible_start) / visible_width
+        } else {
+            0.5 // Fallback if width is zero
+        };
+        
+        // Convert to screen x coordinate
+        position_in_visible * screen_width
     }
 
     /// Check if mouse is over the position line and handle dragging
@@ -456,19 +587,8 @@ impl AudioEditApp {
             return false;
         }
 
-        // Calculate visible range for zoom
-        let visible_range = 1.0 / self.zoom_level;
-        let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
-        let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
-        let visible_width = visible_end - visible_start;
-        
         // Map playback position to screen x coordinate
-        let position_in_visible = if visible_width > 0.0 {
-            ((self.playback_position - visible_start) / visible_width).max(0.0).min(1.0)
-        } else {
-            0.5
-        };
-        let position_x = position_in_visible * width;
+        let position_x = self.audio_position_to_screen_x(self.playback_position, width);
         let line_tolerance = 10.0; // Pixels of tolerance for clicking the line
 
         // Check if mouse is near the position line
@@ -477,8 +597,7 @@ impl AudioEditApp {
                 // Start or continue dragging
                 self.is_dragging_position = true;
                 // Map mouse_x from screen coordinates to actual audio position accounting for zoom
-                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
-                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
+                let new_position = self.screen_x_to_audio_position(mouse_x, width);
                 self.playback_position = new_position;
                 return true;
             }
@@ -559,20 +678,30 @@ impl Application for AudioEditApp {
                     })?;
 
                 // Get sample rate and duration
+                // Note: duration should already be set from load_full_audio_samples, but verify it matches
                 let sample_rate = decoder.sample_rate();
                 let duration = decoder.total_duration()
                     .map(|d| d.as_secs_f32())
                     .unwrap_or(0.0);
                 
+                // Use the duration from this decoder (should match the one from load_full_audio_samples)
+                // If they differ, use this one as it's the one we'll actually play
+                if (self.audio_duration_seconds - duration).abs() > 0.1 {
+                    // Durations differ significantly - use the playback decoder's duration
+                    crate::print(&format!("Warning: Duration mismatch. Visualization: {:.2}s, Playback: {:.2}s. Using playback duration.", 
+                        self.audio_duration_seconds, duration));
+                    self.audio_duration_seconds = duration;
+                }
+                
                 self.sample_rate = sample_rate;
-                self.audio_duration_seconds = duration;
 
-                // Create a buffer to capture live audio samples
-                let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(44100)));
+                // Create a buffer to capture live audio samples (capacity for ~1 second)
+                let buffer_capacity = sample_rate as usize;
+                let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(buffer_capacity)));
                 self.audio_samples = Some(sample_buffer.clone());
 
                 // Wrap the decoder with our capturing source
-                let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
+                let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, buffer_capacity);
 
                 // Play the audio
                 sink.append(capturing_source);
@@ -635,8 +764,17 @@ impl Application for AudioEditApp {
                     
                     // Map mouse x to zoom level (logarithmic)
                     let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
-                    let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
-                    self.zoom_level = zoom.max(1.0).min(100.0);
+                    let max_zoom = if self.audio_duration_seconds > 0.0 {
+                        self.audio_duration_seconds
+                    } else {
+                        100.0 // Fallback
+                    };
+                    let zoom = if max_zoom > 1.0 {
+                        (1.0f32.ln() + normalized * (max_zoom.ln() - 1.0f32.ln())).exp()
+                    } else {
+                        1.0
+                    };
+                    self.zoom_level = zoom.max(1.0).min(max_zoom);
                 } else {
                     // Mouse released
                     self.is_dragging_zoom_slider = false;
@@ -651,15 +789,8 @@ impl Application for AudioEditApp {
                     let width = shape[1] as f32;
                     let mouse_x = state.mouse.x;
                     
-                    // Calculate visible range for zoom
-                    let visible_range = 1.0 / self.zoom_level;
-                    let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
-                    let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
-                    let visible_width = visible_end - visible_start;
-                    
-                    // Map mouse_x from screen coordinates to actual audio position
-                    let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
-                    let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
+                    // Use centralized coordinate transformation
+                    let new_position = self.screen_x_to_audio_position(mouse_x, width);
                     self.playback_position = new_position;
                 } else {
                     // Mouse released, seek to position
@@ -676,14 +807,20 @@ impl Application for AudioEditApp {
             }
 
             // Update playback position based on elapsed time
+            // Account for audio buffering delay (typically 50-100ms)
+            const AUDIO_BUFFERING_DELAY_SECONDS: f32 = 0.05; // 50ms delay
+            
             if !self.is_dragging_position && !self.is_paused {
                 if let Some(start_time) = self.playback_start_time {
                     if self.audio_duration_seconds > 0.0 {
                         // Calculate elapsed time since playback started
                         let elapsed_seconds = start_time.elapsed().as_secs_f32();
                         
+                        // Subtract buffering delay to account for audio system latency
+                        let adjusted_elapsed = (elapsed_seconds - AUDIO_BUFFERING_DELAY_SECONDS).max(0.0);
+                        
                         // Calculate current position: start position + elapsed time as percentage
-                        let elapsed_position = elapsed_seconds / self.audio_duration_seconds;
+                        let elapsed_position = adjusted_elapsed / self.audio_duration_seconds;
                         let current_position = (self.playback_start_position + elapsed_position).min(1.0);
                         
                         self.playback_position = current_position;
@@ -708,7 +845,8 @@ impl Application for AudioEditApp {
             }
 
             // Update zoom center to follow playback position when playing
-            if !self.is_paused && !self.is_dragging_zoom_slider {
+            // Only update if not manually interacting (not dragging position or slider)
+            if !self.is_paused && !self.is_dragging_zoom_slider && !self.is_dragging_position {
                 self.zoom_center = self.playback_position;
             }
 
@@ -765,17 +903,8 @@ impl Application for AudioEditApp {
             // Also allow clicking anywhere in the waveform area to seek
             let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width, height);
             if mouse_y >= waveform_y_start {
-                // Map mouse_x from screen coordinates to actual audio position accounting for zoom
-                let visible_range = 1.0 / self.zoom_level;
-                let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
-                let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
-                let visible_width = visible_end - visible_start;
-                
-                // Map screen x (0.0 to width) to position within visible range (0.0 to 1.0)
-                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
-                // Convert to actual audio position
-                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
-                
+                // Use centralized coordinate transformation
+                let new_position = self.screen_x_to_audio_position(mouse_x, width);
                 self.playback_position = new_position;
                 self.is_dragging_position = true;
             }
@@ -834,8 +963,17 @@ impl Application for AudioEditApp {
                 
                 // Map mouse x to zoom level (logarithmic)
                 let normalized = ((mouse_x - slider_x_start) / slider_width).max(0.0).min(1.0);
-                let zoom = (1.0f32.ln() + normalized * (100.0f32.ln() - 1.0f32.ln())).exp();
-                self.zoom_level = zoom.max(1.0).min(100.0);
+                let max_zoom = if self.audio_duration_seconds > 0.0 {
+                    self.audio_duration_seconds
+                } else {
+                    100.0 // Fallback
+                };
+                let zoom = if max_zoom > 1.0 {
+                    (1.0f32.ln() + normalized * (max_zoom.ln() - 1.0f32.ln())).exp()
+                } else {
+                    1.0
+                };
+                self.zoom_level = zoom.max(1.0).min(max_zoom);
             }
             
             // Update position if dragging - map mouse_x to actual audio position accounting for zoom
@@ -844,15 +982,8 @@ impl Application for AudioEditApp {
                 let width = shape[1] as f32;
                 let mouse_x = state.mouse.x;
                 
-                // Calculate visible range for zoom
-                let visible_range = 1.0 / self.zoom_level;
-                let visible_start = (self.zoom_center - visible_range / 2.0).max(0.0).min(1.0);
-                let visible_end = (self.zoom_center + visible_range / 2.0).max(0.0).min(1.0);
-                let visible_width = visible_end - visible_start;
-                
-                // Map mouse_x from screen coordinates to actual audio position
-                let position_in_visible = (mouse_x / width).max(0.0).min(1.0);
-                let new_position = (visible_start + position_in_visible * visible_width).max(0.0).min(1.0);
+                // Use centralized coordinate transformation
+                let new_position = self.screen_x_to_audio_position(mouse_x, width);
                 self.playback_position = new_position;
             }
         }
