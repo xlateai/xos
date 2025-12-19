@@ -1,6 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
 use crate::shapes::basic_shapes;
+use crate::shapes::niche_shapes;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -230,7 +231,7 @@ impl AudioEditApp {
             // Draw isosceles triangle pointing right (play icon) with anti-aliasing
             let triangle_width = 20.0 * 1.1; // Scale up by 10%
             let triangle_height = 24.0 * 1.1; // Scale up by 10%
-            basic_shapes::draw_triangle_right(
+            niche_shapes::draw_play_button(
                 buffer,
                 width,
                 height,
@@ -288,7 +289,7 @@ impl AudioEditApp {
             // On WASM, draw isosceles triangle pointing right (play icon) with anti-aliasing
             let triangle_width = 20.0 * 1.1; // Scale up by 10%
             let triangle_height = 24.0 * 1.1; // Scale up by 10%
-            basic_shapes::draw_triangle_right(
+            niche_shapes::draw_play_button(
                 buffer,
                 width,
                 height,
