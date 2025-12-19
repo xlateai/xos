@@ -63,15 +63,17 @@ pub fn draw_play_button(
     let half_height = triangle_height / 2.0;
 
     // Triangle vertices (isosceles triangle pointing right):
-    // To center the triangle properly, the centroid should be at (center_x, center_y)
+    // Center using the average of the 3 vertices (centroid)
     // Centroid = ((left_x + left_x + tip_x) / 3, (top_y + bottom_y + tip_y) / 3)
     // For centroid at (center_x, center_y):
     // (2*left_x + tip_x) / 3 = center_x  =>  2*left_x + tip_x = 3*center_x
-    // (top_y + bottom_y + tip_y) / 3 = center_y  =>  top_y + bottom_y + tip_y = 3*center_y
-    // Since tip_y = center_y: top_y + bottom_y = 2*center_y
-    // With symmetric heights: top_y = center_y - half_height, bottom_y = center_y + half_height ✓
+    // (top_y + bottom_y + tip_y) / 3 = center_y
+    // Since tip_y = center_y and top_y + bottom_y = 2*center_y (symmetric), y is already centered
     // For x: tip_x - left_x = triangle_width, and 2*left_x + tip_x = 3*center_x
-    // Solving: left_x = center_x - triangle_width/3, tip_x = center_x + 2*triangle_width/3
+    // Solving: 2*left_x + (left_x + triangle_width) = 3*center_x
+    //          3*left_x + triangle_width = 3*center_x
+    //          left_x = center_x - triangle_width/3
+    //          tip_x = center_x + 2*triangle_width/3
     let left_x = center_x - triangle_width / 3.0;
     let tip_x = center_x + 2.0 * triangle_width / 3.0;
     let tip_y = center_y;
