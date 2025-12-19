@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -15,16 +16,14 @@ use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
-const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
-const WAVEFORM_HEIGHT_PERCENT: f32 = 0.15; // Bottom 15% of screen
+const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
 
 pub struct AudioEditApp {
     #[cfg(not(target_arch = "wasm32"))]
     sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
-    #[cfg(not(target_arch = "wasm32"))]
-    full_audio_samples: Vec<f32>, // All audio samples for waveform visualization
+    track_visualizer: TrackVisualizer,
     #[cfg(not(target_arch = "wasm32"))]
     audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
     #[cfg(not(target_arch = "wasm32"))]
@@ -53,8 +52,7 @@ impl AudioEditApp {
             sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            full_audio_samples: Vec::new(),
+            track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -115,15 +113,18 @@ impl AudioEditApp {
         }
         
         // Downsample if needed (take every Nth sample to fit in reasonable memory)
-        if all_samples.len() > 1_000_000 {
+        let final_samples = if all_samples.len() > 1_000_000 {
             let downsample_factor = (all_samples.len() / 1_000_000) + 1;
-            self.full_audio_samples = all_samples
+            all_samples
                 .into_iter()
                 .step_by(downsample_factor)
-                .collect();
+                .collect()
         } else {
-            self.full_audio_samples = all_samples;
-        }
+            all_samples
+        };
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        self.track_visualizer.set_samples(final_samples);
         
         self.sample_rate = sample_rate;
         Ok(())
@@ -196,113 +197,16 @@ impl AudioEditApp {
         Ok(())
     }
 
-    /// Render the full waveform at the bottom of the screen
-    #[cfg(not(target_arch = "wasm32"))]
-    fn render_waveform(&self, state: &mut EngineState) {
-        if self.full_audio_samples.is_empty() {
-            return;
-        }
-
-        let shape = state.frame.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let buffer = state.frame_buffer_mut();
-
-        // Calculate waveform area (bottom 15% of screen)
-        let waveform_height = (height as f32 * WAVEFORM_HEIGHT_PERCENT) as u32;
-        let waveform_y_start = height - waveform_height;
-        let waveform_y_center = waveform_y_start + waveform_height / 2;
-
-        // Draw waveform
-        let num_samples = self.full_audio_samples.len();
-        let samples_per_pixel = (num_samples as f32 / width as f32).max(1.0);
-        let amplitude = (waveform_height as f32 * 0.4) as i32; // Use 40% of waveform height for amplitude
-
-        let waveform_color = (180, 180, 180); // Light gray
-
-        for x in 0..width {
-            let sample_start = (x as f32 * samples_per_pixel) as usize;
-            let sample_end = ((x + 1) as f32 * samples_per_pixel) as usize;
-            
-            // Find min/max in this pixel range
-            let range_end = sample_end.min(num_samples);
-            if sample_start < range_end {
-                let min_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::INFINITY, |a, &b| a.min(b));
-                let max_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-                
-                // Draw vertical line from min to max
-                let y_min = (waveform_y_center as i32 - (max_val * amplitude as f32) as i32).max(waveform_y_start as i32);
-                let y_max = (waveform_y_center as i32 - (min_val * amplitude as f32) as i32).min((height - 1) as i32);
-                
-                for y in y_min..=y_max {
-                    let idx = ((y as u32 * width + x) * 4) as usize;
-                    if idx + 3 < buffer.len() {
-                        buffer[idx + 0] = waveform_color.0;
-                        buffer[idx + 1] = waveform_color.1;
-                        buffer[idx + 2] = waveform_color.2;
-                        buffer[idx + 3] = 0xff;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Render the vertical playback position line
-    #[cfg(not(target_arch = "wasm32"))]
-    fn render_position_line(&self, state: &mut EngineState) {
-        let shape = state.frame.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let buffer = state.frame_buffer_mut();
-
-        // Calculate waveform area
-        let waveform_height = (height as f32 * WAVEFORM_HEIGHT_PERCENT) as u32;
-        let waveform_y_start = height - waveform_height;
-
-        // Calculate position line X coordinate
-        let position_x = (self.playback_position * width as f32) as u32;
-        let line_color = (255, 100, 100); // Red line
-
-        // Draw vertical line from top of waveform area to bottom
-        for y in waveform_y_start..height {
-            let idx = ((y * width + position_x) * 4) as usize;
-            if idx + 3 < buffer.len() {
-                buffer[idx + 0] = line_color.0;
-                buffer[idx + 1] = line_color.1;
-                buffer[idx + 2] = line_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-
-        // Draw a thicker line (3 pixels wide) for better visibility
-        if position_x > 0 && position_x < width - 1 {
-            for offset in [-1, 0, 1] {
-                let x = (position_x as i32 + offset).max(0).min((width - 1) as i32) as u32;
-                for y in waveform_y_start..height {
-                    let idx = ((y * width + x) * 4) as usize;
-                    if idx + 3 < buffer.len() {
-                        buffer[idx + 0] = line_color.0;
-                        buffer[idx + 1] = line_color.1;
-                        buffer[idx + 2] = line_color.2;
-                        buffer[idx + 3] = 0xff;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Render the play/pause button
+    /// Render the play/pause button at the center of the screen
     fn render_play_pause_button(&self, state: &mut EngineState) {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
 
-        // Position button in the waveform area, left side
-        let waveform_height = (height as f32 * WAVEFORM_HEIGHT_PERCENT) as u32;
-        let waveform_y_start = height - waveform_height;
-        let button_center_x = (self.button_size / 2.0 + 10.0) as i32;
-        let button_center_y = (waveform_y_start + waveform_height / 2) as i32;
+        // Position button at center of screen
+        let button_center_x = (width / 2) as i32;
+        let button_center_y = (height / 2) as i32;
         let button_radius = (self.button_size / 2.0) as i32;
 
         // Draw button circle
@@ -330,23 +234,28 @@ impl AudioEditApp {
         let icon_color = (255, 255, 255);
         #[cfg(target_arch = "wasm32")]
         {
-            // On WASM, just draw a simple play icon
-            let size: i32 = 16;
-            for dy in -size..=size {
+            // On WASM, draw perfect equilateral triangle pointing right
+            let size: i32 = 20;
+            let half_height = (size as f32 * 0.866) as i32;
+            let left_x = button_center_x - size / 2;
+            
+            for dy in -half_height..=half_height {
                 for dx in -size..=size {
-                    let in_triangle = dy >= -size / 2 && dy <= size / 2 &&
-                                     dx >= -size / 2 && dx <= (size / 2 - dy.abs());
-                    if in_triangle {
-                        let px = button_center_x + dx;
-                        let py = button_center_y + dy;
-                        if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                            if idx + 3 < buffer.len() {
-                                buffer[idx + 0] = icon_color.0;
-                                buffer[idx + 1] = icon_color.1;
-                                buffer[idx + 2] = icon_color.2;
-                                buffer[idx + 3] = 0xff;
-                            }
+                    let px = button_center_x + dx;
+                    let py = button_center_y + dy;
+                    let rel_x = (px - left_x) as f32;
+                    let rel_y = (py - button_center_y) as f32;
+                    let in_triangle = rel_x >= 0.0 && 
+                                     rel_x <= size as f32 &&
+                                     rel_y.abs() <= (half_height as f32 * (1.0 - rel_x / size as f32));
+                    
+                    if in_triangle && px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx + 0] = icon_color.0;
+                            buffer[idx + 1] = icon_color.1;
+                            buffer[idx + 2] = icon_color.2;
+                            buffer[idx + 3] = 0xff;
                         }
                     }
                 }
@@ -354,23 +263,34 @@ impl AudioEditApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.is_paused {
-            // Draw play triangle (pointing right)
-            let size: i32 = 16;
-            for dy in -size..=size {
+            // Draw perfect equilateral triangle pointing right
+            // Triangle vertices: left point, top-right, bottom-right
+            let size: i32 = 20; // Size of triangle
+            let half_height = (size as f32 * 0.866) as i32; // sqrt(3)/2 for equilateral triangle
+            let left_x = button_center_x - size / 2;
+            
+            for dy in -half_height..=half_height {
                 for dx in -size..=size {
-                    let in_triangle = dy >= -size / 2 && dy <= size / 2 &&
-                                     dx >= -size / 2 && dx <= (size / 2 - dy.abs());
-                    if in_triangle {
-                        let px = button_center_x + dx;
-                        let py = button_center_y + dy;
-                        if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                            if idx + 3 < buffer.len() {
-                                buffer[idx + 0] = icon_color.0;
-                                buffer[idx + 1] = icon_color.1;
-                                buffer[idx + 2] = icon_color.2;
-                                buffer[idx + 3] = 0xff;
-                            }
+                    let px = button_center_x + dx;
+                    let py = button_center_y + dy;
+                    
+                    // Check if point is inside triangle
+                    // Triangle: left point at (left_x, center_y), top at (right_x, center_y - half_height), bottom at (right_x, center_y + half_height)
+                    let rel_x = (px - left_x) as f32;
+                    let rel_y = (py - button_center_y) as f32;
+                    
+                    // Check if point is to the right of left edge and within triangle bounds
+                    let in_triangle = rel_x >= 0.0 && 
+                                     rel_x <= size as f32 &&
+                                     rel_y.abs() <= (half_height as f32 * (1.0 - rel_x / size as f32));
+                    
+                    if in_triangle && px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx + 0] = icon_color.0;
+                            buffer[idx + 1] = icon_color.1;
+                            buffer[idx + 2] = icon_color.2;
+                            buffer[idx + 3] = 0xff;
                         }
                     }
                 }
@@ -424,9 +344,8 @@ impl AudioEditApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
 
-        // Calculate waveform area
-        let waveform_height = height * WAVEFORM_HEIGHT_PERCENT;
-        let waveform_y_start = height - waveform_height;
+        // Get waveform area bounds
+        let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width, height);
 
         // Check if mouse is in waveform area
         if mouse_y < waveform_y_start {
@@ -642,11 +561,8 @@ impl Application for AudioEditApp {
                 self.total_samples = self.total_samples.max(buffer.len());
             }
 
-            // Render waveform
-            self.render_waveform(state);
-            
-            // Render position line
-            self.render_position_line(state);
+            // Render waveform and position line
+            self.track_visualizer.render(state, self.playback_position);
         }
 
         // Render play/pause button
@@ -662,11 +578,9 @@ impl Application for AudioEditApp {
             let mouse_x = state.mouse.x;
             let mouse_y = state.mouse.y;
 
-            // Check play/pause button
-            let waveform_height = (height * WAVEFORM_HEIGHT_PERCENT) as u32;
-            let waveform_y_start = height - waveform_height as f32;
-            let button_center_x = self.button_size / 2.0 + 10.0;
-            let button_center_y = waveform_y_start + waveform_height as f32 / 2.0;
+            // Check play/pause button at center
+            let button_center_x = width / 2.0;
+            let button_center_y = height / 2.0;
             let button_dist = ((mouse_x - button_center_x).powi(2) + 
                               (mouse_y - button_center_y).powi(2)).sqrt();
             
@@ -681,10 +595,21 @@ impl Application for AudioEditApp {
             }
 
             // Also allow clicking anywhere in the waveform area to seek
+            let (waveform_y_start, _) = self.track_visualizer.get_waveform_bounds(width, height);
             if mouse_y >= waveform_y_start {
                 let new_position = (mouse_x / width).max(0.0).min(1.0);
                 self.playback_position = new_position;
                 self.is_dragging_position = true;
+            }
+        }
+    }
+    
+    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Spacebar toggles play/pause
+            if ch == ' ' {
+                self.is_paused = !self.is_paused;
             }
         }
     }
