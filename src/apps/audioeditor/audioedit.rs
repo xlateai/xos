@@ -208,7 +208,7 @@ impl AudioEditApp {
         // Position button at center of screen
         let button_center_x = (width / 2) as f32;
         let button_center_y = (height / 2) as f32;
-        let button_radius = self.button_size / 2.0;
+        let button_radius = (self.button_size / 2.0) * 1.1; // Scale up by 10%
 
         // Draw button circle with anti-aliasing
         let button_color = (255, 255, 255); // White
@@ -228,8 +228,8 @@ impl AudioEditApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.is_paused {
             // Draw isosceles triangle pointing right (play icon) with anti-aliasing
-            let triangle_width = 20.0;
-            let triangle_height = 24.0; // Slightly taller for isosceles triangle
+            let triangle_width = 20.0 * 1.1; // Scale up by 10%
+            let triangle_height = 24.0 * 1.1; // Scale up by 10%
             basic_shapes::draw_triangle_right(
                 buffer,
                 width,
@@ -243,9 +243,9 @@ impl AudioEditApp {
             );
         } else {
             // Draw pause icon (two vertical bars)
-            let bar_width = 4.0;
-            let bar_height = 18.0;
-            let bar_spacing = 8.0;
+            let bar_width = 4.0 * 1.1; // Scale up by 10%
+            let bar_height = 18.0 * 1.1; // Scale up by 10%
+            let bar_spacing = 8.0 * 1.1; // Scale up by 10%
             
             // Left bar
             let left_bar_x = (button_center_x - bar_spacing / 2.0 - bar_width) as i32;
@@ -286,8 +286,8 @@ impl AudioEditApp {
         #[cfg(target_arch = "wasm32")]
         {
             // On WASM, draw isosceles triangle pointing right (play icon) with anti-aliasing
-            let triangle_width = 20.0;
-            let triangle_height = 24.0;
+            let triangle_width = 20.0 * 1.1; // Scale up by 10%
+            let triangle_height = 24.0 * 1.1; // Scale up by 10%
             basic_shapes::draw_triangle_right(
                 buffer,
                 width,

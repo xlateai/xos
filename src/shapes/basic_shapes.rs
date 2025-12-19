@@ -22,7 +22,7 @@ pub fn draw_circle(
 
     // Increased padding for smoother anti-aliasing
     let padding = if anti_alias { 4 } else { 0 };
-    let aa_range = 2.5; // Anti-aliasing range in pixels
+    let aa_range = 2.25; // Anti-aliasing range in pixels (reduced by ~10%)
 
     for dy in -radius_i - padding..=radius_i + padding {
         for dx in -radius_i - padding..=radius_i + padding {
@@ -80,6 +80,55 @@ pub fn draw_circle(
     }
 }
 
+/// Apply a simple box blur to a buffer
+fn apply_box_blur(
+    src: &[u8],
+    dst: &mut [u8],
+    width: u32,
+    height: u32,
+    radius: i32,
+) {
+    let radius = radius.max(1);
+    let kernel_size = radius * 2 + 1;
+    let kernel_area = (kernel_size * kernel_size) as f32;
+    
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let mut sum_r = 0.0f32;
+            let mut sum_g = 0.0f32;
+            let mut sum_b = 0.0f32;
+            let mut sum_a = 0.0f32;
+            let mut count = 0;
+            
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let px = x + dx;
+                    let py = y + dy;
+                    
+                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        if idx + 3 < src.len() {
+                            sum_r += src[idx + 0] as f32;
+                            sum_g += src[idx + 1] as f32;
+                            sum_b += src[idx + 2] as f32;
+                            sum_a += src[idx + 3] as f32;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            
+            let idx = ((y as u32 * width + x as u32) * 4) as usize;
+            if idx + 3 < dst.len() && count > 0 {
+                dst[idx + 0] = (sum_r / count as f32) as u8;
+                dst[idx + 1] = (sum_g / count as f32) as u8;
+                dst[idx + 2] = (sum_b / count as f32) as u8;
+                dst[idx + 3] = (sum_a / count as f32) as u8;
+            }
+        }
+    }
+}
+
 /// Draw an isosceles triangle pointing right (play icon style)
 /// The triangle is centered at (center_x, center_y) with the specified width and height
 pub fn draw_triangle_right(
@@ -106,131 +155,98 @@ pub fn draw_triangle_right(
     let top_y = center_y - half_height;
     let bottom_y = center_y + half_height;
 
-    let min_x = (left_x - 1.0).floor() as i32;
-    let max_x = (tip_x + 1.0).ceil() as i32;
-    let min_y = (top_y - 1.0).floor() as i32;
-    let max_y = (bottom_y + 1.0).ceil() as i32;
+    let min_x = (left_x - 3.0).floor() as i32; // Add padding for blur
+    let max_x = (tip_x + 3.0).ceil() as i32;
+    let min_y = (top_y - 3.0).floor() as i32;
+    let max_y = (bottom_y + 3.0).ceil() as i32;
+    
+    let region_width = (max_x - min_x + 1) as u32;
+    let region_height = (max_y - min_y + 1) as u32;
+    
+    if anti_alias {
+        // Create temporary buffer for triangle rasterization
+        let temp_size = (region_width * region_height * 4) as usize;
+        let mut temp_buffer = vec![0u8; temp_size];
+        
+        // Rasterize triangle to temp buffer (no anti-aliasing yet)
+        for py in min_y..=max_y {
+            for px in min_x..=max_x {
+                let px_f = px as f32 + 0.5;
+                let py_f = py as f32 + 0.5;
 
-    for py in min_y..=max_y {
-        for px in min_x..=max_x {
-            if px < 0 || py < 0 || (px as u32) >= width || (py as u32) >= height {
-                continue;
+                // Check if point is inside triangle using edge function method
+                let edge_ab = (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
+                let edge_bc = (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
+                let edge_ca = (left_x - tip_x) * (py_f - tip_y) - (top_y - tip_y) * (px_f - tip_x);
+                
+                let inside = (edge_ab >= 0.0 && edge_bc >= 0.0 && edge_ca >= 0.0) ||
+                            (edge_ab <= 0.0 && edge_bc <= 0.0 && edge_ca <= 0.0);
+
+                if inside {
+                    let local_x = (px - min_x) as u32;
+                    let local_y = (py - min_y) as u32;
+                    let idx = ((local_y * region_width + local_x) * 4) as usize;
+                    if idx + 3 < temp_buffer.len() {
+                        temp_buffer[idx + 0] = color.0;
+                        temp_buffer[idx + 1] = color.1;
+                        temp_buffer[idx + 2] = color.2;
+                        temp_buffer[idx + 3] = 255;
+                    }
+                }
             }
-
-            let px_f = px as f32 + 0.5;
-            let py_f = py as f32 + 0.5;
-
-            // Check if point is inside triangle using edge function method
-            // Triangle vertices: A(left_x, top_y), B(left_x, bottom_y), C(tip_x, tip_y)
-            // Point is inside if all edge functions have the same sign
-            
-            // Edge function: (B.x - A.x) * (P.y - A.y) - (B.y - A.y) * (P.x - A.x)
-            // Edge AB: from (left_x, top_y) to (left_x, bottom_y)
-            let edge_ab = (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
-            // Edge BC: from (left_x, bottom_y) to (tip_x, tip_y)
-            let edge_bc = (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
-            // Edge CA: from (tip_x, tip_y) to (left_x, top_y)
-            let edge_ca = (left_x - tip_x) * (py_f - tip_y) - (top_y - tip_y) * (px_f - tip_x);
-            
-            // Point is inside if all edges have same sign (all positive or all negative)
-            let inside = (edge_ab >= 0.0 && edge_bc >= 0.0 && edge_ca >= 0.0) ||
-                        (edge_ab <= 0.0 && edge_bc <= 0.0 && edge_ca <= 0.0);
-
-            if inside {
-                let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                if idx + 3 >= buffer.len() {
+        }
+        
+        // Apply blur to temp buffer
+        let mut blurred_buffer = vec![0u8; temp_size];
+        apply_box_blur(&temp_buffer, &mut blurred_buffer, region_width, region_height, 2);
+        
+        // Composite blurred triangle onto main buffer
+        for py in min_y..=max_y {
+            for px in min_x..=max_x {
+                if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                    let local_x = (px - min_x) as u32;
+                    let local_y = (py - min_y) as u32;
+                    let temp_idx = ((local_y * region_width + local_x) * 4) as usize;
+                    let main_idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    
+                    if temp_idx + 3 < blurred_buffer.len() && main_idx + 3 < buffer.len() {
+                        let alpha = blurred_buffer[temp_idx + 3] as f32 / 255.0;
+                        let bg_r = buffer[main_idx + 0] as f32;
+                        let bg_g = buffer[main_idx + 1] as f32;
+                        let bg_b = buffer[main_idx + 2] as f32;
+                        
+                        buffer[main_idx + 0] = ((blurred_buffer[temp_idx + 0] as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
+                        buffer[main_idx + 1] = ((blurred_buffer[temp_idx + 1] as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
+                        buffer[main_idx + 2] = ((blurred_buffer[temp_idx + 2] as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
+                        buffer[main_idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+    } else {
+        // No anti-aliasing - just draw directly
+        for py in min_y..=max_y {
+            for px in min_x..=max_x {
+                if px < 0 || py < 0 || (px as u32) >= width || (py as u32) >= height {
                     continue;
                 }
 
-                // Calculate distance to nearest edge for anti-aliasing
-                // Edge 1: left vertical edge from (left_x, top_y) to (left_x, bottom_y)
-                let dist_to_left_edge = (px_f - left_x).abs();
-                // Edge 2: top diagonal from (left_x, top_y) to (tip_x, tip_y)
-                let dist_to_top_edge = {
-                    let edge_dist = ((tip_x - left_x) * (top_y - py_f) - (tip_y - top_y) * (left_x - px_f)).abs()
-                        / ((tip_x - left_x).powi(2) + (tip_y - top_y).powi(2)).sqrt();
-                    edge_dist
-                };
-                // Edge 3: bottom diagonal from (left_x, bottom_y) to (tip_x, tip_y)
-                let dist_to_bottom_edge = {
-                    let edge_dist = ((tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (left_x - px_f)).abs()
-                        / ((tip_x - left_x).powi(2) + (tip_y - bottom_y).powi(2)).sqrt();
-                    edge_dist
-                };
+                let px_f = px as f32 + 0.5;
+                let py_f = py as f32 + 0.5;
 
-                let min_edge_dist = dist_to_left_edge
-                    .min(dist_to_top_edge)
-                    .min(dist_to_bottom_edge);
+                let edge_ab = (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
+                let edge_bc = (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
+                let edge_ca = (left_x - tip_x) * (py_f - tip_y) - (top_y - tip_y) * (px_f - tip_x);
+                
+                let inside = (edge_ab >= 0.0 && edge_bc >= 0.0 && edge_ca >= 0.0) ||
+                            (edge_ab <= 0.0 && edge_bc <= 0.0 && edge_ca <= 0.0);
 
-                if anti_alias {
-                    // Smooth anti-aliasing with wider range
-                    let aa_range = 2.5;
-                    let alpha = if min_edge_dist > aa_range {
-                        // Fully inside
-                        1.0
-                    } else if min_edge_dist > -aa_range {
-                        // In the anti-aliasing zone (inside or outside)
-                        // Use smoothstep for smoother falloff: 3t^2 - 2t^3
-                        let t = ((min_edge_dist + aa_range) / (2.0 * aa_range)).max(0.0).min(1.0);
-                        let smooth_alpha = t * t * (3.0 - 2.0 * t);
-                        smooth_alpha
-                    } else {
-                        // Fully outside
-                        0.0
-                    };
-
-                    // Blend with background
-                    let bg_r = buffer[idx + 0] as f32;
-                    let bg_g = buffer[idx + 1] as f32;
-                    let bg_b = buffer[idx + 2] as f32;
-
-                    buffer[idx + 0] = ((color.0 as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
-                    buffer[idx + 1] = ((color.1 as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
-                    buffer[idx + 2] = ((color.2 as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
-                    buffer[idx + 3] = 0xff;
-                } else {
-                    buffer[idx + 0] = color.0;
-                    buffer[idx + 1] = color.1;
-                    buffer[idx + 2] = color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            } else if anti_alias {
-                // Check if point is near an edge for anti-aliasing (outside triangle)
-                // Edge 1: left vertical edge
-                let dist_to_left_edge = (px_f - left_x).abs();
-                // Edge 2: top diagonal
-                let dist_to_top_edge = {
-                    let edge_dist = ((tip_x - left_x) * (top_y - py_f) - (tip_y - top_y) * (left_x - px_f)).abs()
-                        / ((tip_x - left_x).powi(2) + (tip_y - top_y).powi(2)).sqrt();
-                    edge_dist
-                };
-                // Edge 3: bottom diagonal
-                let dist_to_bottom_edge = {
-                    let edge_dist = ((tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (left_x - px_f)).abs()
-                        / ((tip_x - left_x).powi(2) + (tip_y - bottom_y).powi(2)).sqrt();
-                    edge_dist
-                };
-
-                let min_edge_dist = dist_to_left_edge
-                    .min(dist_to_top_edge)
-                    .min(dist_to_bottom_edge);
-
-                // Smooth anti-aliasing with wider range
-                let aa_range = 2.5;
-                if min_edge_dist < aa_range {
-                    let t = (min_edge_dist / aa_range).max(0.0).min(1.0);
-                    let smooth_alpha = 1.0 - (t * t * (3.0 - 2.0 * t)); // Inverse smoothstep
-                    let alpha = smooth_alpha;
-
+                if inside {
                     let idx = ((py as u32 * width + px as u32) * 4) as usize;
                     if idx + 3 < buffer.len() {
-                        let bg_r = buffer[idx + 0] as f32;
-                        let bg_g = buffer[idx + 1] as f32;
-                        let bg_b = buffer[idx + 2] as f32;
-
-                        buffer[idx + 0] = ((color.0 as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
-                        buffer[idx + 1] = ((color.1 as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
-                        buffer[idx + 2] = ((color.2 as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
+                        buffer[idx + 0] = color.0;
+                        buffer[idx + 1] = color.1;
+                        buffer[idx + 2] = color.2;
                         buffer[idx + 3] = 0xff;
                     }
                 }
