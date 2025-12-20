@@ -136,9 +136,15 @@ impl BallGame {
 
 impl Application for BallGame {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        self.balls
-            .push(BallState::new(state.frame.shape()[1] as f32, state.frame.shape()[0] as f32, BALL_RADIUS));
-        crate::print("+1 ball (initial spawn)");
+        let width = state.frame.shape()[1] as f32;
+        let height = state.frame.shape()[0] as f32;
+        
+        for _ in 0..512 {
+            let x = rand_float(BALL_RADIUS, width - BALL_RADIUS);
+            let y = rand_float(BALL_RADIUS, height - BALL_RADIUS);
+            self.balls.push(BallState::new_at_position(x, y, BALL_RADIUS));
+        }
+        crate::print("+128 balls (initial spawn)");
         Ok(())
     }
 
