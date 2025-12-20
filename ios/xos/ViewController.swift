@@ -226,10 +226,10 @@ class ViewController: UIViewController {
             return
         }
         
-        // Check if we have a completed swipe and tap happens within 250ms
+        // Check if we have a completed swipe and tap happens within 375ms (1.5x longer tolerance)
         if gestureReady,
            let swipeTime = swipeCompleteTime,
-           now.timeIntervalSince(swipeTime) < 0.25 {
+           now.timeIntervalSince(swipeTime) < 0.375 {
             
             lastToggleTime = now
             isFullscreen.toggle()
