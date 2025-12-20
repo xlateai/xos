@@ -273,7 +273,8 @@ fn main() {
     // Note: build() already uses find_project_root() so it works from anywhere
     if let Some(Commands::Build { ios }) = &cli.command {
         if *ios {
-            build_ios();
+            // Only build iOS Rust library, skip pod install
+            build_ios_rust();
         } else {
             build();
         }
