@@ -1,5 +1,6 @@
 import UIKit
 import Xos
+import CoreHaptics
 
 class ViewController: UIViewController {
     private var viewportView: XosViewportView!
@@ -27,6 +28,9 @@ class ViewController: UIViewController {
     private var swipeActive: Bool = false
     private var swipeCompleteTime: Date?
     private var lastToggleTime: Date = Date()
+    
+    // Haptic engine for chime feedback
+    private var hapticEngine: CHHapticEngine?
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -66,6 +70,9 @@ class ViewController: UIViewController {
         
         // Setup gesture recognizer for swipe-left-to-right + tap
         setupGestureRecognizer()
+        
+        // Setup haptic engine
+        setupHapticEngine()
         
         // Listen for engine crashes
         NotificationCenter.default.addObserver(
@@ -172,7 +179,7 @@ class ViewController: UIViewController {
         let location = gesture.location(in: view)
         let screenWidth = view.bounds.width
         let screenHeight = view.bounds.height
-        let leftEdgeThreshold = screenWidth * 0.1
+        let leftEdgeThreshold = screenWidth * 0.15 // More lenient: 15% instead of 10%
         
         switch gesture.state {
         case .began:
@@ -194,8 +201,8 @@ class ViewController: UIViewController {
                 let translation = gesture.translation(in: view)
                 let currentX = gesture.location(in: view).x
                 
-                // Check if swipe has moved far enough right (85% of screen width)
-                if !gestureReady && translation.x > screenWidth * 0.85 && currentX > screenWidth * 0.9 {
+                // More lenient: swipe 75% of screen width (instead of 85%) and current position > 80% (instead of 90%)
+                if !gestureReady && translation.x > screenWidth * 0.75 && currentX > screenWidth * 0.8 {
                     gestureReady = true
                     swipeCompleteTime = Date()
                 }
@@ -227,10 +234,95 @@ class ViewController: UIViewController {
             lastToggleTime = now
             isFullscreen.toggle()
             
+            // Play haptic chime feedback
+            playChimeHaptic()
+            
             // Reset gesture state
             gestureReady = false
             swipeActive = false
             swipeCompleteTime = nil
+        }
+    }
+    
+    // MARK: - Haptic Feedback
+    
+    private func setupHapticEngine() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
+            return
+        }
+        
+        do {
+            hapticEngine = try CHHapticEngine()
+            try hapticEngine?.start()
+        } catch {
+            print("Failed to create haptic engine: \(error)")
+        }
+    }
+    
+    private func playChimeHaptic() {
+        guard let engine = hapticEngine,
+              CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
+            // Fallback to simple impact feedback if CoreHaptics not available
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
+            return
+        }
+        
+        // Create chime pattern matching sensorlab: fade in (0.0 -> 0.6) then fade out (0.6 -> 0.0)
+        // Duration: 0.2s total, peak at 0.1s
+        // Use a single continuous event with parameter curves for smooth transitions
+        let intensityParameter = CHHapticDynamicParameter(
+            parameterID: .hapticIntensityControl,
+            value: 0.6,
+            relativeTime: 0.1
+        )
+        
+        let sharpnessParameter = CHHapticDynamicParameter(
+            parameterID: .hapticSharpnessControl,
+            value: 0.5,
+            relativeTime: 0.1
+        )
+        
+        // Create curve points for smooth fade in/out
+        let intensityCurve = CHHapticParameterCurve(
+            parameterID: .hapticIntensityControl,
+            controlPoints: [
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.0, value: 0.0),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.6),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.2, value: 0.0)
+            ],
+            relativeTime: 0.0
+        )
+        
+        let sharpnessCurve = CHHapticParameterCurve(
+            parameterID: .hapticSharpnessControl,
+            controlPoints: [
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.0, value: 0.0),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.5),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.2, value: 0.0)
+            ],
+            relativeTime: 0.0
+        )
+        
+        let event = CHHapticEvent(
+            eventType: .hapticContinuous,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.6),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+            ],
+            relativeTime: 0.0,
+            duration: 0.2
+        )
+        
+        do {
+            let pattern = try CHHapticPattern(events: [event], parameterCurves: [intensityCurve, sharpnessCurve])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: 0)
+        } catch {
+            print("Failed to play haptic: \(error)")
+            // Fallback to simple impact
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
         }
     }
 }
