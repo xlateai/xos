@@ -268,18 +268,19 @@ class ViewController: UIViewController {
             return
         }
         
-        // Create chime pattern matching sensorlab: fade in (0.0 -> 0.6) then fade out (0.6 -> 0.0)
+        // Create chime pattern matching sensorlab: fade in (0.0 -> 0.8) then fade out (0.8 -> 0.0)
         // Duration: 0.2s total, peak at 0.1s
+        // Increased intensity for harder haptic feedback
         // Use a single continuous event with parameter curves for smooth transitions
         let intensityParameter = CHHapticDynamicParameter(
             parameterID: .hapticIntensityControl,
-            value: 0.6,
+            value: 0.8,
             relativeTime: 0.1
         )
         
         let sharpnessParameter = CHHapticDynamicParameter(
             parameterID: .hapticSharpnessControl,
-            value: 0.5,
+            value: 0.6,
             relativeTime: 0.1
         )
         
@@ -288,7 +289,7 @@ class ViewController: UIViewController {
             parameterID: .hapticIntensityControl,
             controlPoints: [
                 CHHapticParameterCurve.ControlPoint(relativeTime: 0.0, value: 0.0),
-                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.6),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.8),
                 CHHapticParameterCurve.ControlPoint(relativeTime: 0.2, value: 0.0)
             ],
             relativeTime: 0.0
@@ -298,7 +299,7 @@ class ViewController: UIViewController {
             parameterID: .hapticSharpnessControl,
             controlPoints: [
                 CHHapticParameterCurve.ControlPoint(relativeTime: 0.0, value: 0.0),
-                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.5),
+                CHHapticParameterCurve.ControlPoint(relativeTime: 0.1, value: 0.6),
                 CHHapticParameterCurve.ControlPoint(relativeTime: 0.2, value: 0.0)
             ],
             relativeTime: 0.0
@@ -307,8 +308,8 @@ class ViewController: UIViewController {
         let event = CHHapticEvent(
             eventType: .hapticContinuous,
             parameters: [
-                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.6),
-                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.8),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.6)
             ],
             relativeTime: 0.0,
             duration: 0.2
