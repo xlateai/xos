@@ -6,8 +6,8 @@ use std::time::Instant;
 const BACKGROUND_COLOR: (u8, u8, u8) = (10, 10, 10); // Very dark background
 const LED_ON_COLOR: (u8, u8, u8) = (255, 0, 0); // Red for on LEDs
 const LED_OFF_COLOR: (u8, u8, u8) = (20, 20, 20); // Very dim for off LEDs
-const TARGET_FPS: f32 = 30.0; // Target frame rate for animation
-const FRAME_DURATION_MS: f32 = 1000.0 / TARGET_FPS; // ~33.33ms per frame
+const TARGET_FPS: f32 = 60.0; // Target frame rate for animation
+const FRAME_DURATION_MS: f32 = 1000.0 / TARGET_FPS; // ~16.67ms per frame
 
 pub struct Leds {
     led_states: Vec<Vec<bool>>, // 2D array of LED states (on/off)
@@ -37,7 +37,7 @@ impl Leds {
     /// Calculate LED grid dimensions based on screen size
     /// Ensures all LEDs are fully contained within the screen bounds
     fn calculate_grid(&mut self, width: f32, height: f32) {
-        // Target: each LED should be roughly 20-30 pixels
+        // Target: each LED should be roughly 35 pixels
         let target_led_size = 25.0; // Target pixels per LED
         
         // Reserve space for LED radius on all sides (half LED size on each edge)
@@ -65,7 +65,6 @@ impl Leds {
             self.led_size_pixels = spacing * 0.8;
             
             // Verify LEDs fit - if not, reduce grid size
-            let radius = self.led_size_pixels / 2.0;
             let total_width_needed = (self.grid_cols - 1) as f32 * spacing + self.led_size_pixels;
             let total_height_needed = (self.grid_rows - 1) as f32 * spacing + self.led_size_pixels;
             
@@ -126,7 +125,8 @@ impl Leds {
         }
     }
     
-    /// Update animation at 30fps - shift rows and spawn new bits
+    /// Update animation at 60fps - shift rows and spawn new bits
+    /// Update animation at 60fps - shift rows and spawn new bits
     fn update_animation(&mut self) {
         for (row_idx, row) in self.led_states.iter_mut().enumerate() {
             let direction_right = self.row_directions.get(row_idx).copied().unwrap_or(true);
