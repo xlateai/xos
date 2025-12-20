@@ -48,12 +48,16 @@ final class SharedAudioEngine {
         }
     }
     
-    func withEngineModification<T>(_ block: (AVAudioEngine) throws -> T) rethrows -> T {
+    func withEngineModification<T>(_ block: (AVAudioEngine) throws -> T) throws -> T {
         lock.lock()
         defer { lock.unlock() }
         
         guard let engine = engine else {
-            fatalError("Engine must exist before modification")
+            throw NSError(
+                domain: "SharedAudioEngine",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Engine must exist before modification"]
+            )
         }
         
         let wasRunning = engine.isRunning
@@ -308,74 +312,83 @@ final class AudioListener {
         SharedAudioEngine.shared.acquireMicrophone()
         
         // Safely modify engine graph
-        SharedAudioEngine.shared.withEngineModification { engine in
-            let inputNode = engine.inputNode
-            self.inputNode = inputNode
-            
-            // Get the actual input format
-            let inputFormat = inputNode.outputFormat(forBus: 0)
-            print("[AudioListener] inputNode.outputFormat: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
-            
-            self.inputFormat = inputFormat
-            
-            // Clear sample buffer
-            queue.async {
-                self.sampleBuffer.removeAll()
-            }
-            
-            // Install tap on input node
-            let bufferSize: AVAudioFrameCount = 4096
-            print("[AudioListener] installing tap with bufferSize=\(bufferSize)")
-            
-            // Remove any existing tap first
-            inputNode.removeTap(onBus: 0)
-            
-            inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
-                guard let self = self else { return }
+        do {
+            try SharedAudioEngine.shared.withEngineModification { engine in
+                let inputNode = engine.inputNode
+                self.inputNode = inputNode
                 
-                // Get channel data (non-interleaved format)
-                guard let channelData = buffer.floatChannelData else {
-                    print("[AudioListener] Warning: buffer.floatChannelData is nil")
-                    return
+                // Get the actual input format
+                let inputFormat = inputNode.outputFormat(forBus: 0)
+                print("[AudioListener] inputNode.outputFormat: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+                
+                self.inputFormat = inputFormat
+                
+                // Clear sample buffer
+                queue.async {
+                    self.sampleBuffer.removeAll()
                 }
                 
-                let frameLength = Int(buffer.frameLength)
-                let channelCount = Int(buffer.format.channelCount)
+                // Install tap on input node
+                let bufferSize: AVAudioFrameCount = 4096
+                print("[AudioListener] installing tap with bufferSize=\(bufferSize)")
                 
-                // Safety check
-                guard frameLength > 0 && channelCount > 0 else {
-                    print("[AudioListener] Warning: invalid frameLength=\(frameLength) or channelCount=\(channelCount)")
-                    return
-                }
+                // Remove any existing tap first
+                inputNode.removeTap(onBus: 0)
                 
-                // Extract samples - for mono, just use first channel
-                // For multi-channel, we'll interleave them for the callback
-                // The callback expects: [ch0_sample0, ch1_sample0, ch0_sample1, ch1_sample1, ...]
-                var samples: [Float] = []
-                samples.reserveCapacity(frameLength * channelCount)
-                
-                if channelCount == 1 {
-                    // Mono: just read from first channel
-                    let channelPtr = channelData[0]
-                    samples = Array(UnsafeBufferPointer(start: channelPtr, count: frameLength))
-                } else {
-                    // Multi-channel: interleave samples
-                    for frame in 0..<frameLength {
-                        for channel in 0..<channelCount {
-                            samples.append(channelData[channel][frame])
+                inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
+                    guard let self = self else { return }
+                    
+                    // Get channel data (non-interleaved format)
+                    guard let channelData = buffer.floatChannelData else {
+                        print("[AudioListener] Warning: buffer.floatChannelData is nil")
+                        return
+                    }
+                    
+                    let frameLength = Int(buffer.frameLength)
+                    let channelCount = Int(buffer.format.channelCount)
+                    
+                    // Safety check
+                    guard frameLength > 0 && channelCount > 0 else {
+                        print("[AudioListener] Warning: invalid frameLength=\(frameLength) or channelCount=\(channelCount)")
+                        return
+                    }
+                    
+                    // Extract samples - for mono, just use first channel
+                    // For multi-channel, we'll interleave them for the callback
+                    // The callback expects: [ch0_sample0, ch1_sample0, ch0_sample1, ch1_sample1, ...]
+                    var samples: [Float] = []
+                    samples.reserveCapacity(frameLength * channelCount)
+                    
+                    if channelCount == 1 {
+                        // Mono: just read from first channel
+                        let channelPtr = channelData[0]
+                        samples = Array(UnsafeBufferPointer(start: channelPtr, count: frameLength))
+                    } else {
+                        // Multi-channel: interleave samples
+                        for frame in 0..<frameLength {
+                            for channel in 0..<channelCount {
+                                samples.append(channelData[channel][frame])
+                            }
+                        }
+                    }
+                    
+                    // Call the Rust callback if set
+                    if let callback = self.callback, !samples.isEmpty {
+                        samples.withUnsafeBufferPointer { ptr in
+                            if let baseAddress = ptr.baseAddress {
+                                callback(baseAddress, ptr.count, self.callbackUserData)
+                            }
                         }
                     }
                 }
-                
-                // Call the Rust callback if set
-                if let callback = self.callback, !samples.isEmpty {
-                    samples.withUnsafeBufferPointer { ptr in
-                        if let baseAddress = ptr.baseAddress {
-                            callback(baseAddress, ptr.count, self.callbackUserData)
-                        }
-                    }
-                }
             }
+        } catch {
+            SharedAudioEngine.shared.releaseMicrophone()
+            throw NSError(
+                domain: "AudioListener",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to configure audio engine: \(error.localizedDescription)"]
+            )
         }
         
         // Ensure engine is running

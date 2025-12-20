@@ -1,5 +1,6 @@
 use crate::audio;
 use crate::engine::{Application, EngineState};
+#[cfg(not(target_os = "ios"))]
 use dialoguer::Select;
 
 pub struct Waveform {
@@ -73,26 +74,57 @@ impl Application for Waveform {
             return Err("⚠️ No audio input devices (microphones) found.".to_string());
         }
 
-        // Create a list of device names for the selector
-        let device_names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
-
-        // Use dialoguer to let user select a microphone
-        let selection = Select::new()
-            .with_prompt("Select microphone")
-            .items(&device_names)
-            .default(0)
-            .interact()
-            .map_err(|e| format!("Failed to get user selection: {}", e))?;
-
-        let device = input_devices.get(selection).ok_or("Selected device not found")?;
+        // On iOS, skip dialoguer selection and use the first available microphone
+        // dialoguer doesn't work on iOS since there's no terminal
+        #[cfg(target_os = "ios")]
+        {
+            let device = input_devices.first().ok_or("No input devices available")?;
+            crate::print(&format!("🔊 Attempting to use device: {}", device.name));
+            
+            let buffer_duration = 1.0;
+            match audio::AudioListener::new(device, buffer_duration) {
+                Ok(listener) => {
+                    match listener.record() {
+                        Ok(_) => {
+                            crate::print("✅ Audio listener started successfully");
+                            self.listener = Some(listener);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            Err(format!("Failed to start recording: {}. Make sure microphone permission is granted in Settings.", e))
+                        }
+                    }
+                }
+                Err(e) => {
+                    Err(format!("Failed to initialize audio listener: {}. On iOS, this usually means microphone permission was denied. Please grant microphone access in Settings > Privacy & Security > Microphone.", e))
+                }
+            }
+        }
         
-        crate::print(&format!("🔊 Selected device: {}", device.name));
+        // On non-iOS platforms, use dialoguer for device selection
+        #[cfg(not(target_os = "ios"))]
+        {
+            // Create a list of device names for the selector
+            let device_names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
 
-        let buffer_duration = 1.0;
-        let listener = audio::AudioListener::new(device, buffer_duration)?;
-        listener.record()?;
-        self.listener = Some(listener);
-        Ok(())
+            // Use dialoguer to let user select a microphone
+            let selection = Select::new()
+                .with_prompt("Select microphone")
+                .items(&device_names)
+                .default(0)
+                .interact()
+                .map_err(|e| format!("Failed to get user selection: {}", e))?;
+
+            let device = input_devices.get(selection).ok_or("Selected device not found")?;
+            
+            crate::print(&format!("🔊 Selected device: {}", device.name));
+
+            let buffer_duration = 1.0;
+            let listener = audio::AudioListener::new(device, buffer_duration)?;
+            listener.record()?;
+            self.listener = Some(listener);
+            Ok(())
+        }
     }
 
     fn tick(&mut self, state: &mut EngineState) {

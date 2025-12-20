@@ -5,26 +5,42 @@ import QuartzCore
 
 /// High-performance Metal-based viewport renderer for XOS engine
 public class XosViewportRenderer {
-    private let device: MTLDevice
-    private let commandQueue: MTLCommandQueue
+    private let device: MTLDevice?
+    private let commandQueue: MTLCommandQueue?
     private var texture: MTLTexture?
     private var textureWidth: Int = 0
     private var textureHeight: Int = 0
     
     public init() {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            fatalError("Metal is not supported on this device")
+            let errorMsg = "ERROR: Metal is not supported on this device"
+            ConsoleManager.shared.addLog(errorMsg)
+            print(errorMsg)
+            self.device = nil
+            self.commandQueue = nil
+            return
         }
         self.device = device
         
         guard let queue = device.makeCommandQueue() else {
-            fatalError("Failed to create Metal command queue")
+            let errorMsg = "ERROR: Failed to create Metal command queue"
+            ConsoleManager.shared.addLog(errorMsg)
+            print(errorMsg)
+            self.commandQueue = nil
+            return
         }
         self.commandQueue = queue
     }
     
     /// Update texture with pixel data (RGBA8 format)
     func updateTexture(width: Int, height: Int, rgbaData: UnsafePointer<UInt8>) {
+        guard let device = device else {
+            let errorMsg = "ERROR: Cannot update texture - Metal device not available"
+            ConsoleManager.shared.addLog(errorMsg)
+            print(errorMsg)
+            return
+        }
+        
         // Recreate texture if size changed
         if texture == nil || textureWidth != width || textureHeight != height {
             let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -37,7 +53,9 @@ public class XosViewportRenderer {
             textureDescriptor.storageMode = .shared
             
             guard let newTexture = device.makeTexture(descriptor: textureDescriptor) else {
-                print("ERROR: Failed to create Metal texture \(width)x\(height)")
+                let errorMsg = "ERROR: Failed to create Metal texture \(width)x\(height)"
+                ConsoleManager.shared.addLog(errorMsg)
+                print(errorMsg)
                 return
             }
             
@@ -69,12 +87,12 @@ public class XosViewportRenderer {
     }
     
     /// Get the Metal device
-    func getDevice() -> MTLDevice {
+    func getDevice() -> MTLDevice? {
         return device
     }
     
     /// Get the command queue
-    func getCommandQueue() -> MTLCommandQueue {
+    func getCommandQueue() -> MTLCommandQueue? {
         return commandQueue
     }
 }
@@ -90,7 +108,11 @@ public class XosViewportView: UIView {
     private var crashOverlay: UIView?
     
     public required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+        let errorMsg = "ERROR: init(coder:) has not been implemented for XosViewportView. Use init(frame:) instead."
+        ConsoleManager.shared.addLog(errorMsg)
+        print(errorMsg)
+        // Return nil to indicate initialization failure
+        return nil
     }
     
     public override init(frame: CGRect) {
@@ -100,8 +122,15 @@ public class XosViewportView: UIView {
         backgroundColor = UIColor.black
         
         // Create Metal layer for GPU rendering
+        guard let device = metalRenderer.getDevice() else {
+            let errorMsg = "ERROR: Cannot create Metal layer - Metal device not available"
+            ConsoleManager.shared.addLog(errorMsg)
+            print(errorMsg)
+            return
+        }
+        
         let metalLayer = CAMetalLayer()
-        metalLayer.device = metalRenderer.getDevice()
+        metalLayer.device = device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = false
         metalLayer.contentsGravity = .resizeAspect
@@ -344,7 +373,14 @@ public class XosViewportView: UIView {
             }
             
             // Use blit encoder for fast texture copy
-            guard let commandBuffer = metalRenderer.getCommandQueue().makeCommandBuffer(),
+            guard let commandQueue = metalRenderer.getCommandQueue() else {
+                let errorMsg = "ERROR: Cannot render - Metal command queue not available"
+                ConsoleManager.shared.addLog(errorMsg)
+                print(errorMsg)
+                return
+            }
+            
+            guard let commandBuffer = commandQueue.makeCommandBuffer(),
                   let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
                 return
             }
