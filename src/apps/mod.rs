@@ -65,4 +65,5 @@ define_apps! {
     AudioEdit => audioeditor::AudioEditApp,
     Partitions => partitions::Partitions,
     Coder => coder::CoderApp,
+    Leds => leds::Leds,
 }
