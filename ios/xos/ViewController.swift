@@ -31,6 +31,8 @@ class ViewController: UIViewController {
     
     // Haptic engine for chime feedback
     private var hapticEngine: CHHapticEngine?
+    private var hapticPlayer: CHHapticAdvancedPatternPlayer?
+    private var isPlayingHaptic: Bool = false
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -168,14 +170,23 @@ class ViewController: UIViewController {
     private func setupGestureRecognizer() {
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePanGesture(_:)))
         panGesture.delegate = self
+        // Allow simultaneous recognition so touches can pass through to viewport view
+        panGesture.cancelsTouchesInView = false
         view.addGestureRecognizer(panGesture)
         
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTapGesture(_:)))
         tapGesture.delegate = self
+        // Only recognize tap if pan gesture is ready (swipe completed)
+        tapGesture.cancelsTouchesInView = false
         view.addGestureRecognizer(tapGesture)
     }
     
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
+        // If gesture didn't start from left edge, ignore it (delegate already filtered)
+        if !swipeActive && gesture.state != .began {
+            return
+        }
+        
         let location = gesture.location(in: view)
         let screenWidth = view.bounds.width
         let screenHeight = view.bounds.height
@@ -192,6 +203,7 @@ class ViewController: UIViewController {
                 swipeActive = true
                 swipeCompleteTime = nil
             } else {
+                // Don't activate if not starting from left edge
                 gestureReady = false
                 swipeActive = false
             }
@@ -253,6 +265,17 @@ class ViewController: UIViewController {
         
         do {
             hapticEngine = try CHHapticEngine()
+            
+            // Set up engine reset handler
+            hapticEngine?.resetHandler = { [weak self] in
+                guard let self = self else { return }
+                do {
+                    try self.hapticEngine?.start()
+                } catch {
+                    print("Failed to restart haptic engine: \(error)")
+                }
+            }
+            
             try hapticEngine?.start()
         } catch {
             print("Failed to create haptic engine: \(error)")
@@ -260,6 +283,11 @@ class ViewController: UIViewController {
     }
     
     private func playChimeHaptic() {
+        // Prevent overlapping haptics - if one is already playing, skip
+        if isPlayingHaptic {
+            return
+        }
+        
         guard let engine = hapticEngine,
               CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
             // Fallback to simple impact feedback if CoreHaptics not available
@@ -268,23 +296,20 @@ class ViewController: UIViewController {
             return
         }
         
+        // Stop any existing player
+        if let player = hapticPlayer {
+            do {
+                try player.stop(atTime: 0)
+            } catch {
+                // Ignore stop errors
+            }
+            hapticPlayer = nil
+        }
+        
         // Create chime pattern matching sensorlab: fade in (0.0 -> 0.8) then fade out (0.8 -> 0.0)
         // Duration: 0.2s total, peak at 0.1s
         // Increased intensity for harder haptic feedback
         // Use a single continuous event with parameter curves for smooth transitions
-        let intensityParameter = CHHapticDynamicParameter(
-            parameterID: .hapticIntensityControl,
-            value: 0.8,
-            relativeTime: 0.1
-        )
-        
-        let sharpnessParameter = CHHapticDynamicParameter(
-            parameterID: .hapticSharpnessControl,
-            value: 0.6,
-            relativeTime: 0.1
-        )
-        
-        // Create curve points for smooth fade in/out
         let intensityCurve = CHHapticParameterCurve(
             parameterID: .hapticIntensityControl,
             controlPoints: [
@@ -317,10 +342,19 @@ class ViewController: UIViewController {
         
         do {
             let pattern = try CHHapticPattern(events: [event], parameterCurves: [intensityCurve, sharpnessCurve])
-            let player = try engine.makePlayer(with: pattern)
+            let player = try engine.makeAdvancedPlayer(with: pattern)
+            
+            isPlayingHaptic = true
+            hapticPlayer = player
             try player.start(atTime: 0)
+            
+            // Reset flag after haptic duration (0.2 seconds) plus a small buffer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.isPlayingHaptic = false
+            }
         } catch {
             print("Failed to play haptic: \(error)")
+            isPlayingHaptic = false
             // Fallback to simple impact
             let generator = UIImpactFeedbackGenerator(style: .medium)
             generator.impactOccurred()
@@ -333,6 +367,27 @@ class ViewController: UIViewController {
 extension ViewController: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         // Allow pan and tap gestures to work together
+        return true
+    }
+    
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // Allow all touches - we'll filter in the handler
+        // This ensures the gesture recognizer can track the gesture properly
+        if gestureRecognizer is UIPanGestureRecognizer {
+            return true
+        }
+        
+        // For tap gesture, allow it but we'll check gestureReady in the handler
+        if gestureRecognizer is UITapGestureRecognizer {
+            return true
+        }
+        
+        return true
+    }
+    
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Allow gesture to begin - we'll check location in the handler
+        // This ensures proper gesture tracking
         return true
     }
 }
