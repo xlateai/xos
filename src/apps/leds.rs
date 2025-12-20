@@ -1,9 +1,13 @@
 use crate::engine::{Application, EngineState};
 use crate::shapes::basic_shapes;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (10, 10, 10); // Very dark background
 const LED_ON_COLOR: (u8, u8, u8) = (255, 0, 0); // Red for on LEDs
 const LED_OFF_COLOR: (u8, u8, u8) = (20, 20, 20); // Very dim for off LEDs
+const TARGET_FPS: f32 = 30.0; // Target frame rate for animation
+const FRAME_DURATION_MS: f32 = 1000.0 / TARGET_FPS; // ~33.33ms per frame
 
 pub struct Leds {
     led_states: Vec<Vec<bool>>, // 2D array of LED states (on/off)
@@ -11,6 +15,9 @@ pub struct Leds {
     grid_cols: usize, // Number of columns in the LED grid
     grid_rows: usize, // Number of rows in the LED grid
     initialized: bool, // Whether we've initialized the random pattern
+    row_directions: Vec<bool>, // Direction for each row (true = right, false = left)
+    #[cfg(not(target_arch = "wasm32"))]
+    last_update_time: Option<Instant>, // Last time we updated the animation
 }
 
 impl Leds {
@@ -21,6 +28,9 @@ impl Leds {
             grid_cols: 0,
             grid_rows: 0,
             initialized: false,
+            row_directions: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            last_update_time: None,
         }
     }
 
@@ -84,45 +94,88 @@ impl Leds {
         let old_cols = if old_rows > 0 { self.led_states[0].len() } else { 0 };
         
         if old_rows != self.grid_rows || old_cols != self.grid_cols {
-            // Create new grid, preserving existing values where possible
-            let mut new_states = vec![vec![false; self.grid_cols]; self.grid_rows];
+            // Create new grid, all LEDs start off
+            self.led_states = vec![vec![false; self.grid_cols]; self.grid_rows];
             
-            // Copy existing values if they fit
-            for (row_idx, new_row) in new_states.iter_mut().enumerate() {
-                if row_idx < old_rows {
-                    for (col_idx, led) in new_row.iter_mut().enumerate() {
-                        if col_idx < old_cols {
-                            *led = self.led_states[row_idx][col_idx];
-                        }
-                    }
-                }
+            // Initialize row directions if needed
+            if self.row_directions.len() != self.grid_rows {
+                self.initialize_row_directions();
             }
-            
-            self.led_states = new_states;
         }
     }
-
-    /// Initialize LED states with random binary bitmap
-    fn randomize_leds(&mut self) {
+    
+    /// Initialize row directions randomly (true = right, false = left)
+    fn initialize_row_directions(&mut self) {
+        self.row_directions.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
             let mut rng = rand::rng();
-            for row in &mut self.led_states {
-                for led in row.iter_mut() {
-                    // Generate random float and check if < 0.5
-                    *led = rng.random::<f32>() < 0.5;
-                }
+            for _ in 0..self.grid_rows {
+                self.row_directions.push(rng.random::<f32>() < 0.5);
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
             // WASM fallback: use simple pseudo-random
-            let mut seed = 12345u32;
-            for row in &mut self.led_states {
-                for led in row.iter_mut() {
-                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                    *led = (seed % 2) == 0; // 50% chance
+            let mut seed = 54321u32;
+            for _ in 0..self.grid_rows {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                self.row_directions.push((seed % 2) == 0);
+            }
+        }
+    }
+    
+    /// Update animation at 30fps - shift rows and spawn new bits
+    fn update_animation(&mut self) {
+        for (row_idx, row) in self.led_states.iter_mut().enumerate() {
+            let direction_right = self.row_directions.get(row_idx).copied().unwrap_or(true);
+            
+            if direction_right {
+                // Shift right: move all bits one position to the right
+                // Spawn new random bit on the left
+                for col_idx in (1..row.len()).rev() {
+                    row[col_idx] = row[col_idx - 1];
+                }
+                // Spawn random bit on the left
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    row[0] = rng.random::<f32>() < 0.5;
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // WASM fallback: use simple pseudo-random
+                    static mut SEED: u32 = 12345;
+                    unsafe {
+                        SEED = SEED.wrapping_mul(1103515245).wrapping_add(12345);
+                        row[0] = (SEED % 2) == 0;
+                    }
+                }
+            } else {
+                // Shift left: move all bits one position to the left
+                // Spawn new random bit on the right
+                for col_idx in 0..(row.len() - 1) {
+                    row[col_idx] = row[col_idx + 1];
+                }
+                // Spawn random bit on the right
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    let last_idx = row.len() - 1;
+                    row[last_idx] = rng.random::<f32>() < 0.5;
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // WASM fallback: use simple pseudo-random
+                    static mut SEED: u32 = 12345;
+                    unsafe {
+                        SEED = SEED.wrapping_mul(1103515245).wrapping_add(12345);
+                        let last_idx = row.len() - 1;
+                        row[last_idx] = (SEED % 2) == 0;
+                    }
                 }
             }
         }
@@ -152,10 +205,34 @@ impl Application for Leds {
         // Calculate grid dimensions based on current screen size
         self.calculate_grid(width, height);
 
-        // Initialize with random pattern only once on first run
+        // Initialize only once on first run - all LEDs start off
         if !self.initialized {
-            self.randomize_leds();
+            // All LEDs are already false (off) from calculate_grid
+            self.initialize_row_directions();
             self.initialized = true;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.last_update_time = Some(Instant::now());
+            }
+        }
+        
+        // Update animation at 30fps
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(last_time) = self.last_update_time {
+                let elapsed_ms = last_time.elapsed().as_secs_f32() * 1000.0;
+                if elapsed_ms >= FRAME_DURATION_MS {
+                    self.update_animation();
+                    self.last_update_time = Some(Instant::now());
+                }
+            } else {
+                self.last_update_time = Some(Instant::now());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // WASM: update every tick (engine handles frame rate)
+            self.update_animation();
         }
 
         // Calculate spacing and center the grid
