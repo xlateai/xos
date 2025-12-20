@@ -1,5 +1,6 @@
 use crate::audio;
 use crate::engine::{Application, EngineState};
+use dialoguer::Select;
 
 pub struct Waveform {
     listener: Option<audio::AudioListener>,
@@ -60,18 +61,32 @@ fn draw_line(
 
 impl Application for Waveform {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        let devices = audio::devices();
-        if devices.is_empty() {
-            return Err("⚠️ No audio input devices found.".to_string());
+        let all_devices = audio::devices();
+        
+        // Filter to only input devices (microphones)
+        let input_devices: Vec<_> = all_devices
+            .into_iter()
+            .filter(|d| d.is_input)
+            .collect();
+        
+        if input_devices.is_empty() {
+            return Err("⚠️ No audio input devices (microphones) found.".to_string());
         }
 
-        crate::print("🔊 Available devices:");
-        for (i, d) in devices.iter().enumerate() {
-            crate::print(&format!("  [{}] {}", i, d.name));
-        }
+        // Create a list of device names for the selector
+        let device_names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
 
-        let device_index = 0;
-        let device = devices.get(device_index).ok_or("No audio device found")?;
+        // Use dialoguer to let user select a microphone
+        let selection = Select::new()
+            .with_prompt("Select microphone")
+            .items(&device_names)
+            .default(0)
+            .interact()
+            .map_err(|e| format!("Failed to get user selection: {}", e))?;
+
+        let device = input_devices.get(selection).ok_or("Selected device not found")?;
+        
+        crate::print(&format!("🔊 Selected device: {}", device.name));
 
         let buffer_duration = 1.0;
         let listener = audio::AudioListener::new(device, buffer_duration)?;

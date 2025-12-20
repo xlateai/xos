@@ -62,10 +62,11 @@ impl TrackVisualizer {
 
         let waveform_y_center = waveform_y_start + waveform_height / 2;
 
-        // Calculate visible range based on zoom
-        // Zoom level represents: 1.0 = full audio, max = 1 second window
-        // This is handled in calculate_visible_range() in audioedit.rs
-        // For rendering, we just use the zoom_level directly
+        // Calculate visible range - need to get audio duration from somewhere
+        // For now, calculate based on zoom_level and zoom_center
+        // This should match calculate_visible_range() in audioedit.rs
+        // We'll pass audio_duration as a parameter or calculate it here
+        // For rendering purposes, calculate visible range directly
         let visible_range = 1.0 / zoom_level.max(1.0);
         let visible_start = (zoom_center - visible_range / 2.0).max(0.0).min(1.0);
         let visible_end = (zoom_center + visible_range / 2.0).max(0.0).min(1.0);
@@ -73,7 +74,21 @@ impl TrackVisualizer {
 
         // Draw waveform
         let num_samples = self.full_audio_samples.len();
-        let amplitude = (waveform_height as f32 * 0.4) as i32; // Use 40% of waveform height for amplitude
+        
+        // Find the maximum absolute value in the entire waveform for normalization
+        // This ensures we use the full available height
+        let max_abs_value = self.full_audio_samples.iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, |a, b| a.max(b));
+        
+        // Use full waveform height (minus a small margin) for amplitude
+        // Normalize based on the actual peak in the data
+        let amplitude_scale = if max_abs_value > 0.0 {
+            // Use 90% of waveform height, normalized by the peak value
+            (waveform_height as f32 * 0.45) / max_abs_value
+        } else {
+            waveform_height as f32 * 0.45
+        };
 
         // Use original sample count for accurate position mapping
         // This ensures alignment even if waveform was downsampled
@@ -110,16 +125,19 @@ impl TrackVisualizer {
                 let min_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::INFINITY, |a, &b| a.min(b));
                 let max_val = self.full_audio_samples[sample_start..range_end].iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
                 
-                // Use absolute values to ensure we show both positive and negative peaks
-                // Scale to make quieter sounds more visible (use RMS-like approach)
-                let peak_val = max_val.abs().max(min_val.abs());
+                // Draw from min to max to show the full waveform range
+                // Scale both values using the normalized amplitude
+                let y_min_val = (min_val * amplitude_scale) as i32;
+                let y_max_val = (max_val * amplitude_scale) as i32;
                 
-                // Draw vertical line from center, showing the peak amplitude
-                let y_offset = (peak_val * amplitude as f32) as i32;
-                let y_min = (waveform_y_center as i32 - y_offset).max(waveform_y_start as i32);
-                let y_max = (waveform_y_center as i32 + y_offset).min((height - 1) as i32);
+                // Convert to screen coordinates (center is at waveform_y_center)
+                let y_min = (waveform_y_center as i32 + y_min_val).max(waveform_y_start as i32).min((height - 1) as i32);
+                let y_max = (waveform_y_center as i32 + y_max_val).max(waveform_y_start as i32).min((height - 1) as i32);
                 
-                for y in y_min..=y_max {
+                // Draw vertical line from min to max
+                let y_start = y_min.min(y_max);
+                let y_end = y_min.max(y_max);
+                for y in y_start..=y_end {
                     let idx = ((y as u32 * width + x) * 4) as usize;
                     if idx + 3 < buffer.len() {
                         buffer[idx + 0] = WAVEFORM_COLOR.0;
