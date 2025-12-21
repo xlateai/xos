@@ -6,6 +6,7 @@ class ViewController: UIViewController {
     private var viewportView: XosViewportView!
     private var changeAppButton: UIButton!
     private var consoleButton: UIButton!
+    private var fullscreenButton: UIButton!
     private var appName: String = {
         // Try to get app name from Info.plist (set during build)
         if let defaultApp = Bundle.main.infoDictionary?["XOSDefaultApp"] as? String,
@@ -17,7 +18,7 @@ class ViewController: UIViewController {
     }()
     
     // Fullscreen state
-    private var isFullscreen: Bool = true {
+    private var isFullscreen: Bool = false {
         didSet {
             updateFullscreenState()
         }
@@ -59,7 +60,17 @@ class ViewController: UIViewController {
         consoleButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(consoleButton)
         
+        // Add fullscreen button
+        fullscreenButton = UIButton(type: .system)
+        fullscreenButton.setTitle("Fullscreen", for: .normal)
+        fullscreenButton.addTarget(self, action: #selector(toggleFullscreen), for: .touchUpInside)
+        fullscreenButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(fullscreenButton)
+        
         NSLayoutConstraint.activate([
+            fullscreenButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            fullscreenButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
+            
             changeAppButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             changeAppButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
             
@@ -137,8 +148,7 @@ class ViewController: UIViewController {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in
                 self?.appName = app
                 self?.viewportView.hideCrashOverlay() // Hide crash overlay when changing apps
-                // Reset to fullscreen when changing apps
-                self?.isFullscreen = true
+                // Don't default to fullscreen when changing apps
                 self?.viewportView.setAppName(app)
             })
         }
@@ -154,12 +164,19 @@ class ViewController: UIViewController {
         present(consoleVC, animated: true)
     }
     
+    @objc private func toggleFullscreen() {
+        isFullscreen = true
+        // Play haptic chime feedback
+        playChimeHaptic()
+    }
+    
     // MARK: - Fullscreen Management
     
     private func updateFullscreenState() {
         // Show/hide buttons
         changeAppButton.isHidden = isFullscreen
         consoleButton.isHidden = isFullscreen
+        fullscreenButton.isHidden = isFullscreen // Hide fullscreen button when in fullscreen mode
         
         // Update status bar
         setNeedsStatusBarAppearanceUpdate()
