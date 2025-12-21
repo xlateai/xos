@@ -79,18 +79,6 @@ xos app
 
 - **Web/WASM** - Browser-based execution (planned for future release)
 
-## Common Tasks
-
-**Rebuild CLI after changes:**
-```bash
-cargo install --path .
-```
-
-**Rebuild iOS Rust library manually:**
-```bash
-./build-ios.sh
-```
-
 ## Development Philosophy
 
 xos applications are designed to be:

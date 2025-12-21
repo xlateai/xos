@@ -161,10 +161,8 @@ impl Application for TextApp {
                 // We want the text to appear starting at roughly 1/3 from top of content area
                 // So the first line's baseline should be at: content_top + (content_height / 3)
                 let target_y = content_top + (content_height / 3.0);
-                let first_line_screen_y = (first_line.baseline_y - self.scroll_y) + content_top;
                 
                 // Adjust scroll_y so first line appears at target position
-                // first_line_screen_y = (first_line.baseline_y - scroll_y) + content_top
                 // target_y = (first_line.baseline_y - scroll_y) + content_top
                 // target_y - content_top = first_line.baseline_y - scroll_y
                 // scroll_y = first_line.baseline_y - (target_y - content_top)

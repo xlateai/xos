@@ -14,16 +14,6 @@ struct BallState {
 }
 
 impl BallState {
-    fn new(width: f32, height: f32, radius: f32) -> Self {
-        Self {
-            x: width / 2.0,
-            y: height / 2.0,
-            vx: 1.5 * SPEED_MULTIPLIER,
-            vy: 1.0 * SPEED_MULTIPLIER,
-            radius,
-        }
-    }
-
     fn new_at_position(x: f32, y: f32, radius: f32) -> Self {
         let vx = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
         let vy = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
