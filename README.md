@@ -23,7 +23,7 @@ Apps in xos are standalone programs that run on any supported backend. Built wit
 
 ## Getting Started
 
-### 1. Installing xos for the first time
+### Installing xos
 
 From the root of the repository:
 
@@ -32,127 +32,40 @@ cargo build --release
 cargo install --path .
 ```
 
-### 2. Verify the CLI is working
+Verify the CLI is working:
 
 ```bash
 xos --help
 ```
 
-### 3. Try out some visual applications
+### Building and Running Applications
 
-```bash
-xos app
-```
-
-This will list all available applications you can launch on your computer. To launch an app on your iOS device instead, use:
-
-```bash
-xos app <app-name> --ios
-```
-
-## Development
-
-After making changes to the Rust codebase, you have two options:
-
-**Option 1: Run your application**
-Run the application you created (see the `src/apps/` directory, especially `blank.rs` for examples) and select "Y" when prompted to rebuild:
-
-```bash
-xos app <app-name>
-# or for iOS:
-xos app <app-name> --ios
-```
-
-**Option 2: Build without running**
-Use `xos build` or `xos build --ios` to build without running the app to check if your changes compile successfully:
-
-```bash
-xos build        # Build for your current platform
-xos build --ios  # Build for iOS
-```
-
-These are the only two commands you need to know after initial setup.
-
-## Building xos
-
-### Standard Build
-
-Build xos for your current platform:
-
+**Build for your current platform:**
 ```bash
 xos build
 ```
 
-This compiles the Rust core library for your native platform (macOS, Linux, or Windows).
-
-### iOS Build
-
-Build the Rust library for iOS devices:
-
+**Build for iOS:**
 ```bash
 xos build --ios
 ```
+This installs the `aarch64-apple-ios` target if needed, compiles the Rust library as a static library (`.a` file), and outputs to `ios/libs/libxos.a` for linking with Swift code.
 
-This script:
-- Installs the `aarch64-apple-ios` target if needed
-- Compiles the Rust library as a static library (`.a` file)
-- Outputs to `ios/libs/libxos.a` for linking with Swift code
-
-**iOS Requirements:**
-- macOS computer
-- Physical USB cable connection to iOS device
-- Device must be in Developer Mode (Settings > Privacy & Security > Developer Mode)
-- Xcode with proper code signing configured
-
-## Running Applications
-
-xos applications are standalone programs that can run on any supported backend. Each application is like a native OS application but with universal portability.
-
-### Running on Native Platform
-
-Run any xos application on your current platform:
-
+**Run an application:**
 ```bash
-xos app <app-name>
+xos app <app-name>        # Run on your current platform
+xos app <app-name> --ios  # Run on connected iOS device
 ```
 
-**Available applications:**
-- `Ball` - Ball physics demo
-- `Tracers` - Particle tracer visualization
-- `Camera` - Camera capture app
-- `Whiteboard` - Drawing whiteboard
-- `Text` - Text editor
-- `Waveform` - Audio waveform visualization
-- `Wireframe` - 3D wireframe demo
-- `Triangles` - Triangle rendering demo
-- `Audiovis` - Audio visualization
-- `AudioEdit` - Audio editor
-- `IosSensors` - iOS sensor data visualization
-- And more...
-
-### Running on iOS
-
-Launch an application on a connected iOS device:
-
+List all available applications:
 ```bash
-xos app <app-name> --ios
+xos app
 ```
 
-**iOS Deployment Process:**
+**For iOS deployment:**
 1. Ensure your device is connected via USB and in Developer Mode
-2. Run `xos build --ios` to compile the Rust library
-3. Run `xos app <app-name> --ios` to build and deploy
-
-The CLI will:
-- Build the Rust library for iOS (if needed)
-- Compile the Swift iOS app
-- Install and launch on your connected device
-
-**First-time iOS setup:**
-- Open `ios/xos.xcworkspace` in Xcode
-- Configure code signing (Signing & Capabilities tab)
-- Select your development team
-- The CLI handles the rest automatically
+2. First-time setup: Open `ios/xos.xcworkspace` in Xcode and configure code signing (Signing & Capabilities tab)
+3. Run `xos app <app-name> --ios` - the CLI will build the Rust library (if needed), compile the Swift iOS app, and install/launch on your device
 
 ## Platform Support
 
@@ -166,46 +79,16 @@ The CLI will:
 
 - **Web/WASM** - Browser-based execution (planned for future release)
 
-## Project Structure
-
-```
-xos/
-├── src/
-│   ├── apps/          # xos applications
-│   ├── engine/        # Core engine and application framework
-│   ├── sensors/       # Sensor abstractions
-│   ├── audio/         # Audio processing
-│   ├── video/         # Video processing
-│   └── main.rs        # CLI entry point
-├── ios/               # iOS native app (Swift)
-│   ├── libs/          # Compiled Rust libraries
-│   └── xos.xcworkspace
-├── build-ios.sh       # iOS Rust library build script
-└── Cargo.toml         # Rust project configuration
-```
-
 ## Common Tasks
-
-**Rebuild iOS Rust library:**
-```bash
-xos build --ios
-# Or manually:
-./build-ios.sh
-```
-
-**Run an app on iOS:**
-```bash
-xos app IosSensors --ios
-```
-
-**List available apps:**
-```bash
-xos app --help
-```
 
 **Rebuild CLI after changes:**
 ```bash
 cargo install --path .
+```
+
+**Rebuild iOS Rust library manually:**
+```bash
+./build-ios.sh
 ```
 
 ## Development Philosophy
