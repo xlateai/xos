@@ -211,7 +211,11 @@ impl Application for IosSensorsApp {
             .unwrap_or(0);
 
         // Update magnitude text (4 decimals)
-        if let Some(reading) = self.last_reading {
+        if self.current_sensor != SensorType::Magnetometer {
+            // Show "no reads" for non-magnetometer sensors
+            self.magnitude_text.set_text("no reads".to_string());
+            self.coordinates_text.set_text("no reads".to_string());
+        } else if let Some(reading) = self.last_reading {
             let magnitude = reading.magnitude();
             self.magnitude_text.set_text(format!("{:.4}μT", magnitude));
             
@@ -259,6 +263,11 @@ impl Application for IosSensorsApp {
         let center_y = height as f32 / 2.0;
         let line_spacing = 50.0;
         
+        // Button position (above text)
+        let button_height = 84.5;
+        let button_padding = 20.0;
+        let button_y_pos = center_y - line_spacing * 1.5 - button_height - button_padding;
+        
         // Magnitude row (top, 4 decimals)
         let magnitude_text_width = if let Some(last_char) = self.magnitude_text.characters.last() {
             last_char.x + last_char.metrics.advance_width
@@ -295,14 +304,14 @@ impl Application for IosSensorsApp {
         let rate_x = (width as f32 - rate_text_width) / 2.0;
         let rate_y = center_y + line_spacing * 1.5;
 
+        // Draw sensor selector button (above text)
+        self.draw_sensor_button(buffer, width, height, button_y_pos);
+        
         // Draw all text
         self.draw_text_geometric(buffer, width, height, &self.magnitude_text, magnitude_x, magnitude_y);
         self.draw_text_geometric(buffer, width, height, &self.coordinates_text, coordinates_x, coordinates_y);
         self.draw_text_geometric(buffer, width, height, &self.count_text, count_x, count_y);
         self.draw_text_geometric(buffer, width, height, &self.rate_text, rate_x, rate_y);
-        
-        // Draw sensor selector button (25% from bottom)
-        self.draw_sensor_button(buffer, width, height);
         
         // Render selector if open
         if self.sensor_selector.is_open() {
@@ -335,8 +344,11 @@ impl Application for IosSensorsApp {
         let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
-        let button_y = height * 0.75; // 25% from bottom
+        let center_y = height / 2.0;
+        let line_spacing = 50.0;
         let button_height = 84.5; // 30% bigger than 65.0
+        let button_padding = 20.0;
+        let button_y = center_y - line_spacing * 1.5 - button_height - button_padding;
         let button_width = 338.0; // 30% bigger than 260.0
         let button_x = (width - button_width) / 2.0;
         
@@ -359,8 +371,11 @@ impl Application for IosSensorsApp {
         let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
-        let button_y = height * 0.75; // 25% from bottom
+        let center_y = height / 2.0;
+        let line_spacing = 50.0;
         let button_height = 84.5; // 30% bigger than 65.0
+        let button_padding = 20.0;
+        let button_y = center_y - line_spacing * 1.5 - button_height - button_padding;
         let button_width = 338.0; // 30% bigger than 260.0
         let button_x = (width - button_width) / 2.0;
         
@@ -402,8 +417,8 @@ impl IosSensorsApp {
         }
     }
     
-    fn draw_sensor_button(&self, buffer: &mut [u8], width: u32, height: u32) {
-        let button_y = (height as f32 * 0.75) as i32; // 25% from bottom
+    fn draw_sensor_button(&self, buffer: &mut [u8], width: u32, height: u32, button_y_pos: f32) {
+        let button_y = button_y_pos as i32;
         let button_height = 85; // 30% bigger than 65 (rounded)
         let button_width = 338; // 30% bigger than 260
         let button_x = ((width as f32 - button_width as f32) / 2.0) as i32;
