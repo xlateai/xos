@@ -27,6 +27,9 @@ pub struct TextApp {
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
     last_tap_y: f32,
+    cursor_position: usize, // Character index where cursor should be
+    dragging: bool,
+    last_mouse_y: f32,
 }
 
 
@@ -50,6 +53,9 @@ impl TextApp {
             last_tap_time: None,
             last_tap_x: 0.0,
             last_tap_y: 0.0,
+            cursor_position: 0,
+            dragging: false,
+            last_mouse_y: 0.0,
         }
     }
 
@@ -191,14 +197,46 @@ impl Application for TextApp {
         }
     
         // Draw cursor (offset by content_top)
-        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
-            if self.text_engine.text.chars().last() == Some('\n') {
-                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+        // Find cursor position based on cursor_position index
+        let (target_x, baseline_y) = if self.cursor_position == 0 {
+            // Cursor at start
+            if let Some(first_line) = self.text_engine.lines.first() {
+                (0.0, first_line.baseline_y)
             } else {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+                (0.0, self.text_engine.ascent)
+            }
+        } else if self.cursor_position >= self.text_engine.text.chars().count() {
+            // Cursor at end
+            if let Some(last) = self.text_engine.characters.last() {
+                if self.text_engine.text.chars().last() == Some('\n') {
+                    (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+                } else {
+                    (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+                }
+            } else {
+                (0.0, self.text_engine.ascent)
             }
         } else {
-            (0.0, self.text_engine.ascent)
+            // Cursor in middle - find the character at cursor_position
+            let mut found_char = None;
+            
+            for character in self.text_engine.characters.iter() {
+                if character.char_index == self.cursor_position {
+                    found_char = Some(character);
+                    break;
+                }
+            }
+            
+            if let Some(char_at_cursor) = found_char {
+                // Cursor is before this character
+                (char_at_cursor.x, self.text_engine.lines.get(char_at_cursor.line_index)
+                    .map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else if let Some(last) = self.text_engine.characters.last() {
+                // Fallback to end
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (0.0, self.text_engine.ascent)
+            }
         };
         
         // Smooth the x-position (linear interpolation)
@@ -226,25 +264,75 @@ impl Application for TextApp {
     
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        self.scroll_y -= dy * 20.0;
-        self.scroll_y = self.scroll_y.max(0.0);
+        // Use same scrolling approach as scroll.rs
+        self.scroll_y += dy;
+        // Don't clamp to 0 - allow scrolling up to see content above
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
             '\t' => {
-                self.text_engine.text.push_str("    ");
+                // Insert tab at cursor position
+                let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                let mut new_text = String::new();
+                for (i, &c) in text_chars.iter().enumerate() {
+                    if i == self.cursor_position {
+                        new_text.push_str("    ");
+                    }
+                    new_text.push(c);
+                }
+                if self.cursor_position >= text_chars.len() {
+                    new_text.push_str("    ");
+                }
+                self.text_engine.text = new_text;
+                self.cursor_position += 4;
             }
             '\r' | '\n' => {
-                self.text_engine.text.push('\n');
+                // Insert newline at cursor position
+                let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                let mut new_text = String::new();
+                for (i, &c) in text_chars.iter().enumerate() {
+                    if i == self.cursor_position {
+                        new_text.push('\n');
+                    }
+                    new_text.push(c);
+                }
+                if self.cursor_position >= text_chars.len() {
+                    new_text.push('\n');
+                }
+                self.text_engine.text = new_text;
+                self.cursor_position += 1;
             }
             '\u{8}' => {
-                // Backspace
-                self.text_engine.text.pop();
+                // Backspace - delete character before cursor
+                if self.cursor_position > 0 {
+                    let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                    let mut new_text = String::new();
+                    for (i, &c) in text_chars.iter().enumerate() {
+                        if i != self.cursor_position - 1 {
+                            new_text.push(c);
+                        }
+                    }
+                    self.text_engine.text = new_text;
+                    self.cursor_position -= 1;
+                }
             }
             _ => {
                 if !ch.is_control() {
-                    self.text_engine.text.push(ch);
+                    // Insert character at cursor position
+                    let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                    let mut new_text = String::new();
+                    for (i, &c) in text_chars.iter().enumerate() {
+                        if i == self.cursor_position {
+                            new_text.push(ch);
+                        }
+                        new_text.push(c);
+                    }
+                    if self.cursor_position >= text_chars.len() {
+                        new_text.push(ch);
+                    }
+                    self.text_engine.text = new_text;
+                    self.cursor_position += 1;
                 }
             }
         }
@@ -257,6 +345,13 @@ impl Application for TextApp {
         
         // Update keyboard hover state
         self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
+        
+        // Handle dragging for scrolling (like scroll.rs)
+        if self.dragging {
+            let dy = state.mouse.y - self.last_mouse_y;
+            self.scroll_y -= dy;
+            self.last_mouse_y = state.mouse.y;
+        }
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
@@ -302,16 +397,62 @@ impl Application for TextApp {
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
         } else {
+            // Single tap - move cursor to tap location
+            let safe_region = &state.frame.safe_region_boundaries;
+            let content_top = safe_region.y1 * height;
+            
+            // Convert screen coordinates to text coordinates
+            let tap_x = state.mouse.x;
+            let tap_y = state.mouse.y - content_top + self.scroll_y;
+            
+            // Find the nearest character to the tap position
+            let mut nearest_char_index = self.text_engine.text.chars().count();
+            let mut min_distance_sq = f32::MAX;
+            
+            for character in &self.text_engine.characters {
+                let char_center_x = character.x + character.width / 2.0;
+                let char_center_y = character.y + character.height / 2.0;
+                
+                let dx = tap_x - char_center_x;
+                let dy = tap_y - char_center_y;
+                let distance_sq = dx * dx + dy * dy;
+                
+                // Also check if tap is before this character horizontally
+                if tap_x < character.x && character.line_index == 0 {
+                    // Tap is before this character, cursor should be at this character's index
+                    if distance_sq < min_distance_sq {
+                        min_distance_sq = distance_sq;
+                        nearest_char_index = character.char_index;
+                    }
+                } else if distance_sq < min_distance_sq {
+                    min_distance_sq = distance_sq;
+                    // If tap is to the right of character center, cursor goes after it
+                    if tap_x > char_center_x {
+                        nearest_char_index = character.char_index + 1;
+                    } else {
+                        nearest_char_index = character.char_index;
+                    }
+                }
+            }
+            
+            self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+            
             // Update tap tracking
             self.last_tap_time = Some(now);
             self.last_tap_x = state.mouse.x;
             self.last_tap_y = state.mouse.y;
+            
+            // Start dragging for scroll
+            self.dragging = true;
+            self.last_mouse_y = state.mouse.y;
         }
     }
 
     fn on_mouse_up(&mut self, _state: &mut EngineState) {
         // Release all keys when mouse is released
         self.keyboard.release_keys();
+        // Stop dragging
+        self.dragging = false;
     }
     
 }
