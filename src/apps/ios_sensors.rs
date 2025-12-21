@@ -117,9 +117,9 @@ impl Application for IosSensorsApp {
         self.count_text.tick(width as f32, height as f32);
 
         // Calculate positions for centering
-        // Get the rightmost x position + width of the last character for total width
+        // Use advance_width (not bitmap width) for accurate text width calculation
         let reading_text_width = if let Some(last_char) = self.reading_text.characters.last() {
-            last_char.x + last_char.width
+            last_char.x + last_char.metrics.advance_width
         } else {
             0.0
         };
@@ -127,7 +127,7 @@ impl Application for IosSensorsApp {
         let reading_y = height as f32 / 2.0 - 60.0;
 
         let count_text_width = if let Some(last_char) = self.count_text.characters.last() {
-            last_char.x + last_char.width
+            last_char.x + last_char.metrics.advance_width
         } else {
             0.0
         };
