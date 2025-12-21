@@ -4,6 +4,18 @@ The fastest and easiest to use cross-platform application framework designed to 
 
 Apps in xos are standalone programs that run on any supported backend. Built with Rust for it's build system, performance, wide backend target support, and reliability; xos provides an easy foundation to build upon for your prototype applications and experiments.
 
+## Platform Support
+
+### ✅ Fully Supported
+
+- **macOS** - Native desktop applications
+- **Linux** - Native desktop applications (with optional ALSA for audio)
+- **iOS** - Native mobile applications (requires macOS + Xcode)
+
+### ⏸️ Paused (Planned Return)
+
+- **Web/WASM** - Browser-based execution (planned for future release)
+
 ## Prerequisites
 
 **Required:**
@@ -67,18 +79,6 @@ xos build
 xos build --ios
 ```
 This installs the `aarch64-apple-ios` target if needed, compiles the Rust library as a static library (`.a` file), and outputs to `ios/libs/libxos.a` for linking with Swift code.
-
-## Platform Support
-
-### ✅ Fully Supported
-
-- **macOS** - Native desktop applications
-- **Linux** - Native desktop applications (with optional ALSA for audio)
-- **iOS** - Native mobile applications (requires macOS + Xcode)
-
-### ⏸️ Paused (Planned Return)
-
-- **Web/WASM** - Browser-based execution (planned for future release)
 
 ## Development Philosophy
 
