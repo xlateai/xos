@@ -91,7 +91,8 @@ impl Application for PyApp {
                 
                 // Wrap it in _FrameWrapper
                 if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
-                    if let Ok(frame_obj) = vm.invoke(&wrapper_class, (frame_dict.clone(),)) {
+                    // Use the newer call API instead of deprecated invoke
+                    if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
                         app_instance.set_attr("frame", frame_obj, vm)
                             .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
                     } else {

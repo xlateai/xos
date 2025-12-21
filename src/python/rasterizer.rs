@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs, PyObjectRef};
+use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 
 /// xos.rasterizer.circles() - efficiently draw circles on a frame buffer
 /// 

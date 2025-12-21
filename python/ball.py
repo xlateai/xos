@@ -1,84 +1,90 @@
 import xos
 
-# Red ball color
+# Red ball color (normalized 0-1)
 BALL_COLOR = (255, 50, 50, 255)  # RGBA: Red
-BALL_RADIUS = 15.0
-SPEED_MULTIPLIER = 3.45
-
-class BallState:
-    def __init__(self, x, y, radius):
-        self.x = x
-        self.y = y
-        self.radius = radius
-        self.vx = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
-        self.vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
-    
-    def update(self, width, height):
-        self.x += self.vx
-        self.y += self.vy
-        
-        # Check if ball is completely off screen
-        is_off_screen = (
-            self.x + self.radius < 0.0 or
-            self.x - self.radius > width or
-            self.y + self.radius < 0.0 or
-            self.y - self.radius > height
-        )
-        
-        if is_off_screen:
-            # Respawn at center with the same heading
-            self.x = width / 2.0
-            self.y = height / 2.0
-        else:
-            # Normal bounce logic
-            if self.x - self.radius < 0.0:
-                self.x = self.radius
-                self.vx = abs(self.vx)
-            elif self.x + self.radius > width:
-                self.x = width - self.radius
-                self.vx = -abs(self.vx)
-            
-            if self.y - self.radius < 0.0:
-                self.y = self.radius
-                self.vy = abs(self.vy)
-            elif self.y + self.radius > height:
-                self.y = height - self.radius
-                self.vy = -abs(self.vy)
+BALL_RADIUS = 0.005
+SPEED_MULTIPLIER = 0.02  # Normalized speed
 
 
 class BallGame(xos.Application):
     def __init__(self):
         super().__init__()
-        self.balls = []
+        self.positions = None  # Will be Rust-backed array
+        self.radii = None  # Will be Rust-backed array
+        self.num_balls = 512
     
     def setup(self):
         """Initialize the game"""
-        # Create initial balls
-        for _ in range(512):
-            x = xos.random.uniform(BALL_RADIUS, self.get_width() - BALL_RADIUS)
-            y = xos.random.uniform(BALL_RADIUS, self.get_height() - BALL_RADIUS)
-            self.balls.append(BallState(x, y, BALL_RADIUS))
+        # Pre-allocate Rust-backed arrays for positions (Nx2) and radii (N)
+        initial_positions = []
+        initial_radii = []
+        
+        for _ in range(self.num_balls):
+            x = xos.random.uniform(BALL_RADIUS, 1.0 - BALL_RADIUS)
+            y = xos.random.uniform(BALL_RADIUS, 1.0 - BALL_RADIUS)
+            initial_positions.append([x, y])
+            initial_radii.append(BALL_RADIUS)
+        
+        # Create Rust-backed arrays
+        self.positions = xos.array(initial_positions, (self.num_balls, 2))
+        self.radii = xos.array(initial_radii, (self.num_balls,))
+        
+        # Velocities (vx, vy) for each ball
+        initial_velocities = []
+        for _ in range(self.num_balls):
+            vx = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
+            vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
+            initial_velocities.append([vx, vy])
+        self.velocities = xos.array(initial_velocities, (self.num_balls, 2))
         
         xos.print("+512 balls (initial spawn)")
+        
+        # Print first 8 positions to verify array slicing
+        # print("Initial positions[:8]:")
+        # print(self.positions["_data"][:16])  # First 8 balls = 16 floats (x,y pairs)
     
     def tick(self):
         """Update and render one frame"""
-        # Update all balls
-        for ball in self.balls:
-            ball.update(self.get_width(), self.get_height())
+        # TODO: Vectorized update in Rust
+        # For now, update positions manually
+        pos_data = self.positions["_data"]
+        vel_data = self.velocities["_data"]
         
-        # Collect positions for fast rasterization
-        positions = [(ball.x, ball.y) for ball in self.balls]
-        radii = [ball.radius for ball in self.balls]
+        for i in range(self.num_balls):
+            # Update position
+            pos_data[i*2] += vel_data[i*2]       # x += vx
+            pos_data[i*2+1] += vel_data[i*2+1]   # y += vy
+            
+            # Simple bounce (wrap around for now)
+            if pos_data[i*2] < 0 or pos_data[i*2] > 1:
+                vel_data[i*2] *= -1
+                pos_data[i*2] = max(0.0, min(1.0, pos_data[i*2]))
+            if pos_data[i*2+1] < 0 or pos_data[i*2+1] > 1:
+                vel_data[i*2+1] *= -1
+                pos_data[i*2+1] = max(0.0, min(1.0, pos_data[i*2+1]))
         
-        # Use fast Rust rasterizer to draw all circles at once
-        # Pass self.frame directly - the array data stays in Rust
-        xos.rasterizer.circles(self.frame, positions, radii, BALL_COLOR)
+        # Print first 8 positions each tick
+        # print("positions[:8] =", pos_data[:16])
+        
+        # Convert normalized positions to pixel coordinates for rasterizer
+        width = self.get_width()
+        height = self.get_height()
+        
+        pixel_positions = []
+        for i in range(self.num_balls):
+            px = pos_data[i*2] * width
+            py = pos_data[i*2+1] * height
+            pixel_positions.append((px, py))
+        
+        radii_list = [BALL_RADIUS * width for _ in range(self.num_balls)]  # Convert normalized radius to pixels
+        
+        # Use fast Rust rasterizer
+        xos.rasterizer.circles(self.frame, pixel_positions, radii_list, BALL_COLOR)
     
     def on_mouse_down(self, x, y):
         """Handle mouse click"""
-        self.balls.append(BallState(x, y, BALL_RADIUS))
-        xos.print("+1 ball (click spawn)")
+        # TODO: Dynamically grow arrays
+        xos.print("+1 ball (click spawn) - dynamic growth not yet implemented")
 
 
 # Demo code to show how it would be used
