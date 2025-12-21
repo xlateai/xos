@@ -44,6 +44,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("get_mouse", vm.new_function("get_mouse", get_mouse), vm).unwrap();
     module.set_attr("print", vm.new_function("print", xos_print), vm).unwrap();
     
+    // Add the random submodule
+    let random_module = crate::python::random::random::make_random_module(vm);
+    module.set_attr("random", random_module, vm).unwrap();
+    
     module
 }
 

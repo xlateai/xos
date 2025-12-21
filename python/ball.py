@@ -1,6 +1,4 @@
 import xos
-import random
-import math
 
 # Red ball color
 BALL_COLOR = (255, 50, 50, 255)  # RGBA: Red
@@ -12,8 +10,8 @@ class BallState:
         self.x = x
         self.y = y
         self.radius = radius
-        self.vx = random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
-        self.vy = random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
+        self.vx = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
+        self.vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
     
     def update(self, width, height):
         self.x += self.vx
@@ -63,8 +61,8 @@ class BallGame:
         
         # Create initial balls
         for _ in range(512):
-            x = random.uniform(BALL_RADIUS, self.width - BALL_RADIUS)
-            y = random.uniform(BALL_RADIUS, self.height - BALL_RADIUS)
+            x = xos.random.uniform(BALL_RADIUS, self.width - BALL_RADIUS)
+            y = xos.random.uniform(BALL_RADIUS, self.height - BALL_RADIUS)
             self.balls.append(BallState(x, y, BALL_RADIUS))
         
         xos.print("+512 balls (initial spawn)")
