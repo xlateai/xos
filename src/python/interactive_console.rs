@@ -25,6 +25,10 @@ pub fn run_python_file(file_path: &PathBuf) {
     // Execute the code
     let result = interpreter.enter(|vm| {
         let scope = vm.new_scope_with_builtins();
+        
+        // Set __name__ to "__main__" so if __name__ == "__main__" works
+        scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm).ok();
+        
         let exec_result = vm.run_code_string(scope, &code, file_path.to_string_lossy().to_string());
         
         // Extract error message from exception if there was one

@@ -6,4 +6,7 @@ pub mod xos_module;
 #[cfg(feature = "python")]
 pub mod random;
 
+#[cfg(feature = "python")]
+pub mod engine;
+
 pub use interactive_console::{run_python_file, run_python_interactive};
