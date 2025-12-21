@@ -1,11 +1,34 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use std::sync::Mutex;
 
-/// xos.rasterizer.circles() - efficiently draw circles on a frame buffer
+// Thread-safe wrapper for raw pointer
+struct FrameBufferPtr(*mut u8);
+unsafe impl Send for FrameBufferPtr {}
+unsafe impl Sync for FrameBufferPtr {}
+
+// Global pointer to the current frame buffer (set during tick)
+static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
+static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
+static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
+
+/// Called by PyApp before tick to set the frame buffer pointer
+pub fn set_frame_buffer_context(buffer: &mut [u8], width: usize, height: usize) {
+    *CURRENT_FRAME_BUFFER.lock().unwrap() = Some(FrameBufferPtr(buffer.as_mut_ptr()));
+    *CURRENT_FRAME_WIDTH.lock().unwrap() = width;
+    *CURRENT_FRAME_HEIGHT.lock().unwrap() = height;
+}
+
+/// Called by PyApp after tick to clear the frame buffer pointer
+pub fn clear_frame_buffer_context() {
+    *CURRENT_FRAME_BUFFER.lock().unwrap() = None;
+}
+
+/// xos.rasterizer.circles() - efficiently draw circles directly on the Rust frame buffer
 /// 
 /// Usage: xos.rasterizer.circles(frame, positions, radii, color)
-/// - frame: dict with 'width', 'height', 'buffer' (list of RGBA bytes)
-/// - positions: list of (x, y) tuples
-/// - radii: list of radii (or single radius for all)
+/// - frame: frame object (ignored, we use the global context)
+/// - positions: list of (x, y) tuples in pixel coordinates
+/// - radii: list of radii in pixels
 /// - color: (r, g, b, a) tuple
 fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Extract arguments
@@ -17,60 +40,19 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         )));
     }
     
-    let frame_dict = &args_vec[0];
+    let _frame_dict = &args_vec[0]; // Ignored, we use global context
     let positions_list = &args_vec[1];
     let radii_list = &args_vec[2];
     let color_tuple = &args_vec[3];
     
-    // frame_dict might be a _FrameWrapper or a plain dict
-    // Try to get _data attribute first (if it's a wrapper), otherwise use it directly
-    let actual_frame_dict = if let Ok(data_attr) = vm.get_attribute_opt(frame_dict.clone(), "_data") {
-        if let Some(data) = data_attr {
-            data
-        } else {
-            frame_dict.clone()
-        }
-    } else {
-        frame_dict.clone()
-    };
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     
-    // actual_frame_dict is a Python dict
-    let frame_py_dict = actual_frame_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
-        .ok_or_else(|| vm.new_type_error("frame must be a dict or _FrameWrapper".to_string()))?;
-    
-    // Extract array from frame
-    let array_obj = frame_py_dict.get_item("array", vm)?;
-    
-    let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
-        .ok_or_else(|| vm.new_type_error("array must be a dict".to_string()))?;
-    
-    // Get the buffer (data) from the array FIRST to get accurate size
-    let buffer = array_dict.get_item("data", vm)?;
-    let buffer_list = buffer.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("buffer data must be a list".to_string()))?;
-    
-    let buffer_len = buffer_list.borrow_vec().len();
-    
-    // Extract width and height from array shape
-    let shape_obj = array_dict.get_item("shape", vm)?;
-    let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
-        .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
-    let shape_vec = shape_tuple.as_slice();
-    if shape_vec.len() < 3 {
-        return Err(vm.new_type_error("shape must be (height, width, channels)".to_string()));
-    }
-    
-    let height: i32 = shape_vec[0].clone().try_into_value(vm)?;
-    let width: i32 = shape_vec[1].clone().try_into_value(vm)?;
-    
-    // Validate that buffer size matches shape (to catch resize issues)
-    let expected_len = (height * width * 4) as usize;
-    if buffer_len != expected_len {
-        return Err(vm.new_runtime_error(format!(
-            "Frame buffer size mismatch: expected {} bytes ({}x{}x4), but buffer has {} bytes. Window may have been resized.",
-            expected_len, width, height, buffer_len
-        )));
-    }
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. Rasterizer must be called during tick().".to_string())
+    })?;
     
     // Parse color tuple (r, g, b, a)
     let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
@@ -93,7 +75,7 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let radii = radii_list.downcast_ref::<rustpython_vm::builtins::PyList>()
         .ok_or_else(|| vm.new_type_error("radii must be a list".to_string()))?;
     
-    // Collect all circle data first before drawing (to avoid borrow conflicts)
+    // Collect all circle data first before drawing
     let positions_vec = positions.borrow_vec();
     let radii_vec = radii.borrow_vec();
     
@@ -122,28 +104,31 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         circles_to_draw.push((cx as f32, cy as f32, radius as f32));
     }
     
-    // Drop borrows
+    // Drop borrows before drawing
     drop(positions_vec);
     drop(radii_vec);
     
-    // Now draw all circles
+    // Get mutable buffer slice
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Now draw all circles directly to the Rust buffer
     for (cx, cy, radius) in circles_to_draw {
-        draw_circle(buffer_list, width as usize, height as usize, cx, cy, radius, color, vm)?;
+        draw_circle_direct(buffer, width, height, cx, cy, radius, color);
     }
     
     Ok(vm.ctx.none())
 }
 
-fn draw_circle(
-    buffer: &rustpython_vm::builtins::PyList,
+fn draw_circle_direct(
+    buffer: &mut [u8],
     width: usize,
     height: usize,
     cx: f32,
     cy: f32,
     radius: f32,
     color: (u8, u8, u8, u8),
-    vm: &VirtualMachine,
-) -> PyResult<()> {
+) {
     let radius_squared = radius * radius;
     
     let start_x = (cx - radius).max(0.0) as usize;
@@ -151,26 +136,21 @@ fn draw_circle(
     let start_y = (cy - radius).max(0.0) as usize;
     let end_y = ((cy + radius + 1.0) as usize).min(height);
     
-    let mut buf_vec = buffer.borrow_vec_mut();
-    
     for y in start_y..end_y {
         for x in start_x..end_x {
             let dx = x as f32 - cx;
             let dy = y as f32 - cy;
             if dx * dx + dy * dy <= radius_squared {
                 let idx = (y * width + x) * 4;
-                if idx + 3 < width * height * 4 {
-                    // Set RGBA values in the list
-                    buf_vec[idx + 0] = vm.ctx.new_int(color.0).into();
-                    buf_vec[idx + 1] = vm.ctx.new_int(color.1).into();
-                    buf_vec[idx + 2] = vm.ctx.new_int(color.2).into();
-                    buf_vec[idx + 3] = vm.ctx.new_int(color.3).into();
+                if idx + 3 < buffer.len() {
+                    buffer[idx + 0] = color.0;
+                    buffer[idx + 1] = color.1;
+                    buffer[idx + 2] = color.2;
+                    buffer[idx + 3] = color.3;
                 }
             }
         }
     }
-    
-    Ok(())
 }
 
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {

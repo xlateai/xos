@@ -3,7 +3,7 @@ import xos
 # Red ball color (normalized 0-1)
 BALL_COLOR = (255, 50, 50, 255)  # RGBA: Red
 BALL_RADIUS = 0.005
-SPEED_MULTIPLIER = 0.02  # Normalized speed
+SPEED_MULTIPLIER = 0.005  # Normalized speed
 
 
 class BallGame(xos.Application):
@@ -55,13 +55,14 @@ class BallGame(xos.Application):
             pos_data[i*2] += vel_data[i*2]       # x += vx
             pos_data[i*2+1] += vel_data[i*2+1]   # y += vy
             
-            # Simple bounce (wrap around for now)
-            if pos_data[i*2] < 0 or pos_data[i*2] > 1:
+            # Bounce off edges (keep ball fully on screen)
+            radius = self.radii["_data"][i]
+            if pos_data[i*2] - radius < 0.0 or pos_data[i*2] + radius > 1.0:
                 vel_data[i*2] *= -1
-                pos_data[i*2] = max(0.0, min(1.0, pos_data[i*2]))
-            if pos_data[i*2+1] < 0 or pos_data[i*2+1] > 1:
+                pos_data[i*2] = max(radius, min(1.0 - radius, pos_data[i*2]))
+            if pos_data[i*2+1] - radius < 0.0 or pos_data[i*2+1] + radius > 1.0:
                 vel_data[i*2+1] *= -1
-                pos_data[i*2+1] = max(0.0, min(1.0, pos_data[i*2+1]))
+                pos_data[i*2+1] = max(radius, min(1.0 - radius, pos_data[i*2+1]))
         
         # Print first 8 positions each tick
         # print("positions[:8] =", pos_data[:16])

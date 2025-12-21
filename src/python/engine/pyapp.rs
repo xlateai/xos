@@ -143,19 +143,17 @@ impl Application for PyApp {
 
     fn tick(&mut self, state: &mut EngineState) {
         if let Some(ref app_instance) = self.app_instance {
+            // Set the frame buffer context for the rasterizer
+            let shape = state.frame.shape();
+            let width = shape[1];
+            let height = shape[0];
+            let buffer = state.frame.buffer_mut();
+            crate::python::rasterizer::set_frame_buffer_context(buffer, width, height);
+            
             self.interpreter.enter(|vm| {
                 // Update frame data before calling tick
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
                     let _ = crate::python::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
-                    
-                    // Print the frame array for debugging
-                    if let Ok(Some(array_obj)) = vm.get_attribute_opt(frame_obj.clone(), "array") {
-                        if let Ok(array_str) = vm.call_method(&array_obj, "__str__", ()) {
-                            if let Ok(s) = array_str.str(vm) {
-                                println!("[frame.array] {}", s.to_string());
-                            }
-                        }
-                    }
                     
                     // Update mouse data
                     let mouse_dict = vm.ctx.new_dict();
@@ -178,11 +176,11 @@ impl Application for PyApp {
                             eprintln!("Python tick error: {}", class_name);
                         }
                     }
-                    
-                    // Sync Python buffer changes back to Rust
-                    let _ = crate::python::engine::py_bindings::sync_py_buffer_to_rust(vm, frame_obj, &mut state.frame);
                 }
             });
+            
+            // Clear the frame buffer context after tick
+            crate::python::rasterizer::clear_frame_buffer_context();
         }
     }
 
