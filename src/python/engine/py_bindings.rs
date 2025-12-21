@@ -105,9 +105,20 @@ pub fn create_py_frame_state(vm: &VirtualMachine, frame: &mut FrameState) -> PyR
 }
 
 /// Update the frame object with current engine state
+/// This copies the Rust buffer data back to Python after rendering
 pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame: &mut FrameState) -> PyResult<()> {
-    // frame_obj is a dict, so we use dict methods
-    let frame_dict = frame_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+    // frame_obj might be a _FrameWrapper, get the underlying dict
+    let actual_dict = if let Ok(data_attr) = vm.get_attribute_opt(frame_obj.clone(), "_data") {
+        if let Some(data) = data_attr {
+            data
+        } else {
+            frame_obj.clone()
+        }
+    } else {
+        frame_obj.clone()
+    };
+    
+    let frame_dict = actual_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
         .ok_or_else(|| vm.new_type_error("frame is not a dict".to_string()))?;
     
     // Get the array from the frame
@@ -123,6 +134,50 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     
     // Update the data field
     array_dict.set_item("data", new_list.into(), vm)?;
+    
+    Ok(())
+}
+
+/// Sync Python buffer changes back to Rust
+/// This copies the Python list data back to the Rust buffer after Python modifies it
+pub fn sync_py_buffer_to_rust(vm: &VirtualMachine, frame_obj: PyObjectRef, frame: &mut FrameState) -> PyResult<()> {
+    // frame_obj might be a _FrameWrapper, get the underlying dict
+    let actual_dict = if let Ok(data_attr) = vm.get_attribute_opt(frame_obj.clone(), "_data") {
+        if let Some(data) = data_attr {
+            data
+        } else {
+            frame_obj.clone()
+        }
+    } else {
+        frame_obj.clone()
+    };
+    
+    let frame_dict = actual_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("frame is not a dict".to_string()))?;
+    
+    // Get the array from the frame
+    let array_obj = frame_dict.get_item("array", vm)?;
+    
+    let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("array is not a dict".to_string()))?;
+    
+    // Get the data list
+    let data_obj = array_dict.get_item("data", vm)?;
+    let data_list = data_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("data is not a list".to_string()))?;
+    
+    // Copy Python list back to Rust buffer
+    let buffer = frame.buffer_mut();
+    let py_vec = data_list.borrow_vec();
+    
+    for (i, py_val) in py_vec.iter().enumerate() {
+        if i >= buffer.len() {
+            break;
+        }
+        if let Ok(val) = py_val.clone().try_into_value::<i32>(vm) {
+            buffer[i] = val as u8;
+        }
+    }
     
     Ok(())
 }

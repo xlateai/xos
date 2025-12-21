@@ -155,28 +155,31 @@ impl Application for PyApp {
                             }
                         }
                     }
-                }
-                
-                // Update mouse data
-                let mouse_dict = vm.ctx.new_dict();
-                let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
-                let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
-                let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
-                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
-                
-                // Call tick
-                if let Err(e) = vm.call_method(app_instance, "tick", ()) {
-                    let class_name = e.class().name().to_string();
-                    let msg = vm.call_method(e.as_object(), "__str__", ())
-                        .ok()
-                        .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                        .unwrap_or_default();
                     
-                    if !msg.is_empty() {
-                        eprintln!("Python tick error: {}: {}", class_name, msg);
-                    } else {
-                        eprintln!("Python tick error: {}", class_name);
+                    // Update mouse data
+                    let mouse_dict = vm.ctx.new_dict();
+                    let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+                    let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+                    let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
+                    let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+                    
+                    // Call tick
+                    if let Err(e) = vm.call_method(app_instance, "tick", ()) {
+                        let class_name = e.class().name().to_string();
+                        let msg = vm.call_method(e.as_object(), "__str__", ())
+                            .ok()
+                            .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
+                            .unwrap_or_default();
+                        
+                        if !msg.is_empty() {
+                            eprintln!("Python tick error: {}: {}", class_name, msg);
+                        } else {
+                            eprintln!("Python tick error: {}", class_name);
+                        }
                     }
+                    
+                    // Sync Python buffer changes back to Rust
+                    let _ = crate::python::engine::py_bindings::sync_py_buffer_to_rust(vm, frame_obj, &mut state.frame);
                 }
             });
         }
