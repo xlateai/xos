@@ -90,7 +90,7 @@ final class MagnetometerListener {
         }
         
         // Set update interval (100ms = 0.1 seconds)
-        manager.magnetometerUpdateInterval = 0.1
+        manager.magnetometerUpdateInterval = 0.01
         
         print("[MagnetometerListener] Initialized listener ID=\(listenerId)")
         #else
