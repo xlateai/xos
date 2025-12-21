@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
-use xos::python::{run_python_file, run_python_interactive};
+use xos::python::{run_python_app, run_python_interactive};
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -394,7 +394,7 @@ fn main() {
         }
         Some(Commands::Python { file }) => {
             if let Some(file_path) = file {
-                run_python_file(&file_path);
+                run_python_app(&file_path);
             } else {
                 run_python_interactive();
             }

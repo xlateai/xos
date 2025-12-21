@@ -235,6 +235,86 @@ pub fn run_python_interactive() {
     }
 }
 
+/// Run a Python application with the xos engine
+#[cfg(feature = "python")]
+pub fn run_python_app(file_path: &PathBuf) {
+    use crate::python::engine::pyapp::PyApp;
+    
+    // Read the Python file
+    let code = match fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("❌ Error reading file {}: {}", file_path.display(), e);
+            std::process::exit(1);
+        }
+    };
+    
+    // Create interpreter with xos module
+    let interpreter = Interpreter::with_init(Default::default(), |vm| {
+        vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
+    });
+    
+    // Execute the code and capture the app instance
+    let app_instance_opt = interpreter.enter(|vm| {
+        let scope = vm.new_scope_with_builtins();
+        
+        // Set __name__ to "__main__"
+        scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm).ok();
+        
+        // Execute the file (don't clone scope so we can see modifications to globals)
+        if let Err(e) = vm.run_code_string(scope, &code, file_path.to_string_lossy().to_string()) {
+            let class_name = e.class().name().to_string();
+            let msg_result = vm.call_method(e.as_object(), "__str__", ())
+                .ok()
+                .and_then(|result| result.str(vm).ok().map(|s| s.to_string()));
+            
+            if let Some(msg) = msg_result {
+                if msg.trim().is_empty() {
+                    eprintln!("{}", class_name);
+                } else {
+                    eprintln!("{}: {}", class_name, msg);
+                }
+            } else {
+                eprintln!("{}", class_name);
+            }
+            std::process::exit(1);
+        }
+        
+        // Try to get the game instance from builtins.__xos_app_instance__
+        // (Python apps store it there when they call .run())
+        vm.get_attribute_opt(vm.builtins.clone().into(), "__xos_app_instance__")
+            .ok()
+            .flatten()
+    });
+    
+    if let Some(app_instance) = app_instance_opt {
+        println!("🎮 Launching xos engine with Python app...");
+        let pyapp = PyApp::new(interpreter, app_instance);
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Err(e) = crate::engine::start_native(Box::new(pyapp)) {
+                eprintln!("❌ Engine error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            eprintln!("❌ WASM not supported for Python apps yet");
+            std::process::exit(1);
+        }
+    } else {
+        eprintln!("ℹ️  Python script completed (no xos app launched)");
+    }
+}
+
+#[cfg(not(feature = "python"))]
+pub fn run_python_app(_file_path: &PathBuf) {
+    eprintln!("❌ Python support not available (python feature disabled)");
+    std::process::exit(1);
+}
+
 #[cfg(not(feature = "python"))]
 pub fn run_python_file(_file_path: &PathBuf) {
     eprintln!("❌ Python support not available (python feature disabled)");
