@@ -1,11 +1,47 @@
 use crate::engine::{Application, EngineState};
 use crate::sensors::{Magnetometer, MagnetometerReading};
 use crate::apps::text::geometric::GeometricText;
+use crate::ui::Selector;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
+const BUTTON_COLOR: (u8, u8, u8) = (60, 60, 60);
+const BUTTON_HOVER_COLOR: (u8, u8, u8) = (80, 80, 80);
+const BUTTON_BORDER_COLOR: (u8, u8, u8) = (120, 120, 120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SensorType {
+    Magnetometer,
+    Accelerometer,
+    Rotation,
+    Gyroscope,
+    Barometer,
+}
+
+impl SensorType {
+    fn name(&self) -> &'static str {
+        match self {
+            SensorType::Magnetometer => "Magnetometer",
+            SensorType::Accelerometer => "Accelerometer",
+            SensorType::Rotation => "Rotation",
+            SensorType::Gyroscope => "Gyroscope",
+            SensorType::Barometer => "Barometer",
+        }
+    }
+    
+    fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => SensorType::Magnetometer,
+            1 => SensorType::Accelerometer,
+            2 => SensorType::Rotation,
+            3 => SensorType::Gyroscope,
+            4 => SensorType::Barometer,
+            _ => SensorType::Magnetometer,
+        }
+    }
+}
 
 pub struct IosSensorsApp {
     magnetometer: Option<Magnetometer>,
@@ -13,11 +49,17 @@ pub struct IosSensorsApp {
     coordinates_text: GeometricText,
     count_text: GeometricText,
     rate_text: GeometricText,
+    button_text: GeometricText,
     last_reading: Option<MagnetometerReading>,
     // For calculating readings per second
     last_rate_calc_time: Instant,
     readings_since_last_calc: u64,
     readings_per_second: f64,
+    // Sensor selection
+    current_sensor: SensorType,
+    sensor_selector: Selector,
+    // Button state
+    button_hovered: bool,
 }
 
 impl IosSensorsApp {
@@ -52,11 +94,24 @@ impl IosSensorsApp {
             .expect("Failed to load font");
         let rate_font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
+        let button_font = Font::from_bytes(font_bytes, FontSettings::default())
+            .expect("Failed to load font");
 
         let magnitude_text = GeometricText::new(magnitude_font, magnitude_font_size);
         let coordinates_text = GeometricText::new(coordinates_font, coordinates_font_size);
         let count_text = GeometricText::new(count_font, small_font_size);
         let rate_text = GeometricText::new(rate_font, small_font_size);
+        let button_text = GeometricText::new(button_font, small_font_size);
+
+        // Create sensor selector with all sensor options
+        let sensor_options = vec![
+            "Magnetometer".to_string(),
+            "Accelerometer".to_string(),
+            "Rotation".to_string(),
+            "Gyroscope".to_string(),
+            "Barometer".to_string(),
+        ];
+        let sensor_selector = Selector::new(sensor_options);
 
         Self {
             magnetometer: None,
@@ -64,10 +119,14 @@ impl IosSensorsApp {
             coordinates_text,
             count_text,
             rate_text,
+            button_text,
             last_reading: None,
             last_rate_calc_time: Instant::now(),
             readings_since_last_calc: 0,
             readings_per_second: 0.0,
+            current_sensor: SensorType::Magnetometer,
+            sensor_selector,
+            button_hovered: false,
         }
     }
 }
@@ -178,6 +237,24 @@ impl Application for IosSensorsApp {
         self.rate_text.set_text(rate_text_str);
         self.rate_text.tick(width as f32, height as f32);
 
+        // Update button text with current sensor name
+        self.button_text.set_text(self.current_sensor.name().to_string());
+        self.button_text.tick(width as f32, height as f32);
+
+        // Update selector
+        self.sensor_selector.update(width as f32, height as f32);
+
+        // Check if selector is closed and we have a selection
+        if !self.sensor_selector.is_open() {
+            if let Some(selected_idx) = self.sensor_selector.selected() {
+                let new_sensor = SensorType::from_index(selected_idx);
+                if new_sensor != self.current_sensor {
+                    self.current_sensor = new_sensor;
+                    // TODO: Initialize the new sensor when we implement them
+                }
+            }
+        }
+
         // Calculate positions for centering - vertically centered layout
         let center_y = height as f32 / 2.0;
         let line_spacing = 50.0;
@@ -223,11 +300,62 @@ impl Application for IosSensorsApp {
         self.draw_text_geometric(buffer, width, height, &self.coordinates_text, coordinates_x, coordinates_y);
         self.draw_text_geometric(buffer, width, height, &self.count_text, count_x, count_y);
         self.draw_text_geometric(buffer, width, height, &self.rate_text, rate_x, rate_y);
+        
+        // Draw sensor selector button (25% from bottom)
+        self.draw_sensor_button(buffer, width, height);
+        
+        // Render selector if open
+        if self.sensor_selector.is_open() {
+            self.sensor_selector.render(state);
+        }
     }
 
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {}
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {}
-    fn on_mouse_move(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        // Check if selector is open - handle selector clicks first
+        if self.sensor_selector.is_open() {
+            self.sensor_selector.on_mouse_down(state);
+            return;
+        }
+        
+        // Check if button was clicked
+        let shape = state.frame.array.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let button_y = height * 0.75; // 25% from bottom
+        let button_height = 50.0;
+        let button_width = 200.0;
+        let button_x = (width - button_width) / 2.0;
+        
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        if mouse_x >= button_x && mouse_x <= button_x + button_width &&
+           mouse_y >= button_y && mouse_y <= button_y + button_height {
+            // Button clicked - open selector
+            self.sensor_selector.open();
+        }
+    }
+    
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        // Nothing needed here for now
+    }
+    
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        // Update button hover state
+        let shape = state.frame.array.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let button_y = height * 0.75; // 25% from bottom
+        let button_height = 50.0;
+        let button_width = 200.0;
+        let button_x = (width - button_width) / 2.0;
+        
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        self.button_hovered = mouse_x >= button_x && mouse_x <= button_x + button_width &&
+                              mouse_y >= button_y && mouse_y <= button_y + button_height;
+    }
 }
 
 impl IosSensorsApp {
@@ -258,6 +386,106 @@ impl IosSensorsApp {
                 }
             }
         }
+    }
+    
+    fn draw_sensor_button(&self, buffer: &mut [u8], width: u32, height: u32) {
+        let button_y = (height as f32 * 0.75) as i32; // 25% from bottom
+        let button_height = 50;
+        let button_width = 200;
+        let button_x = ((width as f32 - button_width as f32) / 2.0) as i32;
+        
+        // Choose button color based on hover state
+        let button_color = if self.button_hovered {
+            BUTTON_HOVER_COLOR
+        } else {
+            BUTTON_COLOR
+        };
+        
+        // Draw button background (rounded rectangle - simplified as rectangle)
+        for py in button_y..(button_y + button_height) {
+            for px in button_x..(button_x + button_width) {
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = button_color.0;
+                        buffer[idx + 1] = button_color.1;
+                        buffer[idx + 2] = button_color.2;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+        
+        // Draw button border
+        let border_thickness = 2;
+        for t in 0..border_thickness {
+            // Top border
+            for px in button_x..(button_x + button_width) {
+                let py = button_y + t;
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = BUTTON_BORDER_COLOR.0;
+                        buffer[idx + 1] = BUTTON_BORDER_COLOR.1;
+                        buffer[idx + 2] = BUTTON_BORDER_COLOR.2;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+            // Bottom border
+            for px in button_x..(button_x + button_width) {
+                let py = button_y + button_height - 1 - t;
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = BUTTON_BORDER_COLOR.0;
+                        buffer[idx + 1] = BUTTON_BORDER_COLOR.1;
+                        buffer[idx + 2] = BUTTON_BORDER_COLOR.2;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+            // Left border
+            for py in button_y..(button_y + button_height) {
+                let px = button_x + t;
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = BUTTON_BORDER_COLOR.0;
+                        buffer[idx + 1] = BUTTON_BORDER_COLOR.1;
+                        buffer[idx + 2] = BUTTON_BORDER_COLOR.2;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+            // Right border
+            for py in button_y..(button_y + button_height) {
+                let px = button_x + button_width - 1 - t;
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = BUTTON_BORDER_COLOR.0;
+                        buffer[idx + 1] = BUTTON_BORDER_COLOR.1;
+                        buffer[idx + 2] = BUTTON_BORDER_COLOR.2;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+        
+        // Draw button text (centered)
+        let button_text_width = if let Some(last_char) = self.button_text.characters.last() {
+            last_char.x + last_char.metrics.advance_width
+        } else {
+            0.0
+        };
+        let button_text_x = button_x as f32 + (button_width as f32 - button_text_width) / 2.0;
+        let button_text_y = button_y as f32 + (button_height as f32 / 2.0) - 
+            self.button_text.characters.first()
+                .map(|c| c.metrics.height as f32 / 2.0)
+                .unwrap_or(0.0);
+        
+        self.draw_text_geometric(buffer, width, height, &self.button_text, button_text_x, button_text_y);
     }
 }
 
