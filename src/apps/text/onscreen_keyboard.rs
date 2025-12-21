@@ -1,5 +1,6 @@
 use crate::apps::partitions::partition::{Partition, PartitionData};
 use fontdue::{Font, FontSettings};
+use std::time::{Instant, Duration};
 
 const KEYBOARD_BG_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black
 const KEY_COLOR: (u8, u8, u8) = (40, 40, 40);
@@ -57,6 +58,10 @@ pub struct OnScreenKeyboard {
     shift_pressed: bool,
     symbol_mode: SymbolMode, // Standard, Symbols1, or Symbols2
     last_pressed_key: Option<KeyType>,
+    // Hold-to-repeat tracking
+    held_key_type: Option<KeyType>,
+    held_key_start_time: Option<Instant>,
+    last_repeat_time: Option<Instant>,
 }
 
 impl OnScreenKeyboard {
@@ -77,6 +82,9 @@ impl OnScreenKeyboard {
             shift_pressed: false,
             symbol_mode: SymbolMode::Standard,
             last_pressed_key: None,
+            held_key_type: None,
+            held_key_start_time: None,
+            last_repeat_time: None,
         };
 
         keyboard.layout_keys();
@@ -91,7 +99,47 @@ impl OnScreenKeyboard {
         self.minimized = !self.minimized;
     }
 
-    pub fn check_key_press(&mut self, mx: f32, my: f32, w: f32, h: f32) -> Option<char> {
+    pub fn check_key_hold_repeat(&mut self, now: Instant) -> Option<char> {
+        if let Some(key_type) = self.held_key_type {
+            if let Some(start_time) = self.held_key_start_time {
+                // 0.5s delay before starting repeat
+                let repeat_delay = Duration::from_millis(500);
+                let repeat_interval = Duration::from_millis(50); // Fast repeat interval
+                
+                if now.duration_since(start_time) >= repeat_delay {
+                    if let Some(last_repeat) = self.last_repeat_time {
+                        if now.duration_since(last_repeat) >= repeat_interval {
+                            self.last_repeat_time = Some(now);
+                            return self.key_type_to_char(key_type);
+                        }
+                    } else {
+                        self.last_repeat_time = Some(now);
+                        return self.key_type_to_char(key_type);
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    fn key_type_to_char(&self, key_type: KeyType) -> Option<char> {
+        match key_type {
+            KeyType::Char(ch) => {
+                let output_char = if self.shift_pressed && self.symbol_mode == SymbolMode::Standard && ch.is_alphabetic() {
+                    ch.to_uppercase().next().unwrap_or(ch)
+                } else {
+                    ch
+                };
+                Some(output_char)
+            }
+            KeyType::Backspace => Some('\u{8}'),
+            KeyType::Space => Some(' '),
+            KeyType::Return => Some('\n'),
+            _ => None, // Shift, Symbol, SymbolToggle don't output characters
+        }
+    }
+
+    pub fn check_key_press(&mut self, mx: f32, my: f32, w: f32, h: f32, now: Instant) -> Option<char> {
         if self.minimized {
             return None;
         }
@@ -161,6 +209,18 @@ impl OnScreenKeyboard {
             key.key_type
         };
         
+        // Track held key for repeat (only for keys that should repeat)
+        let should_repeat = match key_type {
+            KeyType::Char(_) | KeyType::Backspace | KeyType::Space | KeyType::Return => true,
+            _ => false,
+        };
+        
+        if should_repeat {
+            self.held_key_type = Some(key_type);
+            self.held_key_start_time = Some(now);
+            self.last_repeat_time = None;
+        }
+        
         match key_type {
             KeyType::Char(ch) => {
                 // Only apply shift to letters, not symbols
@@ -220,6 +280,10 @@ impl OnScreenKeyboard {
         for key in &mut self.keys {
             key.pressed = false;
         }
+        // Clear hold-to-repeat tracking
+        self.held_key_type = None;
+        self.held_key_start_time = None;
+        self.last_repeat_time = None;
     }
 
     pub fn update_hover(&mut self, _mx: f32, _my: f32, _w: f32, _h: f32) {

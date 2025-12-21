@@ -36,6 +36,11 @@ pub struct TextApp {
     cursor_position: usize, // Character index where cursor should be
     dragging: bool,
     last_mouse_y: f32,
+    // Keyboard repeat tracking
+    held_key: Option<char>,
+    held_key_start_time: Option<Instant>,
+    last_repeat_time: Option<Instant>,
+    touch_started_on_keyboard: bool,
 }
 
 
@@ -62,6 +67,10 @@ impl TextApp {
             cursor_position: 0,
             dragging: false,
             last_mouse_y: 0.0,
+            held_key: None,
+            held_key_start_time: None,
+            last_repeat_time: None,
+            touch_started_on_keyboard: false,
         }
     }
 
@@ -138,6 +147,38 @@ impl Application for TextApp {
         self.keyboard.data_mut().right = 1.0;
     
         self.text_engine.tick(width, content_bottom - content_top);
+    
+        // Handle keyboard repeat for physical keyboard (2x faster than normal)
+        let now = Instant::now();
+        let mut keys_to_process: Vec<char> = Vec::new();
+        
+        if let Some(held_ch) = self.held_key {
+            if let Some(start_time) = self.held_key_start_time {
+                // Normal repeat delay is typically ~500ms, so 2x faster = 250ms
+                let repeat_delay = Duration::from_millis(250);
+                let repeat_interval = Duration::from_millis(50); // Fast repeat interval
+                
+                if now.duration_since(start_time) >= repeat_delay {
+                    if let Some(last_repeat) = self.last_repeat_time {
+                        if now.duration_since(last_repeat) >= repeat_interval {
+                            keys_to_process.push(held_ch);
+                            self.last_repeat_time = Some(now);
+                        }
+                    } else {
+                        keys_to_process.push(held_ch);
+                        self.last_repeat_time = Some(now);
+                    }
+                }
+            }
+        }
+        
+        // Handle on-screen keyboard repeat
+        if let Some(ch) = self.keyboard.check_key_hold_repeat(now) {
+            keys_to_process.push(ch);
+        }
+        
+        // Store keys to process after we're done with buffer
+        let keys_to_process_after = keys_to_process;
     
         // Clear screen
         for i in (0..buffer.len()).step_by(4) {
@@ -315,6 +356,50 @@ impl Application for TextApp {
         let width_u32 = width as u32;
         let height_u32 = height as u32;
         self.keyboard.draw(buffer, width_u32, height_u32);
+        
+        // Draw black area with green border below keyboard (in unsafe region)
+        let keyboard_bottom_px = keyboard_bottom_safe * height;
+        let screen_bottom = height;
+        
+        if keyboard_bottom_px < screen_bottom {
+            let border_y = keyboard_bottom_px.round() as i32;
+            let fill_start_y = (border_y + 1).max(0);
+            let fill_end_y = screen_bottom as i32;
+            
+            // Draw green border line
+            if border_y >= 0 && border_y < height as i32 {
+                for x in 0..width as i32 {
+                    let idx = ((border_y as u32 * width as u32 + x as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx + 0] = 0;   // R
+                        buffer[idx + 1] = 255; // G
+                        buffer[idx + 2] = 0;   // B
+                        buffer[idx + 3] = 0xff; // A
+                    }
+                }
+            }
+            
+            // Fill black pixels below keyboard
+            for y in fill_start_y..fill_end_y {
+                if y >= 0 && y < height as i32 {
+                    for x in 0..width as i32 {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx + 0] = 0;   // R
+                            buffer[idx + 1] = 0;   // G
+                            buffer[idx + 2] = 0;   // B
+                            buffer[idx + 3] = 0xff; // A
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Process repeated keys now that we're done with buffer
+        // Buffer borrow ends here, so we can borrow state again
+        for ch in keys_to_process_after {
+            self.on_key_char(state, ch);
+        }
     }
     
 
@@ -325,6 +410,19 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+        // Track held key for repeat (only for certain keys that should repeat)
+        let should_repeat = match ch {
+            ARROW_LEFT | ARROW_RIGHT | ARROW_UP | ARROW_DOWN | '\u{8}' | ' ' => true,
+            _ if !ch.is_control() => true, // Regular characters
+            _ => false,
+        };
+        
+        if should_repeat {
+            self.held_key = Some(ch);
+            self.held_key_start_time = Some(Instant::now());
+            self.last_repeat_time = None;
+        }
+        
         match ch {
             ARROW_LEFT => {
                 self.move_cursor_left();
@@ -450,13 +548,18 @@ impl Application for TextApp {
             && state.mouse.y <= keyboard_bottom;
         
         if is_in_keyboard_area {
+            // Mark that touch started on keyboard to prevent scrolling
+            self.touch_started_on_keyboard = true;
             // Handle keyboard key press (handles dismiss button internally)
-            if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height) {
+            if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height, Instant::now()) {
                 // Route through on_key_char to ensure it works on all platforms
                 self.on_key_char(state, ch);
             }
             return;
         }
+        
+        // Touch started outside keyboard
+        self.touch_started_on_keyboard = false;
         
         // Check for double tap in content area
         let now = Instant::now();
@@ -552,6 +655,11 @@ impl Application for TextApp {
         self.keyboard.release_keys();
         // Stop dragging
         self.dragging = false;
+        // Reset keyboard repeat tracking
+        self.held_key = None;
+        self.held_key_start_time = None;
+        self.last_repeat_time = None;
+        self.touch_started_on_keyboard = false;
     }
 }
 
