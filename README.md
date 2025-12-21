@@ -21,9 +21,9 @@ Apps in xos are standalone programs that run on any supported backend. Built wit
   sudo apt-get update && sudo apt-get install -y libasound2-dev
   ```
 
-## Quick Start
+## Getting Started
 
-### Installing the xos CLI
+### 1. Installing xos for the first time
 
 From the root of the repository:
 
@@ -32,17 +32,46 @@ cargo build --release
 cargo install --path .
 ```
 
-After installation, verify the CLI is working:
+### 2. Verify the CLI is working
 
 ```bash
 xos --help
 ```
 
-**Note:** When developing the CLI itself, rebuild after making changes:
+### 3. Try out some visual applications
 
 ```bash
-cargo install --path .
+xos app
 ```
+
+This will list all available applications you can launch on your computer. To launch an app on your iOS device instead, use:
+
+```bash
+xos app <app-name> --ios
+```
+
+## Development
+
+After making changes to the Rust codebase, you have two options:
+
+**Option 1: Run your application**
+Run the application you created (see the `src/apps/` directory, especially `blank.rs` for examples) and select "Y" when prompted to rebuild:
+
+```bash
+xos app <app-name>
+# or for iOS:
+xos app <app-name> --ios
+```
+
+**Option 2: Build without running**
+Use `xos build` or `xos build --ios` to build without running the app to check if your changes compile successfully:
+
+```bash
+xos build        # Build for your current platform
+xos build --ios  # Build for iOS
+```
+
+These are the only two commands you need to know after initial setup.
 
 ## Building xos
 
