@@ -8,7 +8,7 @@ Apps in xos are standalone programs that run on any supported backend. Built wit
 
 
 ## Experimental
-The xos API is currently experimental and may change, notably the application engine interface for how apps are defined. This is to support headless applications, embedded-in-subframes, and cross-application compatibilities. We also plan to use Python as a scripting language for defining applications as well as computing experiments.
+The xos API is currently experimental and may change, notably the application engine interface for how apps are defined. This is to support headless applications, embedded-in-subframes, and cross-application compatibilities. We also plan to use Python as a scripting language for defining applications as well as computing experiments with automatic delegations to hardware accelerators (like a lightweight pytorch).
 
 ## Platform Support
 
