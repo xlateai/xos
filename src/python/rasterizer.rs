@@ -22,9 +22,21 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let radii_list = &args_vec[2];
     let color_tuple = &args_vec[3];
     
-    // frame_dict is a Python dict, so we use dict methods
-    let frame_py_dict = frame_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
-        .ok_or_else(|| vm.new_type_error("frame must be a dict".to_string()))?;
+    // frame_dict might be a _FrameWrapper or a plain dict
+    // Try to get _data attribute first (if it's a wrapper), otherwise use it directly
+    let actual_frame_dict = if let Ok(data_attr) = vm.get_attribute_opt(frame_dict.clone(), "_data") {
+        if let Some(data) = data_attr {
+            data
+        } else {
+            frame_dict.clone()
+        }
+    } else {
+        frame_dict.clone()
+    };
+    
+    // actual_frame_dict is a Python dict
+    let frame_py_dict = actual_frame_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("frame must be a dict or _FrameWrapper".to_string()))?;
     
     // Extract array from frame
     let array_obj = frame_py_dict.get_item("array", vm)?;

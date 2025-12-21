@@ -48,51 +48,24 @@ class BallState:
 
 class BallGame(xos.Application):
     def __init__(self):
+        super().__init__()
         self.balls = []
-        self.width = 0
-        self.height = 0
     
     def setup(self):
         """Initialize the game"""
-        # Get frame buffer info from self.frame
-        self.width = self.frame.get_width()
-        self.height = self.frame.get_height()
-        
         # Create initial balls
         for _ in range(512):
-            x = xos.random.uniform(BALL_RADIUS, self.width - BALL_RADIUS)
-            y = xos.random.uniform(BALL_RADIUS, self.height - BALL_RADIUS)
+            x = xos.random.uniform(BALL_RADIUS, self.get_width() - BALL_RADIUS)
+            y = xos.random.uniform(BALL_RADIUS, self.get_height() - BALL_RADIUS)
             self.balls.append(BallState(x, y, BALL_RADIUS))
         
         xos.print("+512 balls (initial spawn)")
-    
-    def draw_circle(self, buffer, cx, cy, radius):
-        """Draw a filled circle on the frame buffer - DEPRECATED, use rasterizer instead"""
-        radius_squared = radius * radius
-        
-        start_x = max(0, int(cx - radius))
-        end_x = min(self.width, int(cx + radius + 1))
-        start_y = max(0, int(cy - radius))
-        end_y = min(self.height, int(cy + radius + 1))
-        
-        for y in range(start_y, end_y):
-            for x in range(start_x, end_x):
-                dx = x - cx
-                dy = y - cy
-                if dx * dx + dy * dy <= radius_squared:
-                    # Calculate buffer index (RGBA format)
-                    idx = (y * self.width + x) * 4
-                    if idx + 3 < len(buffer):
-                        buffer[idx + 0] = BALL_COLOR[0]  # R
-                        buffer[idx + 1] = BALL_COLOR[1]  # G
-                        buffer[idx + 2] = BALL_COLOR[2]  # B
-                        buffer[idx + 3] = BALL_COLOR[3]  # A
     
     def tick(self):
         """Update and render one frame"""
         # Update all balls
         for ball in self.balls:
-            ball.update(self.width, self.height)
+            ball.update(self.get_width(), self.get_height())
         
         # Collect positions for fast rasterization
         positions = [(ball.x, ball.y) for ball in self.balls]

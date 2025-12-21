@@ -27,6 +27,14 @@ class Application:
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
     
+    def get_width(self):
+        """Get the current frame width"""
+        return self.frame.get_width()
+    
+    def get_height(self):
+        """Get the current frame height"""
+        return self.frame.get_height()
+    
     def setup(self):
         """Called once when the application starts. Override this method."""
         raise NotImplementedError("Subclasses must implement setup()")
