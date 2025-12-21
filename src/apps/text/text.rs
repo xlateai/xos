@@ -63,21 +63,36 @@ impl TextApp {
             base_font_size
         };
 
-        let text_engine = GeometricText::new(font, font_size);
+        let mut text_engine = GeometricText::new(font, font_size);
 
-        // huge TODO: multi-language support lmao
-        // text_engine.set_text("こんにちは、今日は大丈夫です".to_string());
+        // Set default text on iOS and calculate initial scroll
+        let mut initial_scroll_y = 0.0;
+        let mut initial_cursor_pos = 0;
+        
+        if cfg!(target_os = "ios") {
+            let default_text = "double tap screen to open keyboard".to_string();
+            text_engine.set_text(default_text.clone());
+            // Set cursor to end of default text
+            initial_cursor_pos = default_text.chars().count();
+            
+            // Calculate initial scroll to position text in top 2/3rds of screen
+            // We'll adjust this in setup() after we know the actual screen dimensions
+            // For now, estimate based on font size - text starts at ascent
+            // We want it to appear at roughly 1/3 from top (so top 2/3rds are visible)
+            // This is a rough estimate, will be refined in setup()
+            initial_scroll_y = -(font_size * 0.3); // Negative scroll moves content up
+        }
 
         Self {
             text_engine,
-            scroll_y: 0.0,
+            scroll_y: initial_scroll_y,
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
             keyboard: OnScreenKeyboard::new(),
             last_tap_time: None,
             last_tap_x: 0.0,
             last_tap_y: 0.0,
-            cursor_position: 0,
+            cursor_position: initial_cursor_pos,
             dragging: false,
             last_mouse_y: 0.0,
             touch_started_on_keyboard: false,
@@ -129,7 +144,33 @@ impl TextApp {
 }
 
 impl Application for TextApp {
-    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+    fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
+        // On iOS, adjust scroll to position default text in top 2/3rds of screen
+        if cfg!(target_os = "ios") && !self.text_engine.text.is_empty() {
+            let shape = state.frame.array.shape();
+            let height = shape[0] as f32;
+            let safe_region = &state.frame.safe_region_boundaries;
+            let content_top = safe_region.y1 * height;
+            let content_height = height - content_top;
+            
+            // Tick the engine once to calculate line positions
+            self.text_engine.tick(shape[1] as f32, content_height);
+            
+            // Find the first line's baseline
+            if let Some(first_line) = self.text_engine.lines.first() {
+                // We want the text to appear starting at roughly 1/3 from top of content area
+                // So the first line's baseline should be at: content_top + (content_height / 3)
+                let target_y = content_top + (content_height / 3.0);
+                let first_line_screen_y = (first_line.baseline_y - self.scroll_y) + content_top;
+                
+                // Adjust scroll_y so first line appears at target position
+                // first_line_screen_y = (first_line.baseline_y - scroll_y) + content_top
+                // target_y = (first_line.baseline_y - scroll_y) + content_top
+                // target_y - content_top = first_line.baseline_y - scroll_y
+                // scroll_y = first_line.baseline_y - (target_y - content_top)
+                self.scroll_y = first_line.baseline_y - (target_y - content_top);
+            }
+        }
         Ok(())
     }
 

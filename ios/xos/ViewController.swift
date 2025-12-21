@@ -131,6 +131,8 @@ class ViewController: UIViewController {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in
                 self?.appName = app
                 self?.viewportView.hideCrashOverlay() // Hide crash overlay when changing apps
+                // Reset to fullscreen when changing apps
+                self?.isFullscreen = true
                 self?.viewportView.setAppName(app)
             })
         }

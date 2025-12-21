@@ -74,8 +74,8 @@ impl OnScreenKeyboard {
 
         // Initialize partition - actual position will be set by text app using safe regions
         // Internal coordinates (0-1) work relative to partition bounds
-        // Start minimized on non-iOS devices (hidden by default)
-        let minimized_default = cfg!(not(target_os = "ios"));
+        // Always start minimized (hidden by default)
+        let minimized_default = true;
         let mut keyboard = Self {
             data: PartitionData::new(0.0, 1.0, 0.70, 1.0, KEYBOARD_BG_COLOR),
             keys: Vec::new(),
