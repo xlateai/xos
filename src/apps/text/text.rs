@@ -551,9 +551,9 @@ impl Application for TextApp {
                 let dot_dx = finger_dx * 5.0;
                 let dot_dy = finger_dy * 5.0;
                 
-                // Update dot position
-                let new_dot_x = dot_x + dot_dx;
-                let new_dot_y = dot_y + dot_dy;
+                // Update dot position and constrain to screen bounds
+                let new_dot_x = (dot_x + dot_dx).max(0.0).min(width);
+                let new_dot_y = (dot_y + dot_dy).max(0.0).min(height);
                 
                 self.shift_dot_x = Some(new_dot_x);
                 self.shift_dot_y = Some(new_dot_y);
