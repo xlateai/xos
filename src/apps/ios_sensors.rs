@@ -1,44 +1,73 @@
 use crate::engine::{Application, EngineState};
-use crate::sensors::Magnetometer;
+use crate::sensors::{Magnetometer, MagnetometerReading};
 use crate::apps::text::geometric::GeometricText;
 use fontdue::{Font, FontSettings};
+use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 
 pub struct IosSensorsApp {
     magnetometer: Option<Magnetometer>,
-    reading_text: GeometricText,
+    magnitude_text: GeometricText,
+    coordinates_text: GeometricText,
     count_text: GeometricText,
+    rate_text: GeometricText,
+    last_reading: Option<MagnetometerReading>,
+    // For calculating readings per second
+    last_rate_calc_time: Instant,
+    readings_since_last_calc: u64,
+    readings_per_second: f64,
 }
 
 impl IosSensorsApp {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         
-        // Large font size for displaying numbers
-        let large_font_size = if cfg!(target_os = "ios") {
-            120.0
+        // Font sizes - smaller and more reasonable
+        let magnitude_font_size = if cfg!(target_os = "ios") {
+            64.0
         } else {
-            80.0
+            48.0
         };
         
-        // Smaller font size for count
-        let small_font_size = large_font_size * 0.4;
+        let coordinates_font_size = if cfg!(target_os = "ios") {
+            36.0
+        } else {
+            28.0
+        };
+        
+        let small_font_size = if cfg!(target_os = "ios") {
+            24.0
+        } else {
+            20.0
+        };
 
-        // Load font twice since Font doesn't implement Clone
-        let reading_font = Font::from_bytes(font_bytes, FontSettings::default())
+        // Load font multiple times since Font doesn't implement Clone
+        let magnitude_font = Font::from_bytes(font_bytes, FontSettings::default())
+            .expect("Failed to load font");
+        let coordinates_font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
         let count_font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
+        let rate_font = Font::from_bytes(font_bytes, FontSettings::default())
+            .expect("Failed to load font");
 
-        let reading_text = GeometricText::new(reading_font, large_font_size);
+        let magnitude_text = GeometricText::new(magnitude_font, magnitude_font_size);
+        let coordinates_text = GeometricText::new(coordinates_font, coordinates_font_size);
         let count_text = GeometricText::new(count_font, small_font_size);
+        let rate_text = GeometricText::new(rate_font, small_font_size);
 
         Self {
             magnetometer: None,
-            reading_text,
+            magnitude_text,
+            coordinates_text,
             count_text,
+            rate_text,
+            last_reading: None,
+            last_rate_calc_time: Instant::now(),
+            readings_since_last_calc: 0,
+            readings_per_second: 0.0,
         }
     }
 }
@@ -95,64 +124,105 @@ impl Application for IosSensorsApp {
         }
 
         // Drain all readings since last tick (batch read)
-        let (latest_reading, total_readings) = if let Some(mag) = &mut self.magnetometer {
+        if let Some(mag) = &mut self.magnetometer {
             // Wrap in catch_unwind in case drain panics
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let batch = mag.drain_readings();
-                let latest = batch.last().copied();
-                let total = mag.get_total_readings();
-                (latest, total)
-            })) {
-                Ok((r, t)) => (r, t),
-                Err(_) => {
-                    // If accessing magnetometer panics, treat as no reading
-                    (None, 0)
+                // Update last_reading with the most recent reading from the batch
+                if let Some(latest) = batch.last() {
+                    self.last_reading = Some(*latest);
                 }
-            }
-        } else {
-            (None, 0)
-        };
+                // Count readings for rate calculation
+                self.readings_since_last_calc += batch.len() as u64;
+            }));
+        }
 
-        // Calculate magnitude if we have a reading
-        let magnitude = latest_reading.map(|reading| reading.magnitude());
+        // Calculate readings per second (update every second)
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_rate_calc_time);
+        if elapsed >= Duration::from_secs(1) {
+            self.readings_per_second = self.readings_since_last_calc as f64 / elapsed.as_secs_f64();
+            self.readings_since_last_calc = 0;
+            self.last_rate_calc_time = now;
+        }
 
-        // Update reading text
-        let reading_text_str = if let Some(mag) = magnitude {
-            format!("{:.2}uT", mag)
+        // Get total readings
+        let total_readings = self.magnetometer.as_ref()
+            .map(|m| m.get_total_readings())
+            .unwrap_or(0);
+
+        // Update magnitude text (4 decimals)
+        if let Some(reading) = self.last_reading {
+            let magnitude = reading.magnitude();
+            self.magnitude_text.set_text(format!("{:.4}uT", magnitude));
+            
+            // Update coordinates text (X, Y, Z on same line, 1 decimal each)
+            self.coordinates_text.set_text(format!(
+                "X: {:.1}, Y: {:.1}, Z: {:.1}",
+                reading.x, reading.y, reading.z
+            ));
         } else {
-            "No reading".to_string()
-        };
-        self.reading_text.set_text(reading_text_str);
-        self.reading_text.tick(width as f32, height as f32);
+            self.magnitude_text.set_text("No reading".to_string());
+            self.coordinates_text.set_text("X: --, Y: --, Z: --".to_string());
+        }
+        self.magnitude_text.tick(width as f32, height as f32);
+        self.coordinates_text.tick(width as f32, height as f32);
 
         // Update count text
         let count_text_str = format!("{} readings", total_readings);
         self.count_text.set_text(count_text_str);
         self.count_text.tick(width as f32, height as f32);
 
-        // Calculate positions for centering
-        // Use advance_width (not bitmap width) for accurate text width calculation
-        let reading_text_width = if let Some(last_char) = self.reading_text.characters.last() {
+        // Update rate text
+        let rate_text_str = format!("{:.1} readings per second", self.readings_per_second);
+        self.rate_text.set_text(rate_text_str);
+        self.rate_text.tick(width as f32, height as f32);
+
+        // Calculate positions for centering - vertically centered layout
+        let center_y = height as f32 / 2.0;
+        let line_spacing = 50.0;
+        
+        // Magnitude row (top, 4 decimals)
+        let magnitude_text_width = if let Some(last_char) = self.magnitude_text.characters.last() {
             last_char.x + last_char.metrics.advance_width
         } else {
             0.0
         };
-        let reading_x = (width as f32 - reading_text_width) / 2.0;
-        let reading_y = height as f32 / 2.0 - 60.0;
-
+        let magnitude_x = (width as f32 - magnitude_text_width) / 2.0;
+        let magnitude_y = center_y - line_spacing * 1.5;
+        
+        // Coordinates row (X, Y, Z on same line, 1 decimal each)
+        let coordinates_text_width = if let Some(last_char) = self.coordinates_text.characters.last() {
+            last_char.x + last_char.metrics.advance_width
+        } else {
+            0.0
+        };
+        let coordinates_x = (width as f32 - coordinates_text_width) / 2.0;
+        let coordinates_y = center_y;
+        
+        // Count row
         let count_text_width = if let Some(last_char) = self.count_text.characters.last() {
             last_char.x + last_char.metrics.advance_width
         } else {
             0.0
         };
         let count_x = (width as f32 - count_text_width) / 2.0;
-        let count_y = height as f32 / 2.0 + 80.0;
-
-        // Draw reading text
-        self.draw_text_geometric(buffer, width, height, &self.reading_text, reading_x, reading_y);
+        let count_y = center_y + line_spacing;
         
-        // Draw count text
+        // Rate row
+        let rate_text_width = if let Some(last_char) = self.rate_text.characters.last() {
+            last_char.x + last_char.metrics.advance_width
+        } else {
+            0.0
+        };
+        let rate_x = (width as f32 - rate_text_width) / 2.0;
+        let rate_y = center_y + line_spacing * 1.5;
+
+        // Draw all text
+        self.draw_text_geometric(buffer, width, height, &self.magnitude_text, magnitude_x, magnitude_y);
+        self.draw_text_geometric(buffer, width, height, &self.coordinates_text, coordinates_x, coordinates_y);
         self.draw_text_geometric(buffer, width, height, &self.count_text, count_x, count_y);
+        self.draw_text_geometric(buffer, width, height, &self.rate_text, rate_x, rate_y);
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
