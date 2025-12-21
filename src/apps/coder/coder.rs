@@ -3,6 +3,8 @@ use crate::apps::text::geometric::GeometricText;
 use crate::apps::coder::button::Button;
 use fontdue::{Font, FontSettings};
 use std::collections::HashMap;
+
+#[cfg(feature = "python")]
 use rustpython_vm::Interpreter;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -15,6 +17,7 @@ pub struct CoderApp {
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
     pub cursor_position: usize, // Character index in the text
+    #[cfg(feature = "python")]
     pub interpreter: Interpreter,
     pub run_button: Button,
 }
@@ -28,6 +31,7 @@ impl CoderApp {
         let text_engine = GeometricText::new(font, 24.0);
 
         // Initialize RustPython interpreter
+        #[cfg(feature = "python")]
         let interpreter = Interpreter::with_init(Default::default(), |_vm| {
             // Standard library is initialized by default
         });
@@ -41,6 +45,7 @@ impl CoderApp {
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
             cursor_position: 0,
+            #[cfg(feature = "python")]
             interpreter,
             run_button,
         }
@@ -111,6 +116,7 @@ impl CoderApp {
         }
     }
 
+    #[cfg(feature = "python")]
     fn execute_python_code(&mut self, code: &str) {
         println!("\n=== Executing Python Code ===");
         println!("{}", code);
@@ -130,6 +136,11 @@ impl CoderApp {
                 println!("--- Execution Failed ---\n");
             }
         }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn execute_python_code(&mut self, _code: &str) {
+        println!("\n=== Python execution not available (python feature disabled) ===\n");
     }
 
 }
