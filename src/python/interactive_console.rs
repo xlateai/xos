@@ -25,14 +25,46 @@ pub fn run_python_file(file_path: &PathBuf) {
     // Execute the code
     let result = interpreter.enter(|vm| {
         let scope = vm.new_scope_with_builtins();
-        vm.run_code_string(scope, &code, file_path.to_string_lossy().to_string())
+        let exec_result = vm.run_code_string(scope, &code, file_path.to_string_lossy().to_string());
+        
+        // Extract error message from exception if there was one
+        let error_msg = if let Err(ref py_exc) = exec_result {
+            // Get exception class name
+            let class_name = py_exc.class().name().to_string();
+            
+            // Try to get the exception message by calling __str__
+            let msg_result = vm.call_method(py_exc.as_object(), "__str__", ())
+                .ok()
+                .and_then(|result| {
+                    result.str(vm).ok().map(|s| s.to_string())
+                });
+            
+            // Build error message
+            if let Some(msg) = msg_result {
+                if msg.trim().is_empty() {
+                    Some(class_name)
+                } else {
+                    Some(format!("{}: {}", class_name, msg))
+                }
+            } else {
+                Some(class_name)
+            }
+        } else {
+            None
+        };
+        
+        (exec_result, error_msg)
     });
     
     match result {
-        Ok(_) => {
+        (Ok(_), _) => {
             // Execution successful
         }
-        Err(e) => {
+        (Err(_), Some(error_msg)) => {
+            eprintln!("{}", error_msg);
+            std::process::exit(1);
+        }
+        (Err(e), None) => {
             eprintln!("Python Error: {:?}", e);
             std::process::exit(1);
         }
