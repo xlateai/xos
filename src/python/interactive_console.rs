@@ -16,8 +16,11 @@ pub fn run_python_file(file_path: &PathBuf) {
         }
     };
     
-    // Create interpreter
-    let interpreter = Interpreter::with_init(Default::default(), |_vm| {});
+    // Create interpreter with xos module
+    let interpreter = Interpreter::with_init(Default::default(), |vm| {
+        // Register the xos module
+        vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
+    });
     
     // Execute the code
     let result = interpreter.enter(|vm| {
@@ -42,8 +45,11 @@ pub fn run_python_interactive() {
     println!("🐍 Python Interactive Console");
     println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
     
-    // Create interpreter
-    let interpreter = Interpreter::with_init(Default::default(), |_vm| {});
+    // Create interpreter with xos module
+    let interpreter = Interpreter::with_init(Default::default(), |vm| {
+        // Register the xos module
+        vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
+    });
     
     // Create persistent scope
     use std::sync::{Arc, Mutex};
