@@ -55,8 +55,8 @@ class BallGame(xos.Application):
     def setup(self):
         """Initialize the game"""
         # Get frame buffer info from self.frame
-        self.width = self.frame["width"]
-        self.height = self.frame["height"]
+        self.width = self.frame.get_width()
+        self.height = self.frame.get_height()
         
         # Create initial balls
         for _ in range(512):

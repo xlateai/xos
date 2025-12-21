@@ -80,24 +80,41 @@ pub fn create_py_array(vm: &VirtualMachine, frame: &mut FrameState) -> PyResult 
 }
 
 pub fn create_py_frame_state(vm: &VirtualMachine, frame: &mut FrameState) -> PyResult {
-    let dict = vm.ctx.new_dict();
-    
     let shape = frame.shape();
-    dict.set_item("width", vm.ctx.new_int(shape[1]).into(), vm)?;
-    dict.set_item("height", vm.ctx.new_int(shape[0]).into(), vm)?;
+    let buffer = frame.buffer_mut();
     
-    // Create the array object
-    let array = create_py_array(vm, frame)?;
-    dict.set_item("array", array, vm)?;
+    // Create array dict
+    let array_dict = vm.ctx.new_dict();
+    array_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
+    array_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     
-    Ok(dict.into())
+    // Create a Python list that directly wraps the buffer
+    let py_buffer: Vec<PyObjectRef> = buffer.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
+    array_dict.set_item("data", vm.ctx.new_list(py_buffer).into(), vm)?;
+    
+    array_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
+    array_dict.set_item("size", vm.ctx.new_int(buffer.len()).into(), vm)?;
+    
+    // Create frame dict
+    let frame_dict = vm.ctx.new_dict();
+    frame_dict.set_item("width", vm.ctx.new_int(shape[1]).into(), vm)?;
+    frame_dict.set_item("height", vm.ctx.new_int(shape[0]).into(), vm)?;
+    frame_dict.set_item("array", array_dict.into(), vm)?;
+    
+    Ok(frame_dict.into())
 }
 
 /// Update the frame object with current engine state
 pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame: &mut FrameState) -> PyResult<()> {
-    // Get the array from the frame object
-    let array_obj = vm.get_attribute_opt(frame_obj.clone(), "array")?
-        .ok_or_else(|| vm.new_attribute_error("array not found".to_string()))?;
+    // frame_obj is a dict, so we use dict methods
+    let frame_dict = frame_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("frame is not a dict".to_string()))?;
+    
+    // Get the array from the frame
+    let array_obj = frame_dict.get_item("array", vm)?;
+    
+    let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("array is not a dict".to_string()))?;
     
     // Update the array's data
     let buffer = frame.buffer_mut();
@@ -105,8 +122,7 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     let new_list = vm.ctx.new_list(py_buffer);
     
     // Update the data field
-    let array_dict = array_obj;
-    array_dict.set_attr("data", new_list, vm)?;
+    array_dict.set_item("data", new_list.into(), vm)?;
     
     Ok(())
 }

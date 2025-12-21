@@ -61,9 +61,14 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         eprintln!("Failed to create Application class: {:?}", e);
     }
     
-    // Get the Application class from the scope and add it to the module
+    // Get the Application class and _FrameWrapper from the scope and add them to the module
     if let Ok(app_class) = scope.globals.get_item("Application", vm) {
         module.set_attr("Application", app_class, vm).unwrap();
+    }
+    if let Ok(frame_wrapper) = scope.globals.get_item("_FrameWrapper", vm) {
+        module.set_attr("_FrameWrapper", frame_wrapper.clone(), vm).unwrap();
+        // Also add to builtins so pyapp can access it
+        let _ = vm.builtins.set_attr("_FrameWrapper", frame_wrapper, vm);
     }
     
     module

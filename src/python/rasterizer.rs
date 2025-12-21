@@ -22,13 +22,18 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let radii_list = &args_vec[2];
     let color_tuple = &args_vec[3];
     
+    // frame_dict is a Python dict, so we use dict methods
+    let frame_py_dict = frame_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("frame must be a dict".to_string()))?;
+    
     // Extract array from frame
-    let array_obj = vm.get_attribute_opt(frame_dict.clone(), "array")?
-        .ok_or_else(|| vm.new_type_error("frame.array not found".to_string()))?;
+    let array_obj = frame_py_dict.get_item("array", vm)?;
+    
+    let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("array must be a dict".to_string()))?;
     
     // Extract width and height from array shape
-    let shape_obj = vm.get_attribute_opt(array_obj.clone(), "shape")?
-        .ok_or_else(|| vm.new_type_error("array.shape not found".to_string()))?;
+    let shape_obj = array_dict.get_item("shape", vm)?;
     let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
         .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
     let shape_vec = shape_tuple.as_slice();
@@ -40,8 +45,7 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let width: i32 = shape_vec[1].clone().try_into_value(vm)?;
     
     // Get the buffer (data) from the array
-    let buffer = vm.get_attribute_opt(array_obj.clone(), "data")?
-        .ok_or_else(|| vm.new_type_error("array.data not found".to_string()))?;
+    let buffer = array_dict.get_item("data", vm)?;
     
     // Parse color tuple (r, g, b, a)
     let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()

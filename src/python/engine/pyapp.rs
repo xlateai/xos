@@ -3,6 +3,23 @@ use rustpython_vm::{Interpreter, PyObjectRef, AsObject};
 use crate::engine::{Application, EngineState};
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
+class _FrameWrapper:
+    """Wrapper to make frame dict behave like an object with methods"""
+    def __init__(self, data):
+        self._data = data
+    
+    def get_width(self):
+        return self._data['width']
+    
+    def get_height(self):
+        return self._data['height']
+    
+    def __getitem__(self, key):
+        return self._data[key]
+    
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
 class Application:
     """Base class for xos applications. Extend this class and implement setup() and tick()."""
     
@@ -61,12 +78,24 @@ impl Application for PyApp {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 // Create Python frame object from engine state
-                let frame_obj = crate::python::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
+                let frame_dict = crate::python::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
                     .map_err(|e| format!("Failed to create frame object: {:?}", e))?;
                 
-                // Set self.frame = frame_obj
-                app_instance.set_attr("frame", frame_obj, vm)
-                    .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
+                // Wrap it in _FrameWrapper
+                if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
+                    if let Ok(frame_obj) = vm.invoke(&wrapper_class, (frame_dict.clone(),)) {
+                        app_instance.set_attr("frame", frame_obj, vm)
+                            .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
+                    } else {
+                        // Fallback: just use the dict directly
+                        app_instance.set_attr("frame", frame_dict, vm)
+                            .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
+                    }
+                } else {
+                    // Fallback: just use the dict directly
+                    app_instance.set_attr("frame", frame_dict, vm)
+                        .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
+                }
                 
                 // Create mouse object
                 let mouse_dict = vm.ctx.new_dict();
