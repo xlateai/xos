@@ -1,36 +1,22 @@
-use std::sync::{Arc, Mutex};
+use ringbuf::{HeapRb, Producer, Consumer};
+use std::sync::{Mutex, Arc};
+use crate::sensors::MagnetometerReading;
 
-/// Magnetometer reading buffer
-#[derive(Clone)]
-struct MagnetometerBuffer {
-    /// Current reading (x, y, z) in microtesla (μT)
-    current_reading: Arc<Mutex<Option<(f64, f64, f64)>>>,
-    /// Total number of readings received
-    total_readings: Arc<Mutex<u64>>,
+/// Thread-safe wrapper for Producer (needed for FFI callbacks)
+struct ProducerWrapper {
+    producer: Mutex<Producer<MagnetometerReading, Arc<HeapRb<MagnetometerReading>>>>,
 }
 
-impl MagnetometerBuffer {
-    fn new() -> Self {
-        Self {
-            current_reading: Arc::new(Mutex::new(None)),
-            total_readings: Arc::new(Mutex::new(0)),
-        }
-    }
-
-    fn push_reading(&self, x: f64, y: f64, z: f64) {
-        *self.current_reading.lock().unwrap() = Some((x, y, z));
-        *self.total_readings.lock().unwrap() += 1;
-    }
-}
-
-/// iOS magnetometer sensor
+/// iOS magnetometer sensor with ring buffer for streaming data
 pub struct Magnetometer {
     /// The magnetometer ID for iOS FFI
     magnetometer_id: u32,
-    /// The buffer storing readings
-    buffer: MagnetometerBuffer,
-    /// Pointer to the buffer stored in heap for callback (must be freed on drop)
-    buffer_ptr: *mut std::ffi::c_void,
+    /// Consumer for reading batches from the ring buffer
+    consumer: Consumer<MagnetometerReading, Arc<HeapRb<MagnetometerReading>>>,
+    /// Pointer to the producer wrapper stored in heap for callback (must be freed on drop)
+    producer_wrapper_ptr: *mut std::ffi::c_void,
+    /// Total number of readings received (for display)
+    total_readings: u64,
 }
 
 impl Magnetometer {
@@ -38,43 +24,53 @@ impl Magnetometer {
     pub fn new() -> Result<Self, String> {
         #[cfg(target_os = "ios")]
         {
-            // Initialize magnetometer on iOS side
+            // Initialize magnetometer on iOS side with error handling
             let magnetometer_id = unsafe {
                 xos_sensors_magnetometer_init()
             };
 
             if magnetometer_id == u32::MAX {
-                return Err("Failed to initialize magnetometer".to_string());
+                return Err("Failed to initialize magnetometer (iOS returned error)".to_string());
             }
 
-            // Create buffer
-            let buffer = MagnetometerBuffer::new();
+            // Create ring buffer with capacity for ~10 seconds at 10Hz (100 samples)
+            // This gives plenty of headroom for batched reads
+            let rb = HeapRb::<MagnetometerReading>::new(1024);
+            let (producer, consumer) = rb.split();
 
-            // Create the magnetometer first
+            // Wrap producer in Mutex for thread-safe FFI access
+            let producer_wrapper = Box::new(ProducerWrapper {
+                producer: Mutex::new(producer),
+            });
+            let producer_wrapper_ptr = Box::into_raw(producer_wrapper) as *mut std::ffi::c_void;
+
+            // Create the magnetometer
             let mut magnetometer = Self {
                 magnetometer_id,
-                buffer,
-                buffer_ptr: std::ptr::null_mut(),
+                consumer,
+                producer_wrapper_ptr,
+                total_readings: 0,
             };
-
-            // Register the buffer callback with iOS (pass pointer to buffer)
-            let buffer_ptr = &magnetometer.buffer as *const MagnetometerBuffer as *mut std::ffi::c_void;
-            magnetometer.buffer_ptr = buffer_ptr;
+            
             unsafe {
                 xos_sensors_magnetometer_set_callback(
                     magnetometer_id,
                     Some(magnetometer_callback),
-                    buffer_ptr,
+                    producer_wrapper_ptr,
                 );
             }
 
-            // Start magnetometer
+            // Start magnetometer with error handling
             let result = unsafe { xos_sensors_magnetometer_start(magnetometer_id) };
             if result != 0 {
+                // Clean up on failure
                 unsafe {
+                    xos_sensors_magnetometer_set_callback(magnetometer_id, None, std::ptr::null_mut());
                     xos_sensors_magnetometer_destroy(magnetometer_id);
+                    // Recover the producer wrapper box to avoid leak
+                    let _ = Box::from_raw(producer_wrapper_ptr as *mut ProducerWrapper);
                 }
-                return Err("Failed to start magnetometer".to_string());
+                return Err(format!("Failed to start magnetometer (error code: {})", result));
             }
 
             Ok(magnetometer)
@@ -86,14 +82,32 @@ impl Magnetometer {
         }
     }
 
-    /// Get the current magnetometer reading in microtesla (μT)
-    pub fn get_reading(&self) -> Option<(f64, f64, f64)> {
-        *self.buffer.current_reading.lock().unwrap()
+    /// Drain all readings since last call (batch read)
+    /// Returns a vector of all readings accumulated since the last drain
+    pub fn drain_readings(&mut self) -> Vec<MagnetometerReading> {
+        let mut batch = Vec::new();
+        while let Some(reading) = self.consumer.pop() {
+            batch.push(reading);
+            self.total_readings += 1;
+        }
+        batch
+    }
+
+    /// Get the latest reading (most recent, if any)
+    /// This peeks at the most recent reading without draining
+    pub fn get_latest_reading(&mut self) -> Option<MagnetometerReading> {
+        // Drain all but keep the last one
+        let mut last = None;
+        while let Some(reading) = self.consumer.pop() {
+            last = Some(reading);
+            self.total_readings += 1;
+        }
+        last
     }
 
     /// Get the total number of readings received
     pub fn get_total_readings(&self) -> u64 {
-        *self.buffer.total_readings.lock().unwrap()
+        self.total_readings
     }
 }
 
@@ -105,6 +119,11 @@ impl Drop for Magnetometer {
                 // Clear callback before destroying
                 xos_sensors_magnetometer_set_callback(self.magnetometer_id, None, std::ptr::null_mut());
                 xos_sensors_magnetometer_destroy(self.magnetometer_id);
+                
+                // Recover the producer wrapper box to avoid leak
+                if !self.producer_wrapper_ptr.is_null() {
+                    let _ = Box::from_raw(self.producer_wrapper_ptr as *mut ProducerWrapper);
+                }
             }
         }
     }
@@ -116,8 +135,18 @@ extern "C" fn magnetometer_callback(x: f64, y: f64, z: f64, user_data: *mut std:
         return;
     }
 
-    let buffer = unsafe { &*(user_data as *const MagnetometerBuffer) };
-    buffer.push_reading(x, y, z);
+    // Wrap in catch_unwind to prevent Swift crashes from propagating
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let wrapper = unsafe { &*(user_data as *const ProducerWrapper) };
+        let reading = MagnetometerReading { x, y, z };
+        
+        // Lock producer and push to ring buffer (non-blocking, may fail if full)
+        // If buffer is full, we drop the sample (better than blocking)
+        if let Ok(mut producer) = wrapper.producer.try_lock() {
+            let _ = producer.push(reading);
+        }
+        // If lock fails, we drop the sample (callback might be called from different thread)
+    }));
 }
 
 // FFI declarations for iOS magnetometer functions
@@ -135,4 +164,3 @@ extern "C" {
 
     fn xos_sensors_magnetometer_destroy(magnetometer_id: u32);
 }
-

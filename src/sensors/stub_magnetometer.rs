@@ -1,3 +1,5 @@
+use crate::sensors::MagnetometerReading;
+
 /// Stub magnetometer implementation for non-iOS platforms
 pub struct Magnetometer {
     // Empty struct for non-iOS platforms
@@ -8,12 +10,18 @@ impl Magnetometer {
         Err("Magnetometer only available on iOS devices".to_string())
     }
 
-    pub fn get_reading(&self) -> Option<(f64, f64, f64)> {
+    /// Drain all readings since last call (batch read)
+    pub fn drain_readings(&mut self) -> Vec<MagnetometerReading> {
+        Vec::new()
+    }
+
+    /// Get the latest reading (most recent, if any)
+    pub fn get_latest_reading(&mut self) -> Option<MagnetometerReading> {
         None
     }
 
+    /// Get the total number of readings received
     pub fn get_total_readings(&self) -> u64 {
         0
     }
 }
-

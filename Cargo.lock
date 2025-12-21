@@ -3746,6 +3746,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "robust"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6061,6 +6070,7 @@ dependencies = [
  "rand 0.9.2",
  "rand_pcg",
  "rfd",
+ "ringbuf",
  "rodio",
  "rustpython-vm",
  "tiny_http",

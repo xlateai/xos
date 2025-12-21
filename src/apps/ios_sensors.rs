@@ -52,26 +52,31 @@ impl Application for IosSensorsApp {
 
         #[cfg(target_os = "ios")]
         {
-            // Temporarily disable magnetometer to debug black screen issue
-            crate::print("⚠️ Magnetometer initialization disabled for debugging");
-            self.magnetometer = None;
-            Ok(())
-            
-            /* Original code - disabled temporarily
             // Try to initialize magnetometer, but don't fail if it doesn't work
             // The app will just show "No reading" instead
-            match Magnetometer::new() {
-                Ok(magnetometer) => {
+            crate::print("Attempting to initialize magnetometer...");
+            
+            // Wrap in a catch-all to prevent any panics from crashing the app
+            let magnetometer_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Magnetometer::new()
+            }));
+            
+            match magnetometer_result {
+                Ok(Ok(magnetometer)) => {
                     crate::print("✅ Magnetometer initialized successfully");
                     self.magnetometer = Some(magnetometer);
                 }
-                Err(e) => {
-                    crate::print(&format!("⚠️ Magnetometer not available: {}. App will continue without sensor data.", e));
+                Ok(Err(e)) => {
+                    crate::print(&format!("⚠️ Magnetometer initialization failed: {}. App will continue without sensor data.", e));
+                    self.magnetometer = None;
+                }
+                Err(_) => {
+                    crate::print("⚠️ Magnetometer initialization panicked. App will continue without sensor data.");
                     self.magnetometer = None;
                 }
             }
+            
             Ok(())
-            */
         }
     }
 
@@ -89,18 +94,27 @@ impl Application for IosSensorsApp {
             pixel[3] = 255;
         }
 
-        // Get magnetometer reading
-        let reading = self.magnetometer.as_ref()
-            .and_then(|m| m.get_reading());
-        
-        let total_readings = self.magnetometer.as_ref()
-            .map(|m| m.get_total_readings())
-            .unwrap_or(0);
+        // Drain all readings since last tick (batch read)
+        let (latest_reading, total_readings) = if let Some(mag) = &mut self.magnetometer {
+            // Wrap in catch_unwind in case drain panics
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let batch = mag.drain_readings();
+                let latest = batch.last().copied();
+                let total = mag.get_total_readings();
+                (latest, total)
+            })) {
+                Ok((r, t)) => (r, t),
+                Err(_) => {
+                    // If accessing magnetometer panics, treat as no reading
+                    (None, 0)
+                }
+            }
+        } else {
+            (None, 0)
+        };
 
         // Calculate magnitude if we have a reading
-        let magnitude = reading.map(|(x, y, z)| {
-            (x * x + y * y + z * z).sqrt()
-        });
+        let magnitude = latest_reading.map(|reading| reading.magnitude());
 
         // Update reading text
         let reading_text_str = if let Some(mag) = magnitude {

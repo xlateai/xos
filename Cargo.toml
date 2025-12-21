@@ -23,6 +23,7 @@ once_cell = "1.19"
 fontdue = "0.9.3"
 delaunator = "1.0"
 rustpython-vm = "0.3.0"
+ringbuf = "0.3"
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies
