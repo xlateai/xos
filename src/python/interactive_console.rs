@@ -1,5 +1,5 @@
 #[cfg(feature = "python")]
-use rustpython_vm::Interpreter;
+use rustpython_vm::{Interpreter, AsObject};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::fs;
@@ -135,6 +135,12 @@ def clear_output():
 
 # Store last exception info for extraction
 _last_exception_info = None
+
+def get_last_exception():
+    global _last_exception_info
+    msg = _last_exception_info
+    _last_exception_info = None
+    return msg if msg is not None else ""
 "#;
     
     // Create and initialize persistent scope once
@@ -226,11 +232,11 @@ _last_exception_info = None
                         }
                     };
                     
-                    // Clear previous output
-                    let _ = vm.run_code_string(scope.clone(), "clear_output()", "<clear>".to_string());
+                    // Clear previous output and exception info
+                    let _ = vm.run_code_string(scope.clone(), "clear_output(); _last_exception_info = None", "<clear>".to_string());
                     
                     // Wrap all code execution in proper error handling to get Python-style error messages
-                    // We'll format the exception and store it before re-raising
+                    // We'll format the exception and store it instead of re-raising
                     let wrapped_code = if is_multiline {
                         // For multi-line code, use compile + exec with error handling
                         let code_escaped = code_to_try
@@ -239,29 +245,26 @@ _last_exception_info = None
                             .replace('\n', r"\n");
                         format!(
                             r#"
-import traceback
-import sys
 try:
     code_source = "{}"
     code_obj = compile(code_source, '<stdin>', 'exec')
     exec(code_obj)
+    # Success - clear exception info
+    global _last_exception_info
+    _last_exception_info = None
 except SyntaxError as e:
     # Check if it's an incomplete statement
     error_msg = str(e)
     if 'EOF' in error_msg or 'unexpected EOF' in error_msg or 'incomplete' in error_msg.lower():
         # Re-raise incomplete statements so we can handle continuation
         raise
-    # Format and print exception before re-raising
-    exc_info = ''.join(traceback.format_exception_only(type(e), e))
-    sys.stderr.write(exc_info)
-    sys.stderr.flush()
-    raise
+    # Store exception info instead of re-raising
+    global _last_exception_info
+    _last_exception_info = ''.join(traceback.format_exception_only(type(e), e))
 except Exception as e:
-    # Format and print exception before re-raising
-    exc_info = ''.join(traceback.format_exception_only(type(e), e))
-    sys.stderr.write(exc_info)
-    sys.stderr.flush()
-    raise
+    # Store exception info instead of re-raising
+    global _last_exception_info
+    _last_exception_info = ''.join(traceback.format_exception_only(type(e), e))
 "#,
                             code_escaped
                         )
@@ -277,39 +280,33 @@ try:
     __result = eval("{}")
     if __result is not None:
         print(repr(__result))
+    # Success - clear exception info
+    global _last_exception_info
+    _last_exception_info = None
 except (NameError, SyntaxError):
     # If eval fails, try as statement
     try:
         exec("{}")
+        # Success - clear exception info
+        global _last_exception_info
+        _last_exception_info = None
     except SyntaxError as e2:
         # Check if it's an incomplete statement
         error_msg = str(e2)
         if 'EOF' in error_msg or 'unexpected EOF' in error_msg or 'incomplete' in error_msg.lower():
             # Re-raise incomplete statements so we can handle continuation
             raise
-        # Format and print exception
-        import traceback
-        import sys
-        exc_info = ''.join(traceback.format_exception_only(type(e2), e2))
-        sys.stderr.write(exc_info)
-        sys.stderr.flush()
-        raise
+        # Store exception info instead of re-raising
+        global _last_exception_info
+        _last_exception_info = ''.join(traceback.format_exception_only(type(e2), e2))
     except Exception as e2:
-        # Format and print exception
-        import traceback
-        import sys
-        exc_info = ''.join(traceback.format_exception_only(type(e2), e2))
-        sys.stderr.write(exc_info)
-        sys.stderr.flush()
-        raise
+        # Store exception info instead of re-raising
+        global _last_exception_info
+        _last_exception_info = ''.join(traceback.format_exception_only(type(e2), e2))
 except Exception as e:
-    # Other exceptions from eval - format and print
-    import traceback
-    import sys
-    exc_info = ''.join(traceback.format_exception_only(type(e), e))
-    sys.stderr.write(exc_info)
-    sys.stderr.flush()
-    raise
+    # Store exception info instead of re-raising
+    global _last_exception_info
+    _last_exception_info = ''.join(traceback.format_exception_only(type(e), e))
 "#,
                             code_escaped,
                             code_escaped
@@ -319,8 +316,35 @@ except Exception as e:
                     // Execute the wrapped code
                     let exec_result = vm.run_code_string(scope.clone(), &wrapped_code, "<stdin>".to_string());
                     
-                    // Get captured stdout output and print it
-                    let output_code = r#"
+                    // Try to extract Python exception message directly from the error
+                    let python_error_msg = if let Err(ref py_exc) = exec_result {
+                        // Get exception class name
+                        let class_name = py_exc.class().name().to_string();
+                        
+                        // Try to call str() on the exception via Python
+                        let msg_result = vm.call_method(py_exc.as_object(), "__str__", ())
+                            .ok()
+                            .and_then(|result| {
+                                result.str(vm).ok().map(|s| s.to_string())
+                            });
+                        
+                        // Build error message
+                        if let Some(msg) = msg_result {
+                            if msg.trim().is_empty() {
+                                Some(class_name)
+                            } else {
+                                Some(format!("{}: {}", class_name, msg))
+                            }
+                        } else {
+                            Some(class_name)
+                        }
+                    } else {
+                        None
+                    };
+                    
+                    // Get captured stdout output and print it (only if execution succeeded)
+                    if exec_result.is_ok() {
+                        let output_code = r#"
 try:
     output = get_output()
     if output:
@@ -328,11 +352,11 @@ try:
 except:
     pass
 "#;
-                    let _ = vm.run_code_string(scope.clone(), output_code, "<get_output>".to_string());
+                        let _ = vm.run_code_string(scope.clone(), output_code, "<get_output>".to_string());
+                    }
                     
-                    // Always try to get error output (will be empty if no error occurred)
-                    // This way we can access it even if exec_result is an error
-                    let error_output = vm.run_code_string(scope.clone(), "get_error()", "<get_error>".to_string())
+                    // Also try to get stored exception info
+                    let stored_exception = vm.run_code_string(scope.clone(), "get_last_exception()", "<get_exc>".to_string())
                         .ok()
                         .and_then(|obj| {
                             obj.str(vm).ok()
@@ -340,21 +364,40 @@ except:
                         })
                         .filter(|s| !s.trim().is_empty());
                     
-                    (exec_result, error_output)
+                    (exec_result, stored_exception.or(python_error_msg))
                 });
                 
+                // Check execution result first
                 match result {
                     Ok(_) => {
+                        // Execution succeeded - check if we have a stored exception (error was caught and stored)
+                        if let Some(ref py_error) = error_scope {
+                            if !py_error.trim().is_empty() {
+                                // Print the stored Python error
+                                eprint!("{}", py_error);
+                                continuation = false;
+                                code_buffer.clear();
+                                continue;
+                            }
+                        }
+                        // No stored exception, execution succeeded
                         continuation = false;
                         code_buffer.clear();
                     }
                     Err(e) => {
-                        // Use the error output we captured from the same scope
-                        let python_error = error_scope;
+                        // Execution failed - check if we have a stored exception first
+                        if let Some(ref py_error) = error_scope {
+                            if !py_error.trim().is_empty() {
+                                // Print the stored Python error
+                                eprint!("{}", py_error);
+                                continuation = false;
+                                code_buffer.clear();
+                                continue;
+                            }
+                        }
                         
+                        // No stored exception, check if it's an incomplete statement
                         let error_str = format!("{:?}", e);
-                        
-                        // Check if this is a continuation case (incomplete statement)
                         let is_incomplete = error_str.contains("unexpected EOF") || 
                                            error_str.contains("incomplete") ||
                                            error_str.contains("EOL") ||
@@ -366,25 +409,11 @@ except:
                         if is_incomplete {
                             continuation = true;
                         } else {
-                            // Print the Python error if we captured it
-                            if let Some(ref py_error) = python_error {
-                                if !py_error.trim().is_empty() {
-                                    eprint!("{}", py_error);
-                                } else {
-                                    // Fallback to extracting from Rust error string
-                                    if let Some(error_details) = extract_error_details(&error_str) {
-                                        eprintln!("{}", error_details);
-                                    } else {
-                                        eprintln!("Error: {:?}", e);
-                                    }
-                                }
+                            // Fallback: try to extract error details from Rust error string
+                            if let Some(error_details) = extract_error_details(&error_str) {
+                                eprintln!("{}", error_details);
                             } else {
-                                // Fallback to extracting from Rust error string
-                                if let Some(error_details) = extract_error_details(&error_str) {
-                                    eprintln!("{}", error_details);
-                                } else {
-                                    eprintln!("Error: {:?}", e);
-                                }
+                                eprintln!("Error: {:?}", e);
                             }
                             continuation = false;
                             code_buffer.clear();
