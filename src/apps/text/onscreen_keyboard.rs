@@ -784,7 +784,7 @@ impl Partition for OnScreenKeyboard {
                 KeyType::Backspace => "del".to_string(),
                 KeyType::Space => "Space".to_string(),
                 KeyType::Shift => "⇧".to_string(),
-                KeyType::Return => "return".to_string(),
+                KeyType::Return => "enter".to_string(),
                 KeyType::Symbol => match self.symbol_mode {
                     SymbolMode::Standard => "123".to_string(),
                     SymbolMode::Symbols1 => "ABC".to_string(),
