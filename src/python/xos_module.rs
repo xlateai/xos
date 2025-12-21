@@ -1,10 +1,10 @@
 #[cfg(feature = "python")]
-use rustpython_vm::{PyResult, VirtualMachine, PyObjectRef, builtins::PyModule, PyRef};
+use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 
 /// The xos.hello() function
-fn hello(_args: Vec<PyObjectRef>, _vm: &VirtualMachine) -> PyResult {
+fn hello(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     println!("hello from xos module");
-    Ok(_vm.ctx.none())
+    Ok(vm.ctx.none())
 }
 
 /// Create the xos module
