@@ -54,9 +54,9 @@ impl SafeRegionBoundingRectangle {
         // Normalized: top ~0.069, bottom ~0.960
         Self {
             x1: 0.0,
-            y1: 0.069,  // Top edge starts below Dynamic Island
+            y1: 0.08,  // Top edge starts below Dynamic Island
             x2: 1.0,
-            y2: 0.960,  // Bottom edge ends above home indicator
+            y2: 0.95,  // Bottom edge ends above home indicator
         }
     }
 }
