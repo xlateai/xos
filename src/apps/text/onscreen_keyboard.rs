@@ -12,6 +12,23 @@ const ROW1: &[char] = &['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
 const ROW2: &[char] = &['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
 const ROW3: &[char] = &['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 
+// Symbols1 layout
+const SYMBOL1_ROW1: &[char] = &['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+const SYMBOL1_ROW2: &[char] = &['-', '/', ':', ';', '(', ')', '$', '&', '@', '"'];
+const SYMBOL1_ROW3: &[char] = &['.', ',', '?', '!', '\''];
+
+// Symbols2 layout
+const SYMBOL2_ROW1: &[char] = &['[', ']', '{', '}', '#', '%', '^', '*', '+', '='];
+const SYMBOL2_ROW2: &[char] = &['_', '\\', '|', '~', '<', '>', '€', '£', '¥', '•'];
+const SYMBOL2_ROW3: &[char] = &['.', ',', '?', '!', '\''];
+
+#[derive(Clone, Copy, PartialEq)]
+enum SymbolMode {
+    Standard,
+    Symbols1,
+    Symbols2,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum KeyType {
     Char(char),
@@ -19,8 +36,8 @@ enum KeyType {
     Space,
     Shift,
     Return,
-    Dismiss,
-    Symbol,
+    Symbol,      // Left of spacebar: "123" (Standard) or "ABC" (Symbols1/Symbols2)
+    SymbolToggle, // Row 3: "#+=" (Symbols1) or "123" (Symbols2), toggles Symbols1 ↔ Symbols2
 }
 
 struct Key {
@@ -35,10 +52,10 @@ struct Key {
 pub struct OnScreenKeyboard {
     data: PartitionData,
     keys: Vec<Key>,
-    dismiss_button: Key, // Separate dismiss button at top right
     font: Font,
     minimized: bool,
     shift_pressed: bool,
+    symbol_mode: SymbolMode, // Standard, Symbols1, or Symbols2
     last_pressed_key: Option<KeyType>,
 }
 
@@ -53,17 +70,10 @@ impl OnScreenKeyboard {
         let mut keyboard = Self {
             data: PartitionData::new(0.0, 1.0, 0.70, 1.0, KEYBOARD_BG_COLOR),
             keys: Vec::new(),
-            dismiss_button: Key {
-                key_type: KeyType::Dismiss,
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                pressed: false,
-            },
             font,
             minimized: false,
             shift_pressed: false,
+            symbol_mode: SymbolMode::Standard,
             last_pressed_key: None,
         };
 
@@ -80,23 +90,6 @@ impl OnScreenKeyboard {
     }
 
     pub fn check_key_press(&mut self, mx: f32, my: f32, w: f32, h: f32) -> Option<char> {
-        // Check dismiss button first (top right, above green line)
-        let dismiss_height = 0.02; // 2% of keyboard height for dismiss button
-        let dismiss_width = 0.15; // 15% of keyboard width
-        let keyboard_right = self.data.right * w;
-        let keyboard_top = self.data.top * h;
-        let keyboard_height = (self.data.bottom - self.data.top) * h;
-        
-        let dismiss_x0 = keyboard_right - dismiss_width * w;
-        let dismiss_x1 = keyboard_right;
-        let dismiss_y0 = keyboard_top;
-        let dismiss_y1 = keyboard_top + dismiss_height * keyboard_height;
-        
-        if mx >= dismiss_x0 && mx <= dismiss_x1 && my >= dismiss_y0 && my <= dismiss_y1 {
-            self.toggle_minimize();
-            return None;
-        }
-        
         if self.minimized {
             return None;
         }
@@ -168,7 +161,8 @@ impl OnScreenKeyboard {
         
         match key_type {
             KeyType::Char(ch) => {
-                let output_char = if self.shift_pressed {
+                // Only apply shift to letters, not symbols
+                let output_char = if self.shift_pressed && self.symbol_mode == SymbolMode::Standard && ch.is_alphabetic() {
                     ch.to_uppercase().next().unwrap_or(ch)
                 } else {
                     ch
@@ -193,14 +187,29 @@ impl OnScreenKeyboard {
                 self.last_pressed_key = Some(key_type);
                 Some('\n')
             }
-            KeyType::Dismiss => {
-                self.toggle_minimize();
-                self.last_pressed_key = Some(key_type);
-                None // Dismiss doesn't output a character
-            }
             KeyType::Symbol => {
+                // Left of spacebar: toggle between Standard and Symbols1
+                self.symbol_mode = match self.symbol_mode {
+                    SymbolMode::Standard => SymbolMode::Symbols1,
+                    SymbolMode::Symbols1 => SymbolMode::Standard,
+                    SymbolMode::Symbols2 => SymbolMode::Standard,
+                };
+                // Relayout keys to show symbols/letters
+                self.layout_keys();
                 self.last_pressed_key = Some(key_type);
-                None // Symbol doesn't output a character yet
+                None // Symbol toggle doesn't output a character
+            }
+            KeyType::SymbolToggle => {
+                // Row 3: toggle between Symbols1 and Symbols2
+                self.symbol_mode = match self.symbol_mode {
+                    SymbolMode::Standard => SymbolMode::Standard, // Shouldn't happen
+                    SymbolMode::Symbols1 => SymbolMode::Symbols2,
+                    SymbolMode::Symbols2 => SymbolMode::Symbols1,
+                };
+                // Relayout keys to show symbols
+                self.layout_keys();
+                self.last_pressed_key = Some(key_type);
+                None // SymbolToggle doesn't output a character
             }
         }
     }
@@ -221,144 +230,326 @@ impl OnScreenKeyboard {
         // Use a reference size - actual sizing happens in draw_key based on screen dimensions
         // Store relative positions (0.0 to 1.0) that will be scaled to actual screen size
         let top_line_height = 0.01; // Thin green line at top (1% of keyboard height)
-        let dismiss_height = 0.02; // Dismiss button height (2% of keyboard height)
         let key_spacing_ratio = 0.0075; // 0.75% spacing between keys (50% of original)
-        let side_padding_ratio = 0.02; // 2% padding on sides
+        // No side padding - all rows span exactly 0.0 to 1.0
         
         // We have 4 rows: 3 rows of keys + 1 spacebar row
         let num_key_rows = 3.0;
         
         // Calculate relative positions (will be scaled in draw_key)
         // Store as 0.0-1.0 relative to keyboard area
-        // Start below dismiss button and green line
-        let mut key_y = top_line_height + dismiss_height;
-        let row_height = (1.0 - top_line_height - dismiss_height) / (num_key_rows + 1.0); // +1 for spacebar
+        // Start below green line
+        let mut key_y = top_line_height;
+        let row_height = (1.0 - top_line_height) / (num_key_rows + 1.0); // +1 for spacebar
         
-        // Uniform key width for all letter keys
-        // Row 1: 10 buttons (full width)
-        // Row 2: 9 buttons (full width)
-        // Row 3: Shift + 7 letters + Backspace
-        // Row 4: Symbol + Spacebar + Return
-        
-        // Calculate uniform key width for full-width rows
-        let uniform_key_width = (1.0 - side_padding_ratio * 2.0 - key_spacing_ratio * 9.0) / 10.0;
-        let shift_key_width = uniform_key_width * 1.2; // Shift is 1.2x (smaller than before)
-        let backspace_key_width = uniform_key_width * 1.3; // Backspace is smaller, says "del"
-        let symbol_key_width = uniform_key_width * 1.5; // Symbol button
-        let return_key_width = uniform_key_width * 1.5; // Return button
-        
-        // Row 1: 10 buttons (qwertyuiop) - full width, left-aligned
-        let mut x = side_padding_ratio;
-        for &ch in ROW1 {
-            self.keys.push(Key {
-                key_type: KeyType::Char(ch),
-                x,
-                y: key_y,
-                width: uniform_key_width,
-                height: row_height,
-                pressed: false,
-            });
-            x += uniform_key_width + key_spacing_ratio;
+        match self.symbol_mode {
+            SymbolMode::Standard => {
+                // Standard QWERTY layout
+                // Row 1: 10 buttons (qwertyuiop)
+                let row1_key_width = (1.0 - key_spacing_ratio * 9.0) / 10.0;
+                let mut x = 0.0;
+                for &ch in ROW1 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row1_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row1_key_width + key_spacing_ratio;
+                }
+                
+                // Row 2: 9 buttons (asdfghjkl)
+                key_y += row_height + key_spacing_ratio;
+                let row2_key_width = (1.0 - key_spacing_ratio * 8.0) / 9.0;
+                x = 0.0;
+                for &ch in ROW2 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row2_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row2_key_width + key_spacing_ratio;
+                }
+                
+                // Row 3: Shift + 7 letters + Backspace
+                key_y += row_height + key_spacing_ratio;
+                let shift_key_width = row2_key_width * 1.2;
+                let backspace_key_width = row2_key_width * 1.3;
+                let row3_char_width = (1.0 - shift_key_width - backspace_key_width - key_spacing_ratio * 8.0) / 7.0;
+                
+                x = 0.0;
+                self.keys.push(Key {
+                    key_type: KeyType::Shift,
+                    x,
+                    y: key_y,
+                    width: shift_key_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                x += shift_key_width + key_spacing_ratio;
+                
+                for &ch in ROW3 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row3_char_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row3_char_width + key_spacing_ratio;
+                }
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Backspace,
+                    x,
+                    y: key_y,
+                    width: backspace_key_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                
+                // Row 4: Symbol(123) + Space + Return
+                key_y += row_height + key_spacing_ratio;
+                let symbol_key_width = row2_key_width * 1.5;
+                let return_key_width = row2_key_width * 1.5;
+                let spacebar_width = 1.0 - symbol_key_width - return_key_width - key_spacing_ratio * 2.0;
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Symbol,
+                    x: 0.0,
+                    y: key_y,
+                    width: symbol_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Space,
+                    x: symbol_key_width + key_spacing_ratio,
+                    y: key_y,
+                    width: spacebar_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Return,
+                    x: symbol_key_width + key_spacing_ratio + spacebar_width + key_spacing_ratio,
+                    y: key_y,
+                    width: return_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+            }
+            SymbolMode::Symbols1 => {
+                // Symbols1 layout
+                // Row 1: 10 numbers (1234567890)
+                let row1_key_width = (1.0 - key_spacing_ratio * 9.0) / 10.0;
+                let mut x = 0.0;
+                for &ch in SYMBOL1_ROW1 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row1_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row1_key_width + key_spacing_ratio;
+                }
+                
+                // Row 2: 10 symbols (-/:;()$&@")
+                key_y += row_height + key_spacing_ratio;
+                let row2_key_width = (1.0 - key_spacing_ratio * 9.0) / 10.0;
+                x = 0.0;
+                for &ch in SYMBOL1_ROW2 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row2_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row2_key_width + key_spacing_ratio;
+                }
+                
+                // Row 3: SymbolToggle(#+=) + 5 symbols (.,?!') + Backspace
+                key_y += row_height + key_spacing_ratio;
+                let symbol_toggle_width = row2_key_width * 1.2; // Same size as shift
+                let backspace_key_width = row2_key_width * 1.3;
+                let row3_char_width = (1.0 - symbol_toggle_width - backspace_key_width - key_spacing_ratio * 6.0) / 5.0;
+                
+                x = 0.0;
+                self.keys.push(Key {
+                    key_type: KeyType::SymbolToggle,
+                    x,
+                    y: key_y,
+                    width: symbol_toggle_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                x += symbol_toggle_width + key_spacing_ratio;
+                
+                for &ch in SYMBOL1_ROW3 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row3_char_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row3_char_width + key_spacing_ratio;
+                }
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Backspace,
+                    x,
+                    y: key_y,
+                    width: backspace_key_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                
+                // Row 4: Symbol(ABC) + Space + Return
+                key_y += row_height + key_spacing_ratio;
+                let symbol_key_width = row2_key_width * 1.5;
+                let return_key_width = row2_key_width * 1.5;
+                let spacebar_width = 1.0 - symbol_key_width - return_key_width - key_spacing_ratio * 2.0;
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Symbol,
+                    x: 0.0,
+                    y: key_y,
+                    width: symbol_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Space,
+                    x: symbol_key_width + key_spacing_ratio,
+                    y: key_y,
+                    width: spacebar_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Return,
+                    x: symbol_key_width + key_spacing_ratio + spacebar_width + key_spacing_ratio,
+                    y: key_y,
+                    width: return_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+            }
+            SymbolMode::Symbols2 => {
+                // Symbols2 layout
+                // Row 1: 10 symbols ([]{}#%^*+=)
+                let row1_key_width = (1.0 - key_spacing_ratio * 9.0) / 10.0;
+                let mut x = 0.0;
+                for &ch in SYMBOL2_ROW1 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row1_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row1_key_width + key_spacing_ratio;
+                }
+                
+                // Row 2: 10 symbols (_\|~<>€£¥•)
+                key_y += row_height + key_spacing_ratio;
+                let row2_key_width = (1.0 - key_spacing_ratio * 9.0) / 10.0;
+                x = 0.0;
+                for &ch in SYMBOL2_ROW2 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row2_key_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row2_key_width + key_spacing_ratio;
+                }
+                
+                // Row 3: SymbolToggle(123) + 5 symbols (.,?!') + Backspace
+                key_y += row_height + key_spacing_ratio;
+                let symbol_toggle_width = row2_key_width * 1.2; // Same size as shift
+                let backspace_key_width = row2_key_width * 1.3;
+                let row3_char_width = (1.0 - symbol_toggle_width - backspace_key_width - key_spacing_ratio * 6.0) / 5.0;
+                
+                x = 0.0;
+                self.keys.push(Key {
+                    key_type: KeyType::SymbolToggle,
+                    x,
+                    y: key_y,
+                    width: symbol_toggle_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                x += symbol_toggle_width + key_spacing_ratio;
+                
+                for &ch in SYMBOL2_ROW3 {
+                    self.keys.push(Key {
+                        key_type: KeyType::Char(ch),
+                        x,
+                        y: key_y,
+                        width: row3_char_width,
+                        height: row_height,
+                        pressed: false,
+                    });
+                    x += row3_char_width + key_spacing_ratio;
+                }
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Backspace,
+                    x,
+                    y: key_y,
+                    width: backspace_key_width,
+                    height: row_height,
+                    pressed: false,
+                });
+                
+                // Row 4: Symbol(ABC) + Space + Return
+                key_y += row_height + key_spacing_ratio;
+                let symbol_key_width = row2_key_width * 1.5;
+                let return_key_width = row2_key_width * 1.5;
+                let spacebar_width = 1.0 - symbol_key_width - return_key_width - key_spacing_ratio * 2.0;
+                
+                self.keys.push(Key {
+                    key_type: KeyType::Symbol,
+                    x: 0.0,
+                    y: key_y,
+                    width: symbol_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Space,
+                    x: symbol_key_width + key_spacing_ratio,
+                    y: key_y,
+                    width: spacebar_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+                self.keys.push(Key {
+                    key_type: KeyType::Return,
+                    x: symbol_key_width + key_spacing_ratio + spacebar_width + key_spacing_ratio,
+                    y: key_y,
+                    width: return_key_width,
+                    height: 1.0 - key_y,
+                    pressed: false,
+                });
+            }
         }
-        
-        // Row 2: 9 buttons (asdfghjkl) - full width, left-aligned
-        key_y += row_height + key_spacing_ratio;
-        x = side_padding_ratio;
-        for &ch in ROW2 {
-            self.keys.push(Key {
-                key_type: KeyType::Char(ch),
-                x,
-                y: key_y,
-                width: uniform_key_width,
-                height: row_height,
-                pressed: false,
-            });
-            x += uniform_key_width + key_spacing_ratio;
-        }
-        
-        // Row 3: Shift + 7 letters + Backspace
-        key_y += row_height + key_spacing_ratio;
-        let row3_letters_width = uniform_key_width * 7.0 + key_spacing_ratio * 6.0;
-        let row3_total_width = shift_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio + backspace_key_width;
-        let row3_start_x = (1.0 - row3_total_width) / 2.0;
-        
-        // Shift on left (smaller)
-        self.keys.push(Key {
-            key_type: KeyType::Shift,
-            x: row3_start_x,
-            y: key_y,
-            width: shift_key_width,
-            height: row_height,
-            pressed: false,
-        });
-        
-        // 7 letters (zxcvbnm)
-        x = row3_start_x + shift_key_width + key_spacing_ratio;
-        for &ch in ROW3 {
-            self.keys.push(Key {
-                key_type: KeyType::Char(ch),
-                x,
-                y: key_y,
-                width: uniform_key_width,
-                height: row_height,
-                pressed: false,
-            });
-            x += uniform_key_width + key_spacing_ratio;
-        }
-        
-        // Backspace on right (smaller, says "del")
-        self.keys.push(Key {
-            key_type: KeyType::Backspace,
-            x: row3_start_x + shift_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio,
-            y: key_y,
-            width: backspace_key_width,
-            height: row_height,
-            pressed: false,
-        });
-        
-        // Row 4: Symbol + Spacebar + Return
-        key_y += row_height + key_spacing_ratio;
-        let spacebar_width = 1.0 - side_padding_ratio * 2.0 - symbol_key_width - return_key_width - key_spacing_ratio * 2.0;
-        
-        // Symbol on left
-        self.keys.push(Key {
-            key_type: KeyType::Symbol,
-            x: side_padding_ratio,
-            y: key_y,
-            width: symbol_key_width,
-            height: 1.0 - key_y, // Extends to bottom
-            pressed: false,
-        });
-        
-        // Spacebar in middle
-        self.keys.push(Key {
-            key_type: KeyType::Space,
-            x: side_padding_ratio + symbol_key_width + key_spacing_ratio,
-            y: key_y,
-            width: spacebar_width,
-            height: 1.0 - key_y, // Extends to bottom
-            pressed: false,
-        });
-        
-        // Return on right
-        self.keys.push(Key {
-            key_type: KeyType::Return,
-            x: side_padding_ratio + symbol_key_width + key_spacing_ratio + spacebar_width + key_spacing_ratio,
-            y: key_y,
-            width: return_key_width,
-            height: 1.0 - key_y, // Extends to bottom
-            pressed: false,
-        });
-        
-        // Set up dismiss button (top right, above green line)
-        self.dismiss_button = Key {
-            key_type: KeyType::Dismiss,
-            x: 1.0 - 0.15, // 15% from right
-            y: 0.0,
-            width: 0.15, // 15% width
-            height: dismiss_height,
-            pressed: false,
-        };
     }
 
     fn draw_rounded_rect(
@@ -469,7 +660,7 @@ impl OnScreenKeyboard {
         // Draw key label (centered) - scale font size with key size
         // Use the same approach as geometric.rs for accurate rendering
         let key_size = (key_w as f32).min(key_h as f32);
-        let font_size = (key_size * 0.4).max(20.0).min(48.0); // Scale between 20-48px
+        let font_size = (key_size * 0.36).max(18.0).min(43.2); // 10% smaller: 0.4 * 0.9 = 0.36, 20*0.9=18, 48*0.9=43.2
         let line_metrics = self.font.horizontal_line_metrics(font_size)
             .expect("Font missing horizontal metrics");
         
@@ -565,43 +756,8 @@ impl Partition for OnScreenKeyboard {
             }
         }
 
-        // Draw dismiss button first (top right, above green line)
-        let keyboard_width = x1 - x0;
-        let keyboard_height = y1 - y0;
-        let dismiss_height_px = (keyboard_height as f32 * 0.02).round() as i32;
-        let dismiss_width_px = (keyboard_width as f32 * 0.15).round() as i32;
-        let dismiss_x0 = x1 - dismiss_width_px;
-        let dismiss_y0 = y0;
-        
-        // Draw dismiss button background
-        for dy in 0..dismiss_height_px {
-            for dx in 0..dismiss_width_px {
-                let sx = dismiss_x0 + dx;
-                let sy = dismiss_y0 + dy;
-                if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
-                    let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
-                    buffer[idx + 0] = KEY_COLOR.0;
-                    buffer[idx + 1] = KEY_COLOR.1;
-                    buffer[idx + 2] = KEY_COLOR.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
-        }
-        
-        // Draw dismiss button label (using relative coordinates within keyboard partition)
-        let dismiss_label = "dismiss";
-        let dismiss_key = Key {
-            key_type: KeyType::Dismiss,
-            x: (dismiss_x0 - x0) as f32 / keyboard_width as f32,
-            y: 0.0,
-            width: dismiss_width_px as f32 / keyboard_width as f32,
-            height: dismiss_height_px as f32 / keyboard_height as f32,
-            pressed: false,
-        };
-        self.draw_key(buffer, width, height, &dismiss_key, dismiss_label);
-        
-        // Draw thin green line at top (below dismiss button)
-        let top_y = y0 + dismiss_height_px;
+        // Draw thin green line at top
+        let top_y = y0;
         if top_y >= 0 && top_y < height as i32 {
             for x in x0..x1 {
                 if x >= 0 && (x as u32) < width {
@@ -618,7 +774,8 @@ impl Partition for OnScreenKeyboard {
         for key in &self.keys {
             let label = match key.key_type {
                 KeyType::Char(ch) => {
-                    if self.shift_pressed {
+                    // Only show uppercase for letters when shift is pressed, not for symbols
+                    if self.shift_pressed && self.symbol_mode == SymbolMode::Standard && ch.is_alphabetic() {
                         ch.to_uppercase().to_string()
                     } else {
                         ch.to_string()
@@ -628,8 +785,16 @@ impl Partition for OnScreenKeyboard {
                 KeyType::Space => "Space".to_string(),
                 KeyType::Shift => "⇧".to_string(),
                 KeyType::Return => "return".to_string(),
-                KeyType::Dismiss => "dismiss".to_string(),
-                KeyType::Symbol => "123".to_string(),
+                KeyType::Symbol => match self.symbol_mode {
+                    SymbolMode::Standard => "123".to_string(),
+                    SymbolMode::Symbols1 => "ABC".to_string(),
+                    SymbolMode::Symbols2 => "ABC".to_string(),
+                },
+                KeyType::SymbolToggle => match self.symbol_mode {
+                    SymbolMode::Standard => "".to_string(), // Shouldn't appear
+                    SymbolMode::Symbols1 => "#+=".to_string(),
+                    SymbolMode::Symbols2 => "123".to_string(),
+                },
             };
             self.draw_key(buffer, width, height, key, &label);
         }
