@@ -5,8 +5,6 @@ const KEYBOARD_BG_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black
 const KEY_COLOR: (u8, u8, u8) = (40, 40, 40);
 const KEY_PRESSED_COLOR: (u8, u8, u8) = (80, 80, 80);
 const KEY_TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
-const DISMISS_BUTTON_COLOR: (u8, u8, u8) = (60, 60, 60);
-const DISMISS_BUTTON_HOVER_COLOR: (u8, u8, u8) = (100, 100, 100);
 const TOP_LINE_COLOR: (u8, u8, u8) = (0, 255, 0); // Green line
 
 // QWERTY layout
@@ -21,6 +19,7 @@ enum KeyType {
     Space,
     Shift,
     Return,
+    Dismiss,
 }
 
 struct Key {
@@ -39,7 +38,6 @@ pub struct OnScreenKeyboard {
     minimized: bool,
     shift_pressed: bool,
     last_pressed_key: Option<KeyType>,
-    dismiss_button_hover: bool,
 }
 
 impl OnScreenKeyboard {
@@ -57,7 +55,6 @@ impl OnScreenKeyboard {
             minimized: false,
             shift_pressed: false,
             last_pressed_key: None,
-            dismiss_button_hover: false,
         };
 
         keyboard.layout_keys();
@@ -74,27 +71,6 @@ impl OnScreenKeyboard {
 
     pub fn check_key_press(&mut self, mx: f32, my: f32, w: f32, h: f32) -> Option<char> {
         if self.minimized {
-            // Check dismiss button (far right top)
-            let kx0 = self.data.right * w - 60.0;
-            let kx1 = self.data.right * w;
-            let ky0 = self.data.top * h;
-            let ky1 = self.data.top * h + 40.0;
-            
-            if mx >= kx0 && mx <= kx1 && my >= ky0 && my <= ky1 {
-                self.toggle_minimize();
-                return None;
-            }
-            return None;
-        }
-
-        // Check dismiss button first (far right top)
-        let kx0 = self.data.right * w - 60.0;
-        let kx1 = self.data.right * w;
-        let ky0 = self.data.top * h;
-        let ky1 = self.data.top * h + 40.0;
-        
-        if mx >= kx0 && mx <= kx1 && my >= ky0 && my <= ky1 {
-            self.toggle_minimize();
             return None;
         }
 
@@ -156,36 +132,44 @@ impl OnScreenKeyboard {
             nearest_idx
         };
         
-        // Activate the selected key
-        let key = &mut self.keys[key_index];
-        key.pressed = true;
+        // Activate the selected key and get its type
+        let key_type = {
+            let key = &mut self.keys[key_index];
+            key.pressed = true;
+            key.key_type
+        };
         
-        match key.key_type {
+        match key_type {
             KeyType::Char(ch) => {
                 let output_char = if self.shift_pressed {
                     ch.to_uppercase().next().unwrap_or(ch)
                 } else {
                     ch
                 };
-                self.last_pressed_key = Some(key.key_type);
+                self.last_pressed_key = Some(key_type);
                 Some(output_char)
             }
             KeyType::Backspace => {
-                self.last_pressed_key = Some(key.key_type);
+                self.last_pressed_key = Some(key_type);
                 Some('\u{8}') // Backspace character
             }
             KeyType::Space => {
-                self.last_pressed_key = Some(key.key_type);
+                self.last_pressed_key = Some(key_type);
                 Some(' ')
             }
             KeyType::Shift => {
                 self.shift_pressed = !self.shift_pressed;
-                self.last_pressed_key = Some(key.key_type);
+                self.last_pressed_key = Some(key_type);
                 None // Shift doesn't output a character
             }
             KeyType::Return => {
-                self.last_pressed_key = Some(key.key_type);
+                self.last_pressed_key = Some(key_type);
                 Some('\n')
+            }
+            KeyType::Dismiss => {
+                self.toggle_minimize();
+                self.last_pressed_key = Some(key_type);
+                None // Dismiss doesn't output a character
             }
         }
     }
@@ -196,14 +180,8 @@ impl OnScreenKeyboard {
         }
     }
 
-    pub fn update_hover(&mut self, mx: f32, my: f32, w: f32, h: f32) {
-        // Check dismiss button hover
-        let kx0 = self.data.right * w - 60.0;
-        let kx1 = self.data.right * w;
-        let ky0 = self.data.top * h;
-        let ky1 = self.data.top * h + 40.0;
-        
-        self.dismiss_button_hover = mx >= kx0 && mx <= kx1 && my >= ky0 && my <= ky1;
+    pub fn update_hover(&mut self, _mx: f32, _my: f32, _w: f32, _h: f32) {
+        // Hover state is now handled per-key in the keys vector
     }
 
     fn layout_keys(&mut self) {
@@ -231,8 +209,8 @@ impl OnScreenKeyboard {
         
         // Calculate uniform key width based on row with most keys (row 1 has 10)
         let uniform_key_width = (1.0 - side_padding_ratio * 2.0 - key_spacing_ratio * 9.0) / 10.0;
-        let special_key_width = uniform_key_width * 1.5; // Shift, Return are 1.5x
-        let delete_key_width = uniform_key_width * 1.8; // Delete is slightly wider for "delete" text
+        let special_key_width = uniform_key_width * 1.5; // Shift, Return, Dismiss are 1.5x
+        let backspace_key_width = uniform_key_width * 1.8; // Backspace is wider for "backspace" text
         
         // Row 1: 10 buttons (qwertyuiop)
         let row1_total_width = uniform_key_width * 10.0 + key_spacing_ratio * 9.0;
@@ -269,10 +247,10 @@ impl OnScreenKeyboard {
             x += uniform_key_width + key_spacing_ratio;
         }
         
-        // Row 3: Shift + 7 letters + Delete
+        // Row 3: Shift + 7 letters + Backspace
         key_y += row_height + key_spacing_ratio;
         let row3_letters_width = uniform_key_width * 7.0 + key_spacing_ratio * 6.0;
-        let row3_total_width = special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio + delete_key_width;
+        let row3_total_width = special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio + backspace_key_width;
         let row3_start_x = (1.0 - row3_total_width) / 2.0;
         
         // Shift on left
@@ -299,25 +277,36 @@ impl OnScreenKeyboard {
             x += uniform_key_width + key_spacing_ratio;
         }
         
-        // Delete on right (wider for "delete" text)
+        // Backspace on right (wider for "backspace" text)
         self.keys.push(Key {
             key_type: KeyType::Backspace,
             x: row3_start_x + special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio,
             y: key_y,
-            width: delete_key_width,
+            width: backspace_key_width,
             height: row_height,
             pressed: false,
         });
         
-        // Row 4: Spacebar + Return (spacebar takes most width, return on right)
+        // Row 4: Dismiss + Spacebar + Return
         key_y += row_height + key_spacing_ratio;
+        let dismiss_width = special_key_width;
         let return_width = special_key_width;
-        let spacebar_width = 1.0 - side_padding_ratio * 2.0 - return_width - key_spacing_ratio;
+        let spacebar_width = 1.0 - side_padding_ratio * 2.0 - dismiss_width - return_width - key_spacing_ratio * 2.0;
         
-        // Spacebar
+        // Dismiss on left
+        self.keys.push(Key {
+            key_type: KeyType::Dismiss,
+            x: side_padding_ratio,
+            y: key_y,
+            width: dismiss_width,
+            height: 1.0 - key_y, // Extends to bottom
+            pressed: false,
+        });
+        
+        // Spacebar in middle
         self.keys.push(Key {
             key_type: KeyType::Space,
-            x: side_padding_ratio,
+            x: side_padding_ratio + dismiss_width + key_spacing_ratio,
             y: key_y,
             width: spacebar_width,
             height: 1.0 - key_y, // Extends to bottom
@@ -327,7 +316,7 @@ impl OnScreenKeyboard {
         // Return on right
         self.keys.push(Key {
             key_type: KeyType::Return,
-            x: side_padding_ratio + spacebar_width + key_spacing_ratio,
+            x: side_padding_ratio + dismiss_width + key_spacing_ratio + spacebar_width + key_spacing_ratio,
             y: key_y,
             width: return_width,
             height: 1.0 - key_y, // Extends to bottom
@@ -465,7 +454,7 @@ impl OnScreenKeyboard {
         let mut current_x = x0 as f32 + ((key_w as f32 - total_width) / 2.0);
         
         // Render each character using the same approach as geometric.rs
-        for (ch, metrics, bitmap) in character_data {
+        for (_ch, metrics, bitmap) in character_data {
             // Calculate y position using the same formula as geometric.rs
             let char_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
             let char_x = current_x;
@@ -495,67 +484,6 @@ impl OnScreenKeyboard {
         }
     }
 
-    fn draw_dismiss_button(&self, buffer: &mut [u8], width: u32, height: u32) {
-        let w = width as f32;
-        let h = height as f32;
-        
-        let btn_size = 40.0;
-        let x0 = ((self.data.right * w - btn_size).round().clamp(0.0, w)) as i32;
-        let x1 = ((self.data.right * w).round().clamp(0.0, w)) as i32;
-        let y0 = ((self.data.top * h).round().clamp(0.0, h)) as i32;
-        let y1 = ((self.data.top * h + btn_size).round().clamp(0.0, h)) as i32;
-        
-        let btn_w = (x1 - x0).max(0) as u32;
-        let btn_h = (y1 - y0).max(0) as u32;
-        
-        let color = if self.dismiss_button_hover {
-            DISMISS_BUTTON_HOVER_COLOR
-        } else {
-            DISMISS_BUTTON_COLOR
-        };
-        
-        // Draw rounded button
-        self.draw_rounded_rect(buffer, width, height, x0, y0, btn_w, btn_h, color, 6.0);
-        
-        // Draw dismiss label "×" using the same approach as geometric.rs
-        let font_size = 24.0;
-        let line_metrics = self.font.horizontal_line_metrics(font_size)
-            .expect("Font missing horizontal metrics");
-        
-        let label = "×";
-        let ch = label.chars().next().unwrap_or(' ');
-        let (metrics, bitmap) = self.font.rasterize(ch, font_size);
-        
-        // Calculate baseline_y for proper vertical centering
-        let baseline_y = y0 as f32 + (btn_h as f32 / 2.0) + (line_metrics.ascent - line_metrics.descent) / 2.0;
-        
-        // Calculate x position (centered)
-        let char_x = x0 as f32 + ((btn_w as f32 - metrics.advance_width) / 2.0);
-        
-        // Calculate y position using the same formula as geometric.rs
-        let char_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
-        
-        // Render bitmap using same indexing as geometric.rs: bitmap[y * width + x]
-        for y in 0..metrics.height {
-            for x in 0..metrics.width {
-                let val = bitmap[y * metrics.width + x];
-                if val == 0 {
-                    continue;
-                }
-                
-                let sx = (char_x + x as f32) as i32;
-                let sy = (char_y + y as f32) as i32;
-                
-                if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
-                    let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
-                    buffer[idx + 0] = KEY_TEXT_COLOR.0;
-                    buffer[idx + 1] = KEY_TEXT_COLOR.1;
-                    buffer[idx + 2] = KEY_TEXT_COLOR.2;
-                    buffer[idx + 3] = val;
-                }
-            }
-        }
-    }
 }
 
 impl Partition for OnScreenKeyboard {
@@ -582,9 +510,6 @@ impl Partition for OnScreenKeyboard {
                     buffer[idx + 3] = 0xff;
                 }
             }
-            
-            // Draw dismiss button
-            self.draw_dismiss_button(buffer, width, height);
             return;
         }
 
@@ -629,9 +554,6 @@ impl Partition for OnScreenKeyboard {
             }
         }
 
-        // Draw dismiss button (far right top)
-        self.draw_dismiss_button(buffer, width, height);
-
         // Draw keys
         for key in &self.keys {
             let label = match key.key_type {
@@ -642,10 +564,11 @@ impl Partition for OnScreenKeyboard {
                         ch.to_string()
                     }
                 }
-                KeyType::Backspace => "delete".to_string(),
+                KeyType::Backspace => "backspace".to_string(),
                 KeyType::Space => "Space".to_string(),
                 KeyType::Shift => "⇧".to_string(),
                 KeyType::Return => "↵".to_string(),
+                KeyType::Dismiss => "dismiss".to_string(),
             };
             self.draw_key(buffer, width, height, key, &label);
         }

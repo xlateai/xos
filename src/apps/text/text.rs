@@ -3,6 +3,7 @@ use crate::apps::text::geometric::GeometricText;
 use crate::apps::text::onscreen_keyboard::OnScreenKeyboard;
 use crate::apps::partitions::partition::Partition;
 use fontdue::{Font, FontSettings};
+use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
@@ -12,6 +13,8 @@ const BASELINE_COLOR: (u8, u8, u8) = (100, 100, 100);
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
 const DRAW_BASELINES: bool = true;
+const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
+const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
 
 use std::collections::HashMap;
 
@@ -21,6 +24,9 @@ pub struct TextApp {
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
     keyboard: OnScreenKeyboard,
+    last_tap_time: Option<Instant>,
+    last_tap_x: f32,
+    last_tap_y: f32,
 }
 
 
@@ -41,6 +47,9 @@ impl TextApp {
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
             keyboard: OnScreenKeyboard::new(),
+            last_tap_time: None,
+            last_tap_x: 0.0,
+            last_tap_y: 0.0,
         }
     }
 
@@ -255,10 +264,48 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check keyboard key press (handles dismiss button internally)
-        if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height) {
-            // Route through on_key_char to ensure it works on all platforms
-            self.on_key_char(state, ch);
+        // Check if click is in keyboard area first
+        let keyboard_data = self.keyboard.data();
+        let keyboard_left = keyboard_data.left * width;
+        let keyboard_right = keyboard_data.right * width;
+        let keyboard_top = keyboard_data.top * height;
+        let keyboard_bottom = keyboard_data.bottom * height;
+        
+        let is_in_keyboard_area = state.mouse.x >= keyboard_left 
+            && state.mouse.x <= keyboard_right 
+            && state.mouse.y >= keyboard_top 
+            && state.mouse.y <= keyboard_bottom;
+        
+        if is_in_keyboard_area {
+            // Handle keyboard key press (handles dismiss button internally)
+            if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height) {
+                // Route through on_key_char to ensure it works on all platforms
+                self.on_key_char(state, ch);
+            }
+            return;
+        }
+        
+        // Check for double tap in content area
+        let now = Instant::now();
+        let is_double_tap = if let Some(last_time) = self.last_tap_time {
+            let time_since_last = now.duration_since(last_time);
+            let distance = ((state.mouse.x - self.last_tap_x).powi(2) + (state.mouse.y - self.last_tap_y).powi(2)).sqrt();
+            
+            time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) && distance < DOUBLE_TAP_DISTANCE
+        } else {
+            false
+        };
+        
+        if is_double_tap {
+            // Toggle keyboard
+            self.keyboard.toggle_minimize();
+            // Reset tap tracking to prevent triple-tap from immediately closing
+            self.last_tap_time = None;
+        } else {
+            // Update tap tracking
+            self.last_tap_time = Some(now);
+            self.last_tap_x = state.mouse.x;
+            self.last_tap_y = state.mouse.y;
         }
     }
 
