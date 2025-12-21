@@ -46,14 +46,6 @@ impl PyFrameState {
             frame_ptr: frame as *mut FrameState,
         }
     }
-    
-    fn get_frame(&self) -> &FrameState {
-        unsafe { &*self.frame_ptr }
-    }
-    
-    fn get_frame_mut(&mut self) -> &mut FrameState {
-        unsafe { &mut *self.frame_ptr }
-    }
 }
 
 // For now, let's create simple Python objects using dicts
@@ -127,6 +119,10 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
         .ok_or_else(|| vm.new_type_error("array is not a dict".to_string()))?;
     
+    // Update the array's shape (in case of window resize)
+    let shape = frame.shape();
+    array_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
+    
     // Update the array's data
     let buffer = frame.buffer_mut();
     let py_buffer: Vec<PyObjectRef> = buffer.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
@@ -134,6 +130,12 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     
     // Update the data field
     array_dict.set_item("data", new_list.into(), vm)?;
+    
+    // Also update the frame dict's width and height
+    let width = shape[1];
+    let height = shape[0];
+    frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
+    frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
     
     Ok(())
 }

@@ -44,6 +44,13 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
         .ok_or_else(|| vm.new_type_error("array must be a dict".to_string()))?;
     
+    // Get the buffer (data) from the array FIRST to get accurate size
+    let buffer = array_dict.get_item("data", vm)?;
+    let buffer_list = buffer.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("buffer data must be a list".to_string()))?;
+    
+    let buffer_len = buffer_list.borrow_vec().len();
+    
     // Extract width and height from array shape
     let shape_obj = array_dict.get_item("shape", vm)?;
     let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
@@ -56,8 +63,14 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let height: i32 = shape_vec[0].clone().try_into_value(vm)?;
     let width: i32 = shape_vec[1].clone().try_into_value(vm)?;
     
-    // Get the buffer (data) from the array
-    let buffer = array_dict.get_item("data", vm)?;
+    // Validate that buffer size matches shape (to catch resize issues)
+    let expected_len = (height * width * 4) as usize;
+    if buffer_len != expected_len {
+        return Err(vm.new_runtime_error(format!(
+            "Frame buffer size mismatch: expected {} bytes ({}x{}x4), but buffer has {} bytes. Window may have been resized.",
+            expected_len, width, height, buffer_len
+        )));
+    }
     
     // Parse color tuple (r, g, b, a)
     let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
@@ -79,10 +92,6 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Get radii list
     let radii = radii_list.downcast_ref::<rustpython_vm::builtins::PyList>()
         .ok_or_else(|| vm.new_type_error("radii must be a list".to_string()))?;
-    
-    // Get buffer as list
-    let buffer_list = buffer.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("buffer is not a list".to_string()))?;
     
     // Collect all circle data first before drawing (to avoid borrow conflicts)
     let positions_vec = positions.borrow_vec();
