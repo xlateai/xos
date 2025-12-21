@@ -41,9 +41,11 @@ pub struct TextApp {
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
     initial_scroll_y: f32,
-    // Shift cursor movement tracking
-    shift_cursor_last_x: Option<f32>,
-    shift_cursor_last_y: Option<f32>,
+    // Shift cursor movement tracking (laser dot)
+    shift_dot_x: Option<f32>, // Screen coordinates
+    shift_dot_y: Option<f32>, // Screen coordinates
+    shift_last_finger_x: Option<f32>,
+    shift_last_finger_y: Option<f32>,
 }
 
 
@@ -82,8 +84,10 @@ impl TextApp {
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
             initial_scroll_y: 0.0,
-            shift_cursor_last_x: None,
-            shift_cursor_last_y: None,
+            shift_dot_x: None,
+            shift_dot_y: None,
+            shift_last_finger_x: None,
+            shift_last_finger_y: None,
         }
     }
 
@@ -344,6 +348,32 @@ impl Application for TextApp {
             }
         }
     
+        // Draw laser dot if shift is held
+        if let (Some(dot_x), Some(dot_y)) = (self.shift_dot_x, self.shift_dot_y) {
+            let dot_radius = 4.0;
+            let dot_x_i = dot_x.round() as i32;
+            let dot_y_i = dot_y.round() as i32;
+            
+            // Draw a small circle/dot
+            for dy in -dot_radius as i32..=dot_radius as i32 {
+                for dx in -dot_radius as i32..=dot_radius as i32 {
+                    let distance_sq = (dx * dx + dy * dy) as f32;
+                    if distance_sq <= dot_radius * dot_radius {
+                        let x = dot_x_i + dx;
+                        let y = dot_y_i + dy;
+                        if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                            // Bright red dot
+                            buffer[idx + 0] = 255; // R
+                            buffer[idx + 1] = 0;   // G
+                            buffer[idx + 2] = 0;   // B
+                            buffer[idx + 3] = 0xff; // A
+                        }
+                    }
+                }
+            }
+        }
+    
         // Draw keyboard
         let width_u32 = width as u32;
         let height_u32 = height as u32;
@@ -493,59 +523,106 @@ impl Application for TextApp {
         // Update keyboard hover state
         self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
         
-        // Check if shift is held for cursor movement (delta-based, like fast arrow keys)
+        // Check if shift is held for cursor movement (laser dot mode)
         if let Some(KeyType::Shift) = self.keyboard.get_held_key_type() {
-            if let (Some(last_x), Some(last_y)) = (self.shift_cursor_last_x, self.shift_cursor_last_y) {
-                // Calculate movement delta
-                let dx = state.mouse.x - last_x;
-                let dy = state.mouse.y - last_y;
+            // Initialize dot position if not set (start at current cursor position)
+            if self.shift_dot_x.is_none() || self.shift_dot_y.is_none() {
+                // Find current cursor screen position
+                let safe_region = &state.frame.safe_region_boundaries;
+                let content_top = safe_region.y1 * height;
                 
-                // Threshold to prevent tiny movements from moving cursor
-                let horizontal_threshold = 3.0; // pixels
-                let vertical_threshold = 9.0; // pixels (3x slower than horizontal)
+                // Get cursor text position
+                let (cursor_text_x, cursor_baseline_y) = self.get_cursor_text_position();
                 
-                // Move cursor based on delta (like arrow keys but faster)
-                if dx.abs() > horizontal_threshold {
-                    // Horizontal movement - move left or right
-                    let steps = (dx.abs() / horizontal_threshold).floor() as usize;
-                    if dx > 0.0 {
-                        // Move right
-                        for _ in 0..steps {
-                            self.move_cursor_right();
-                        }
-                    } else {
-                        // Move left
-                        for _ in 0..steps {
-                            self.move_cursor_left();
-                        }
-                    }
-                }
-                
-                if dy.abs() > vertical_threshold {
-                    // Vertical movement - move up or down (slower than horizontal)
-                    let steps = (dy.abs() / vertical_threshold).floor() as usize;
-                    if dy > 0.0 {
-                        // Move down
-                        for _ in 0..steps {
-                            self.move_cursor_down();
-                        }
-                    } else {
-                        // Move up
-                        for _ in 0..steps {
-                            self.move_cursor_up();
-                        }
-                    }
-                }
+                // Convert to screen coordinates
+                self.shift_dot_x = Some(cursor_text_x);
+                self.shift_dot_y = Some((cursor_baseline_y - self.scroll_y) + content_top);
+                self.shift_last_finger_x = Some(state.mouse.x);
+                self.shift_last_finger_y = Some(state.mouse.y);
             }
             
-            // Update last position for next frame
-            self.shift_cursor_last_x = Some(state.mouse.x);
-            self.shift_cursor_last_y = Some(state.mouse.y);
+            // Move dot 5x faster than finger movement
+            if let (Some(dot_x), Some(dot_y), Some(last_finger_x), Some(last_finger_y)) = 
+                (self.shift_dot_x, self.shift_dot_y, self.shift_last_finger_x, self.shift_last_finger_y) {
+                let finger_dx = state.mouse.x - last_finger_x;
+                let finger_dy = state.mouse.y - last_finger_y;
+                
+                // Dot moves 5x faster
+                let dot_dx = finger_dx * 5.0;
+                let dot_dy = finger_dy * 5.0;
+                
+                // Update dot position
+                let new_dot_x = dot_x + dot_dx;
+                let new_dot_y = dot_y + dot_dy;
+                
+                self.shift_dot_x = Some(new_dot_x);
+                self.shift_dot_y = Some(new_dot_y);
+                
+                // Find nearest valid cursor position to dot
+                let safe_region = &state.frame.safe_region_boundaries;
+                let content_top = safe_region.y1 * height;
+                
+                // Convert dot screen coordinates to text coordinates
+                let dot_text_x = new_dot_x;
+                let dot_text_y = new_dot_y - content_top + self.scroll_y;
+                
+                // Find nearest character or line to dot position
+                let mut best_char_index = self.text_engine.text.chars().count();
+                let mut min_distance_sq = f32::MAX;
+                
+                // Check empty lines first
+                for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                    let line_y = line.baseline_y;
+                    
+                    if dot_text_y >= line_y - self.text_engine.ascent && dot_text_y <= line_y + self.text_engine.descent {
+                        let has_chars = self.text_engine.characters.iter()
+                            .any(|c| c.line_index == line_idx);
+                        
+                        if !has_chars {
+                            // Empty line - check distance to start
+                            let distance_sq = dot_text_x * dot_text_x + (dot_text_y - line_y) * (dot_text_y - line_y);
+                            if distance_sq < min_distance_sq {
+                                min_distance_sq = distance_sq;
+                                best_char_index = line.start_index;
+                            }
+                        }
+                    }
+                }
+                
+                // Check characters
+                for character in &self.text_engine.characters {
+                    let char_center_x = character.x + character.width / 2.0;
+                    let char_center_y = character.y + character.height / 2.0;
+                    
+                    let dx = dot_text_x - char_center_x;
+                    let dy = dot_text_y - char_center_y;
+                    let distance_sq = dx * dx + dy * dy;
+                    
+                    if distance_sq < min_distance_sq {
+                        min_distance_sq = distance_sq;
+                        // If dot is to the right of character center, cursor goes after it
+                        if dot_text_x > char_center_x {
+                            best_char_index = character.char_index + 1;
+                        } else {
+                            best_char_index = character.char_index;
+                        }
+                    }
+                }
+                
+                // Update cursor to nearest valid position
+                self.cursor_position = best_char_index.min(self.text_engine.text.chars().count());
+            }
+            
+            // Update last finger position
+            self.shift_last_finger_x = Some(state.mouse.x);
+            self.shift_last_finger_y = Some(state.mouse.y);
             return;
         } else {
             // Shift not held - clear tracking
-            self.shift_cursor_last_x = None;
-            self.shift_cursor_last_y = None;
+            self.shift_dot_x = None;
+            self.shift_dot_y = None;
+            self.shift_last_finger_x = None;
+            self.shift_last_finger_y = None;
         }
         
         // Don't allow scrolling if touch started on keyboard
@@ -603,13 +680,8 @@ impl Application for TextApp {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
             
-            // Check if shift key was pressed and initialize cursor tracking
-            if let Some(KeyType::Shift) = self.keyboard.check_key_type_at_position(state.mouse.x, state.mouse.y, width, height) {
-                self.shift_cursor_last_x = Some(state.mouse.x);
-                self.shift_cursor_last_y = Some(state.mouse.y);
-            }
-            
             // Handle keyboard key press (handles dismiss button internally)
+            // Shift dot initialization happens in on_mouse_move when shift is detected as held
             if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height, Instant::now()) {
                 // Route through on_key_char to ensure it works on all platforms
                 self.on_key_char(state, ch);
@@ -757,13 +829,92 @@ impl Application for TextApp {
         self.dragging = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        // Clear shift cursor tracking
-        self.shift_cursor_last_x = None;
-        self.shift_cursor_last_y = None;
+        // Clear shift dot tracking
+        self.shift_dot_x = None;
+        self.shift_dot_y = None;
+        self.shift_last_finger_x = None;
+        self.shift_last_finger_y = None;
     }
 }
 
 impl TextApp {
+    fn get_cursor_text_position(&self) -> (f32, f32) {
+        // Find cursor position based on cursor_position index
+        let line_info_with_idx = self.text_engine.lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+            });
+        
+        if let Some((line_idx, line)) = line_info_with_idx {
+            let chars_in_line: Vec<_> = self.text_engine.characters.iter()
+                .filter(|c| c.line_index == line_idx)
+                .collect();
+            
+            if chars_in_line.is_empty() {
+                (0.0, line.baseline_y)
+            } else {
+                if self.cursor_position == line.start_index {
+                    (0.0, line.baseline_y)
+                } else {
+                    let mut found_char = None;
+                    let mut char_after = None;
+                    
+                    for character in self.text_engine.characters.iter() {
+                        if character.char_index == self.cursor_position {
+                            found_char = Some(character);
+                            break;
+                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
+                            char_after = Some(character);
+                            break;
+                        }
+                    }
+                    
+                    if let Some(char_at_cursor) = found_char {
+                        (char_at_cursor.x, line.baseline_y)
+                    } else if let Some(char_after_cursor) = char_after {
+                        (char_after_cursor.x, line.baseline_y)
+                    } else if let Some(last_in_line) = chars_in_line.last() {
+                        (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
+                    } else {
+                        (0.0, line.baseline_y)
+                    }
+                }
+            }
+        } else if self.cursor_position == 0 {
+            if let Some(first_line) = self.text_engine.lines.first() {
+                (0.0, first_line.baseline_y)
+            } else {
+                (0.0, self.text_engine.ascent)
+            }
+        } else if self.cursor_position >= self.text_engine.text.chars().count() {
+            if let Some(last_line) = self.text_engine.lines.last() {
+                let last_line_idx = self.text_engine.lines.len() - 1;
+                let chars_in_last_line: Vec<_> = self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == last_line_idx)
+                    .collect();
+                
+                if chars_in_last_line.is_empty() {
+                    (0.0, last_line.baseline_y)
+                } else if let Some(last_char) = chars_in_last_line.last() {
+                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
+                } else {
+                    (0.0, last_line.baseline_y)
+                }
+            } else if let Some(last) = self.text_engine.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (0.0, self.text_engine.ascent)
+            }
+        } else {
+            if let Some(last) = self.text_engine.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (0.0, self.text_engine.ascent)
+            }
+        }
+    }
+
     fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
