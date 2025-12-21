@@ -547,9 +547,9 @@ impl Application for TextApp {
                 let finger_dx = state.mouse.x - last_finger_x;
                 let finger_dy = state.mouse.y - last_finger_y;
                 
-                // Dot moves 5x faster
-                let dot_dx = finger_dx * 5.0;
-                let dot_dy = finger_dy * 5.0;
+                // Dot moves 4x faster (20% slower than 5x)
+                let dot_dx = finger_dx * 4.0;
+                let dot_dy = finger_dy * 4.0;
                 
                 // Update dot position and constrain to screen bounds
                 let new_dot_x = (dot_x + dot_dx).max(0.0).min(width);
