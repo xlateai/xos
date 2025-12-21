@@ -62,6 +62,8 @@ pub struct OnScreenKeyboard {
     held_key_type: Option<KeyType>,
     held_key_start_time: Option<Instant>,
     last_repeat_time: Option<Instant>,
+    // Shift tap tracking (for quick tap vs hold)
+    shift_press_time: Option<Instant>,
 }
 
 impl OnScreenKeyboard {
@@ -85,6 +87,7 @@ impl OnScreenKeyboard {
             held_key_type: None,
             held_key_start_time: None,
             last_repeat_time: None,
+            shift_press_time: None,
         };
 
         keyboard.layout_keys();
@@ -97,6 +100,39 @@ impl OnScreenKeyboard {
 
     pub fn get_held_key_type(&self) -> Option<KeyType> {
         self.held_key_type
+    }
+
+    pub fn check_key_type_at_position(&self, mx: f32, my: f32, w: f32, h: f32) -> Option<KeyType> {
+        if self.minimized {
+            return None;
+        }
+
+        // Check if click is within keyboard partition bounds
+        let keyboard_left = self.data.left * w;
+        let keyboard_right = self.data.right * w;
+        let keyboard_top = self.data.top * h;
+        let keyboard_bottom = self.data.bottom * h;
+        let keyboard_width = keyboard_right - keyboard_left;
+        let keyboard_height = keyboard_bottom - keyboard_top;
+        
+        // Only process if click is within keyboard bounds
+        if mx < keyboard_left || mx > keyboard_right || my < keyboard_top || my > keyboard_bottom {
+            return None;
+        }
+        
+        // Find the key at this position
+        for key in &self.keys {
+            let key_x0 = keyboard_left + key.x * keyboard_width;
+            let key_x1 = key_x0 + key.width * keyboard_width;
+            let key_y0 = keyboard_top + key.y * keyboard_height;
+            let key_y1 = key_y0 + key.height * keyboard_height;
+
+            if mx >= key_x0 && mx <= key_x1 && my >= key_y0 && my <= key_y1 {
+                return Some(key.key_type);
+            }
+        }
+        
+        None
     }
 
     pub fn toggle_minimize(&mut self) {
@@ -253,7 +289,9 @@ impl OnScreenKeyboard {
                 Some(' ')
             }
             KeyType::Shift => {
-                self.shift_pressed = !self.shift_pressed;
+                // Record when shift was pressed (for quick tap detection)
+                self.shift_press_time = Some(now);
+                // Don't toggle shift_pressed yet - wait to see if it's a quick tap
                 self.last_pressed_key = Some(key_type);
                 None // Shift doesn't output a character
             }
@@ -289,6 +327,19 @@ impl OnScreenKeyboard {
     }
 
     pub fn release_keys(&mut self) {
+        let now = Instant::now();
+        
+        // Check if shift was released quickly (quick tap)
+        if let Some(shift_press_time) = self.shift_press_time {
+            let hold_duration = now.duration_since(shift_press_time);
+            let quick_tap_threshold = Duration::from_millis(300); // 300ms threshold
+            
+            // If shift was held for less than threshold, it's a quick tap - toggle shift
+            if hold_duration < quick_tap_threshold && self.held_key_type == Some(KeyType::Shift) {
+                self.shift_pressed = !self.shift_pressed;
+            }
+        }
+        
         for key in &mut self.keys {
             key.pressed = false;
         }
@@ -296,6 +347,7 @@ impl OnScreenKeyboard {
         self.held_key_type = None;
         self.held_key_start_time = None;
         self.last_repeat_time = None;
+        self.shift_press_time = None;
     }
 
     pub fn update_hover(&mut self, _mx: f32, _my: f32, _w: f32, _h: f32) {

@@ -41,6 +41,9 @@ pub struct TextApp {
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
     initial_scroll_y: f32,
+    // Shift cursor movement tracking
+    shift_cursor_last_x: Option<f32>,
+    shift_cursor_last_y: Option<f32>,
 }
 
 
@@ -79,6 +82,8 @@ impl TextApp {
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
             initial_scroll_y: 0.0,
+            shift_cursor_last_x: None,
+            shift_cursor_last_y: None,
         }
     }
 
@@ -488,57 +493,59 @@ impl Application for TextApp {
         // Update keyboard hover state
         self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
         
-        // Check if shift is held for cursor movement
+        // Check if shift is held for cursor movement (delta-based, like fast arrow keys)
         if let Some(KeyType::Shift) = self.keyboard.get_held_key_type() {
-            // Move cursor based on finger position
-            let safe_region = &state.frame.safe_region_boundaries;
-            let content_top = safe_region.y1 * height;
-            
-            // Convert screen coordinates to text coordinates
-            let text_x = state.mouse.x;
-            let text_y = state.mouse.y - content_top + self.scroll_y;
-            
-            // Find nearest character to finger position
-            let mut nearest_char_index = self.text_engine.text.chars().count();
-            let mut min_distance_sq = f32::MAX;
-            
-            for character in &self.text_engine.characters {
-                let char_center_x = character.x + character.width / 2.0;
-                let char_center_y = character.y + character.height / 2.0;
+            if let (Some(last_x), Some(last_y)) = (self.shift_cursor_last_x, self.shift_cursor_last_y) {
+                // Calculate movement delta
+                let dx = state.mouse.x - last_x;
+                let dy = state.mouse.y - last_y;
                 
-                let dx = text_x - char_center_x;
-                let dy = text_y - char_center_y;
-                let distance_sq = dx * dx + dy * dy;
+                // Threshold to prevent tiny movements from moving cursor
+                let horizontal_threshold = 3.0; // pixels
+                let vertical_threshold = 9.0; // pixels (3x slower than horizontal)
                 
-                if distance_sq < min_distance_sq {
-                    min_distance_sq = distance_sq;
-                    // If finger is to the right of character center, cursor goes after it
-                    if text_x > char_center_x {
-                        nearest_char_index = character.char_index + 1;
+                // Move cursor based on delta (like arrow keys but faster)
+                if dx.abs() > horizontal_threshold {
+                    // Horizontal movement - move left or right
+                    let steps = (dx.abs() / horizontal_threshold).floor() as usize;
+                    if dx > 0.0 {
+                        // Move right
+                        for _ in 0..steps {
+                            self.move_cursor_right();
+                        }
                     } else {
-                        nearest_char_index = character.char_index;
+                        // Move left
+                        for _ in 0..steps {
+                            self.move_cursor_left();
+                        }
                     }
                 }
-            }
-            
-            // Also check for empty lines
-            for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
-                let line_y = line.baseline_y;
                 
-                if text_y >= line_y - self.text_engine.ascent && text_y <= line_y + self.text_engine.descent {
-                    let has_chars = self.text_engine.characters.iter()
-                        .any(|c| c.line_index == line_idx);
-                    
-                    if !has_chars {
-                        // Empty line - place cursor at start
-                        self.cursor_position = line.start_index;
-                        return;
+                if dy.abs() > vertical_threshold {
+                    // Vertical movement - move up or down (slower than horizontal)
+                    let steps = (dy.abs() / vertical_threshold).floor() as usize;
+                    if dy > 0.0 {
+                        // Move down
+                        for _ in 0..steps {
+                            self.move_cursor_down();
+                        }
+                    } else {
+                        // Move up
+                        for _ in 0..steps {
+                            self.move_cursor_up();
+                        }
                     }
                 }
             }
             
-            self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+            // Update last position for next frame
+            self.shift_cursor_last_x = Some(state.mouse.x);
+            self.shift_cursor_last_y = Some(state.mouse.y);
             return;
+        } else {
+            // Shift not held - clear tracking
+            self.shift_cursor_last_x = None;
+            self.shift_cursor_last_y = None;
         }
         
         // Don't allow scrolling if touch started on keyboard
@@ -595,6 +602,13 @@ impl Application for TextApp {
             // Keyboard is visible and click is on it
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
+            
+            // Check if shift key was pressed and initialize cursor tracking
+            if let Some(KeyType::Shift) = self.keyboard.check_key_type_at_position(state.mouse.x, state.mouse.y, width, height) {
+                self.shift_cursor_last_x = Some(state.mouse.x);
+                self.shift_cursor_last_y = Some(state.mouse.y);
+            }
+            
             // Handle keyboard key press (handles dismiss button internally)
             if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height, Instant::now()) {
                 // Route through on_key_char to ensure it works on all platforms
@@ -743,6 +757,9 @@ impl Application for TextApp {
         self.dragging = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
+        // Clear shift cursor tracking
+        self.shift_cursor_last_x = None;
+        self.shift_cursor_last_y = None;
     }
 }
 
