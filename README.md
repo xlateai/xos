@@ -2,7 +2,13 @@
 
 The fastest and easiest to use cross-platform application framework designed to feel like a UI framework, game engine, tensor operator library, operating system, and mobile scientific computation experimentation playground.
 
+Writing cross-platform applications in xos requires minimal code differences, with easy compilation branching for device-specific features and simple screen-size responsiveness.
+
 Apps in xos are standalone programs that run on any supported backend. Built with Rust for it's build system, performance, wide backend target support, and reliability; xos provides an easy foundation to build upon for your prototype applications and experiments.
+
+
+## Experimental
+The xos API is currently experimental and may change, notably the application engine interface for how apps are defined. This is to support headless applications, embedded-in-subframes, and cross-application compatibilities. We also plan to use Python as a scripting language for defining applications as well as computing experiments.
 
 ## Platform Support
 
