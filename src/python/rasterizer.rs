@@ -22,15 +22,26 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let radii_list = &args_vec[2];
     let color_tuple = &args_vec[3];
     
-    // Extract frame buffer info
-    let width: i32 = vm.get_attribute_opt(frame_dict.clone(), "width")?
-        .ok_or_else(|| vm.new_type_error("frame width not found".to_string()))?
-        .try_into_value(vm)?;
-    let height: i32 = vm.get_attribute_opt(frame_dict.clone(), "height")?
-        .ok_or_else(|| vm.new_type_error("frame height not found".to_string()))?
-        .try_into_value(vm)?;
-    let buffer = vm.get_attribute_opt(frame_dict.clone(), "buffer")?
-        .ok_or_else(|| vm.new_type_error("frame buffer not found".to_string()))?;
+    // Extract array from frame
+    let array_obj = vm.get_attribute_opt(frame_dict.clone(), "array")?
+        .ok_or_else(|| vm.new_type_error("frame.array not found".to_string()))?;
+    
+    // Extract width and height from array shape
+    let shape_obj = vm.get_attribute_opt(array_obj.clone(), "shape")?
+        .ok_or_else(|| vm.new_type_error("array.shape not found".to_string()))?;
+    let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
+    let shape_vec = shape_tuple.as_slice();
+    if shape_vec.len() < 3 {
+        return Err(vm.new_type_error("shape must be (height, width, channels)".to_string()));
+    }
+    
+    let height: i32 = shape_vec[0].clone().try_into_value(vm)?;
+    let width: i32 = shape_vec[1].clone().try_into_value(vm)?;
+    
+    // Get the buffer (data) from the array
+    let buffer = vm.get_attribute_opt(array_obj.clone(), "data")?
+        .ok_or_else(|| vm.new_type_error("array.data not found".to_string()))?;
     
     // Parse color tuple (r, g, b, a)
     let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
