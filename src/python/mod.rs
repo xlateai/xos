@@ -9,4 +9,7 @@ pub mod random;
 #[cfg(feature = "python")]
 pub mod engine;
 
+#[cfg(feature = "python")]
+pub mod rasterizer;
+
 pub use interactive_console::{run_python_file, run_python_interactive, run_python_app};

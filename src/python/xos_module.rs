@@ -48,6 +48,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let random_module = crate::python::random::random::make_random_module(vm);
     module.set_attr("random", random_module, vm).unwrap();
     
+    // Add the rasterizer submodule
+    let rasterizer_module = crate::python::rasterizer::make_rasterizer_module(vm);
+    module.set_attr("rasterizer", rasterizer_module, vm).unwrap();
+    
     // Define the Application base class in Python
     let application_class_code = crate::python::engine::pyapp::APPLICATION_CLASS_CODE;
     

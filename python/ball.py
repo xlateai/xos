@@ -68,7 +68,7 @@ class BallGame(xos.Application):
         xos.print("+512 balls (initial spawn)")
     
     def draw_circle(self, buffer, cx, cy, radius):
-        """Draw a filled circle on the frame buffer"""
+        """Draw a filled circle on the frame buffer - DEPRECATED, use rasterizer instead"""
         radius_squared = radius * radius
         
         start_x = max(0, int(cx - radius))
@@ -93,15 +93,17 @@ class BallGame(xos.Application):
         """Update and render one frame"""
         # Get frame buffer
         frame = xos.get_frame_buffer()
-        buffer = frame["buffer"]
         
         # Update all balls
         for ball in self.balls:
             ball.update(self.width, self.height)
         
-        # Draw all balls
-        for ball in self.balls:
-            self.draw_circle(buffer, ball.x, ball.y, ball.radius)
+        # Collect positions for fast rasterization
+        positions = [(ball.x, ball.y) for ball in self.balls]
+        radii = [ball.radius for ball in self.balls]
+        
+        # Use fast Rust rasterizer to draw all circles at once
+        xos.rasterizer.circles(frame, positions, radii, BALL_COLOR)
     
     def on_mouse_down(self, x, y):
         """Handle mouse click"""
