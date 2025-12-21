@@ -98,7 +98,7 @@ impl OnScreenKeyboard {
             return None;
         }
 
-        // Check keys
+        // Check if click is within keyboard partition bounds
         let keyboard_left = self.data.left * w;
         let keyboard_right = self.data.right * w;
         let keyboard_top = self.data.top * h;
@@ -106,47 +106,88 @@ impl OnScreenKeyboard {
         let keyboard_width = keyboard_right - keyboard_left;
         let keyboard_height = keyboard_bottom - keyboard_top;
         
-        for key in &mut self.keys {
+        // Only process if click is within keyboard bounds
+        if mx < keyboard_left || mx > keyboard_right || my < keyboard_top || my > keyboard_bottom {
+            return None;
+        }
+        
+        // First, try to find a key that directly contains the click
+        let mut clicked_key: Option<usize> = None;
+        for (i, key) in self.keys.iter().enumerate() {
             let key_x0 = keyboard_left + key.x * keyboard_width;
             let key_x1 = key_x0 + key.width * keyboard_width;
             let key_y0 = keyboard_top + key.y * keyboard_height;
             let key_y1 = key_y0 + key.height * keyboard_height;
 
             if mx >= key_x0 && mx <= key_x1 && my >= key_y0 && my <= key_y1 {
-                key.pressed = true;
-                
-                match key.key_type {
-                    KeyType::Char(ch) => {
-                        let output_char = if self.shift_pressed {
-                            ch.to_uppercase().next().unwrap_or(ch)
-                        } else {
-                            ch
-                        };
-                        self.last_pressed_key = Some(key.key_type);
-                        return Some(output_char);
-                    }
-                    KeyType::Backspace => {
-                        self.last_pressed_key = Some(key.key_type);
-                        return Some('\u{8}'); // Backspace character
-                    }
-                    KeyType::Space => {
-                        self.last_pressed_key = Some(key.key_type);
-                        return Some(' ');
-                    }
-                    KeyType::Shift => {
-                        self.shift_pressed = !self.shift_pressed;
-                        self.last_pressed_key = Some(key.key_type);
-                        return None; // Shift doesn't output a character
-                    }
-                    KeyType::Return => {
-                        self.last_pressed_key = Some(key.key_type);
-                        return Some('\n');
-                    }
-                }
+                clicked_key = Some(i);
+                break;
             }
         }
-
-        None
+        
+        // If no key was directly clicked, find the nearest key
+        let key_index = if let Some(idx) = clicked_key {
+            idx
+        } else {
+            // Find nearest key by calculating distance to center of each key
+            let mut nearest_idx = 0;
+            let mut min_distance_sq = f32::MAX;
+            
+            for (i, key) in self.keys.iter().enumerate() {
+                let key_x0 = keyboard_left + key.x * keyboard_width;
+                let key_x1 = key_x0 + key.width * keyboard_width;
+                let key_y0 = keyboard_top + key.y * keyboard_height;
+                let key_y1 = key_y0 + key.height * keyboard_height;
+                
+                // Calculate center of key
+                let key_center_x = (key_x0 + key_x1) / 2.0;
+                let key_center_y = (key_y0 + key_y1) / 2.0;
+                
+                // Calculate squared distance (avoiding sqrt for performance)
+                let dx = mx - key_center_x;
+                let dy = my - key_center_y;
+                let distance_sq = dx * dx + dy * dy;
+                
+                if distance_sq < min_distance_sq {
+                    min_distance_sq = distance_sq;
+                    nearest_idx = i;
+                }
+            }
+            nearest_idx
+        };
+        
+        // Activate the selected key
+        let key = &mut self.keys[key_index];
+        key.pressed = true;
+        
+        match key.key_type {
+            KeyType::Char(ch) => {
+                let output_char = if self.shift_pressed {
+                    ch.to_uppercase().next().unwrap_or(ch)
+                } else {
+                    ch
+                };
+                self.last_pressed_key = Some(key.key_type);
+                Some(output_char)
+            }
+            KeyType::Backspace => {
+                self.last_pressed_key = Some(key.key_type);
+                Some('\u{8}') // Backspace character
+            }
+            KeyType::Space => {
+                self.last_pressed_key = Some(key.key_type);
+                Some(' ')
+            }
+            KeyType::Shift => {
+                self.shift_pressed = !self.shift_pressed;
+                self.last_pressed_key = Some(key.key_type);
+                None // Shift doesn't output a character
+            }
+            KeyType::Return => {
+                self.last_pressed_key = Some(key.key_type);
+                Some('\n')
+            }
+        }
     }
 
     pub fn release_keys(&mut self) {
@@ -400,46 +441,53 @@ impl OnScreenKeyboard {
         self.draw_rounded_rect(buffer, width, height, x0, y0, key_w, key_h, color, 8.0);
         
         // Draw key label (centered) - scale font size with key size
+        // Use the same approach as geometric.rs for accurate rendering
         let key_size = (key_w as f32).min(key_h as f32);
         let font_size = (key_size * 0.4).max(20.0).min(48.0); // Scale between 20-48px
         let line_metrics = self.font.horizontal_line_metrics(font_size)
             .expect("Font missing horizontal metrics");
         
-        // Handle multi-character labels
+        // Calculate baseline_y for proper vertical centering
+        let baseline_y = y0 as f32 + (key_h as f32 / 2.0) + (line_metrics.ascent - line_metrics.descent) / 2.0;
+        
+        // Handle multi-character labels - calculate total width first
         let label_chars: Vec<char> = label.chars().collect();
         let mut total_width = 0.0;
-        let mut bitmaps = Vec::new();
+        let mut character_data = Vec::new();
         
         for &ch in &label_chars {
             let (metrics, bitmap) = self.font.rasterize(ch, font_size);
             total_width += metrics.advance_width;
-            bitmaps.push((metrics, bitmap));
+            character_data.push((ch, metrics, bitmap));
         }
         
-        let char_height = line_metrics.ascent + line_metrics.descent;
+        // Start x position (centered)
         let mut current_x = x0 as f32 + ((key_w as f32 - total_width) / 2.0);
-        let label_y = y0 as f32 + ((key_h as f32 - char_height) / 2.0 + line_metrics.ascent);
         
-        for (metrics, bitmap) in bitmaps {
-            let char_width = metrics.width;
+        // Render each character using the same approach as geometric.rs
+        for (ch, metrics, bitmap) in character_data {
+            // Calculate y position using the same formula as geometric.rs
+            let char_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+            let char_x = current_x;
             
-            for (i, &val) in bitmap.iter().enumerate() {
-                if val == 0 {
-                    continue;
-                }
-                
-                let px = i % char_width;
-                let py = i / char_width;
-                
-                let sx = (current_x + px as f32) as i32;
-                let sy = label_y as i32 + py as i32;
-                
-                if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
-                    let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
-                    buffer[idx + 0] = KEY_TEXT_COLOR.0;
-                    buffer[idx + 1] = KEY_TEXT_COLOR.1;
-                    buffer[idx + 2] = KEY_TEXT_COLOR.2;
-                    buffer[idx + 3] = val;
+            // Render bitmap using same indexing as geometric.rs: bitmap[y * width + x]
+            for y in 0..metrics.height {
+                for x in 0..metrics.width {
+                    let val = bitmap[y * metrics.width + x];
+                    if val == 0 {
+                        continue;
+                    }
+                    
+                    let sx = (char_x + x as f32) as i32;
+                    let sy = (char_y + y as f32) as i32;
+                    
+                    if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
+                        let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
+                        buffer[idx + 0] = KEY_TEXT_COLOR.0;
+                        buffer[idx + 1] = KEY_TEXT_COLOR.1;
+                        buffer[idx + 2] = KEY_TEXT_COLOR.2;
+                        buffer[idx + 3] = val;
+                    }
                 }
             }
             
@@ -469,7 +517,7 @@ impl OnScreenKeyboard {
         // Draw rounded button
         self.draw_rounded_rect(buffer, width, height, x0, y0, btn_w, btn_h, color, 6.0);
         
-        // Draw dismiss label "×"
+        // Draw dismiss label "×" using the same approach as geometric.rs
         let font_size = 24.0;
         let line_metrics = self.font.horizontal_line_metrics(font_size)
             .expect("Font missing horizontal metrics");
@@ -477,29 +525,34 @@ impl OnScreenKeyboard {
         let label = "×";
         let ch = label.chars().next().unwrap_or(' ');
         let (metrics, bitmap) = self.font.rasterize(ch, font_size);
-        let char_width = metrics.width;
-        let char_height = line_metrics.ascent + line_metrics.descent;
         
-        let label_x = x0 + ((btn_w as f32 - char_width as f32) / 2.0) as i32;
-        let label_y = y0 + ((btn_h as f32 - char_height) / 2.0 + line_metrics.ascent) as i32;
+        // Calculate baseline_y for proper vertical centering
+        let baseline_y = y0 as f32 + (btn_h as f32 / 2.0) + (line_metrics.ascent - line_metrics.descent) / 2.0;
         
-        for (i, &val) in bitmap.iter().enumerate() {
-            if val == 0 {
-                continue;
-            }
-            
-            let px = i % char_width;
-            let py = i / char_width;
-            
-            let sx = label_x + px as i32;
-            let sy = label_y + py as i32;
-            
-            if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
-                let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
-                buffer[idx + 0] = KEY_TEXT_COLOR.0;
-                buffer[idx + 1] = KEY_TEXT_COLOR.1;
-                buffer[idx + 2] = KEY_TEXT_COLOR.2;
-                buffer[idx + 3] = val;
+        // Calculate x position (centered)
+        let char_x = x0 as f32 + ((btn_w as f32 - metrics.advance_width) / 2.0);
+        
+        // Calculate y position using the same formula as geometric.rs
+        let char_y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+        
+        // Render bitmap using same indexing as geometric.rs: bitmap[y * width + x]
+        for y in 0..metrics.height {
+            for x in 0..metrics.width {
+                let val = bitmap[y * metrics.width + x];
+                if val == 0 {
+                    continue;
+                }
+                
+                let sx = (char_x + x as f32) as i32;
+                let sy = (char_y + y as f32) as i32;
+                
+                if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
+                    let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
+                    buffer[idx + 0] = KEY_TEXT_COLOR.0;
+                    buffer[idx + 1] = KEY_TEXT_COLOR.1;
+                    buffer[idx + 2] = KEY_TEXT_COLOR.2;
+                    buffer[idx + 3] = val;
+                }
             }
         }
     }
