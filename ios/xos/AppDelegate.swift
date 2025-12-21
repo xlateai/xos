@@ -44,25 +44,14 @@ private func signalHandler(_ signal: Int32) {
     print("CRASH: [Swift Crash] \(errorMsg)")
     
     // Post notification to show crash overlay
-    // Use sync dispatch to main queue to ensure notification is posted before termination
-    if Thread.isMainThread {
+    // Use async dispatch to avoid blocking the main thread
+    // This allows the UI to remain responsive even after a crash
+    DispatchQueue.main.async {
         NotificationCenter.default.post(
             name: NSNotification.Name("XosSwiftCrashed"),
             object: nil,
             userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
         )
-        // Give UI a moment to display
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-    } else {
-        DispatchQueue.main.sync {
-            NotificationCenter.default.post(
-                name: NSNotification.Name("XosSwiftCrashed"),
-                object: nil,
-                userInfo: ["type": "Swift Crash", "message": errorMsg, "signal": signal]
-            )
-            // Give UI a moment to display
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-        }
     }
     
     // Don't immediately re-raise the signal - let the UI show the crash overlay
@@ -94,21 +83,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             ConsoleManager.shared.addLog("CRASH: [Swift Crash] \(errorMsg)")
             print("CRASH: [Swift Crash] \(errorMsg)")
             
-            // Post notification (sync on main thread to ensure it's posted)
-            if Thread.isMainThread {
+            // Post notification (async to avoid blocking)
+            DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("XosSwiftCrashed"),
                     object: nil,
                     userInfo: ["type": "Swift Crash", "message": errorMsg]
                 )
-            } else {
-                DispatchQueue.main.sync {
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("XosSwiftCrashed"),
-                        object: nil,
-                        userInfo: ["type": "Swift Crash", "message": errorMsg]
-                    )
-                }
             }
         }
         

@@ -103,6 +103,9 @@ class ViewController: UIViewController {
             return
         }
         
+        // Disable fullscreen to show buttons and status bar
+        isFullscreen = false
+        
         // Show crash overlay in the viewport view (isolated application frame)
         viewportView.showCrashOverlay(crashType: "Rust crash", appName: crashedAppName)
         
@@ -113,6 +116,9 @@ class ViewController: UIViewController {
     }
     
     @objc private func handleSwiftCrash(_ notification: Notification) {
+        // Disable fullscreen to show buttons and status bar
+        isFullscreen = false
+        
         // Show crash overlay in the viewport view (isolated application frame)
         viewportView.showCrashOverlay(crashType: "Swift crash", appName: nil)
         
@@ -125,7 +131,7 @@ class ViewController: UIViewController {
     @objc private func changeApp() {
         let alert = UIAlertController(title: "Select App", message: nil, preferredStyle: .actionSheet)
         
-        let apps = ["blank", "crash", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "audioedit", "partitions", "coder", "leds"]
+        let apps = ["blank", "crash", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "audioedit", "partitions", "coder", "leds", "sensors"]
         
         for app in apps {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in

@@ -66,4 +66,5 @@ define_apps! {
     Partitions => partitions::Partitions,
     Coder => coder::CoderApp,
     Leds => leds::Leds,
+    IosSensors => ios_sensors::IosSensorsApp,
 }
