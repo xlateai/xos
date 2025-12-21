@@ -38,7 +38,7 @@ Verify the CLI is working:
 xos --help
 ```
 
-### Building and Running Applications
+## Developing Applications
 
 **Build for your current platform:**
 ```bash
@@ -51,7 +51,7 @@ xos build --ios
 ```
 This installs the `aarch64-apple-ios` target if needed, compiles the Rust library as a static library (`.a` file), and outputs to `ios/libs/libxos.a` for linking with Swift code.
 
-**Run an application:**
+## Running Applications:
 ```bash
 xos app <app-name>        # Run on your current platform
 xos app <app-name> --ios  # Run on connected iOS device
