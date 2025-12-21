@@ -80,9 +80,9 @@ impl IosSensorsApp {
         };
         
         let small_font_size = if cfg!(target_os = "ios") {
-            24.0
+            24.0 * 1.2 // 20% larger
         } else {
-            20.0
+            20.0 * 1.2 // 20% larger
         };
 
         // Load font multiple times since Font doesn't implement Clone
@@ -313,7 +313,21 @@ impl Application for IosSensorsApp {
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         // Check if selector is open - handle selector clicks first
         if self.sensor_selector.is_open() {
-            self.sensor_selector.on_mouse_down(state);
+            let shape = state.frame.array.shape();
+            let width = shape[1] as f32;
+            let height = shape[0] as f32;
+            let mouse_x = state.mouse.x;
+            let mouse_y = state.mouse.y;
+            
+            // Check if click was handled by selector (clicked on an option)
+            if self.sensor_selector.on_mouse_down(state) {
+                return;
+            }
+            
+            // If click was outside selector, close it (default is magnetometer so always allow closing)
+            if self.sensor_selector.is_click_outside(mouse_x, mouse_y, width, height) {
+                self.sensor_selector.close();
+            }
             return;
         }
         
@@ -322,8 +336,8 @@ impl Application for IosSensorsApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let button_y = height * 0.75; // 25% from bottom
-        let button_height = 50.0;
-        let button_width = 200.0;
+        let button_height = 65.0; // 30% bigger than 50.0
+        let button_width = 260.0; // 30% bigger than 200.0
         let button_x = (width - button_width) / 2.0;
         
         let mouse_x = state.mouse.x;
@@ -346,8 +360,8 @@ impl Application for IosSensorsApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let button_y = height * 0.75; // 25% from bottom
-        let button_height = 50.0;
-        let button_width = 200.0;
+        let button_height = 65.0; // 30% bigger than 50.0
+        let button_width = 260.0; // 30% bigger than 200.0
         let button_x = (width - button_width) / 2.0;
         
         let mouse_x = state.mouse.x;
@@ -390,8 +404,8 @@ impl IosSensorsApp {
     
     fn draw_sensor_button(&self, buffer: &mut [u8], width: u32, height: u32) {
         let button_y = (height as f32 * 0.75) as i32; // 25% from bottom
-        let button_height = 50;
-        let button_width = 200;
+        let button_height = 65; // 30% bigger than 50
+        let button_width = 260; // 30% bigger than 200
         let button_x = ((width as f32 - button_width as f32) / 2.0) as i32;
         
         // Choose button color based on hover state

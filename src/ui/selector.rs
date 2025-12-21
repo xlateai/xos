@@ -23,7 +23,7 @@ pub struct Selector {
 impl Selector {
     /// Create a new selector with the given options
     pub fn new(options: Vec<String>) -> Self {
-        let font_size = 24.0;
+        let font_size = 34.56; // 20% larger than 28.8 (which was 20% larger than 24.0)
         
         // Create a text renderer for each option
         // Each renderer gets its own font instance (fontdue Font is not Clone)
@@ -95,8 +95,9 @@ impl Selector {
         let height = shape[0] as f32;
 
         // Calculate selector position (centered)
-        let selector_width = 300.0;
-        let selector_height = (self.options.len() as f32 * 50.0) + 40.0; // 50px per option + padding
+        let selector_width = 390.0; // 30% larger than 300.0
+        let option_height = 78.0; // 30% larger than 60.0
+        let selector_height = (self.options.len() as f32 * option_height) + 40.0; // 78px per option + padding
         let x = (width - selector_width) / 2.0;
         let y = (height - selector_height) / 2.0;
 
@@ -104,7 +105,6 @@ impl Selector {
         if mouse_x >= x && mouse_x <= x + selector_width &&
            mouse_y >= y && mouse_y <= y + selector_height {
             // Check which option was clicked
-            let option_height = 50.0;
             let start_y = y + 20.0; // Top padding
             let click_y = mouse_y - start_y;
             
@@ -137,6 +137,23 @@ impl Selector {
             text_renderer.tick(10000.0, height); // Large width to prevent wrapping
         }
     }
+    
+    /// Check if a click is outside the selector bounds
+    pub fn is_click_outside(&self, mouse_x: f32, mouse_y: f32, width: f32, height: f32) -> bool {
+        if !self.is_open {
+            return false;
+        }
+        
+        let selector_width = 390.0; // 30% larger than 300.0
+        let option_height = 78.0; // 30% larger than 60.0
+        let selector_height = (self.options.len() as f32 * option_height) + 40.0;
+        let x = (width - selector_width) / 2.0;
+        let y = (height - selector_height) / 2.0;
+        
+        // Return true if click is outside selector bounds
+        !(mouse_x >= x && mouse_x <= x + selector_width &&
+          mouse_y >= y && mouse_y <= y + selector_height)
+    }
 
     /// Render the selector to the frame buffer
     pub fn render(&self, state: &mut EngineState) {
@@ -152,8 +169,8 @@ impl Selector {
         let buffer = state.frame_buffer_mut();
 
         // Calculate selector dimensions and position
-        let selector_width = 300.0;
-        let option_height = 50.0;
+        let selector_width = 390.0; // 30% larger than 300.0
+        let option_height = 78.0; // 30% larger than 60.0
         let selector_height = (self.options.len() as f32 * option_height) + 40.0;
         let center_x = width as f32 / 2.0;
         let center_y = height as f32 / 2.0;
@@ -308,8 +325,16 @@ impl Selector {
 
             // Render text for this option
             if let Some(text_renderer) = self.text_renderers.get(idx) {
-                // Calculate text position (centered vertically in option, left-aligned with padding)
-                let text_x = (scaled_x + 20 + 10) as f32; // Left padding
+                // Calculate text width to center it horizontally
+                let text_width = if let Some(last_char) = text_renderer.characters.last() {
+                    last_char.x + last_char.metrics.advance_width
+                } else {
+                    0.0
+                };
+                
+                // Center text horizontally in the option box
+                let option_center_x = (scaled_x + 20) as f32 + option_width as f32 / 2.0;
+                let text_x = option_center_x - text_width / 2.0;
                 
                 // Center text vertically in the option box
                 // The renderer's coordinate system: y=0 is top, y=ascent is first baseline
