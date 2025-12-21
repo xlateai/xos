@@ -1,67 +1,194 @@
 # xos
-xlate's operating system designed to run portably across all types of devices and circumstances.
 
-# Rust
-Yes rust. We're so modern look at us go. But seriously, what an incredibly well put-together ecosystem.
+xlate's operating system—a cross-platform framework designed to feel like a game engine and tensor library wrapped up into an easy to use and understand programming interface.
 
-# Using the CLI
-Make sure you have rust installed. It should be super simple.
+Every application in xos is essentially like a standalone application in a standard operating system, but you can launch them on any supported backend. Built with Rust for performance, reliability, and universal compatibility, xos aims to become as easily cross-compatible as possible—a perfect build system with universal applicability that feels more like a game engine with conveniences always within reach.
 
-```
+**Key goals:**
+- **<1 minute build times** across the board
+- **No HTML/CSS dependencies**—rasterization/game engine approach with clean UI optimized for scientific computing
+- **Universal application compatibility**—write once, run anywhere
+- **Future "home screen"** where applications, launchers, and drivers are easily modifiable and compatible
+
+## Prerequisites
+
+**Required:**
+- ✅ Rust toolchain ([rustup.rs](https://rustup.rs/))
+- ✅ macOS (for iOS development)
+- ✅ Xcode (for iOS development)
+- ✅ iOS device with Developer Mode enabled (for iOS deployment)
+
+**Optional (Linux):**
+- Advanced Linux Sound Architecture library (for audio support):
+  ```bash
+  sudo apt-get update && sudo apt-get install -y libasound2-dev
+  ```
+
+## Quick Start
+
+### Installing the xos CLI
+
+From the root of the repository:
+
+```bash
 cargo build --release
 cargo install --path .
 ```
 
-Advanced Linux Sound Architecture library is needed if you do not have it (TODO: we may want our own kernels for this? or auto install/features?)
-```
-sudo apt-get update && sudo apt-get install -y libasound2-dev
-```
+After installation, verify the CLI is working:
 
-To run the react native, expo & its dependencies are required
-```
-cd src/native-bridge/
-npm i -g
-```
-
-After that, you can now run the `xos` CLI, which can be executed in one of a few methods:
-1. `xos dev` (standard) - this will launch the dev showcase app locally on your machine (windows/mac native app windows).
-2. `xos dev --web` (web/wasm) - this will compile the code into WASM and open within your browser.
-3. `xos dev --react-native` (react-native/wasm) - this will compile into WASM and launch react-native so you can open the app in the browser OR scan the QR code using expo go to launch the native IOS application!
-
-Since XOS is designed to run anywhere and on any device, it's crucial that all apps developed on xlate are always buildable/runnable through both standard runtimes (compiled for the current target machine) as well as WASM that allows us to launch the exact same app on the browser and on mobile devices like IOS through react native web views.
-
-That means that XOS as a development principle system needs to ensure that conditional compilation requirements for WASM support are always maintained for every app. This means we will likely have to rebuild many pieces of rust's STD libraries. Some examples include `system time`, `rand`, `net`, `fs`, among a few others.
-
-However, it's a small price to pay for full application unity! 
-
-# Update/Develop the CLI
-To update and run the CLI, unfortunately Rust doesn't support the ability to automatically sync the CLI command with local changes (the equivalent of python's `pip install -e .` flag for `-e` which adds this feature). So, instead we have to make sure to rebuild the package and THEN run the CLI.
-
-So, after making changes in the repo, you should run:
-
-```
-cargo install --path .
+```bash
 xos --help
 ```
 
-Note: `xos` is our CLI command.
+**Note:** When developing the CLI itself, rebuild after making changes:
 
-TODO: make it so that xos automatically builds itself (for the standard/native version) whenever we call the CLI so we don't have to run `cargo install --path .` each time we make changes to it (simulating python's `pip install -e .` feature).
-
-# Native Bridge
-Don't forget to use the `--tunnel` in `npx expo start --tunnel`, otherwise weird things occur (you'll just see a JSON payload).
-
-# Python (EXPERIMENTAL)
-First, you'll need to have python installed on your machine, also preferably inside of a venv (I prefer conda).
-
-```
-pip install maturin
+```bash
+cargo install --path .
 ```
 
-Then, from the root of the repo, you can run:
+## Building xos
+
+### Standard Build
+
+Build xos for your current platform:
+
+```bash
+xos build
+```
+
+This compiles the Rust core library for your native platform (macOS, Linux, or Windows).
+
+### iOS Build
+
+Build the Rust library for iOS devices:
+
+```bash
+xos build --ios
+```
+
+This script:
+- Installs the `aarch64-apple-ios` target if needed
+- Compiles the Rust library as a static library (`.a` file)
+- Outputs to `ios/libs/libxos.a` for linking with Swift code
+
+**iOS Requirements:**
+- macOS computer
+- Physical USB cable connection to iOS device
+- Device must be in Developer Mode (Settings > Privacy & Security > Developer Mode)
+- Xcode with proper code signing configured
+
+## Running Applications
+
+xos applications are standalone programs that can run on any supported backend. Each application is like a native OS application but with universal portability.
+
+### Running on Native Platform
+
+Run any xos application on your current platform:
+
+```bash
+xos app <app-name>
+```
+
+**Available applications:**
+- `Ball` - Ball physics demo
+- `Tracers` - Particle tracer visualization
+- `Camera` - Camera capture app
+- `Whiteboard` - Drawing whiteboard
+- `Text` - Text editor
+- `Waveform` - Audio waveform visualization
+- `Wireframe` - 3D wireframe demo
+- `Triangles` - Triangle rendering demo
+- `Audiovis` - Audio visualization
+- `AudioEdit` - Audio editor
+- `IosSensors` - iOS sensor data visualization
+- And more...
+
+### Running on iOS
+
+Launch an application on a connected iOS device:
+
+```bash
+xos app <app-name> --ios
+```
+
+**iOS Deployment Process:**
+1. Ensure your device is connected via USB and in Developer Mode
+2. Run `xos build --ios` to compile the Rust library
+3. Run `xos app <app-name> --ios` to build and deploy
+
+The CLI will:
+- Build the Rust library for iOS (if needed)
+- Compile the Swift iOS app
+- Install and launch on your connected device
+
+**First-time iOS setup:**
+- Open `ios/xos.xcworkspace` in Xcode
+- Configure code signing (Signing & Capabilities tab)
+- Select your development team
+- The CLI handles the rest automatically
+
+## Platform Support
+
+### ✅ Fully Supported
+
+- **macOS** - Native desktop applications
+- **Linux** - Native desktop applications (with optional ALSA for audio)
+- **iOS** - Native mobile applications (requires macOS + Xcode)
+
+### ⏸️ Paused (Planned Return)
+
+- **Web/WASM** - Browser-based execution (planned for future release)
+
+## Project Structure
 
 ```
-maturin develop --release
+xos/
+├── src/
+│   ├── apps/          # xos applications
+│   ├── engine/        # Core engine and application framework
+│   ├── sensors/       # Sensor abstractions
+│   ├── audio/         # Audio processing
+│   ├── video/         # Video processing
+│   └── main.rs        # CLI entry point
+├── ios/               # iOS native app (Swift)
+│   ├── libs/          # Compiled Rust libraries
+│   └── xos.xcworkspace
+├── build-ios.sh       # iOS Rust library build script
+└── Cargo.toml         # Rust project configuration
 ```
 
-Note: `--release` is really important for performance, even if you're just developing.
+## Common Tasks
+
+**Rebuild iOS Rust library:**
+```bash
+xos build --ios
+# Or manually:
+./build-ios.sh
+```
+
+**Run an app on iOS:**
+```bash
+xos app IosSensors --ios
+```
+
+**List available apps:**
+```bash
+xos app --help
+```
+
+**Rebuild CLI after changes:**
+```bash
+cargo install --path .
+```
+
+## Development Philosophy
+
+xos applications are designed to be:
+- **Standalone** - Each app is independent and self-contained
+- **Portable** - Write once, run on any supported platform
+- **Performant** - Built with Rust for speed and reliability
+- **Scientific computing friendly** - Optimized for data visualization, sensor processing, and computational workloads
+- **Game engine-like** - Rich rendering capabilities with clean, efficient UI primitives
+
+We're building toward a future where xos applications can be easily modified, extended, and composed together, with a unified home screen and application launcher that makes the entire ecosystem feel cohesive and powerful.
