@@ -31,7 +31,7 @@ enum SymbolMode {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum KeyType {
+pub enum KeyType {
     Char(char),
     Backspace,
     Space,
@@ -93,6 +93,10 @@ impl OnScreenKeyboard {
 
     pub fn is_minimized(&self) -> bool {
         self.minimized
+    }
+
+    pub fn get_held_key_type(&self) -> Option<KeyType> {
+        self.held_key_type
     }
 
     pub fn toggle_minimize(&mut self) {
@@ -210,8 +214,16 @@ impl OnScreenKeyboard {
         };
         
         // Track held key for repeat (only for keys that should repeat)
+        // Shift is tracked separately for cursor movement, not repeat
         let should_repeat = match key_type {
             KeyType::Char(_) | KeyType::Backspace | KeyType::Space | KeyType::Return => true,
+            KeyType::Shift => {
+                // Track shift for cursor movement, but don't repeat
+                self.held_key_type = Some(key_type);
+                self.held_key_start_time = Some(now);
+                self.last_repeat_time = None;
+                false
+            },
             _ => false,
         };
         

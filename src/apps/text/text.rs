@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::geometric::GeometricText;
-use crate::apps::text::onscreen_keyboard::OnScreenKeyboard;
+use crate::apps::text::onscreen_keyboard::{OnScreenKeyboard, KeyType};
 use crate::apps::partitions::partition::Partition;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
@@ -50,7 +50,15 @@ impl TextApp {
         // let font_bytes = include_bytes!("../../../assets/NotoSansJP-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
-        let text_engine = GeometricText::new(font, 48.0);
+        // Increase font size by 10% on iOS
+        let base_font_size = 48.0;
+        let font_size = if cfg!(target_os = "ios") {
+            base_font_size * 1.1 // 10% larger on iOS
+        } else {
+            base_font_size
+        };
+
+        let text_engine = GeometricText::new(font, font_size);
 
         // huge TODO: multi-language support lmao
         // text_engine.set_text("こんにちは、今日は大丈夫です".to_string());
@@ -479,6 +487,64 @@ impl Application for TextApp {
         
         // Update keyboard hover state
         self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
+        
+        // Check if shift is held for cursor movement
+        if let Some(KeyType::Shift) = self.keyboard.get_held_key_type() {
+            // Move cursor based on finger position
+            let safe_region = &state.frame.safe_region_boundaries;
+            let content_top = safe_region.y1 * height;
+            
+            // Convert screen coordinates to text coordinates
+            let text_x = state.mouse.x;
+            let text_y = state.mouse.y - content_top + self.scroll_y;
+            
+            // Find nearest character to finger position
+            let mut nearest_char_index = self.text_engine.text.chars().count();
+            let mut min_distance_sq = f32::MAX;
+            
+            for character in &self.text_engine.characters {
+                let char_center_x = character.x + character.width / 2.0;
+                let char_center_y = character.y + character.height / 2.0;
+                
+                let dx = text_x - char_center_x;
+                let dy = text_y - char_center_y;
+                let distance_sq = dx * dx + dy * dy;
+                
+                if distance_sq < min_distance_sq {
+                    min_distance_sq = distance_sq;
+                    // If finger is to the right of character center, cursor goes after it
+                    if text_x > char_center_x {
+                        nearest_char_index = character.char_index + 1;
+                    } else {
+                        nearest_char_index = character.char_index;
+                    }
+                }
+            }
+            
+            // Also check for empty lines
+            for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                let line_y = line.baseline_y;
+                
+                if text_y >= line_y - self.text_engine.ascent && text_y <= line_y + self.text_engine.descent {
+                    let has_chars = self.text_engine.characters.iter()
+                        .any(|c| c.line_index == line_idx);
+                    
+                    if !has_chars {
+                        // Empty line - place cursor at start
+                        self.cursor_position = line.start_index;
+                        return;
+                    }
+                }
+            }
+            
+            self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+            return;
+        }
+        
+        // Don't allow scrolling if touch started on keyboard
+        if self.touch_started_on_keyboard {
+            return;
+        }
         
         // Check if mouse moved significantly from tap position (start dragging)
         if !self.dragging && state.mouse.is_left_clicking {
