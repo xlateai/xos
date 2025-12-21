@@ -203,41 +203,91 @@ impl Application for TextApp {
     
         // Draw cursor (offset by content_top)
         // Find cursor position based on cursor_position index
-        let (target_x, baseline_y) = if self.cursor_position == 0 {
-            // Cursor at start
+        // First, find which line the cursor is on
+        let line_info_with_idx = self.text_engine.lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+            });
+        
+        let (target_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
+            // Found the line - check if there are characters in this line
+            let chars_in_line: Vec<_> = self.text_engine.characters.iter()
+                .filter(|c| c.line_index == line_idx)
+                .collect();
+            
+            if chars_in_line.is_empty() {
+                // Empty line - cursor at start
+                (0.0, line.baseline_y)
+            } else {
+                // Line has characters - find the appropriate x position
+                // Check if cursor is at the start of the line
+                if self.cursor_position == line.start_index {
+                    (0.0, line.baseline_y)
+                } else {
+                    // Find character at or before cursor position
+                    let mut found_char = None;
+                    let mut char_after = None;
+                    
+                    for character in self.text_engine.characters.iter() {
+                        if character.char_index == self.cursor_position {
+                            found_char = Some(character);
+                            break;
+                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
+                            char_after = Some(character);
+                            break;
+                        }
+                    }
+                    
+                    if let Some(char_at_cursor) = found_char {
+                        // Cursor is before this character
+                        (char_at_cursor.x, line.baseline_y)
+                    } else if let Some(char_after_cursor) = char_after {
+                        // Cursor is before this character (on same line)
+                        (char_after_cursor.x, line.baseline_y)
+                    } else {
+                        // Cursor is at end of line - find last character's end position
+                        if let Some(last_in_line) = chars_in_line.last() {
+                            (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
+                        } else {
+                            (0.0, line.baseline_y)
+                        }
+                    }
+                }
+            }
+        } else if self.cursor_position == 0 {
+            // Cursor at very start (before any lines)
             if let Some(first_line) = self.text_engine.lines.first() {
                 (0.0, first_line.baseline_y)
             } else {
                 (0.0, self.text_engine.ascent)
             }
         } else if self.cursor_position >= self.text_engine.text.chars().count() {
-            // Cursor at end
-            if let Some(last) = self.text_engine.characters.last() {
-                if self.text_engine.text.chars().last() == Some('\n') {
-                    (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            // Cursor at end of text
+            if let Some(last_line) = self.text_engine.lines.last() {
+                // Find the line index
+                let last_line_idx = self.text_engine.lines.len() - 1;
+                // Check if last line has characters
+                let chars_in_last_line: Vec<_> = self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == last_line_idx)
+                    .collect();
+                
+                if chars_in_last_line.is_empty() {
+                    (0.0, last_line.baseline_y)
+                } else if let Some(last_char) = chars_in_last_line.last() {
+                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
                 } else {
-                    (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+                    (0.0, last_line.baseline_y)
                 }
+            } else if let Some(last) = self.text_engine.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
             } else {
                 (0.0, self.text_engine.ascent)
             }
         } else {
-            // Cursor in middle - find the character at cursor_position
-            let mut found_char = None;
-            
-            for character in self.text_engine.characters.iter() {
-                if character.char_index == self.cursor_position {
-                    found_char = Some(character);
-                    break;
-                }
-            }
-            
-            if let Some(char_at_cursor) = found_char {
-                // Cursor is before this character
-                (char_at_cursor.x, self.text_engine.lines.get(char_at_cursor.line_index)
-                    .map_or(self.text_engine.ascent, |line| line.baseline_y))
-            } else if let Some(last) = self.text_engine.characters.last() {
-                // Fallback to end
+            // Fallback: cursor position is out of bounds somehow
+            // Try to find nearest line or character
+            if let Some(last) = self.text_engine.characters.last() {
                 (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
             } else {
                 (0.0, self.text_engine.ascent)
