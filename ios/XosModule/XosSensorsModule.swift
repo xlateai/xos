@@ -170,6 +170,13 @@ final class MagnetometerListener {
             // Safely call the Rust callback with captured values
             // Wrap in autoreleasepool to prevent memory issues
             autoreleasepool {
+                // Double-check that callback and userData are still valid
+                // (They might have been cleared during cleanup)
+                guard let callback = self.callback, let userData = userData else {
+                    // Callback was cleared, ignore this reading
+                    return
+                }
+                
                 // Callback might crash if Rust side has issues, but we can't catch that
                 // However, we've already validated all inputs, so it should be safe
                 callback(x, y, z, userData)
@@ -192,11 +199,16 @@ final class MagnetometerListener {
             return
         }
         
-        // Set inactive first to prevent callbacks from executing
+        // Clear callback FIRST to prevent any new callbacks from being invoked
+        // This must happen before stopping updates to avoid race conditions
+        self.callback = nil
+        self.callbackUserData = nil
+        
+        // Set inactive to prevent any in-flight callbacks from processing
         isActive = false
         
         #if canImport(CoreMotion)
-        // Stop updates
+        // Stop updates - this will prevent new callbacks from being queued
         if let manager = motionManager as? CMMotionManager {
             manager.stopMagnetometerUpdates()
         }

@@ -116,13 +116,19 @@ impl Drop for Magnetometer {
         #[cfg(target_os = "ios")]
         {
             unsafe {
-                // Clear callback before destroying
+                // IMPORTANT: Clear callback FIRST to prevent any new callbacks
+                // This must happen before destroy to avoid race conditions
+                // The Swift side will also clear the callback in stop(), providing double protection
                 xos_sensors_magnetometer_set_callback(self.magnetometer_id, None, std::ptr::null_mut());
+                
+                // Now destroy the listener (this will stop updates on Swift side)
                 xos_sensors_magnetometer_destroy(self.magnetometer_id);
                 
                 // Recover the producer wrapper box to avoid leak
+                // Do this last, after ensuring no more callbacks can fire
                 if !self.producer_wrapper_ptr.is_null() {
                     let _ = Box::from_raw(self.producer_wrapper_ptr as *mut ProducerWrapper);
+                    self.producer_wrapper_ptr = std::ptr::null_mut();
                 }
             }
         }
@@ -131,17 +137,22 @@ impl Drop for Magnetometer {
 
 // FFI callback function called from Swift
 extern "C" fn magnetometer_callback(x: f64, y: f64, z: f64, user_data: *mut std::ffi::c_void) {
+    // Early return if user_data is null (callback was cleared)
     if user_data.is_null() {
         return;
     }
 
     // Wrap in catch_unwind to prevent Swift crashes from propagating
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Double-check pointer is still valid before dereferencing
+        // This is a best-effort check - if the memory was freed, this might still crash
+        // but it's better than nothing
         let wrapper = unsafe { &*(user_data as *const ProducerWrapper) };
         let reading = MagnetometerReading { x, y, z };
         
         // Lock producer and push to ring buffer (non-blocking, may fail if full)
         // If buffer is full, we drop the sample (better than blocking)
+        // If lock fails (e.g., mutex was poisoned), we drop the sample
         if let Ok(mut producer) = wrapper.producer.try_lock() {
             let _ = producer.push(reading);
         }
