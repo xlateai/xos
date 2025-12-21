@@ -36,10 +36,6 @@ pub struct TextApp {
     cursor_position: usize, // Character index where cursor should be
     dragging: bool,
     last_mouse_y: f32,
-    // Keyboard repeat tracking
-    held_key: Option<char>,
-    held_key_start_time: Option<Instant>,
-    last_repeat_time: Option<Instant>,
     touch_started_on_keyboard: bool,
     // Cursor positioning on release
     pending_cursor_tap_x: Option<f32>,
@@ -71,9 +67,6 @@ impl TextApp {
             cursor_position: 0,
             dragging: false,
             last_mouse_y: 0.0,
-            held_key: None,
-            held_key_start_time: None,
-            last_repeat_time: None,
             touch_started_on_keyboard: false,
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
@@ -155,31 +148,10 @@ impl Application for TextApp {
     
         self.text_engine.tick(width, content_bottom - content_top);
     
-        // Handle keyboard repeat for physical keyboard (2x faster than normal)
+        // Handle on-screen keyboard repeat
         let now = Instant::now();
         let mut keys_to_process: Vec<char> = Vec::new();
         
-        if let Some(held_ch) = self.held_key {
-            if let Some(start_time) = self.held_key_start_time {
-                // Normal repeat delay is typically ~500ms, so 2x faster = 250ms
-                let repeat_delay = Duration::from_millis(250);
-                let repeat_interval = Duration::from_millis(50); // Fast repeat interval
-                
-                if now.duration_since(start_time) >= repeat_delay {
-                    if let Some(last_repeat) = self.last_repeat_time {
-                        if now.duration_since(last_repeat) >= repeat_interval {
-                            keys_to_process.push(held_ch);
-                            self.last_repeat_time = Some(now);
-                        }
-                    } else {
-                        keys_to_process.push(held_ch);
-                        self.last_repeat_time = Some(now);
-                    }
-                }
-            }
-        }
-        
-        // Handle on-screen keyboard repeat
         if let Some(ch) = self.keyboard.check_key_hold_repeat(now) {
             keys_to_process.push(ch);
         }
@@ -420,19 +392,6 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
-        // Track held key for repeat (only for certain keys that should repeat)
-        let should_repeat = match ch {
-            ARROW_LEFT | ARROW_RIGHT | ARROW_UP | ARROW_DOWN | '\u{8}' | ' ' => true,
-            _ if !ch.is_control() => true, // Regular characters
-            _ => false,
-        };
-        
-        if should_repeat {
-            self.held_key = Some(ch);
-            self.held_key_start_time = Some(Instant::now());
-            self.last_repeat_time = None;
-        }
-        
         match ch {
             ARROW_LEFT => {
                 self.move_cursor_left();
@@ -716,10 +675,7 @@ impl Application for TextApp {
         
         // Stop dragging
         self.dragging = false;
-        // Reset keyboard repeat tracking
-        self.held_key = None;
-        self.held_key_start_time = None;
-        self.last_repeat_time = None;
+        // Reset touch tracking
         self.touch_started_on_keyboard = false;
     }
 }
