@@ -1,5 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::geometric::GeometricText;
+use crate::apps::text::onscreen_keyboard::OnScreenKeyboard;
+use crate::apps::partitions::partition::Partition;
 use fontdue::{Font, FontSettings};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -18,6 +20,7 @@ pub struct TextApp {
     pub scroll_y: f32,
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
+    keyboard: OnScreenKeyboard,
 }
 
 
@@ -37,6 +40,7 @@ impl TextApp {
             scroll_y: 0.0,
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
+            keyboard: OnScreenKeyboard::new(),
         }
     }
 
@@ -184,6 +188,12 @@ impl Application for TextApp {
         }
     
         self.tick_cursor(state);
+        
+        // Draw keyboard
+        let shape = state.frame.shape();
+        let width_u32 = shape[1] as u32;
+        let height_u32 = shape[0] as u32;
+        self.keyboard.draw(state.frame_buffer_mut(), width_u32, height_u32);
     }
     
 
@@ -210,6 +220,32 @@ impl Application for TextApp {
                 }
             }
         }
+    }
+
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        
+        // Update keyboard hover state
+        self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
+    }
+
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        
+        // Check keyboard key press (handles dismiss button internally)
+        if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height) {
+            // Route through on_key_char to ensure it works on all platforms
+            self.on_key_char(state, ch);
+        }
+    }
+
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        // Release all keys when mouse is released
+        self.keyboard.release_keys();
     }
     
 }
