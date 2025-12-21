@@ -140,7 +140,7 @@ impl Application for CoderApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         

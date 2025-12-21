@@ -9,8 +9,7 @@ use winit::{
     window::{CursorIcon, Window, WindowId},
 };
 
-use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter};
-use crate::tensor::array::{Array, Device};
+use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundaries};
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -225,10 +224,9 @@ impl ApplicationHandler for AppStateWrapper {
                 }
             };
 
-            let shape = vec![size.height as usize, size.width as usize, 4];
-            let data = vec![0u8; (size.width * size.height * 4) as usize];
+            let safe_regions = SafeRegionBoundaries::full_screen();
             let mut engine_state = EngineState {
-                frame: Array::new_on_device(data, shape, Device::Cpu),
+                frame: FrameState::new(size.width, size.height, safe_regions),
                 mouse: MouseState {
                     x: 0.0,
                     y: 0.0,

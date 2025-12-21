@@ -148,7 +148,7 @@ impl MediaControlBar {
     pub fn on_mouse_down(&mut self, state: &mut EngineState) -> bool {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
 
@@ -182,7 +182,7 @@ impl MediaControlBar {
     /// Update seek position based on mouse position
     fn update_seek_position(&mut self, state: &mut EngineState) {
         let mouse_x = state.mouse.x;
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
 
@@ -199,7 +199,7 @@ impl MediaControlBar {
 
     /// Render the control bar
     pub fn render(&self, state: &mut EngineState) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();

@@ -19,7 +19,7 @@ impl Application for CursorApp {
     fn tick(&mut self, state: &mut EngineState) {
         // state.mouse.style.hidden();
 
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let mx = state.mouse.x.round() as i32;

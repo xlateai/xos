@@ -14,11 +14,9 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
 use crate::apps;
 #[cfg(target_os = "ios")]
-use crate::engine::{Application, EngineState, MouseState};
+use crate::engine::{Application, EngineState, MouseState, FrameState, SafeRegionBoundaries};
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
-#[cfg(target_os = "ios")]
-use crate::tensor::array::{Array, Device};
 
 // Global engine state for iOS
 // Note: We use unsafe Send impl because Application trait objects are not Send,
@@ -138,10 +136,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         }
     };
 
-    let shape = vec![height as usize, width as usize, 4];
-    let data = vec![0u8; (width * height * 4) as usize];
+    let safe_regions = SafeRegionBoundaries::ios_iphone_16_pro();
     let mut engine_state = EngineState {
-        frame: Array::new_on_device(data, shape, Device::Cpu),
+        frame: FrameState::new(width, height, safe_regions),
         mouse: MouseState {
             x: 0.0,
             y: 0.0,
@@ -244,7 +241,7 @@ pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
     };
 
     if let Some(ref ios_state) = *state {
-        let data = ios_state.engine_state.frame.data();
+        let data = ios_state.engine_state.frame.array.data();
         if data.is_empty() {
             ptr::null()
         } else {
@@ -265,7 +262,7 @@ pub extern "C" fn xos_engine_get_frame_buffer_size() -> usize {
     };
 
     if let Some(ref ios_state) = *state {
-        ios_state.engine_state.frame.data().len()
+        ios_state.engine_state.frame.array.data().len()
     } else {
         0
     }

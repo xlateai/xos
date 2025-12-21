@@ -1,4 +1,4 @@
-use crate::engine::EngineState;
+use crate::engine::{EngineState, SafeRegionBoundaries};
 use crate::tuneable::write_all_to_source;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -93,6 +93,32 @@ pub trait Partition {
     fn draw(&self, buffer: &mut [u8], width: u32, height: u32) {
         // Blank - partitions are invisible by default unless taken ownership over by another module
         let _ = (buffer, width, height);
+    }
+
+    /// Get the actual screen coordinates for this partition, accounting for safe regions
+    /// Returns (x0, y0, x1, y1) in screen pixel coordinates
+    fn get_screen_bounds(&self, width: u32, height: u32, safe_regions: &SafeRegionBoundaries) -> (f32, f32, f32, f32) {
+        let w = width as f32;
+        let h = height as f32;
+        let data = self.data();
+        
+        // Transform partition coordinates (0-1) to screen coordinates
+        // Partitions are defined in safe region space, so we need to map them
+        let top_safe = safe_regions.top_safe_coordinates;
+        let bottom_safe = safe_regions.bottom_safe_coordinates;
+        
+        // Calculate the safe drawing area
+        let safe_top = top_safe.3; // Bottom of top safe region
+        let safe_bottom = bottom_safe.1; // Top of bottom safe region
+        let safe_height = safe_bottom - safe_top;
+        
+        // Map partition coordinates to safe area
+        let x0 = data.left * w;
+        let x1 = data.right * w;
+        let y0 = safe_top * h + data.top * safe_height * h;
+        let y1 = safe_top * h + data.bottom * safe_height * h;
+        
+        (x0, y0, x1, y1)
     }
 
     fn region_under_mouse(&self, mx: f32, my: f32, w: f32, h: f32) -> DragRegion {
@@ -251,6 +277,7 @@ pub trait Partition {
         }
     }
 }
+
 
 
 

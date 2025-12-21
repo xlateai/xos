@@ -27,7 +27,7 @@ impl WireframeDemo {
     }
 
     fn draw_square(&self, state: &mut EngineState, x: f32, y: f32) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as usize;
         let height = shape[0] as usize;
         let buffer = state.frame_buffer_mut();
@@ -63,7 +63,7 @@ impl WireframeDemo {
         let norm_x = square_x().get();
         let norm_y = square_y().get();
 
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let abs_x = norm_x * shape[1] as f32;
         let abs_y = norm_y * shape[0] as f32;
         (abs_x, abs_y)
@@ -107,11 +107,11 @@ impl Application for WireframeDemo {
             let raw_x = state.mouse.x - self.drag_offset_x;
             let raw_y = state.mouse.y - self.drag_offset_y;
 
-            let shape = state.frame.shape();
+            let shape = state.frame.array.shape();
             let norm_x = raw_x / shape[1] as f32;
             let norm_y = raw_y / shape[0] as f32;
 
-            let shape = state.frame.shape();
+            let shape = state.frame.array.shape();
             let (clamped_x, clamped_y) = Self::clamp_position(norm_x, norm_y, shape[1] as u32, shape[0] as u32);
 
             square_x().set(clamped_x);
@@ -127,11 +127,11 @@ impl Application for WireframeDemo {
             let raw_x = state.mouse.x - self.drag_offset_x;
             let raw_y = state.mouse.y - self.drag_offset_y;
 
-            let shape = state.frame.shape();
+            let shape = state.frame.array.shape();
             let norm_x = raw_x / shape[1] as f32;
             let norm_y = raw_y / shape[0] as f32;
 
-            let shape = state.frame.shape();
+            let shape = state.frame.array.shape();
             let (clamped_x, clamped_y) = Self::clamp_position(norm_x, norm_y, shape[1] as u32, shape[0] as u32);
 
             square_x().set(clamped_x);

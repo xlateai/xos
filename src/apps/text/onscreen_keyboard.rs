@@ -48,9 +48,10 @@ impl OnScreenKeyboard {
         let font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
 
-        // Initialize at bottom 25% of screen
+        // Initialize partition - actual position will be set by text app using safe regions
+        // Internal coordinates (0-1) work relative to partition bounds
         let mut keyboard = Self {
-            data: PartitionData::new(0.0, 1.0, 0.75, 1.0, KEYBOARD_BG_COLOR),
+            data: PartitionData::new(0.0, 1.0, 0.70, 1.0, KEYBOARD_BG_COLOR),
             keys: Vec::new(),
             font,
             minimized: false,
@@ -189,7 +190,8 @@ impl OnScreenKeyboard {
         
         // Calculate uniform key width based on row with most keys (row 1 has 10)
         let uniform_key_width = (1.0 - side_padding_ratio * 2.0 - key_spacing_ratio * 9.0) / 10.0;
-        let special_key_width = uniform_key_width * 1.5; // Shift, Backspace, Return are 1.5x
+        let special_key_width = uniform_key_width * 1.5; // Shift, Return are 1.5x
+        let delete_key_width = uniform_key_width * 1.8; // Delete is slightly wider for "delete" text
         
         // Row 1: 10 buttons (qwertyuiop)
         let row1_total_width = uniform_key_width * 10.0 + key_spacing_ratio * 9.0;
@@ -226,10 +228,10 @@ impl OnScreenKeyboard {
             x += uniform_key_width + key_spacing_ratio;
         }
         
-        // Row 3: Shift + 7 letters + Backspace
+        // Row 3: Shift + 7 letters + Delete
         key_y += row_height + key_spacing_ratio;
         let row3_letters_width = uniform_key_width * 7.0 + key_spacing_ratio * 6.0;
-        let row3_total_width = special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio + special_key_width;
+        let row3_total_width = special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio + delete_key_width;
         let row3_start_x = (1.0 - row3_total_width) / 2.0;
         
         // Shift on left
@@ -256,12 +258,12 @@ impl OnScreenKeyboard {
             x += uniform_key_width + key_spacing_ratio;
         }
         
-        // Backspace on right
+        // Delete on right (wider for "delete" text)
         self.keys.push(Key {
             key_type: KeyType::Backspace,
             x: row3_start_x + special_key_width + key_spacing_ratio + row3_letters_width + key_spacing_ratio,
             y: key_y,
-            width: special_key_width,
+            width: delete_key_width,
             height: row_height,
             pressed: false,
         });
@@ -587,7 +589,7 @@ impl Partition for OnScreenKeyboard {
                         ch.to_string()
                     }
                 }
-                KeyType::Backspace => "⌫".to_string(),
+                KeyType::Backspace => "delete".to_string(),
                 KeyType::Space => "Space".to_string(),
                 KeyType::Shift => "⇧".to_string(),
                 KeyType::Return => "↵".to_string(),

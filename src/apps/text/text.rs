@@ -80,36 +80,6 @@ impl TextApp {
         }
     }
 
-    fn tick_cursor(&mut self, state: &mut EngineState) {
-        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
-            if self.text_engine.text.chars().last() == Some('\n') {
-                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
-            } else {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
-            }
-        } else {
-            (0.0, self.text_engine.ascent)
-        };
-        
-        // Smooth the x-position (linear interpolation)
-        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
-        
-        let cursor_top = (baseline_y - self.text_engine.ascent - self.scroll_y).round() as i32;
-        let cursor_bottom = (baseline_y + self.text_engine.descent - self.scroll_y).round() as i32;
-        let cx = self.smooth_cursor_x.round() as i32;
-        
-        for y in cursor_top..cursor_bottom {
-            let shape = state.frame.shape();
-            if y >= 0 && y < shape[0] as i32 && cx >= 0 && cx < shape[1] as i32 {
-                let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
-                let buffer = state.frame_buffer_mut();
-                buffer[idx + 0] = CURSOR_COLOR.0;
-                buffer[idx + 1] = CURSOR_COLOR.1;
-                buffer[idx + 2] = CURSOR_COLOR.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-    }
 }
 
 impl Application for TextApp {
@@ -118,12 +88,36 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
-        let width = shape[1] as f32;
-        let height = shape[0] as f32;
+        // Extract all needed values in a block to release borrows
+        let (width, height, content_top, keyboard_top, keyboard_bottom_safe, content_bottom) = {
+            let shape = state.frame.array.shape();
+            let width = shape[1] as f32;
+            let height = shape[0] as f32;
+            
+            let top_safe = state.frame.safe_region_boundaries.top_safe_coordinates;
+            let bottom_safe = state.frame.safe_region_boundaries.bottom_safe_coordinates;
+            
+            // Content area starts below top safe region and ends above keyboard
+            let content_top = top_safe.3 * height; // Bottom of top safe region
+            let keyboard_bottom_safe = bottom_safe.1; // Top of bottom safe region
+            let keyboard_height = 0.30; // 30% of screen height
+            let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(0.0);
+            let content_bottom = keyboard_top * height; // Top of keyboard area
+            
+            (width, height, content_top, keyboard_top, keyboard_bottom_safe, content_bottom)
+        };
+        
+        // Now get mutable buffer (after all immutable borrows are released)
         let buffer = state.frame_buffer_mut();
+        
+        // Position keyboard partition just above bottom safe region
+        // The keyboard's internal coordinates (0-1) work within this partition automatically
+        self.keyboard.data_mut().top = keyboard_top;
+        self.keyboard.data_mut().bottom = keyboard_bottom_safe;
+        self.keyboard.data_mut().left = 0.0;
+        self.keyboard.data_mut().right = 1.0;
     
-        self.text_engine.tick(width, height);
+        self.text_engine.tick(width, content_bottom - content_top);
     
         // Clear screen
         for i in (0..buffer.len()).step_by(4) {
@@ -133,10 +127,10 @@ impl Application for TextApp {
             buffer[i + 3] = 0xff;
         }
     
-        // Draw baselines
+        // Draw baselines (offset by content_top)
         if DRAW_BASELINES {
             for line in &self.text_engine.lines {
-                let y = (line.baseline_y - self.scroll_y) as i32;
+                let y = ((line.baseline_y - self.scroll_y) + content_top) as i32;
                 if y >= 0 && y < height as i32 {
                     for x in 0..width as i32 {
                         let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
@@ -149,7 +143,7 @@ impl Application for TextApp {
             }
         }
     
-        // Draw characters with fade and slide-in
+        // Draw characters with fade and slide-in (offset by content_top)
         for character in &self.text_engine.characters {
             let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
             let fade = self.fade_map.entry(fade_key).or_insert(0.0);
@@ -160,7 +154,7 @@ impl Application for TextApp {
             // Slide in from the right using bitmap width as base
             let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
             let px = (character.x as i32) + slide_offset;
-            let py = (character.y - self.scroll_y) as i32;
+            let py = ((character.y - self.scroll_y) + content_top) as i32;
             let pw = character.width as u32;
             let ph = character.height as u32;
     
@@ -187,13 +181,38 @@ impl Application for TextApp {
             }
         }
     
-        self.tick_cursor(state);
+        // Draw cursor (offset by content_top)
+        let (target_x, baseline_y) = if let Some(last) = self.text_engine.characters.last() {
+            if self.text_engine.text.chars().last() == Some('\n') {
+                (0.0, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else {
+                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            }
+        } else {
+            (0.0, self.text_engine.ascent)
+        };
         
+        // Smooth the x-position (linear interpolation)
+        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+        
+        let cursor_top = ((baseline_y - self.text_engine.ascent - self.scroll_y) + content_top).round() as i32;
+        let cursor_bottom = ((baseline_y + self.text_engine.descent - self.scroll_y) + content_top).round() as i32;
+        let cx = self.smooth_cursor_x.round() as i32;
+        
+        for y in cursor_top..cursor_bottom {
+            if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
+                let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
+                buffer[idx + 0] = CURSOR_COLOR.0;
+                buffer[idx + 1] = CURSOR_COLOR.1;
+                buffer[idx + 2] = CURSOR_COLOR.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+    
         // Draw keyboard
-        let shape = state.frame.shape();
-        let width_u32 = shape[1] as u32;
-        let height_u32 = shape[0] as u32;
-        self.keyboard.draw(state.frame_buffer_mut(), width_u32, height_u32);
+        let width_u32 = width as u32;
+        let height_u32 = height as u32;
+        self.keyboard.draw(buffer, width_u32, height_u32);
     }
     
 
@@ -223,7 +242,7 @@ impl Application for TextApp {
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
@@ -232,7 +251,7 @@ impl Application for TextApp {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         

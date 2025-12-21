@@ -105,7 +105,7 @@ impl BallGame {
         cy: f32,
         radius: f32,
     ) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -136,8 +136,8 @@ impl BallGame {
 
 impl Application for BallGame {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        let width = state.frame.shape()[1] as f32;
-        let height = state.frame.shape()[0] as f32;
+        let width = state.frame.array.shape()[1] as f32;
+        let height = state.frame.array.shape()[0] as f32;
         
         for _ in 0..512 {
             let x = rand_float(BALL_RADIUS, width - BALL_RADIUS);
@@ -150,7 +150,7 @@ impl Application for BallGame {
 
     fn tick(&mut self, state: &mut EngineState) {
         for ball in &mut self.balls {
-            ball.update(state.frame.shape()[1] as f32, state.frame.shape()[0] as f32);
+            ball.update(state.frame.array.shape()[1] as f32, state.frame.array.shape()[0] as f32);
         }
 
         for ball in &self.balls {

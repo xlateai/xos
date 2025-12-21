@@ -31,7 +31,7 @@ impl Application for ScrollApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
+        let shape = state.frame.array.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
