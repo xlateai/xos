@@ -46,7 +46,7 @@ class BallState:
                 self.vy = -abs(self.vy)
 
 
-class BallGame:
+class BallGame(xos.Application):
     def __init__(self):
         self.balls = []
         self.width = 0
@@ -115,12 +115,5 @@ if __name__ == "__main__":
     xos.print("Click to spawn red balls!")
     
     game = BallGame()
-    game.setup()
-    
-    # In a real xos app, this would be called by the engine:
-    # while running:
-    #     game.tick()
-    #     if mouse_clicked:
-    #         mouse = xos.get_mouse()
-    #         game.on_mouse_down(mouse["x"], mouse["y"])
+    game.run()
 
