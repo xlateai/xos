@@ -336,8 +336,8 @@ impl Application for IosSensorsApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let button_y = height * 0.75; // 25% from bottom
-        let button_height = 65.0; // 30% bigger than 50.0
-        let button_width = 260.0; // 30% bigger than 200.0
+        let button_height = 84.5; // 30% bigger than 65.0
+        let button_width = 338.0; // 30% bigger than 260.0
         let button_x = (width - button_width) / 2.0;
         
         let mouse_x = state.mouse.x;
@@ -360,8 +360,8 @@ impl Application for IosSensorsApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let button_y = height * 0.75; // 25% from bottom
-        let button_height = 65.0; // 30% bigger than 50.0
-        let button_width = 260.0; // 30% bigger than 200.0
+        let button_height = 84.5; // 30% bigger than 65.0
+        let button_width = 338.0; // 30% bigger than 260.0
         let button_x = (width - button_width) / 2.0;
         
         let mouse_x = state.mouse.x;
@@ -404,8 +404,8 @@ impl IosSensorsApp {
     
     fn draw_sensor_button(&self, buffer: &mut [u8], width: u32, height: u32) {
         let button_y = (height as f32 * 0.75) as i32; // 25% from bottom
-        let button_height = 65; // 30% bigger than 50
-        let button_width = 260; // 30% bigger than 200
+        let button_height = 85; // 30% bigger than 65 (rounded)
+        let button_width = 338; // 30% bigger than 260
         let button_x = ((width as f32 - button_width as f32) / 2.0) as i32;
         
         // Choose button color based on hover state
@@ -487,17 +487,23 @@ impl IosSensorsApp {
             }
         }
         
-        // Draw button text (centered)
+        // Draw button text (bottom-aligned, horizontally centered)
         let button_text_width = if let Some(last_char) = self.button_text.characters.last() {
             last_char.x + last_char.metrics.advance_width
         } else {
             0.0
         };
         let button_text_x = button_x as f32 + (button_width as f32 - button_text_width) / 2.0;
-        let button_text_y = button_y as f32 + (button_height as f32 / 2.0) - 
-            self.button_text.characters.first()
-                .map(|c| c.metrics.height as f32 / 2.0)
-                .unwrap_or(0.0);
+        
+        // Bottom-align text vertically in the button
+        // The text baseline is at ascent from the top of the text area
+        // We want the bottom of the text (baseline + descent) to be at button_bottom - padding
+        let button_text_bottom_padding = 10.0; // Padding from bottom
+        let button_bottom_y = button_y as f32 + button_height as f32;
+        // Calculate baseline position: bottom - padding - descent
+        let baseline_y = button_bottom_y - button_text_bottom_padding - self.button_text.descent;
+        // The top of the text area (where character.y=0) is at baseline_y - ascent
+        let button_text_y = baseline_y - self.button_text.ascent;
         
         self.draw_text_geometric(buffer, width, height, &self.button_text, button_text_x, button_text_y);
     }

@@ -23,7 +23,7 @@ pub struct Selector {
 impl Selector {
     /// Create a new selector with the given options
     pub fn new(options: Vec<String>) -> Self {
-        let font_size = 34.56; // 20% larger than 28.8 (which was 20% larger than 24.0)
+        let font_size = 44.93; // 30% larger than 34.56
         
         // Create a text renderer for each option
         // Each renderer gets its own font instance (fontdue Font is not Clone)
@@ -95,9 +95,9 @@ impl Selector {
         let height = shape[0] as f32;
 
         // Calculate selector position (centered)
-        let selector_width = 390.0; // 30% larger than 300.0
-        let option_height = 78.0; // 30% larger than 60.0
-        let selector_height = (self.options.len() as f32 * option_height) + 40.0; // 78px per option + padding
+        let selector_width = 507.0; // 30% larger than 390.0
+        let option_height = 101.0; // 30% larger than 78.0
+        let selector_height = (self.options.len() as f32 * option_height) + 40.0; // 101px per option + padding
         let x = (width - selector_width) / 2.0;
         let y = (height - selector_height) / 2.0;
 
@@ -144,8 +144,8 @@ impl Selector {
             return false;
         }
         
-        let selector_width = 390.0; // 30% larger than 300.0
-        let option_height = 78.0; // 30% larger than 60.0
+        let selector_width = 507.0; // 30% larger than 390.0
+        let option_height = 101.0; // 30% larger than 78.0
         let selector_height = (self.options.len() as f32 * option_height) + 40.0;
         let x = (width - selector_width) / 2.0;
         let y = (height - selector_height) / 2.0;
@@ -169,8 +169,8 @@ impl Selector {
         let buffer = state.frame_buffer_mut();
 
         // Calculate selector dimensions and position
-        let selector_width = 390.0; // 30% larger than 300.0
-        let option_height = 78.0; // 30% larger than 60.0
+        let selector_width = 507.0; // 30% larger than 390.0
+        let option_height = 101.0; // 30% larger than 78.0
         let selector_height = (self.options.len() as f32 * option_height) + 40.0;
         let center_x = width as f32 / 2.0;
         let center_y = height as f32 / 2.0;
@@ -336,12 +336,10 @@ impl Selector {
                 let option_center_x = (scaled_x + 20) as f32 + option_width as f32 / 2.0;
                 let text_x = option_center_x - text_width / 2.0;
                 
-                // Center text vertically in the option box
-                // The renderer's coordinate system: y=0 is top, y=ascent is first baseline
-                // character.y is the top of the character bitmap
-                let option_center_y = option_rect_y as f32 + option_rect_height as f32 / 2.0;
-                // We want the text baseline at the center, so offset by ascent
-                let text_top = option_center_y - text_renderer.ascent;
+                // Top-align text vertically in the option box
+                // Position text at the top with some padding
+                let text_top_padding = 10.0; // Padding from top
+                let text_top = option_rect_y as f32 + text_top_padding;
 
                 // Draw each character
                 for character in &text_renderer.characters {
