@@ -146,6 +146,18 @@ impl ApplicationHandler for AppState {
                         Key::Named(NamedKey::Tab) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\t');
                         }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2190}'); // ←
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2192}'); // →
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2191}'); // ↑
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2193}'); // ↓
+                        }
                         _ => {
                             // Check if the event has text (for regular character input)
                             // In winit 0.30, text input should come through IME, but we can also

@@ -16,6 +16,12 @@ const DRAW_BASELINES: bool = true;
 const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
 const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
 
+// Arrow key characters (using Unicode arrow symbols)
+const ARROW_LEFT: char = '\u{2190}';  // ←
+const ARROW_RIGHT: char = '\u{2192}'; // →
+const ARROW_UP: char = '\u{2191}';    // ↑
+const ARROW_DOWN: char = '\u{2193}';  // ↓
+
 use std::collections::HashMap;
 
 pub struct TextApp {
@@ -94,7 +100,6 @@ impl TextApp {
             draw_pixel(x + w.saturating_sub(1), y + dy);
         }
     }
-
 }
 
 impl Application for TextApp {
@@ -271,6 +276,18 @@ impl Application for TextApp {
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
+            ARROW_LEFT => {
+                self.move_cursor_left();
+            }
+            ARROW_RIGHT => {
+                self.move_cursor_right();
+            }
+            ARROW_UP => {
+                self.move_cursor_up();
+            }
+            ARROW_DOWN => {
+                self.move_cursor_down();
+            }
             '\t' => {
                 // Insert tab at cursor position
                 let text_chars: Vec<char> = self.text_engine.text.chars().collect();
@@ -346,7 +363,18 @@ impl Application for TextApp {
         // Update keyboard hover state
         self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
         
-        // Handle dragging for scrolling (like scroll.rs)
+        // Check if mouse moved significantly from tap position (start dragging)
+        if !self.dragging && state.mouse.is_left_clicking {
+            let dx = (state.mouse.x - self.last_tap_x).abs();
+            let dy = (state.mouse.y - self.last_tap_y).abs();
+            // Start dragging if moved more than 5 pixels
+            if dx > 5.0 || dy > 5.0 {
+                self.dragging = true;
+                self.last_mouse_y = state.mouse.y;
+            }
+        }
+        
+        // Handle dragging for scrolling (like scroll.rs) - only scroll, don't move cursor
         if self.dragging {
             let dy = state.mouse.y - self.last_mouse_y;
             self.scroll_y -= dy;
@@ -397,7 +425,7 @@ impl Application for TextApp {
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
         } else {
-            // Single tap - move cursor to tap location
+            // Single tap - move cursor to tap location (but don't start dragging yet)
             let safe_region = &state.frame.safe_region_boundaries;
             let content_top = safe_region.y1 * height;
             
@@ -405,46 +433,67 @@ impl Application for TextApp {
             let tap_x = state.mouse.x;
             let tap_y = state.mouse.y - content_top + self.scroll_y;
             
-            // Find the nearest character to the tap position
-            let mut nearest_char_index = self.text_engine.text.chars().count();
-            let mut min_distance_sq = f32::MAX;
-            
-            for character in &self.text_engine.characters {
-                let char_center_x = character.x + character.width / 2.0;
-                let char_center_y = character.y + character.height / 2.0;
+            // Check if tap is on an empty line
+            let mut found_line: Option<usize> = None;
+            for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                let line_y = line.baseline_y;
                 
-                let dx = tap_x - char_center_x;
-                let dy = tap_y - char_center_y;
-                let distance_sq = dx * dx + dy * dy;
-                
-                // Also check if tap is before this character horizontally
-                if tap_x < character.x && character.line_index == 0 {
-                    // Tap is before this character, cursor should be at this character's index
-                    if distance_sq < min_distance_sq {
-                        min_distance_sq = distance_sq;
-                        nearest_char_index = character.char_index;
-                    }
-                } else if distance_sq < min_distance_sq {
-                    min_distance_sq = distance_sq;
-                    // If tap is to the right of character center, cursor goes after it
-                    if tap_x > char_center_x {
-                        nearest_char_index = character.char_index + 1;
-                    } else {
-                        nearest_char_index = character.char_index;
+                // Check if tap is within this line's vertical bounds
+                if tap_y >= line_y - self.text_engine.ascent && tap_y <= line_y + self.text_engine.descent {
+                    // Check if this line is empty (no characters in this line)
+                    let has_chars = self.text_engine.characters.iter()
+                        .any(|c| c.line_index == line_idx);
+                    
+                    if !has_chars {
+                        // Empty line - place cursor at start of line
+                        found_line = Some(line_idx);
+                        self.cursor_position = line.start_index;
+                        break;
                     }
                 }
             }
             
-            self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+            // If not on empty line, find nearest character
+            if found_line.is_none() {
+                let mut nearest_char_index = self.text_engine.text.chars().count();
+                let mut min_distance_sq = f32::MAX;
+                
+                for character in &self.text_engine.characters {
+                    let char_center_x = character.x + character.width / 2.0;
+                    let char_center_y = character.y + character.height / 2.0;
+                    
+                    let dx = tap_x - char_center_x;
+                    let dy = tap_y - char_center_y;
+                    let distance_sq = dx * dx + dy * dy;
+                    
+                    // Check if tap is before this character horizontally
+                    if tap_x < character.x && character.line_index == 0 {
+                        // Tap is before this character, cursor should be at this character's index
+                        if distance_sq < min_distance_sq {
+                            min_distance_sq = distance_sq;
+                            nearest_char_index = character.char_index;
+                        }
+                    } else if distance_sq < min_distance_sq {
+                        min_distance_sq = distance_sq;
+                        // If tap is to the right of character center, cursor goes after it
+                        if tap_x > char_center_x {
+                            nearest_char_index = character.char_index + 1;
+                        } else {
+                            nearest_char_index = character.char_index;
+                        }
+                    }
+                }
+                
+                self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+            }
             
             // Update tap tracking
             self.last_tap_time = Some(now);
             self.last_tap_x = state.mouse.x;
             self.last_tap_y = state.mouse.y;
             
-            // Start dragging for scroll
-            self.dragging = true;
-            self.last_mouse_y = state.mouse.y;
+            // Don't start dragging immediately - wait for mouse movement
+            // Dragging will be started in on_mouse_move if mouse moves significantly
         }
     }
 
@@ -454,5 +503,125 @@ impl Application for TextApp {
         // Stop dragging
         self.dragging = false;
     }
-    
+}
+
+impl TextApp {
+    fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        let text_len = self.text_engine.text.chars().count();
+        if self.cursor_position < text_len {
+            self.cursor_position += 1;
+        }
+    }
+
+    fn move_cursor_up(&mut self) {
+        // Find current line
+        let line_idx_opt = self.text_engine.lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+            })
+            .map(|(idx, _)| idx);
+        
+        if let Some(line_idx) = line_idx_opt {
+            if line_idx > 0 {
+                // Move to previous line
+                let prev_line = &self.text_engine.lines[line_idx - 1];
+                
+                // Find current x position in current line
+                let current_x = if let Some(char_at_cursor) = self.text_engine.characters.iter()
+                    .find(|c| c.char_index == self.cursor_position) {
+                    char_at_cursor.x
+                } else if let Some(last_in_line) = self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == line_idx)
+                    .last() {
+                    last_in_line.x + last_in_line.metrics.advance_width
+                } else {
+                    0.0
+                };
+                
+                // Find character in previous line closest to current_x
+                let mut best_char_index = prev_line.end_index;
+                let mut min_distance = f32::MAX;
+                
+                for character in self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == line_idx - 1) {
+                    let distance = (character.x - current_x).abs();
+                    if distance < min_distance {
+                        min_distance = distance;
+                        best_char_index = character.char_index;
+                    }
+                    // Also check position after this character
+                    let after_distance = (character.x + character.metrics.advance_width - current_x).abs();
+                    if after_distance < min_distance {
+                        min_distance = after_distance;
+                        best_char_index = character.char_index + 1;
+                    }
+                }
+                
+                self.cursor_position = best_char_index.min(prev_line.end_index);
+            } else {
+                // Already at first line, move to start
+                self.cursor_position = 0;
+            }
+        }
+    }
+
+    fn move_cursor_down(&mut self) {
+        // Find current line
+        let line_idx_opt = self.text_engine.lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+            })
+            .map(|(idx, _)| idx);
+        
+        if let Some(line_idx) = line_idx_opt {
+            if line_idx < self.text_engine.lines.len() - 1 {
+                // Move to next line
+                let next_line = &self.text_engine.lines[line_idx + 1];
+                
+                // Find current x position in current line
+                let current_x = if let Some(char_at_cursor) = self.text_engine.characters.iter()
+                    .find(|c| c.char_index == self.cursor_position) {
+                    char_at_cursor.x
+                } else if let Some(last_in_line) = self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == line_idx)
+                    .last() {
+                    last_in_line.x + last_in_line.metrics.advance_width
+                } else {
+                    0.0
+                };
+                
+                // Find character in next line closest to current_x
+                let mut best_char_index = next_line.end_index;
+                let mut min_distance = f32::MAX;
+                
+                for character in self.text_engine.characters.iter()
+                    .filter(|c| c.line_index == line_idx + 1) {
+                    let distance = (character.x - current_x).abs();
+                    if distance < min_distance {
+                        min_distance = distance;
+                        best_char_index = character.char_index;
+                    }
+                    // Also check position after this character
+                    let after_distance = (character.x + character.metrics.advance_width - current_x).abs();
+                    if after_distance < min_distance {
+                        min_distance = after_distance;
+                        best_char_index = character.char_index + 1;
+                    }
+                }
+                
+                self.cursor_position = best_char_index.min(next_line.end_index);
+            } else {
+                // Already at last line, move to end
+                self.cursor_position = self.text_engine.text.chars().count();
+            }
+        }
+    }
 }

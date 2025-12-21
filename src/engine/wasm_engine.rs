@@ -269,8 +269,23 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.app.on_key_char(&mut state.engine_state, '\t');
                         event.prevent_default();
                     }
-                    "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "ArrowLeft" | "ArrowRight"
-                    | "ArrowUp" | "ArrowDown" | "Home" | "End" | "PageUp" | "PageDown" => {
+                    "ArrowLeft" => {
+                        state.app.on_key_char(&mut state.engine_state, '\u{2190}'); // ←
+                        event.prevent_default();
+                    }
+                    "ArrowRight" => {
+                        state.app.on_key_char(&mut state.engine_state, '\u{2192}'); // →
+                        event.prevent_default();
+                    }
+                    "ArrowUp" => {
+                        state.app.on_key_char(&mut state.engine_state, '\u{2191}'); // ↑
+                        event.prevent_default();
+                    }
+                    "ArrowDown" => {
+                        state.app.on_key_char(&mut state.engine_state, '\u{2193}'); // ↓
+                        event.prevent_default();
+                    }
+                    "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
                         // Do nothing — non-character keys
                     }
                     _ => {
