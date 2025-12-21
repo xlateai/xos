@@ -1,14 +1,16 @@
 # xos
 
-The fastest and easiest to use cross-platform application framework designed to feel like a UI framework, game engine, tensor operator library, operating system, and mobile scientific computation experimentation playground.
+xos is a high-performance, cross-platform application framework for building interactive, compute-intensive software with a single, coherent architecture. It is designed to unify concepts from UI frameworks, game engines, tensor operator libraries, and experimental operating-system–like runtimes into a lightweight build system.
 
-Writing cross-platform applications in xos requires minimal code differences, with easy compilation branching for device-specific features and simple screen-size responsiveness.
+xos enables applications to target multiple platforms with minimal code divergence, providing explicit and ergonomic mechanisms for device-specific specialization, backend selection, and responsive layout across screen sizes.
 
-Apps in xos are standalone programs that run on any supported backend. Built with Rust for it's build system, performance, wide backend target support, and reliability; xos provides an easy foundation to build upon for your prototype applications and experiments.
+Applications built with xos are standalone programs that run on any supported backend. Implemented in Rust, xos leverages a modern build system, strong safety guarantees, and predictable performance, while maintaining broad platform compatibility and low-level control where required. This makes xos well-suited for rapid prototyping, research tooling, and experimental systems that span UI, graphics, and numerical computation.
 
 
-## Experimental
-The xos API is currently experimental and may change, notably the application engine interface for how apps are defined. This is to support headless applications, embedded-in-subframes, and cross-application compatibilities. We also plan to use Python as a scripting language for defining applications as well as computing experiments with automatic delegations to hardware accelerators (like a lightweight pytorch).
+## Experimental Status
+The xos API is currently experimental and subject to change. In particular, the application engine interface is evolving to support headless execution, sub-frame embedding, and cross-application interoperability.
+
+Planned extensions include Python-based scripting for application definition and computational workflows, with automatic delegation to available hardware accelerators—enabling lightweight, PyTorch-style numerical experimentation within the xos runtime.
 
 ## Platform Support
 
