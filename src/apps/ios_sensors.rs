@@ -154,11 +154,11 @@ impl Application for IosSensorsApp {
         // Update magnitude text (4 decimals)
         if let Some(reading) = self.last_reading {
             let magnitude = reading.magnitude();
-            self.magnitude_text.set_text(format!("{:.4}uT", magnitude));
+            self.magnitude_text.set_text(format!("{:.4}μT", magnitude));
             
             // Update coordinates text (X, Y, Z on same line, 1 decimal each)
             self.coordinates_text.set_text(format!(
-                "X: {:.1}, Y: {:.1}, Z: {:.1}",
+                "X: {:.1}μT, Y: {:.1}μT, Z: {:.1}μT",
                 reading.x, reading.y, reading.z
             ));
         } else {

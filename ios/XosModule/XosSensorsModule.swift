@@ -162,10 +162,10 @@ final class MagnetometerListener {
                 return
             }
             
-            // Convert from Tesla to microtesla (μT)
-            let x = magnetometerData.magneticField.x * 1_000_000.0
-            let y = magnetometerData.magneticField.y * 1_000_000.0
-            let z = magnetometerData.magneticField.z * 1_000_000.0
+            // CMMagneticField values are already in microtesla (μT), no conversion needed
+            let x = magnetometerData.magneticField.x
+            let y = magnetometerData.magneticField.y
+            let z = magnetometerData.magneticField.z
             
             // Safely call the Rust callback with captured values
             // Wrap in autoreleasepool to prevent memory issues
