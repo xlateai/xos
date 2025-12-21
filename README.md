@@ -1,22 +1,19 @@
 # xos
 
-xlate's operating system—a cross-platform framework designed to feel like a game engine and tensor library wrapped up into an easy to use and understand programming interface.
+The fastest and easiest to use cross-platform application framework designed to feel like a UI framework, game engine, tensor operator library, operating system, and mobile scientific computation experimentation playground.
 
-Every application in xos is essentially like a standalone application in a standard operating system, but you can launch them on any supported backend. Built with Rust for performance, reliability, and universal compatibility, xos aims to become as easily cross-compatible as possible—a perfect build system with universal applicability that feels more like a game engine with conveniences always within reach.
-
-**Key goals:**
-- **<1 minute build times** across the board
-- **No HTML/CSS dependencies**—rasterization/game engine approach with clean UI optimized for scientific computing
-- **Universal application compatibility**—write once, run anywhere
-- **Future "home screen"** where applications, launchers, and drivers are easily modifiable and compatible
+Apps in xos are standalone programs that run on any supported backend. Built with Rust for it's build system, performance, wide backend target support, and reliability; xos provides an easy foundation to build upon for your prototype applications and experiments.
 
 ## Prerequisites
 
 **Required:**
 - ✅ Rust toolchain ([rustup.rs](https://rustup.rs/))
-- ✅ macOS (for iOS development)
-- ✅ Xcode (for iOS development)
-- ✅ iOS device with Developer Mode enabled (for iOS deployment)
+
+**Optional (iOS):**
+- macOS computer
+- Xcode
+- iOS device with Developer Mode enabled (Settings > Privacy & Security > Developer Mode)
+- Physical USB cable connection to iOS device
 
 **Optional (Linux):**
 - Advanced Linux Sound Architecture library (for audio support):
