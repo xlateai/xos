@@ -1,4 +1,4 @@
-use crate::engine::{EngineState, SafeRegionBoundaries};
+use crate::engine::{EngineState, SafeRegionBoundingRectangle};
 use crate::tuneable::write_all_to_source;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -95,28 +95,25 @@ pub trait Partition {
         let _ = (buffer, width, height);
     }
 
-    /// Get the actual screen coordinates for this partition, accounting for safe regions
+    /// Get the actual screen coordinates for this partition, accounting for safe region
     /// Returns (x0, y0, x1, y1) in screen pixel coordinates
-    fn get_screen_bounds(&self, width: u32, height: u32, safe_regions: &SafeRegionBoundaries) -> (f32, f32, f32, f32) {
+    fn get_screen_bounds(&self, width: u32, height: u32, safe_region: &SafeRegionBoundingRectangle) -> (f32, f32, f32, f32) {
         let w = width as f32;
         let h = height as f32;
         let data = self.data();
         
         // Transform partition coordinates (0-1) to screen coordinates
-        // Partitions are defined in safe region space, so we need to map them
-        let top_safe = safe_regions.top_safe_coordinates;
-        let bottom_safe = safe_regions.bottom_safe_coordinates;
+        // Partitions are defined within the safe region, so we map them to the safe area
+        let safe_width = (safe_region.x2 - safe_region.x1) * w;
+        let safe_height = (safe_region.y2 - safe_region.y1) * h;
+        let safe_left = safe_region.x1 * w;
+        let safe_top = safe_region.y1 * h;
         
-        // Calculate the safe drawing area
-        let safe_top = top_safe.3; // Bottom of top safe region
-        let safe_bottom = bottom_safe.1; // Top of bottom safe region
-        let safe_height = safe_bottom - safe_top;
-        
-        // Map partition coordinates to safe area
-        let x0 = data.left * w;
-        let x1 = data.right * w;
-        let y0 = safe_top * h + data.top * safe_height * h;
-        let y1 = safe_top * h + data.bottom * safe_height * h;
+        // Map partition coordinates (0-1) to safe area coordinates
+        let x0 = safe_left + data.left * safe_width;
+        let x1 = safe_left + data.right * safe_width;
+        let y0 = safe_top + data.top * safe_height;
+        let y1 = safe_top + data.bottom * safe_height;
         
         (x0, y0, x1, y1)
     }

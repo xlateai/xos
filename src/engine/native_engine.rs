@@ -9,7 +9,7 @@ use winit::{
     window::{CursorIcon, Window, WindowId},
 };
 
-use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundaries};
+use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -224,9 +224,9 @@ impl ApplicationHandler for AppStateWrapper {
                 }
             };
 
-            let safe_regions = SafeRegionBoundaries::full_screen();
+            let safe_region = SafeRegionBoundingRectangle::full_screen();
             let mut engine_state = EngineState {
-                frame: FrameState::new(size.width, size.height, safe_regions),
+                frame: FrameState::new(size.width, size.height, safe_region),
                 mouse: MouseState {
                     x: 0.0,
                     y: 0.0,

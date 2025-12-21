@@ -94,14 +94,14 @@ impl Application for TextApp {
             let width = shape[1] as f32;
             let height = shape[0] as f32;
             
-            let top_safe = state.frame.safe_region_boundaries.top_safe_coordinates;
-            let bottom_safe = state.frame.safe_region_boundaries.bottom_safe_coordinates;
+            let safe_region = &state.frame.safe_region_boundaries;
             
-            // Content area starts below top safe region and ends above keyboard
-            let content_top = top_safe.3 * height; // Bottom of top safe region
-            let keyboard_bottom_safe = bottom_safe.1; // Top of bottom safe region
+            // Content area uses the safe region bounds
+            // Keyboard sits at the bottom of the safe region
             let keyboard_height = 0.30; // 30% of screen height
-            let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(0.0);
+            let keyboard_bottom_safe = safe_region.y2; // Bottom of safe region
+            let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(safe_region.y1);
+            let content_top = safe_region.y1 * height; // Top of safe region
             let content_bottom = keyboard_top * height; // Top of keyboard area
             
             (width, height, content_top, keyboard_top, keyboard_bottom_safe, content_bottom)

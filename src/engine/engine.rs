@@ -1,36 +1,62 @@
 use crate::tensor::array::{Array, Device};
 
-/// Safe region boundaries for UI elements
-/// Coordinates are normalized (0.0 to 1.0) relative to the frame dimensions
+/// Safe region bounding rectangle for UI elements
+/// 
+/// Defines the safe rectangular area where content can be displayed without being
+/// obscured by system UI elements (e.g., notches, home indicators, etc.).
+/// 
+/// Coordinates are normalized (0.0 to 1.0) relative to the full viewport dimensions.
+/// The coordinate system uses:
+/// - x1, x2: horizontal coordinates (left to right, 0.0 to 1.0)
+/// - y1, y2: vertical coordinates (top to bottom, 0.0 to 1.0)
+/// 
+/// The rectangle is defined by two corner points:
+/// - (x1, y1): top-left corner (minimum x, minimum y)
+/// - (x2, y2): bottom-right corner (maximum x, maximum y)
+/// 
+/// For a full-screen safe region (no restrictions), use (0.0, 0.0, 1.0, 1.0).
 #[derive(Debug, Clone)]
-pub struct SafeRegionBoundaries {
-    /// Top safe region: (left_x, top_y, right_x, bottom_y)
-    pub top_safe_coordinates: (f32, f32, f32, f32),
-    /// Bottom safe region: (left_x, top_y, right_x, bottom_y)
-    pub bottom_safe_coordinates: (f32, f32, f32, f32),
+pub struct SafeRegionBoundingRectangle {
+    /// Left edge of the safe region (minimum x, typically 0.0)
+    pub x1: f32,
+    /// Top edge of the safe region (minimum y, typically > 0.0 on devices with notches)
+    pub y1: f32,
+    /// Right edge of the safe region (maximum x, typically 1.0)
+    pub x2: f32,
+    /// Bottom edge of the safe region (maximum y, typically < 1.0 on devices with home indicators)
+    pub y2: f32,
 }
 
-impl SafeRegionBoundaries {
-    /// Create safe regions for non-iOS devices (full screen, no restrictions)
+impl SafeRegionBoundingRectangle {
+    /// Create safe region for non-iOS devices (full screen, no restrictions)
+    /// Returns a rectangle covering the entire viewport: (0.0, 0.0, 1.0, 1.0)
     pub fn full_screen() -> Self {
         Self {
-            top_safe_coordinates: (0.0, 0.0, 1.0, 0.0),
-            bottom_safe_coordinates: (0.0, 1.0, 1.0, 1.0),
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
         }
     }
 
-    /// Create safe regions for iOS devices (iPhone 16 Pro safe areas)
-    /// Top safe area accounts for Dynamic Island (~59pt)
-    /// Bottom safe area accounts for home indicator (~34pt)
-    /// Assuming typical screen dimensions, these translate to normalized coordinates
+    /// Create safe region for iOS devices (iPhone 16 Pro safe area)
+    /// 
+    /// Accounts for:
+    /// - Dynamic Island at the top (~59pt, normalized to ~0.069)
+    /// - Home indicator at the bottom (~34pt, normalized to ~0.960)
+    /// 
+    /// Returns a rectangle that excludes these areas.
+    /// For iPhone 16 Pro (393x852 points), this is approximately (0.0, 0.069, 1.0, 0.960)
     pub fn ios_iphone_16_pro() -> Self {
         // iPhone 16 Pro: 393x852 points
         // Top safe area: ~59pt from top (Dynamic Island)
         // Bottom safe area: ~34pt from bottom (home indicator)
         // Normalized: top ~0.069, bottom ~0.960
         Self {
-            top_safe_coordinates: (0.0, 0.069, 1.0, 0.069),
-            bottom_safe_coordinates: (0.0, 0.960, 1.0, 1.0),
+            x1: 0.0,
+            y1: 0.069,  // Top edge starts below Dynamic Island
+            x2: 1.0,
+            y2: 0.960,  // Bottom edge ends above home indicator
         }
     }
 }
@@ -40,18 +66,18 @@ impl SafeRegionBoundaries {
 pub struct FrameState {
     /// The pixel array with shape [height, width, 4] for RGBA pixels
     pub array: Array<u8>,
-    /// Safe region boundaries for UI elements
-    pub safe_region_boundaries: SafeRegionBoundaries,
+    /// Safe region bounding rectangle for UI elements
+    pub safe_region_boundaries: SafeRegionBoundingRectangle,
 }
 
 impl FrameState {
-    /// Create a new FrameState with given dimensions and safe regions
-    pub fn new(width: u32, height: u32, safe_regions: SafeRegionBoundaries) -> Self {
+    /// Create a new FrameState with given dimensions and safe region
+    pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
         let shape = vec![height as usize, width as usize, 4];
         let data = vec![0u8; (width * height * 4) as usize];
         Self {
             array: Array::new_on_device(data, shape, Device::Cpu),
-            safe_region_boundaries: safe_regions,
+            safe_region_boundaries: safe_region,
         }
     }
 
@@ -66,12 +92,12 @@ impl FrameState {
         self.array.shape().to_vec()
     }
 
-    /// Resize the frame to new dimensions (preserves safe regions)
+    /// Resize the frame to new dimensions (preserves safe region, as it's normalized)
     pub fn resize(&mut self, width: u32, height: u32) {
         let shape = vec![height as usize, width as usize, 4];
         let data = vec![0u8; (width * height * 4) as usize];
         self.array = Array::new_on_device(data, shape, Device::Cpu);
-        // Safe regions are normalized, so they don't need to change
+        // Safe region is normalized, so it doesn't need to change
     }
 }
 

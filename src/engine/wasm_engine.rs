@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundaries};
+use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
 
 
 #[cfg(target_arch = "wasm32")]
@@ -42,8 +42,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     let state_ptr = Box::into_raw(Box::new(WasmState {
         engine_state: EngineState {
             frame: {
-                let safe_regions = SafeRegionBoundaries::full_screen();
-                FrameState::new(width, height, safe_regions)
+                let safe_region = SafeRegionBoundingRectangle::full_screen();
+                FrameState::new(width, height, safe_region)
             },
             mouse: MouseState {
                 x: 0.0,

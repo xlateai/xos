@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
 use crate::apps;
 #[cfg(target_os = "ios")]
-use crate::engine::{Application, EngineState, MouseState, FrameState, SafeRegionBoundaries};
+use crate::engine::{Application, EngineState, MouseState, FrameState, SafeRegionBoundingRectangle};
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
 
@@ -136,9 +136,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         }
     };
 
-    let safe_regions = SafeRegionBoundaries::ios_iphone_16_pro();
+    let safe_region = SafeRegionBoundingRectangle::ios_iphone_16_pro();
     let mut engine_state = EngineState {
-        frame: FrameState::new(width, height, safe_regions),
+        frame: FrameState::new(width, height, safe_region),
         mouse: MouseState {
             x: 0.0,
             y: 0.0,
