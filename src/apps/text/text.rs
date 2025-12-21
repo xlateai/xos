@@ -41,6 +41,10 @@ pub struct TextApp {
     held_key_start_time: Option<Instant>,
     last_repeat_time: Option<Instant>,
     touch_started_on_keyboard: bool,
+    // Cursor positioning on release
+    pending_cursor_tap_x: Option<f32>,
+    pending_cursor_tap_y: Option<f32>,
+    initial_scroll_y: f32,
 }
 
 
@@ -71,6 +75,9 @@ impl TextApp {
             held_key_start_time: None,
             last_repeat_time: None,
             touch_started_on_keyboard: false,
+            pending_cursor_tap_x: None,
+            pending_cursor_tap_y: None,
+            initial_scroll_y: 0.0,
         }
     }
 
@@ -358,37 +365,40 @@ impl Application for TextApp {
         self.keyboard.draw(buffer, width_u32, height_u32);
         
         // Draw black area with green border below keyboard (in unsafe region)
-        let keyboard_bottom_px = keyboard_bottom_safe * height;
-        let screen_bottom = height;
-        
-        if keyboard_bottom_px < screen_bottom {
-            let border_y = keyboard_bottom_px.round() as i32;
-            let fill_start_y = (border_y + 1).max(0);
-            let fill_end_y = screen_bottom as i32;
+        // Only draw if keyboard is visible
+        if !self.keyboard.is_minimized() {
+            let keyboard_bottom_px = keyboard_bottom_safe * height;
+            let screen_bottom = height;
             
-            // Draw green border line
-            if border_y >= 0 && border_y < height as i32 {
-                for x in 0..width as i32 {
-                    let idx = ((border_y as u32 * width as u32 + x as u32) * 4) as usize;
-                    if idx + 3 < buffer.len() {
-                        buffer[idx + 0] = 0;   // R
-                        buffer[idx + 1] = 255; // G
-                        buffer[idx + 2] = 0;   // B
-                        buffer[idx + 3] = 0xff; // A
-                    }
-                }
-            }
-            
-            // Fill black pixels below keyboard
-            for y in fill_start_y..fill_end_y {
-                if y >= 0 && y < height as i32 {
+            if keyboard_bottom_px < screen_bottom {
+                let border_y = keyboard_bottom_px.round() as i32;
+                let fill_start_y = (border_y + 1).max(0);
+                let fill_end_y = screen_bottom as i32;
+                
+                // Draw green border line
+                if border_y >= 0 && border_y < height as i32 {
                     for x in 0..width as i32 {
-                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        let idx = ((border_y as u32 * width as u32 + x as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
                             buffer[idx + 0] = 0;   // R
-                            buffer[idx + 1] = 0;   // G
+                            buffer[idx + 1] = 255; // G
                             buffer[idx + 2] = 0;   // B
                             buffer[idx + 3] = 0xff; // A
+                        }
+                    }
+                }
+                
+                // Fill black pixels below keyboard
+                for y in fill_start_y..fill_end_y {
+                    if y >= 0 && y < height as i32 {
+                        for x in 0..width as i32 {
+                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                            if idx + 3 < buffer.len() {
+                                buffer[idx + 0] = 0;   // R
+                                buffer[idx + 1] = 0;   // G
+                                buffer[idx + 2] = 0;   // B
+                                buffer[idx + 3] = 0xff; // A
+                            }
                         }
                     }
                 }
@@ -535,19 +545,29 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check if click is in keyboard area first
+        // Check if click is in keyboard area first (even if keyboard is hidden)
         let keyboard_data = self.keyboard.data();
         let keyboard_left = keyboard_data.left * width;
         let keyboard_right = keyboard_data.right * width;
         let keyboard_top = keyboard_data.top * height;
         let keyboard_bottom = keyboard_data.bottom * height;
         
+        // Also check the area below keyboard (unsafe region) where keyboard used to be
+        let screen_bottom = height;
+        
         let is_in_keyboard_area = state.mouse.x >= keyboard_left 
             && state.mouse.x <= keyboard_right 
             && state.mouse.y >= keyboard_top 
             && state.mouse.y <= keyboard_bottom;
         
-        if is_in_keyboard_area {
+        // Check if click is in the area where keyboard would be (including hidden area)
+        let is_in_keyboard_region = state.mouse.x >= keyboard_left 
+            && state.mouse.x <= keyboard_right 
+            && state.mouse.y >= keyboard_top 
+            && state.mouse.y <= screen_bottom;
+        
+        if is_in_keyboard_area && !self.keyboard.is_minimized() {
+            // Keyboard is visible and click is on it
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
             // Handle keyboard key press (handles dismiss button internally)
@@ -558,10 +578,10 @@ impl Application for TextApp {
             return;
         }
         
-        // Touch started outside keyboard
+        // Touch started outside keyboard or keyboard is hidden
         self.touch_started_on_keyboard = false;
         
-        // Check for double tap in content area
+        // Check for double tap in content area OR in keyboard region (even if hidden)
         let now = Instant::now();
         let is_double_tap = if let Some(last_time) = self.last_tap_time {
             let time_since_last = now.duration_since(last_time);
@@ -573,86 +593,127 @@ impl Application for TextApp {
         };
         
         if is_double_tap {
-            // Toggle keyboard
+            // Toggle keyboard (works from content area or keyboard region)
             self.keyboard.toggle_minimize();
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
-        } else {
-            // Single tap - move cursor to tap location (but don't start dragging yet)
-            let safe_region = &state.frame.safe_region_boundaries;
-            let content_top = safe_region.y1 * height;
-            
-            // Convert screen coordinates to text coordinates
-            let tap_x = state.mouse.x;
-            let tap_y = state.mouse.y - content_top + self.scroll_y;
-            
-            // Check if tap is on an empty line
-            let mut found_line: Option<usize> = None;
-            for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
-                let line_y = line.baseline_y;
-                
-                // Check if tap is within this line's vertical bounds
-                if tap_y >= line_y - self.text_engine.ascent && tap_y <= line_y + self.text_engine.descent {
-                    // Check if this line is empty (no characters in this line)
-                    let has_chars = self.text_engine.characters.iter()
-                        .any(|c| c.line_index == line_idx);
-                    
-                    if !has_chars {
-                        // Empty line - place cursor at start of line
-                        found_line = Some(line_idx);
-                        self.cursor_position = line.start_index;
-                        break;
-                    }
-                }
-            }
-            
-            // If not on empty line, find nearest character
-            if found_line.is_none() {
-                let mut nearest_char_index = self.text_engine.text.chars().count();
-                let mut min_distance_sq = f32::MAX;
-                
-                for character in &self.text_engine.characters {
-                    let char_center_x = character.x + character.width / 2.0;
-                    let char_center_y = character.y + character.height / 2.0;
-                    
-                    let dx = tap_x - char_center_x;
-                    let dy = tap_y - char_center_y;
-                    let distance_sq = dx * dx + dy * dy;
-                    
-                    // Check if tap is before this character horizontally
-                    if tap_x < character.x && character.line_index == 0 {
-                        // Tap is before this character, cursor should be at this character's index
-                        if distance_sq < min_distance_sq {
-                            min_distance_sq = distance_sq;
-                            nearest_char_index = character.char_index;
-                        }
-                    } else if distance_sq < min_distance_sq {
-                        min_distance_sq = distance_sq;
-                        // If tap is to the right of character center, cursor goes after it
-                        if tap_x > char_center_x {
-                            nearest_char_index = character.char_index + 1;
-                        } else {
-                            nearest_char_index = character.char_index;
-                        }
-                    }
-                }
-                
-                self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
-            }
-            
-            // Update tap tracking
+            // Clear pending cursor position
+            self.pending_cursor_tap_x = None;
+            self.pending_cursor_tap_y = None;
+            return; // Don't process cursor positioning for double-tap
+        }
+        
+        // If single tap in keyboard region while keyboard is hidden, don't move cursor
+        if is_in_keyboard_region && self.keyboard.is_minimized() {
+            // Just update tap tracking for potential double-tap
             self.last_tap_time = Some(now);
             self.last_tap_x = state.mouse.x;
             self.last_tap_y = state.mouse.y;
-            
-            // Don't start dragging immediately - wait for mouse movement
-            // Dragging will be started in on_mouse_move if mouse moves significantly
+            return;
         }
+        
+        // Normal single tap in content area
+        // Single tap - record position but don't move cursor yet
+        // We'll move cursor on mouse up if user didn't scroll
+        self.pending_cursor_tap_x = Some(state.mouse.x);
+        self.pending_cursor_tap_y = Some(state.mouse.y);
+        self.initial_scroll_y = self.scroll_y;
+        
+        // Update tap tracking
+        self.last_tap_time = Some(now);
+        self.last_tap_x = state.mouse.x;
+        self.last_tap_y = state.mouse.y;
+        
+        // Don't start dragging immediately - wait for mouse movement
+        // Dragging will be started in on_mouse_move if mouse moves significantly
     }
 
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+    fn on_mouse_up(&mut self, state: &mut EngineState) {
         // Release all keys when mouse is released
         self.keyboard.release_keys();
+        
+        // Check if we should move cursor (only if user didn't scroll and didn't drag)
+        if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {
+            // Check if user scrolled (scroll_y changed significantly)
+            let scroll_delta = (self.scroll_y - self.initial_scroll_y).abs();
+            let scroll_threshold = 1.0; // pixels
+            
+            // Check if user dragged (moved mouse significantly)
+            let drag_distance = ((state.mouse.x - tap_x).powi(2) + (state.mouse.y - tap_y).powi(2)).sqrt();
+            let drag_threshold = 10.0; // pixels
+            
+            // Only move cursor if user didn't scroll and didn't drag
+            if scroll_delta < scroll_threshold && (!self.dragging || drag_distance < drag_threshold) {
+                // Move cursor to tap location
+                let shape = state.frame.array.shape();
+                let height = shape[0] as f32;
+                let safe_region = &state.frame.safe_region_boundaries;
+                let content_top = safe_region.y1 * height;
+                
+                // Convert screen coordinates to text coordinates (use current scroll_y)
+                let text_x = tap_x;
+                let text_y = tap_y - content_top + self.scroll_y;
+                
+                // Check if tap is on an empty line
+                let mut found_line: Option<usize> = None;
+                for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                    let line_y = line.baseline_y;
+                    
+                    // Check if tap is within this line's vertical bounds
+                    if text_y >= line_y - self.text_engine.ascent && text_y <= line_y + self.text_engine.descent {
+                        // Check if this line is empty (no characters in this line)
+                        let has_chars = self.text_engine.characters.iter()
+                            .any(|c| c.line_index == line_idx);
+                        
+                        if !has_chars {
+                            // Empty line - place cursor at start of line
+                            found_line = Some(line_idx);
+                            self.cursor_position = line.start_index;
+                            break;
+                        }
+                    }
+                }
+                
+                // If not on empty line, find nearest character
+                if found_line.is_none() {
+                    let mut nearest_char_index = self.text_engine.text.chars().count();
+                    let mut min_distance_sq = f32::MAX;
+                    
+                    for character in &self.text_engine.characters {
+                        let char_center_x = character.x + character.width / 2.0;
+                        let char_center_y = character.y + character.height / 2.0;
+                        
+                        let dx = text_x - char_center_x;
+                        let dy = text_y - char_center_y;
+                        let distance_sq = dx * dx + dy * dy;
+                        
+                        // Check if tap is before this character horizontally
+                        if text_x < character.x && character.line_index == 0 {
+                            // Tap is before this character, cursor should be at this character's index
+                            if distance_sq < min_distance_sq {
+                                min_distance_sq = distance_sq;
+                                nearest_char_index = character.char_index;
+                            }
+                        } else if distance_sq < min_distance_sq {
+                            min_distance_sq = distance_sq;
+                            // If tap is to the right of character center, cursor goes after it
+                            if text_x > char_center_x {
+                                nearest_char_index = character.char_index + 1;
+                            } else {
+                                nearest_char_index = character.char_index;
+                            }
+                        }
+                    }
+                    
+                    self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+                }
+            }
+            
+            // Clear pending cursor position
+            self.pending_cursor_tap_x = None;
+            self.pending_cursor_tap_y = None;
+        }
+        
         // Stop dragging
         self.dragging = false;
         // Reset keyboard repeat tracking
