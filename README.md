@@ -9,8 +9,9 @@ Apps in xos are standalone programs that run on any supported backend. Built wit
 ### ✅ Fully Supported
 
 - **macOS** - Native desktop applications
-- **Linux** - Native desktop applications (with optional ALSA for audio)
 - **iOS** - Native mobile applications (requires macOS + Xcode)
+- **Windows** - Native desktop applications
+- **Linux** - Native desktop applications (with optional ALSA for audio)
 
 ### ⏸️ Paused (Planned Return)
 
