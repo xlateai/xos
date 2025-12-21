@@ -131,7 +131,7 @@ class ViewController: UIViewController {
     @objc private func changeApp() {
         let alert = UIAlertController(title: "Select App", message: nil, preferredStyle: .actionSheet)
         
-        let apps = ["blank", "crash", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "audioedit", "partitions", "coder", "leds", "sensors"]
+        let apps = ["blank", "crash", "ball", "tracers", "camera", "whiteboard", "waveform", "scroll", "text", "wireframe", "triangles", "cursor", "audiovis", "audioedit", "partitions", "coder", "leds", "ios_sensors"]
         
         for app in apps {
             alert.addAction(UIAlertAction(title: app, style: .default) { [weak self] _ in
