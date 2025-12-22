@@ -36,7 +36,6 @@ impl ApplicationHandler for AppState {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         // Check if Ctrl+C was pressed
         if SHOULD_EXIT.load(Ordering::Relaxed) {
-            println!("Shutting down...");
             event_loop.exit();
             return;
         }
@@ -212,7 +211,6 @@ impl ApplicationHandler for AppState {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Check if Ctrl+C was pressed
         if SHOULD_EXIT.load(Ordering::Relaxed) {
-            println!("Shutting down...");
             event_loop.exit();
             return;
         }
