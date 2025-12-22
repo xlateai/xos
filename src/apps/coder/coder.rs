@@ -2,8 +2,6 @@ use crate::engine::{Application, EngineState};
 use crate::apps::text::text::TextApp;
 use crate::apps::coder::button::Button;
 use crate::text::text_rasterization::TextRasterizer;
-
-#[cfg(feature = "python")]
 use rustpython_vm::{Interpreter, AsObject};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -16,7 +14,6 @@ pub struct CoderApp {
     pub code_app: TextApp,
     pub terminal_app: TextApp,
     active_tab: Tab,
-    #[cfg(feature = "python")]
     pub interpreter: Interpreter,
     pub run_button: Button,
     pub code_tab_label: TextRasterizer,
@@ -47,7 +44,6 @@ impl CoderApp {
         terminal_app.text_rasterizer.text = "Run code.py".to_string();
 
         // Initialize RustPython interpreter with xos module
-        #[cfg(feature = "python")]
         let interpreter = Interpreter::with_init(Default::default(), |vm| {
             // Register the xos native module
             vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
@@ -75,7 +71,6 @@ impl CoderApp {
             code_app,
             terminal_app,
             active_tab: Tab::Code,
-            #[cfg(feature = "python")]
             interpreter,
             run_button,
             code_tab_label,
@@ -83,16 +78,9 @@ impl CoderApp {
         }
     }
 
-    #[cfg(feature = "python")]
     fn execute_python_code(&mut self, code: &str) {
-        use std::sync::{Arc, Mutex};
-        
         // Clear terminal - just show the raw output
         self.terminal_app.text_rasterizer.text.clear();
-        
-        // Shared buffer accessible from Python
-        let output_buffer = Arc::new(Mutex::new(String::new()));
-        let buffer_clone = output_buffer.clone();
         
         let result = self.interpreter.enter(|vm| {
             let scope = vm.new_scope_with_builtins();
@@ -191,13 +179,6 @@ builtins.print = __custom_print__
         
         // Switch to terminal tab to show output
         self.active_tab = Tab::Terminal;
-    }
-
-    #[cfg(not(feature = "python"))]
-    fn execute_python_code(&mut self, _code: &str) {
-        self.terminal_app.text_rasterizer.text = "Python execution not available (python feature disabled)".to_string();
-        self.active_tab = Tab::Terminal;
-        println!("\n=== Python execution not available (python feature disabled) ===\n");
     }
 
     fn draw_tab(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, x: i32, y: i32, width: u32, height: u32, label_rasterizer: &TextRasterizer, is_active: bool) {

@@ -24,6 +24,5 @@ pub fn get_frame() -> Vec<u8> {
     vec![]
 }
 
-#[cfg(feature = "python")]
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 pub mod py_webcam;

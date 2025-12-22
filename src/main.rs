@@ -134,7 +134,7 @@ fn build() {
     let project_root = find_project_root();
     
     let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap(), "--features", "python"]);
+    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
     cargo_cmd.stdout(Stdio::inherit());
     cargo_cmd.stderr(Stdio::inherit());
     
@@ -230,9 +230,8 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
     
     let project_root = find_project_root();
     
-    // Always enable python feature since it's optional and the binary might be used for Python commands
     let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap(), "--features", "python"]);
+    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
     cargo_cmd.stdout(Stdio::inherit());
     cargo_cmd.stderr(Stdio::inherit());
     
@@ -301,7 +300,7 @@ fn main() {
                     println!("🔨 Rebuilding Rust CLI...");
                     let project_root = find_project_root();
                     let mut cargo_cmd = Command::new("cargo");
-                    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap(), "--features", "python"]);
+                    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
                     cargo_cmd.stdout(Stdio::inherit());
                     cargo_cmd.stderr(Stdio::inherit());
                     let status = cargo_cmd.status().expect("Failed to run cargo install");

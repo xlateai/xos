@@ -1,4 +1,3 @@
-#[cfg(feature = "python")]
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 
 /// xos.random.uniform(min, max) - returns a random float between min and max

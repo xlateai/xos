@@ -1,11 +1,9 @@
-#[cfg(feature = "python")]
 use rustpython_vm::{Interpreter, AsObject};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::fs;
 
 /// Run a Python file
-#[cfg(feature = "python")]
 pub fn run_python_file(file_path: &PathBuf) {
     // Read the Python file
     let code = match fs::read_to_string(file_path) {
@@ -76,7 +74,6 @@ pub fn run_python_file(file_path: &PathBuf) {
 }
 
 /// Run an interactive Python console
-#[cfg(feature = "python")]
 pub fn run_python_interactive() {
     println!("🐍 Python Interactive Console");
     println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
@@ -236,7 +233,6 @@ pub fn run_python_interactive() {
 }
 
 /// Run a Python application with the xos engine
-#[cfg(feature = "python")]
 pub fn run_python_app(file_path: &PathBuf) {
     use crate::python::engine::pyapp::PyApp;
     
@@ -307,22 +303,4 @@ pub fn run_python_app(file_path: &PathBuf) {
     } else {
         eprintln!("ℹ️  Python script completed (no xos app launched)");
     }
-}
-
-#[cfg(not(feature = "python"))]
-pub fn run_python_app(_file_path: &PathBuf) {
-    eprintln!("❌ Python support not available (python feature disabled)");
-    std::process::exit(1);
-}
-
-#[cfg(not(feature = "python"))]
-pub fn run_python_file(_file_path: &PathBuf) {
-    eprintln!("❌ Python support not available (python feature disabled)");
-    std::process::exit(1);
-}
-
-#[cfg(not(feature = "python"))]
-pub fn run_python_interactive() {
-    eprintln!("❌ Python interactive console not available (python feature disabled)");
-    std::process::exit(1);
 }

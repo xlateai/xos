@@ -20,7 +20,6 @@ pub mod tensor;
 pub mod shapes;
 pub mod python;
 
-#[cfg(feature = "python")]
 pub mod py_engine {
     // Python application wrapper - TODO: Reimplement with proper rustpython API
     // This is a placeholder for now since the API migration is complex

@@ -1,4 +1,3 @@
-#[cfg(feature = "python")]
 use rustpython_vm::{Interpreter, PyObjectRef, AsObject};
 use crate::engine::{Application, EngineState};
 
@@ -64,13 +63,11 @@ class Application:
 "#;
 
 /// PyApp wraps a Python Application instance and implements the Rust Application trait
-#[cfg(feature = "python")]
 pub struct PyApp {
     interpreter: Interpreter,
     app_instance: Option<PyObjectRef>,
 }
 
-#[cfg(feature = "python")]
 impl PyApp {
     pub fn new(interpreter: Interpreter, app_instance: PyObjectRef) -> Self {
         Self {
@@ -80,7 +77,6 @@ impl PyApp {
     }
 }
 
-#[cfg(feature = "python")]
 impl Application for PyApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         if let Some(ref app_instance) = self.app_instance {

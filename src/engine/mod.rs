@@ -17,7 +17,6 @@ pub use native_engine::start_native;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_engine::run_web;
 
-#[cfg(feature = "python")]
 pub use crate::py_engine::PyApplicationWrapper;
 
 pub use engine::{Application, EngineState, KeyboardState, MouseState, FrameState, SafeRegionBoundingRectangle};
