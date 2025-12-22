@@ -20,4 +20,4 @@ pub use wasm_engine::run_web;
 #[cfg(feature = "python")]
 pub use crate::py_engine::PyApplicationWrapper;
 
-pub use engine::{Application, EngineState, MouseState, FrameState, SafeRegionBoundingRectangle};
+pub use engine::{Application, EngineState, KeyboardState, MouseState, FrameState, SafeRegionBoundingRectangle};

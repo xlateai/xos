@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
 use crate::apps;
 #[cfg(target_os = "ios")]
-use crate::engine::{Application, EngineState, MouseState, FrameState, SafeRegionBoundingRectangle};
+use crate::engine::{Application, EngineState, KeyboardState, MouseState, FrameState, SafeRegionBoundingRectangle};
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
 
@@ -227,29 +227,18 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
         }
         
-        let result = Ok(()); // Already checked for panic above
+        // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
+        let frame_buffer = ios_state.engine_state.frame_buffer_mut();
+        let pixel_count = frame_buffer.len() / 4;
         
-        match result {
-            Ok(_) => {
-                // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
-                let frame_buffer = ios_state.engine_state.frame_buffer_mut();
-                let pixel_count = frame_buffer.len() / 4;
-                
-                for i in 0..pixel_count {
-                    let idx = i * 4;
-                    if idx + 3 < frame_buffer.len() {
-                        // Swap R (idx+0) and B (idx+2) channels
-                        frame_buffer.swap(idx, idx + 2);
-                    }
-                }
-                0
-            }
-            Err(_) => {
-                // Panic occurred - the panic hook already logged it
-                // Just return error code - Swift side will detect this and show crash overlay
-                1
+        for i in 0..pixel_count {
+            let idx = i * 4;
+            if idx + 3 < frame_buffer.len() {
+                // Swap R (idx+0) and B (idx+2) channels
+                frame_buffer.swap(idx, idx + 2);
             }
         }
+        0
     } else {
         1
     }
