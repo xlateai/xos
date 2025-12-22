@@ -31,7 +31,7 @@ pub struct TextApp {
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
     last_tap_y: f32,
-    cursor_position: usize, // Character index where cursor should be
+    pub cursor_position: usize, // Character index where cursor should be
     dragging: bool,
     last_mouse_y: f32,
     touch_started_on_keyboard: bool,
@@ -44,6 +44,10 @@ pub struct TextApp {
     shift_dot_y: Option<f32>, // Screen coordinates
     shift_last_finger_x: Option<f32>,
     shift_last_finger_y: Option<f32>,
+    // Configuration flags
+    pub show_cursor: bool,
+    pub show_debug_visuals: bool,
+    pub read_only: bool,
 }
 
 
@@ -100,6 +104,9 @@ impl TextApp {
             shift_dot_y: None,
             shift_last_finger_x: None,
             shift_last_finger_y: None,
+            show_cursor: true,
+            show_debug_visuals: true,
+            read_only: false,
         }
     }
 
@@ -206,7 +213,7 @@ impl Application for TextApp {
         }
     
         // Draw baselines (offset by content_top)
-        if DRAW_BASELINES {
+        if DRAW_BASELINES && self.show_debug_visuals {
             for line in &self.text_rasterizer.lines {
                 let y = ((line.baseline_y - self.scroll_y) + content_top) as i32;
                 if y >= 0 && y < height as i32 {
@@ -254,21 +261,22 @@ impl Application for TextApp {
                 }
             }
     
-            if SHOW_BOUNDING_RECTANGLES {
+            if SHOW_BOUNDING_RECTANGLES && self.show_debug_visuals {
                 Self::draw_rect(buffer, width as u32, height as u32, px, py, pw, ph, alpha);
             }
         }
     
         // Draw cursor (offset by content_top)
-        // Find cursor position based on cursor_position index
-        // First, find which line the cursor is on
-        let line_info_with_idx = self.text_rasterizer.lines.iter()
-            .enumerate()
-            .find(|(_, line)| {
-                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
-            });
-        
-        let (target_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
+        if self.show_cursor {
+            // Find cursor position based on cursor_position index
+            // First, find which line the cursor is on
+            let line_info_with_idx = self.text_rasterizer.lines.iter()
+                .enumerate()
+                .find(|(_, line)| {
+                    line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+                });
+            
+            let (target_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
             // Found the line - check if there are characters in this line
             let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
                 .filter(|c| c.line_index == line_idx)
@@ -352,20 +360,21 @@ impl Application for TextApp {
             }
         };
         
-        // Smooth the x-position (linear interpolation)
-        self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
-        
-        let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
-        let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round() as i32;
-        let cx = self.smooth_cursor_x.round() as i32;
-        
-        for y in cursor_top..cursor_bottom {
-            if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
-                let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
-                buffer[idx + 0] = CURSOR_COLOR.0;
-                buffer[idx + 1] = CURSOR_COLOR.1;
-                buffer[idx + 2] = CURSOR_COLOR.2;
-                buffer[idx + 3] = 0xff;
+            // Smooth the x-position (linear interpolation)
+            self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+            
+            let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
+            let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round() as i32;
+            let cx = self.smooth_cursor_x.round() as i32;
+            
+            for y in cursor_top..cursor_bottom {
+                if y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
+                    let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
+                    buffer[idx + 0] = CURSOR_COLOR.0;
+                    buffer[idx + 1] = CURSOR_COLOR.1;
+                    buffer[idx + 2] = CURSOR_COLOR.2;
+                    buffer[idx + 3] = 0xff;
+                }
             }
         }
     
@@ -404,6 +413,11 @@ impl Application for TextApp {
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+        // Don't process keys if read-only
+        if self.read_only {
+            return;
+        }
+        
         match ch {
             ARROW_LEFT => {
                 self.move_cursor_left();

@@ -13,11 +13,13 @@ enum Tab {
 pub struct CoderApp {
     pub code_app: TextApp,
     pub terminal_app: TextApp,
+    pub console_app: TextApp,
     active_tab: Tab,
     pub interpreter: Interpreter,
     pub run_button: Button,
     pub code_tab_label: TextRasterizer,
     pub terminal_tab_label: TextRasterizer,
+    persistent_scope: Option<rustpython_vm::scope::Scope>,
 }
 
 impl CoderApp {
@@ -37,17 +39,36 @@ impl CoderApp {
     pub fn new() -> Self {
         // Create the code editor text app with default code
         let mut code_app = TextApp::new();
-        code_app.text_rasterizer.text = r#"print("Hello World! Double tap screen to show keyboard")"#.to_string();
+        code_app.text_rasterizer.text = r#"print("python in rust!!!")
+
+x = ""
+
+for i in range(100):
+    x += str(i)
+
+print(x)"#.to_string();
+        code_app.show_debug_visuals = false; // Hide debug visuals in code editor
         
-        // Create the terminal text app with prompt
+        // Create the terminal text app (empty initially)
         let mut terminal_app = TextApp::new();
-        terminal_app.text_rasterizer.text = "Run code.py".to_string();
+        terminal_app.text_rasterizer.text = "".to_string();
+        terminal_app.read_only = true; // Terminal is read-only
+        terminal_app.show_cursor = false; // Hide cursor in terminal
+        terminal_app.show_debug_visuals = false; // Hide debug visuals in terminal
+        
+        // Create the console text app for interactive Python
+        let mut console_app = TextApp::new();
+        console_app.text_rasterizer.text = "".to_string();
+        console_app.show_debug_visuals = false; // Hide debug visuals in console
 
         // Initialize RustPython interpreter with xos module
         let interpreter = Interpreter::with_init(Default::default(), |vm| {
             // Register the xos native module
             vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
         });
+
+        // Initialize persistent scope for console
+        let persistent_scope = None; // Will be created on first use
 
         // Create run button (position will be updated in tick)
         let (button_width, button_height) = Self::get_button_size();
@@ -70,11 +91,13 @@ impl CoderApp {
         Self {
             code_app,
             terminal_app,
+            console_app,
             active_tab: Tab::Code,
             interpreter,
             run_button,
             code_tab_label,
             terminal_tab_label,
+            persistent_scope,
         }
     }
 
@@ -83,10 +106,16 @@ impl CoderApp {
         self.terminal_app.text_rasterizer.text.clear();
         
         let result = self.interpreter.enter(|vm| {
-            let scope = vm.new_scope_with_builtins();
-            
-            // Set __name__ to "__main__" so if __name__ == "__main__" works
-            let _ = scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+            // Get or create persistent scope
+            let scope = if let Some(ref existing_scope) = self.persistent_scope {
+                existing_scope.clone()
+            } else {
+                let new_scope = vm.new_scope_with_builtins();
+                // Set __name__ to "__main__" so if __name__ == "__main__" works
+                let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+                self.persistent_scope = Some(new_scope.clone());
+                new_scope
+            };
             
             // Store output buffer reference in scope so we can access it
             // We'll use a simple Python list to capture output
@@ -179,6 +208,134 @@ builtins.print = __custom_print__
         
         // Switch to terminal tab to show output
         self.active_tab = Tab::Terminal;
+    }
+
+    fn execute_console_command(&mut self, command: &str) {
+        // Get the current line (after the last newline)
+        let lines: Vec<&str> = command.split('\n').collect();
+        let current_line = lines.last().unwrap_or(&"").trim();
+        
+        if current_line.is_empty() {
+            return;
+        }
+        
+        let actual_command = current_line;
+        
+        // Execute in the same scope as run code
+        let result = self.interpreter.enter(|vm| {
+            // Get or create persistent scope
+            let scope = if let Some(ref existing_scope) = self.persistent_scope {
+                existing_scope.clone()
+            } else {
+                let new_scope = vm.new_scope_with_builtins();
+                let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+                self.persistent_scope = Some(new_scope.clone());
+                new_scope
+            };
+            
+            // Store output buffer reference in scope so we can capture print statements
+            let output_list = vm.ctx.new_list(vec![]);
+            scope.globals.set_item("__output_lines__", output_list.clone().into(), vm).ok();
+            
+            // Override print in builtins to capture output
+            let setup_code = r#"
+import builtins
+__original_print__ = builtins.print
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __output_lines__.append(output)
+
+builtins.print = __custom_print__
+"#;
+            
+            // Set up print capture
+            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                eprintln!("Failed to set up print capture: {:?}", e);
+            }
+            
+            // Try eval first (for expressions), then exec
+            let eval_code = format!("__console_result = eval({:?})", actual_command);
+            let eval_result = vm.run_code_string(scope.clone(), &eval_code, "<console>".to_string());
+            
+            // Extract captured output
+            let captured_output = if let Ok(output_obj) = scope.globals.get_item("__output_lines__", vm) {
+                if let Ok(output_list) = output_obj.downcast::<rustpython_vm::builtins::PyList>() {
+                    let mut result = String::new();
+                    for item in output_list.borrow_vec().iter() {
+                        if let Ok(s) = item.str(vm) {
+                            result.push_str(&s.to_string());
+                        }
+                    }
+                    result
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            
+            // Restore original print
+            let restore_code = "builtins.print = __original_print__";
+            vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
+            
+            if eval_result.is_ok() {
+                // Check if result is None
+                if let Ok(result_obj) = scope.globals.get_item("__console_result", vm) {
+                    if !vm.is_none(&result_obj) {
+                        // Print the result
+                        if let Ok(repr_str) = vm.call_method(&result_obj, "__repr__", ()) {
+                            if let Ok(s) = repr_str.str(vm) {
+                                return Ok((captured_output + &s.to_string(), false));
+                            }
+                        }
+                    }
+                }
+                Ok((captured_output, false))
+            } else {
+                // Eval failed, try exec
+                let exec_result = vm.run_code_string(scope.clone(), actual_command, "<console>".to_string());
+                
+                if let Err(py_exc) = exec_result {
+                    let class_name = py_exc.class().name();
+                    let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
+                        .ok()
+                        .and_then(|result| result.str(vm).ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    
+                    let error_text = if !error_msg.is_empty() {
+                        format!("{}: {}", class_name, error_msg)
+                    } else {
+                        format!("{}", class_name)
+                    };
+                    
+                    return Err((captured_output + &error_text, true));
+                }
+                
+                Ok((captured_output, false))
+            }
+        });
+        
+        // Append command and result to terminal
+        if !self.terminal_app.text_rasterizer.text.is_empty() {
+            self.terminal_app.text_rasterizer.text.push_str("\n");
+        }
+        self.terminal_app.text_rasterizer.text.push_str(">>> ");
+        self.terminal_app.text_rasterizer.text.push_str(actual_command);
+        self.terminal_app.text_rasterizer.text.push_str("\n");
+        
+        match result {
+            Ok((output, _)) => {
+                if !output.is_empty() {
+                    self.terminal_app.text_rasterizer.text.push_str(&output);
+                }
+            }
+            Err((error, _)) => {
+                self.terminal_app.text_rasterizer.text.push_str(&error);
+                self.terminal_app.text_rasterizer.text.push_str("\n");
+            }
+        }
     }
 
     fn draw_tab(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, x: i32, y: i32, width: u32, height: u32, label_rasterizer: &TextRasterizer, is_active: bool) {
@@ -293,13 +450,100 @@ builtins.print = __custom_print__
             && y < (tab_y + tab_height as i32) as f32
     }
 
+    fn draw_button_with_color(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, is_hovered: bool, color: (u8, u8, u8)) {
+        let x = self.run_button.x;
+        let y = self.run_button.y;
+        let width = self.run_button.width;
+        let height = self.run_button.height;
+        
+        let bg_color = if is_hovered {
+            // Slightly lighter when hovered
+            (
+                (color.0 as u16 * 120 / 100).min(255) as u8,
+                (color.1 as u16 * 120 / 100).min(255) as u8,
+                (color.2 as u16 * 120 / 100).min(255) as u8,
+            )
+        } else {
+            color
+        };
+        
+        // Draw button background
+        for dy in 0..height {
+            for dx in 0..width {
+                let px = x + dx as i32;
+                let py = y + dy as i32;
+                
+                if px >= 0 && px < canvas_width as i32 && py >= 0 && py < canvas_height as i32 {
+                    let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
+                    buffer[idx + 0] = bg_color.0;
+                    buffer[idx + 1] = bg_color.1;
+                    buffer[idx + 2] = bg_color.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+        
+        // Draw button border
+        let border_color = (255, 255, 255);
+        // Top border
+        for dx in 0..width {
+            let px = x + dx as i32;
+            if px >= 0 && px < canvas_width as i32 && y >= 0 && y < canvas_height as i32 {
+                let idx = ((y as u32 * canvas_width + px as u32) * 4) as usize;
+                buffer[idx + 0] = border_color.0;
+                buffer[idx + 1] = border_color.1;
+                buffer[idx + 2] = border_color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+        // Bottom border
+        let bottom_y = y + height as i32 - 1;
+        for dx in 0..width {
+            let px = x + dx as i32;
+            if px >= 0 && px < canvas_width as i32 && bottom_y >= 0 && bottom_y < canvas_height as i32 {
+                let idx = ((bottom_y as u32 * canvas_width + px as u32) * 4) as usize;
+                buffer[idx + 0] = border_color.0;
+                buffer[idx + 1] = border_color.1;
+                buffer[idx + 2] = border_color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+        // Left border
+        for dy in 0..height {
+            let py = y + dy as i32;
+            if py >= 0 && py < canvas_height as i32 && x >= 0 && x < canvas_width as i32 {
+                let idx = ((py as u32 * canvas_width + x as u32) * 4) as usize;
+                buffer[idx + 0] = border_color.0;
+                buffer[idx + 1] = border_color.1;
+                buffer[idx + 2] = border_color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+        // Right border
+        let right_x = x + width as i32 - 1;
+        for dy in 0..height {
+            let py = y + dy as i32;
+            if py >= 0 && py < canvas_height as i32 && right_x >= 0 && right_x < canvas_width as i32 {
+                let idx = ((py as u32 * canvas_width + right_x as u32) * 4) as usize;
+                buffer[idx + 0] = border_color.0;
+                buffer[idx + 1] = border_color.1;
+                buffer[idx + 2] = border_color.2;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+        
+        // Note: Button text rendering is not implemented yet
+        // The button will just show as a colored rectangle
+    }
+
 }
 
 impl Application for CoderApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        // Setup both text apps
+        // Setup all text apps
         self.code_app.setup(state)?;
         self.terminal_app.setup(state)?;
+        self.console_app.setup(state)?;
         Ok(())
     }
 
@@ -313,27 +557,145 @@ impl Application for CoderApp {
         
         // Get keyboard top edge coordinates (normalized 0-1)
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let keyboard_top_px = keyboard_top_y * height;
         
-        // Delegate to active text app
+        // Calculate console dimensions (above keyboard, full width, same height as button)
+        let (_, console_height) = Self::get_button_size();
+        let padding = 10;
+        
+        // Console is only shown on terminal tab
+        let show_console = self.active_tab == Tab::Terminal;
+        
+        let console_bottom_y = keyboard_top_px - padding as f32;
+        let console_top_y = console_bottom_y - console_height as f32;
+        
+        // Delegate to active text app (but not console - it gets special handling)
         match self.active_tab {
             Tab::Code => self.code_app.tick(state),
             Tab::Terminal => self.terminal_app.tick(state),
         }
         
+        // Tick console separately with its own viewport
+        // Console needs to know its available space for rendering
+        self.console_app.text_rasterizer.tick(width, console_height as f32);
+        
         // Update tab label rasterizers
         self.code_tab_label.tick(width, height);
         self.terminal_tab_label.tick(width, height);
         
-        // Get buffer again for drawing tabs and button on top
+        // Get buffer again for drawing console, tabs and button on top
         let buffer = state.frame_buffer_mut();
         
-        // Draw tabs aligned with keyboard edge - same size as button
-        let (tab_width, tab_height) = Self::get_button_size();
-        let padding = 10;
+        // Only draw console when on terminal tab
+        if show_console {
+            // Draw console area background (above keyboard)
+            let console_bg_color = (20, 20, 20);
+            for y in (console_top_y as i32)..(console_bottom_y as i32) {
+                if y >= 0 && y < height as i32 {
+                    for x in 0..(width as i32) {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        buffer[idx + 0] = console_bg_color.0;
+                        buffer[idx + 1] = console_bg_color.1;
+                        buffer[idx + 2] = console_bg_color.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+            
+            // Draw console text
+            let text_color = (0, 255, 0); // Green terminal-style text
+            for character in &self.console_app.text_rasterizer.characters {
+                let px = character.x as i32;
+                let py = (console_top_y + character.y - self.console_app.scroll_y) as i32;
+                
+                for y in 0..character.metrics.height {
+                    for x in 0..character.metrics.width {
+                        let val = character.bitmap[y * character.metrics.width + x];
+                        
+                        let sx = px + x as i32;
+                        let sy = py + y as i32;
+                        
+                        if sx >= 0 && sx < width as i32 && sy >= console_top_y as i32 && sy < console_bottom_y as i32 {
+                            let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
+                            buffer[idx + 0] = ((text_color.0 as u16 * val as u16) / 255) as u8;
+                            buffer[idx + 1] = ((text_color.1 as u16 * val as u16) / 255) as u8;
+                            buffer[idx + 2] = ((text_color.2 as u16 * val as u16) / 255) as u8;
+                            buffer[idx + 3] = val;
+                        }
+                    }
+                }
+            }
+            
+            // Draw console cursor
+            if self.console_app.show_cursor {
+                // Find cursor position
+                let line_info_with_idx = self.console_app.text_rasterizer.lines.iter()
+                    .enumerate()
+                    .find(|(_, line)| {
+                        line.start_index <= self.console_app.cursor_position && self.console_app.cursor_position <= line.end_index
+                    });
+                
+                let (cursor_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
+                    let chars_in_line: Vec<_> = self.console_app.text_rasterizer.characters.iter()
+                        .filter(|c| c.line_index == line_idx)
+                        .collect();
+                    
+                    if chars_in_line.is_empty() || self.console_app.cursor_position == line.start_index {
+                        (0.0, line.baseline_y)
+                    } else if let Some(last_char) = chars_in_line.last() {
+                        if self.console_app.cursor_position > last_char.char_index {
+                            (last_char.x + last_char.metrics.advance_width, line.baseline_y)
+                        } else {
+                            (0.0, line.baseline_y)
+                        }
+                    } else {
+                        (0.0, line.baseline_y)
+                    }
+                } else if let Some(first_line) = self.console_app.text_rasterizer.lines.first() {
+                    (0.0, first_line.baseline_y)
+                } else {
+                    (0.0, self.console_app.text_rasterizer.ascent)
+                };
+                
+                let cursor_top = (console_top_y + baseline_y - self.console_app.text_rasterizer.ascent - self.console_app.scroll_y).round() as i32;
+                let cursor_bottom = (console_top_y + baseline_y + self.console_app.text_rasterizer.descent - self.console_app.scroll_y).round() as i32;
+                let cx = cursor_x.round() as i32;
+                
+                for y in cursor_top..cursor_bottom {
+                    if y >= console_top_y as i32 && y < console_bottom_y as i32 && cx >= 0 && cx < width as i32 {
+                        let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
+                        buffer[idx + 0] = text_color.0;
+                        buffer[idx + 1] = text_color.1;
+                        buffer[idx + 2] = text_color.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+            
+            // Draw console border
+            let border_color = (100, 100, 100);
+            // Top border
+            for x in 0..(width as i32) {
+                let y = console_top_y as i32;
+                if y >= 0 && y < height as i32 {
+                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                    buffer[idx + 0] = border_color.0;
+                    buffer[idx + 1] = border_color.1;
+                    buffer[idx + 2] = border_color.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
         
-        // Position tabs just above the keyboard (same logic as button)
-        let keyboard_top_px = keyboard_top_y * height;
-        let tab_bottom_y = keyboard_top_px - padding as f32;
+        // Calculate tab position based on whether console is shown
+        let (tab_width, tab_height) = Self::get_button_size();
+        let tab_bottom_y = if show_console {
+            // Console is shown, tabs go above console
+            console_top_y - padding as f32
+        } else {
+            // Console is hidden, tabs go at keyboard edge
+            keyboard_top_px - padding as f32
+        };
         let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
         
         // Draw code.py tab on the left
@@ -349,11 +711,21 @@ impl Application for CoderApp {
         self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
         self.run_button.y = button_top_y as i32;
         
+        // Determine button behavior and color based on console state
+        let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
+        let should_execute_console = show_console && console_has_text;
+        
         // Check if mouse is hovering over button
         let is_hovered = self.run_button.contains_point(mouse_x, mouse_y);
         
-        // Draw run button on top of everything
-        self.run_button.draw(buffer, width as u32, height as u32, is_hovered);
+        // Draw run button with appropriate color
+        if should_execute_console {
+            // Gold color for console command
+            self.draw_button_with_color(buffer, width as u32, height as u32, is_hovered, (218, 165, 32));
+        } else {
+            // Green color for running code
+            self.run_button.draw(buffer, width as u32, height as u32, is_hovered);
+        }
     }
 
     fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
@@ -364,9 +736,23 @@ impl Application for CoderApp {
     }
 
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
-        // Only allow editing in code tab
-        if self.active_tab == Tab::Code {
-            self.code_app.on_key_char(state, ch);
+        match self.active_tab {
+            Tab::Code => {
+                // On code tab, input goes to code editor
+                self.code_app.on_key_char(state, ch);
+            }
+            Tab::Terminal => {
+                // On terminal tab, check if Enter key - execute console command
+                if ch == '\n' || ch == '\r' {
+                    // Execute console command
+                    let command = self.console_app.text_rasterizer.text.clone();
+                    self.execute_console_command(&command);
+                    return;
+                }
+                
+                // Pass all other characters to console (it's our interactive terminal)
+                self.console_app.on_key_char(state, ch);
+            }
         }
     }
 
@@ -392,7 +778,21 @@ impl Application for CoderApp {
         let height = shape[0] as f32;
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
-        let tab_bottom_y = keyboard_top_px - padding as f32;
+        
+        // Calculate console dimensions (must match tick)
+        let show_console = self.active_tab == Tab::Terminal;
+        let (_, console_height) = Self::get_button_size();
+        let console_bottom_y = keyboard_top_px - padding as f32;
+        let console_top_y = console_bottom_y - console_height as f32;
+        
+        // Calculate tab position based on whether console is shown
+        let tab_bottom_y = if show_console {
+            // Console is shown, tabs go above console
+            console_top_y - padding as f32
+        } else {
+            // Console is hidden, tabs go at keyboard edge
+            keyboard_top_px - padding as f32
+        };
         let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
         
         println!("Button position - x: {}, y: {}, width: {}, height: {}", 
@@ -416,13 +816,28 @@ impl Application for CoderApp {
         // Check if click is on the run button
         if self.run_button.contains_point(mouse_x, mouse_y) {
             println!("Run button clicked at ({}, {})", mouse_x, mouse_y);
-            // Execute the Python code from code tab
-            let code = self.code_app.text_rasterizer.text.clone();
-            println!("Code to execute: {}", code);
-            if !code.trim().is_empty() {
-                self.execute_python_code(&code);
+            
+            // Determine if we should execute console command or run code
+            let show_console = self.active_tab == Tab::Terminal;
+            let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
+            
+            if show_console && console_has_text {
+                // Execute console command and clear it
+                println!("Executing console command");
+                let command = self.console_app.text_rasterizer.text.clone();
+                self.execute_console_command(&command);
+                // Clear the console input after execution
+                self.console_app.text_rasterizer.text.clear();
+                self.console_app.cursor_position = 0;
             } else {
-                println!("Code was empty!");
+                // Execute the Python code from code tab
+                let code = self.code_app.text_rasterizer.text.clone();
+                println!("Code to execute: {}", code);
+                if !code.trim().is_empty() {
+                    self.execute_python_code(&code);
+                } else {
+                    println!("Code was empty!");
+                }
             }
             return;
         }
