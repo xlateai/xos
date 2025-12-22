@@ -233,8 +233,6 @@ pub fn launch_ios_app(app_name: &str) {
     {
         use std::process::{Command, Stdio};
         
-        let _ = app_name; // Unused on macOS - deployment script handles everything
-        
         // Find project root (same logic as main.rs)
         let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
         let project_root = loop {
@@ -262,11 +260,13 @@ pub fn launch_ios_app(app_name: &str) {
             std::process::exit(1);
         }
         
-        println!("📱 Deploying app to iOS device...");
+        println!("📱 Deploying app '{}' to iOS device...", app_name);
         
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
         cmd.current_dir(project_root.join("ios"));
+        // Pass the app name via environment variable - this is used by the build system
+        cmd.env("XOS_APP_NAME", app_name);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
         
