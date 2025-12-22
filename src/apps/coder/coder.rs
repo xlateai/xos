@@ -5,7 +5,7 @@ use fontdue::{Font, FontSettings};
 use std::collections::HashMap;
 
 #[cfg(feature = "python")]
-use rustpython_vm::Interpreter;
+use rustpython_vm::{Interpreter, AsObject};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
@@ -30,10 +30,11 @@ impl CoderApp {
 
         let text_engine = GeometricText::new(font, 24.0);
 
-        // Initialize RustPython interpreter
+        // Initialize RustPython interpreter with xos module
         #[cfg(feature = "python")]
-        let interpreter = Interpreter::with_init(Default::default(), |_vm| {
-            // Standard library is initialized by default
+        let interpreter = Interpreter::with_init(Default::default(), |vm| {
+            // Register the xos native module
+            vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
         });
 
         // Create run button (position will be updated in tick)
@@ -124,7 +125,39 @@ impl CoderApp {
         
         let result = self.interpreter.enter(|vm| {
             let scope = vm.new_scope_with_builtins();
-            vm.run_code_string(scope, code, "<coder>".to_string())
+            
+            // Set __name__ to "__main__" so if __name__ == "__main__" works
+            let _ = scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+            
+            // Run the code
+            let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
+            
+            // Handle errors with detailed messages
+            if let Err(py_exc) = exec_result {
+                let class_name = py_exc.class().name();
+                let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
+                    .ok()
+                    .and_then(|result| result.str(vm).ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                
+                if !error_msg.is_empty() {
+                    eprintln!("Python Error: {}: {}", class_name, error_msg);
+                } else {
+                    eprintln!("Python Error: {}", class_name);
+                }
+                return Err(format!("{}: {}", class_name, error_msg));
+            }
+            
+            // Check if an xos.Application was registered
+            if let Ok(Some(_app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
+                println!("\n[xos] Application instance registered in coder!");
+                println!("[xos] Note: The coder app cannot launch the xos engine window.");
+                println!("[xos] To run this application with a window, save it to a file and run:");
+                println!("[xos]   xos python <filename>.py");
+            }
+            
+            Ok(())
         });
 
         match result {
@@ -132,8 +165,8 @@ impl CoderApp {
                 println!("--- Execution Complete ---\n");
             }
             Err(e) => {
-                eprintln!("Python Error: {:?}", e);
-                println!("--- Execution Failed ---\n");
+                println!("--- Execution Failed ---");
+                println!("{}\n", e);
             }
         }
     }
