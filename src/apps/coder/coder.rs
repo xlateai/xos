@@ -18,6 +18,7 @@ pub struct CoderApp {
     active_tab: Tab,
     pub interpreter: Interpreter,
     pub run_button: Button,
+    pub stop_button: Button,
     pub clear_button: Button,
     pub clear_button_label: TextRasterizer,
     pub code_tab_label: TextRasterizer,
@@ -44,6 +45,20 @@ impl CoderApp {
         #[cfg(not(target_os = "ios"))]
         {
             (160, 60)
+        }
+    }
+    
+    // Get tab width (narrower on iOS to make room for stop button)
+    fn get_tab_width() -> u32 {
+        let (button_width, _) = Self::get_button_size();
+        #[cfg(target_os = "ios")]
+        {
+            // 20% narrower on iOS
+            (button_width as f32 * 0.8) as u32
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            button_width
         }
     }
     
@@ -79,6 +94,12 @@ impl CoderApp {
         let (button_width, button_height) = Self::get_button_size();
         let run_button = Button::new(0, 0, button_width, button_height, "Run".to_string());
         
+        // Create stop button (smaller, appears during execution)
+        let stop_button_width = button_height; // Square button
+        let mut stop_button = Button::new(0, 0, stop_button_width, button_height, "Stop".to_string());
+        stop_button.bg_color = (200, 50, 50); // Red
+        stop_button.hover_color = (220, 70, 70); // Lighter red on hover
+        
         // Create clear button (smaller, will be positioned in console area)
         let clear_button_size = (button_height, button_height); // Square button
         let mut clear_button = Button::new(0, 0, clear_button_size.0, clear_button_size.1, "X".to_string());
@@ -113,6 +134,7 @@ impl CoderApp {
             active_tab: Tab::Code,
             interpreter,
             run_button,
+            stop_button,
             clear_button,
             clear_button_label,
             code_tab_label,
@@ -609,7 +631,7 @@ impl Application for CoderApp {
         let keyboard_top_px = keyboard_top_y * height;
         
         // Calculate button/tab dimensions
-        let (button_width, button_height) = Self::get_button_size();
+        let (_, button_height) = Self::get_button_size();
         let padding = 10;
         
         // Console is only shown on terminal tab
@@ -878,9 +900,9 @@ impl Application for CoderApp {
             }
         }
         
-        // Draw tabs at tabs_top_y position
+        // Draw tabs at tabs_top_y position (narrower on iOS)
         let tab_top_y = tabs_top_y as i32;
-        let tab_width = button_width;
+        let tab_width = Self::get_tab_width();
         let tab_height = button_height;
         
         // Draw code.py tab on the left
@@ -892,9 +914,27 @@ impl Application for CoderApp {
         // Draw viewport tab next to terminal
         self.draw_tab(buffer, width as u32, height as u32, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height, &self.viewport_tab_label, self.active_tab == Tab::Viewport);
         
-        // Position run button on the right side, same vertical alignment as tabs
-        self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
-        self.run_button.y = tab_top_y;
+        // Check if viewport app is running
+        let is_app_running = self.viewport_app.is_some();
+        
+        // Position buttons on the right side
+        // If app is running, show stop button to the left of run button
+        if is_app_running {
+            // Stop button to the left, run button to the right
+            self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
+            self.run_button.y = tab_top_y;
+            
+            self.stop_button.x = self.run_button.x - (self.stop_button.width as i32) - (padding / 2);
+            self.stop_button.y = tab_top_y;
+            
+            // Draw stop button
+            let is_stop_hovered = self.stop_button.contains_point(mouse_x, mouse_y);
+            self.stop_button.draw(buffer, width as u32, height as u32, is_stop_hovered);
+        } else {
+            // Just run button
+            self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
+            self.run_button.y = tab_top_y;
+        }
         
         // Determine button behavior and color based on console state
         let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
@@ -1026,7 +1066,8 @@ impl Application for CoderApp {
         println!("Mouse down at ({}, {})", mouse_x, mouse_y);
         
         // Tab dimensions (must match tick())
-        let (tab_width, tab_height) = Self::get_button_size();
+        let (_, tab_height) = Self::get_button_size();
+        let tab_width = Self::get_tab_width();
         let padding = 10;
         
         // Calculate tab position (same as in tick)
@@ -1075,6 +1116,18 @@ impl Application for CoderApp {
                 self.console_app.cursor_position = 0;
                 return;
             }
+        }
+        
+        // Check if click is on the stop button (only visible when app is running)
+        if self.viewport_app.is_some() && self.stop_button.contains_point(mouse_x, mouse_y) {
+            println!("Stop button clicked - stopping viewport app");
+            // Stop the viewport app
+            self.viewport_app = None;
+            self.viewport_app_setup_done = false;
+            
+            // Clear the terminal to show stop message
+            self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
+            return;
         }
         
         // Check if click is on the run button
