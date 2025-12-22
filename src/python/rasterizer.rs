@@ -280,7 +280,6 @@ fn draw_line_direct(
     color: (u8, u8, u8, u8),
 ) {
     let radius = thickness / 2.0;
-    let radius_squared = radius * radius;
     
     // Calculate line vector and length
     let dx = x2 - x1;
@@ -293,48 +292,18 @@ fn draw_line_direct(
         return;
     }
     
-    // Normalized perpendicular vector
-    let perp_x = -dy / length;
-    let perp_y = dx / length;
+    // Fast approach: Draw circles along the line at regular intervals
+    // This creates a smooth thick line much faster than checking every pixel
     
-    // Bounding box for the line
-    let min_x = (x1.min(x2) - radius).max(0.0) as usize;
-    let max_x = ((x1.max(x2) + radius + 1.0) as usize).min(width);
-    let min_y = (y1.min(y2) - radius).max(0.0) as usize;
-    let max_y = ((y1.max(y2) + radius + 1.0) as usize).min(height);
+    // Calculate number of steps based on thickness (ensure smooth coverage)
+    let step_size = (radius * 0.5).max(1.0);
+    let num_steps = (length / step_size).ceil() as i32 + 1;
     
-    // For each pixel in bounding box, check if it's close enough to the line
-    for y in min_y..max_y {
-        for x in min_x..max_x {
-            let px = x as f32;
-            let py = y as f32;
-            
-            // Vector from line start to pixel
-            let to_px = px - x1;
-            let to_py = py - y1;
-            
-            // Project pixel onto line (t = 0 at start, t = 1 at end)
-            let t = ((to_px * dx + to_py * dy) / (length * length)).max(0.0).min(1.0);
-            
-            // Closest point on line segment
-            let closest_x = x1 + t * dx;
-            let closest_y = y1 + t * dy;
-            
-            // Distance from pixel to closest point
-            let dist_x = px - closest_x;
-            let dist_y = py - closest_y;
-            let dist_squared = dist_x * dist_x + dist_y * dist_y;
-            
-            if dist_squared <= radius_squared {
-                let idx = (y * width + x) * 4;
-                if idx + 3 < buffer.len() {
-                    buffer[idx + 0] = color.0;
-                    buffer[idx + 1] = color.1;
-                    buffer[idx + 2] = color.2;
-                    buffer[idx + 3] = color.3;
-                }
-            }
-        }
+    for i in 0..=num_steps {
+        let t = (i as f32) / (num_steps as f32);
+        let x = x1 + dx * t;
+        let y = y1 + dy * t;
+        draw_circle_direct(buffer, width, height, x, y, radius, color);
     }
 }
 
