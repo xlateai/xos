@@ -177,9 +177,11 @@ impl CoderApp {
         clear_button_label.set_text("×".to_string()); // Multiplication sign
 
         // Create text rasterizers for each file in the file explorer
+        // Larger font size for better touch targets on mobile
+        let file_list_font_size = if cfg!(target_os = "ios") { 32.0 } else { 24.0 };
         let mut file_list_rasterizers = Vec::new();
         for file in &python_files {
-            let mut rasterizer = TextRasterizer::new(font.clone(), 24.0);
+            let mut rasterizer = TextRasterizer::new(font.clone(), file_list_font_size);
             rasterizer.set_text(file.name.clone());
             file_list_rasterizers.push(rasterizer);
         }
@@ -602,10 +604,14 @@ builtins.print = __custom_print__
         }
     }
     
-    fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32) {
-        // Draw file list background
-        let bg_color = (20, 20, 20);
-        for y in 0..(viewport_height as i32) {
+    fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32, safe_region_top_y: f32) {
+        // Draw pitch black background for file list
+        let bg_color = (0, 0, 0);
+        
+        // Start drawing from safe region top (below Dynamic Island on iOS)
+        let start_y = safe_region_top_y as i32;
+        
+        for y in start_y..(viewport_height as i32) {
             if y >= 0 && y < canvas_height as i32 {
                 for x in 0..(canvas_width as i32) {
                     let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
@@ -617,27 +623,28 @@ builtins.print = __custom_print__
             }
         }
         
-        let item_height = 60.0;
-        let padding = 10.0;
+        // Larger touch targets for iOS
+        let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
+        let padding = if cfg!(target_os = "ios") { 20.0 } else { 10.0 };
         
         for (i, rasterizer) in self.file_list_rasterizers.iter().enumerate() {
-            let y_offset = i as f32 * item_height - self.file_list_scroll_y;
+            let y_offset = safe_region_top_y + i as f32 * item_height - self.file_list_scroll_y;
             
-            // Skip if not visible
-            if y_offset + item_height < 0.0 || y_offset > viewport_height {
+            // Skip if not visible (check against safe region boundaries)
+            if y_offset + item_height < safe_region_top_y || y_offset > viewport_height {
                 continue;
             }
             
             // Draw item background (highlight if current file)
             let item_bg_color = if i == self.current_file_index {
-                (40, 60, 80) // Highlight current file
+                (50, 80, 120) // Brighter highlight for current file against pitch black
             } else {
-                (30, 30, 30)
+                (15, 15, 15) // Slightly off-black for file items
             };
             
             for dy in 0..(item_height as i32) {
                 let y = y_offset as i32 + dy;
-                if y >= 0 && y < viewport_height as i32 {
+                if y >= safe_region_top_y as i32 && y < viewport_height as i32 {
                     for x in 0..(canvas_width as i32) {
                         let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
                         buffer[idx + 0] = item_bg_color.0;
@@ -649,7 +656,7 @@ builtins.print = __custom_print__
             }
             
             // Draw file name text using TextRasterizer
-            let text_color = (200, 200, 200);
+            let text_color = (220, 220, 220); // Brighter text against pitch black
             let text_y_offset = y_offset + (item_height - rasterizer.font_size) / 2.0;
             
             for character in &rasterizer.characters {
@@ -665,7 +672,7 @@ builtins.print = __custom_print__
                         let px = (char_x + bitmap_x as f32) as i32;
                         let py = (char_y + bitmap_y as f32) as i32;
                         
-                        if px >= 0 && px < canvas_width as i32 && py >= 0 && py < viewport_height as i32 {
+                        if px >= 0 && px < canvas_width as i32 && py >= safe_region_top_y as i32 && py < viewport_height as i32 {
                             let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
                             
                             // Blend text color with alpha
@@ -680,12 +687,12 @@ builtins.print = __custom_print__
             
             // Draw separator line
             let separator_y = (y_offset + item_height - 1.0) as i32;
-            if separator_y >= 0 && separator_y < viewport_height as i32 {
+            if separator_y >= safe_region_top_y as i32 && separator_y < viewport_height as i32 {
                 for x in 0..(canvas_width as i32) {
                     let idx = ((separator_y as u32 * canvas_width + x as u32) * 4) as usize;
-                    buffer[idx + 0] = 50;
-                    buffer[idx + 1] = 50;
-                    buffer[idx + 2] = 50;
+                    buffer[idx + 0] = 30;
+                    buffer[idx + 1] = 30;
+                    buffer[idx + 2] = 30;
                     buffer[idx + 3] = 0xff;
                 }
             }
@@ -996,6 +1003,9 @@ impl Application for CoderApp {
             rasterizer.tick(width, height);
         }
         
+        // Get safe region top boundary (in pixels) before mutable borrow
+        let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
+        
         // Get buffer again for drawing console, file explorer, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
         
@@ -1003,7 +1013,8 @@ impl Application for CoderApp {
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
             // Calculate the viewport height (everything above the tabs)
             let viewport_height = tabs_top_y;
-            self.draw_file_explorer(buffer, width as u32, height as u32, viewport_height);
+            
+            self.draw_file_explorer(buffer, width as u32, height as u32, viewport_height, safe_region_top_y);
         }
         
         // Draw console above tabs (only when on terminal tab)
@@ -1218,8 +1229,9 @@ impl Application for CoderApp {
                 if self.code_view_mode == CodeViewMode::FileExplorer {
                     // Scroll the file list
                     self.file_list_scroll_y += dy;
-                    // Clamp to valid range
-                    let max_scroll = (self.python_files.len() as f32 * 60.0).max(0.0);
+                    // Clamp to valid range (use platform-specific item height)
+                    let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
+                    let max_scroll = (self.python_files.len() as f32 * item_height).max(0.0);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                 } else {
                     self.code_app.on_scroll(state, dx, dy)
@@ -1405,11 +1417,14 @@ impl Application for CoderApp {
         // Check if we're in file explorer mode and clicked on a file
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
             // Calculate file list item positions (same as in draw_file_explorer)
-            let item_height = 60.0;
+            let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
             
-            // Check if click is within the file list area
-            if mouse_y < tabs_top_y {
-                let clicked_index = ((mouse_y + self.file_list_scroll_y) / item_height) as usize;
+            // Get safe region top boundary
+            let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
+            
+            // Check if click is within the file list area (below safe region, above tabs)
+            if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
+                let clicked_index = ((mouse_y - safe_region_top_y + self.file_list_scroll_y) / item_height) as usize;
                 if clicked_index < self.python_files.len() {
                     println!("Clicked on file: {}", self.python_files[clicked_index].name);
                     self.load_file(clicked_index);
