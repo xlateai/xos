@@ -8,6 +8,7 @@ use rustpython_vm::{Interpreter, AsObject};
 enum Tab {
     Code,
     Terminal,
+    Viewport,
 }
 
 pub struct CoderApp {
@@ -17,9 +18,15 @@ pub struct CoderApp {
     active_tab: Tab,
     pub interpreter: Interpreter,
     pub run_button: Button,
+    pub clear_button: Button,
     pub code_tab_label: TextRasterizer,
     pub terminal_tab_label: TextRasterizer,
+    pub viewport_tab_label: TextRasterizer,
     persistent_scope: Option<rustpython_vm::scope::Scope>,
+    // Viewport double-tap tracking
+    viewport_last_tap_time: Option<std::time::Instant>,
+    viewport_last_tap_x: f32,
+    viewport_last_tap_y: f32,
 }
 
 impl CoderApp {
@@ -74,6 +81,12 @@ print(x)"#.to_string();
         let (button_width, button_height) = Self::get_button_size();
         let run_button = Button::new(0, 0, button_width, button_height, "Run".to_string());
         
+        // Create clear button (smaller, will be positioned in console area)
+        let clear_button_size = (button_height, button_height); // Square button
+        let mut clear_button = Button::new(0, 0, clear_button_size.0, clear_button_size.1, "X".to_string());
+        clear_button.bg_color = (80, 80, 80); // Gray
+        clear_button.hover_color = (100, 100, 100); // Lighter gray on hover
+        
         // Load font for tab labels
         let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
         let font = fontdue::Font::from_bytes(
@@ -85,8 +98,11 @@ print(x)"#.to_string();
         let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0);
         code_tab_label.set_text("code.py".to_string());
         
-        let mut terminal_tab_label = TextRasterizer::new(font, 20.0);
+        let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
         terminal_tab_label.set_text("terminal".to_string());
+        
+        let mut viewport_tab_label = TextRasterizer::new(font, 20.0);
+        viewport_tab_label.set_text("viewport".to_string());
 
         Self {
             code_app,
@@ -95,9 +111,14 @@ print(x)"#.to_string();
             active_tab: Tab::Code,
             interpreter,
             run_button,
+            clear_button,
             code_tab_label,
             terminal_tab_label,
+            viewport_tab_label,
             persistent_scope,
+            viewport_last_tap_time: None,
+            viewport_last_tap_x: 0.0,
+            viewport_last_tap_y: 0.0,
         }
     }
 
@@ -559,20 +580,43 @@ impl Application for CoderApp {
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
         
-        // Calculate console dimensions (above keyboard, full width, same height as button)
-        let (_, console_height) = Self::get_button_size();
+        // Calculate button/tab dimensions
+        let (button_width, button_height) = Self::get_button_size();
         let padding = 10;
         
         // Console is only shown on terminal tab
         let show_console = self.active_tab == Tab::Terminal;
+        let console_height = button_height;
         
-        let console_bottom_y = keyboard_top_px - padding as f32;
+        // Calculate positions from bottom up:
+        // 1. Keyboard at keyboard_top_px
+        // 2. Tabs/button above keyboard (or above console if shown)
+        // 3. Console above tabs/button (only if shown on terminal tab)
+        
+        let tabs_bottom_y = keyboard_top_px - padding as f32;
+        let tabs_top_y = tabs_bottom_y - button_height as f32;
+        
+        let console_bottom_y = if show_console {
+            tabs_top_y - padding as f32
+        } else {
+            tabs_bottom_y // Not shown, but calculate for consistency
+        };
         let console_top_y = console_bottom_y - console_height as f32;
         
         // Delegate to active text app (but not console - it gets special handling)
         match self.active_tab {
             Tab::Code => self.code_app.tick(state),
             Tab::Terminal => self.terminal_app.tick(state),
+            Tab::Viewport => {
+                // Viewport is just a black screen - clear it manually
+                let buffer = state.frame_buffer_mut();
+                for i in (0..buffer.len()).step_by(4) {
+                    buffer[i + 0] = 0; // R
+                    buffer[i + 1] = 0; // G
+                    buffer[i + 2] = 0; // B
+                    buffer[i + 3] = 0xff; // A
+                }
+            }
         }
         
         // Tick console separately with its own viewport
@@ -582,11 +626,12 @@ impl Application for CoderApp {
         // Update tab label rasterizers
         self.code_tab_label.tick(width, height);
         self.terminal_tab_label.tick(width, height);
+        self.viewport_tab_label.tick(width, height);
         
-        // Get buffer again for drawing console, tabs and button on top
+        // Get buffer again for drawing console, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
         
-        // Only draw console when on terminal tab
+        // Draw console above tabs (only when on terminal tab)
         if show_console {
             // Draw console area background (above keyboard)
             let console_bg_color = (20, 20, 20);
@@ -687,16 +732,10 @@ impl Application for CoderApp {
             }
         }
         
-        // Calculate tab position based on whether console is shown
-        let (tab_width, tab_height) = Self::get_button_size();
-        let tab_bottom_y = if show_console {
-            // Console is shown, tabs go above console
-            console_top_y - padding as f32
-        } else {
-            // Console is hidden, tabs go at keyboard edge
-            keyboard_top_px - padding as f32
-        };
-        let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
+        // Draw tabs at tabs_top_y position
+        let tab_top_y = tabs_top_y as i32;
+        let tab_width = button_width;
+        let tab_height = button_height;
         
         // Draw code.py tab on the left
         self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, &self.code_tab_label, self.active_tab == Tab::Code);
@@ -704,27 +743,40 @@ impl Application for CoderApp {
         // Draw terminal tab next to it
         self.draw_tab(buffer, width as u32, height as u32, padding + tab_width as i32, tab_top_y, tab_width, tab_height, &self.terminal_tab_label, self.active_tab == Tab::Terminal);
         
-        // Position button on the right side, same vertical alignment as tabs
-        let button_height = self.run_button.height as f32;
-        let button_top_y = (tab_bottom_y - button_height) as i32;
+        // Draw viewport tab next to terminal
+        self.draw_tab(buffer, width as u32, height as u32, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height, &self.viewport_tab_label, self.active_tab == Tab::Viewport);
         
+        // Position run button on the right side, same vertical alignment as tabs
         self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
-        self.run_button.y = button_top_y as i32;
+        self.run_button.y = tab_top_y;
         
         // Determine button behavior and color based on console state
         let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
         let should_execute_console = show_console && console_has_text;
         
-        // Check if mouse is hovering over button
-        let is_hovered = self.run_button.contains_point(mouse_x, mouse_y);
+        // Check if mouse is hovering over run button
+        let is_run_hovered = self.run_button.contains_point(mouse_x, mouse_y);
         
         // Draw run button with appropriate color
         if should_execute_console {
             // Gold color for console command
-            self.draw_button_with_color(buffer, width as u32, height as u32, is_hovered, (218, 165, 32));
+            self.draw_button_with_color(buffer, width as u32, height as u32, is_run_hovered, (218, 165, 32));
         } else {
             // Green color for running code
-            self.run_button.draw(buffer, width as u32, height as u32, is_hovered);
+            self.run_button.draw(buffer, width as u32, height as u32, is_run_hovered);
+        }
+        
+        // Position and draw clear button (only when console is shown and has text)
+        if show_console && console_has_text {
+            // Position clear button on right side of console, aligned beneath run button
+            self.clear_button.x = self.run_button.x + (self.run_button.width as i32 - self.clear_button.width as i32);
+            self.clear_button.y = console_top_y as i32 + padding;
+            
+            // Check if mouse is hovering over clear button
+            let is_clear_hovered = self.clear_button.contains_point(mouse_x, mouse_y);
+            
+            // Draw clear button
+            self.clear_button.draw(buffer, width as u32, height as u32, is_clear_hovered);
         }
     }
 
@@ -732,6 +784,9 @@ impl Application for CoderApp {
         match self.active_tab {
             Tab::Code => self.code_app.on_scroll(state, dx, dy),
             Tab::Terminal => self.terminal_app.on_scroll(state, dx, dy),
+            Tab::Viewport => {
+                // No scrolling in viewport
+            }
         }
     }
 
@@ -753,6 +808,9 @@ impl Application for CoderApp {
                 // Pass all other characters to console (it's our interactive terminal)
                 self.console_app.on_key_char(state, ch);
             }
+            Tab::Viewport => {
+                // No keyboard input in viewport
+            }
         }
     }
 
@@ -760,6 +818,9 @@ impl Application for CoderApp {
         match self.active_tab {
             Tab::Code => self.code_app.on_mouse_move(state),
             Tab::Terminal => self.terminal_app.on_mouse_move(state),
+            Tab::Viewport => {
+                // No mouse move handling in viewport
+            }
         }
     }
 
@@ -779,21 +840,10 @@ impl Application for CoderApp {
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
         
-        // Calculate console dimensions (must match tick)
-        let show_console = self.active_tab == Tab::Terminal;
-        let (_, console_height) = Self::get_button_size();
-        let console_bottom_y = keyboard_top_px - padding as f32;
-        let console_top_y = console_bottom_y - console_height as f32;
-        
-        // Calculate tab position based on whether console is shown
-        let tab_bottom_y = if show_console {
-            // Console is shown, tabs go above console
-            console_top_y - padding as f32
-        } else {
-            // Console is hidden, tabs go at keyboard edge
-            keyboard_top_px - padding as f32
-        };
-        let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
+        // Tabs are always at keyboard edge now (console is above them)
+        let tabs_bottom_y = keyboard_top_px - padding as f32;
+        let tabs_top_y = tabs_bottom_y - tab_height as f32;
+        let tab_top_y = tabs_top_y as i32;
         
         println!("Button position - x: {}, y: {}, width: {}, height: {}", 
                  self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height);
@@ -811,6 +861,25 @@ impl Application for CoderApp {
             println!("Terminal tab clicked");
             self.active_tab = Tab::Terminal;
             return;
+        }
+        
+        // Check if click is on viewport tab
+        if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
+            println!("Viewport tab clicked");
+            self.active_tab = Tab::Viewport;
+            return;
+        }
+        
+        // Check if click is on clear button (only visible when console has text)
+        let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
+        if self.active_tab == Tab::Terminal && console_has_text {
+            if self.clear_button.contains_point(mouse_x, mouse_y) {
+                println!("Clear button clicked");
+                // Clear the console input
+                self.console_app.text_rasterizer.text.clear();
+                self.console_app.cursor_position = 0;
+                return;
+            }
         }
         
         // Check if click is on the run button
@@ -844,10 +913,38 @@ impl Application for CoderApp {
         
         println!("Click not on any button, delegating to text app");
         
-        // Otherwise delegate to active text app
+        // Otherwise delegate to active text app or handle viewport
         match self.active_tab {
             Tab::Code => self.code_app.on_mouse_down(state),
             Tab::Terminal => self.terminal_app.on_mouse_down(state),
+            Tab::Viewport => {
+                // Handle double-tap to show/hide keyboard in viewport
+                use std::time::{Duration, Instant};
+                const DOUBLE_TAP_TIME_MS: u64 = 300;
+                const DOUBLE_TAP_DISTANCE: f32 = 50.0;
+                
+                let now = Instant::now();
+                let is_double_tap = if let Some(last_time) = self.viewport_last_tap_time {
+                    let time_since_last = now.duration_since(last_time);
+                    let distance = ((mouse_x - self.viewport_last_tap_x).powi(2) + (mouse_y - self.viewport_last_tap_y).powi(2)).sqrt();
+                    
+                    time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) && distance < DOUBLE_TAP_DISTANCE
+                } else {
+                    false
+                };
+                
+                if is_double_tap {
+                    // Toggle keyboard
+                    state.keyboard.onscreen.toggle_minimize();
+                    // Reset tap tracking
+                    self.viewport_last_tap_time = None;
+                } else {
+                    // Update tap tracking
+                    self.viewport_last_tap_time = Some(now);
+                    self.viewport_last_tap_x = mouse_x;
+                    self.viewport_last_tap_y = mouse_y;
+                }
+            }
         }
     }
 
@@ -855,6 +952,9 @@ impl Application for CoderApp {
         match self.active_tab {
             Tab::Code => self.code_app.on_mouse_up(state),
             Tab::Terminal => self.terminal_app.on_mouse_up(state),
+            Tab::Viewport => {
+                // No mouse up handling in viewport
+            }
         }
     }
 }
