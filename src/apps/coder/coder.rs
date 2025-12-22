@@ -24,6 +24,9 @@ pub struct CoderApp {
     pub terminal_tab_label: TextRasterizer,
     pub viewport_tab_label: TextRasterizer,
     persistent_scope: Option<rustpython_vm::scope::Scope>,
+    // Python app instance for viewport rendering
+    viewport_app: Option<rustpython_vm::PyObjectRef>,
+    viewport_app_setup_done: bool,
     // Viewport double-tap tracking
     viewport_last_tap_time: Option<std::time::Instant>,
     viewport_last_tap_x: f32,
@@ -45,16 +48,10 @@ impl CoderApp {
     }
     
     pub fn new() -> Self {
-        // Create the code editor text app with default code
+        // Create the code editor text app with default code from ball.py
         let mut code_app = TextApp::new();
-        code_app.text_rasterizer.text = r#"print("python in rust!!!")
-
-x = ""
-
-for i in range(100):
-    x += str(i)
-
-print(x)"#.to_string();
+        let default_code = include_str!("../../../python/ball.py");
+        code_app.text_rasterizer.text = default_code.to_string();
         code_app.show_debug_visuals = false; // Hide debug visuals in code editor
         
         // Create the terminal text app (empty initially)
@@ -122,6 +119,8 @@ print(x)"#.to_string();
             terminal_tab_label,
             viewport_tab_label,
             persistent_scope,
+            viewport_app: None,
+            viewport_app_setup_done: false,
             viewport_last_tap_time: None,
             viewport_last_tap_x: 0.0,
             viewport_last_tap_y: 0.0,
@@ -210,11 +209,15 @@ builtins.print = __custom_print__
             
             // Check if an xos.Application was registered
             let mut extra_output = String::new();
-            if let Ok(Some(_app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                extra_output.push_str("[xos] Application instance registered in coder!\n");
-                extra_output.push_str("[xos] Note: The coder app cannot launch the xos engine window.\n");
-                extra_output.push_str("[xos] To run this application with a window, save it to a file and run:\n");
-                extra_output.push_str("[xos]   xos python <filename>.py\n");
+            if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
+                extra_output.push_str("[xos] Application registered - rendering to viewport tab\n");
+                
+                // Store the app instance for viewport rendering
+                self.viewport_app = Some(app_instance_obj);
+                self.viewport_app_setup_done = false;
+                
+                // Switch to viewport tab to show the app
+                self.active_tab = Tab::Viewport;
             }
             
             Ok((captured_output, extra_output))
@@ -633,13 +636,128 @@ impl Application for CoderApp {
             Tab::Code => self.code_app.tick(state),
             Tab::Terminal => self.terminal_app.tick(state),
             Tab::Viewport => {
-                // Viewport is just a black screen - clear it manually
-                let buffer = state.frame_buffer_mut();
-                for i in (0..buffer.len()).step_by(4) {
-                    buffer[i + 0] = 0; // R
-                    buffer[i + 1] = 0; // G
-                    buffer[i + 2] = 0; // B
-                    buffer[i + 3] = 0xff; // A
+                // Render Python app if available, otherwise show black screen
+                if let Some(ref app_instance) = self.viewport_app {
+                    // Clear to black first
+                    let buffer = state.frame_buffer_mut();
+                    for i in (0..buffer.len()).step_by(4) {
+                        buffer[i + 0] = 0; // R
+                        buffer[i + 1] = 0; // G
+                        buffer[i + 2] = 0; // B
+                        buffer[i + 3] = 0xff; // A
+                    }
+                    
+                    // Setup Python app if not done yet
+                    if !self.viewport_app_setup_done {
+                        let setup_result = self.interpreter.enter(|vm| {
+                            // Register Application class and _FrameWrapper in builtins
+                            let app_class_code = crate::python::engine::pyapp::APPLICATION_CLASS_CODE;
+                            let scope = vm.new_scope_with_builtins();
+                            if let Err(e) = vm.run_code_string(scope, app_class_code, "<viewport_setup>".to_string()) {
+                                eprintln!("Failed to register Application class: {:?}", e);
+                                return Err(());
+                            }
+                            
+                            // Create Python frame object from engine state
+                            let frame_dict = crate::python::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
+                                .map_err(|e| { eprintln!("Failed to create frame object: {:?}", e); () })?;
+                            
+                            // Wrap it in _FrameWrapper
+                            if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
+                                if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
+                                    app_instance.set_attr("frame", frame_obj, vm)
+                                        .map_err(|e| { eprintln!("Failed to set frame attribute: {:?}", e); () })?;
+                                } else {
+                                    app_instance.set_attr("frame", frame_dict, vm)
+                                        .map_err(|e| { eprintln!("Failed to set frame attribute: {:?}", e); () })?;
+                                }
+                            } else {
+                                app_instance.set_attr("frame", frame_dict, vm)
+                                    .map_err(|e| { eprintln!("Failed to set frame attribute: {:?}", e); () })?;
+                            }
+                            
+                            // Create mouse object
+                            let mouse_dict = vm.ctx.new_dict();
+                            let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+                            let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+                            let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
+                            app_instance.set_attr("mouse", mouse_dict, vm)
+                                .map_err(|e| { eprintln!("Failed to set mouse attribute: {:?}", e); () })?;
+                            
+                            // Call setup
+                            if let Err(e) = vm.call_method(app_instance, "setup", ()) {
+                                let class_name = e.class().name().to_string();
+                                let msg = vm.call_method(e.as_object(), "__str__", ())
+                                    .ok()
+                                    .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
+                                    .unwrap_or_default();
+                                
+                                if msg.is_empty() {
+                                    eprintln!("Python setup error: {}", class_name);
+                                } else {
+                                    eprintln!("Python setup error: {}: {}", class_name, msg);
+                                }
+                                return Err(());
+                            }
+                            
+                            Ok(())
+                        });
+                        
+                        if setup_result.is_ok() {
+                            self.viewport_app_setup_done = true;
+                        }
+                    }
+                    
+                    // Tick the Python app
+                    if self.viewport_app_setup_done {
+                        // Set the frame buffer context for the rasterizer
+                        let shape = state.frame.array.shape();
+                        let width = shape[1];
+                        let height = shape[0];
+                        let buffer = state.frame.buffer_mut();
+                        crate::python::rasterizer::set_frame_buffer_context(buffer, width, height);
+                        
+                        self.interpreter.enter(|vm| {
+                            // Update frame data before calling tick
+                            if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
+                                let _ = crate::python::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
+                                
+                                // Update mouse data
+                                let mouse_dict = vm.ctx.new_dict();
+                                let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+                                let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+                                let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
+                                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+                                
+                                // Call tick
+                                if let Err(e) = vm.call_method(app_instance, "tick", ()) {
+                                    let class_name = e.class().name().to_string();
+                                    let msg = vm.call_method(e.as_object(), "__str__", ())
+                                        .ok()
+                                        .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
+                                        .unwrap_or_default();
+                                    
+                                    if !msg.is_empty() {
+                                        eprintln!("Python tick error: {}: {}", class_name, msg);
+                                    } else {
+                                        eprintln!("Python tick error: {}", class_name);
+                                    }
+                                }
+                            }
+                        });
+                        
+                        // Clear the frame buffer context after tick
+                        crate::python::rasterizer::clear_frame_buffer_context();
+                    }
+                } else {
+                    // No Python app - show black screen
+                    let buffer = state.frame_buffer_mut();
+                    for i in (0..buffer.len()).step_by(4) {
+                        buffer[i + 0] = 0; // R
+                        buffer[i + 1] = 0; // G
+                        buffer[i + 2] = 0; // B
+                        buffer[i + 3] = 0xff; // A
+                    }
                 }
             }
         }
@@ -889,7 +1007,14 @@ impl Application for CoderApp {
             Tab::Code => self.code_app.on_mouse_move(state),
             Tab::Terminal => self.terminal_app.on_mouse_move(state),
             Tab::Viewport => {
-                // No mouse move handling in viewport
+                // Forward to Python app if available
+                if let Some(ref app_instance) = self.viewport_app {
+                    let mouse_x = state.mouse.x;
+                    let mouse_y = state.mouse.y;
+                    self.interpreter.enter(|vm| {
+                        let _ = vm.call_method(app_instance, "on_mouse_move", (mouse_x, mouse_y));
+                    });
+                }
             }
         }
     }
@@ -1013,6 +1138,13 @@ impl Application for CoderApp {
                     self.viewport_last_tap_time = Some(now);
                     self.viewport_last_tap_x = mouse_x;
                     self.viewport_last_tap_y = mouse_y;
+                    
+                    // Forward to Python app if available
+                    if let Some(ref app_instance) = self.viewport_app {
+                        self.interpreter.enter(|vm| {
+                            let _ = vm.call_method(app_instance, "on_mouse_down", (mouse_x, mouse_y));
+                        });
+                    }
                 }
             }
         }
@@ -1023,7 +1155,14 @@ impl Application for CoderApp {
             Tab::Code => self.code_app.on_mouse_up(state),
             Tab::Terminal => self.terminal_app.on_mouse_up(state),
             Tab::Viewport => {
-                // No mouse up handling in viewport
+                // Forward to Python app if available
+                if let Some(ref app_instance) = self.viewport_app {
+                    let mouse_x = state.mouse.x;
+                    let mouse_y = state.mouse.y;
+                    self.interpreter.enter(|vm| {
+                        let _ = vm.call_method(app_instance, "on_mouse_up", (mouse_x, mouse_y));
+                    });
+                }
             }
         }
     }
