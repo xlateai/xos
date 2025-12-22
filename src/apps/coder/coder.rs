@@ -11,6 +11,20 @@ enum Tab {
     Viewport,
 }
 
+#[derive(Debug, Clone)]
+struct PythonFile {
+    name: String,
+    content: String,
+    #[allow(dead_code)]
+    path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CodeViewMode {
+    Editor,
+    FileExplorer,
+}
+
 pub struct CoderApp {
     pub code_app: TextApp,
     pub terminal_app: TextApp,
@@ -32,6 +46,11 @@ pub struct CoderApp {
     viewport_last_tap_time: Option<std::time::Instant>,
     viewport_last_tap_x: f32,
     viewport_last_tap_y: f32,
+    // File explorer
+    code_view_mode: CodeViewMode,
+    python_files: Vec<PythonFile>,
+    current_file_index: usize,
+    file_list_scroll_y: f32,
 }
 
 impl CoderApp {
@@ -63,11 +82,40 @@ impl CoderApp {
     }
     
     pub fn new() -> Self {
+        // Load all Python files from the python/ directory
+        let python_files = vec![
+            PythonFile {
+                name: "ball.py".to_string(),
+                content: include_str!("../../../python/ball.py").to_string(),
+                path: "ball.py".to_string(),
+            },
+            PythonFile {
+                name: "hello.py".to_string(),
+                content: include_str!("../../../python/hello.py").to_string(),
+                path: "hello.py".to_string(),
+            },
+            PythonFile {
+                name: "old/galaxy.py".to_string(),
+                content: include_str!("../../../python/old/galaxy.py").to_string(),
+                path: "old/galaxy.py".to_string(),
+            },
+            PythonFile {
+                name: "old/python_camera.py".to_string(),
+                content: include_str!("../../../python/old/python_camera.py").to_string(),
+                path: "old/python_camera.py".to_string(),
+            },
+            PythonFile {
+                name: "old/setup.py".to_string(),
+                content: include_str!("../../../python/old/setup.py").to_string(),
+                path: "old/setup.py".to_string(),
+            },
+        ];
+        
         // Create the code editor text app with default code from ball.py
         let mut code_app = TextApp::new();
-        let default_code = include_str!("../../../python/ball.py");
-        code_app.text_rasterizer.text = default_code.to_string();
+        code_app.text_rasterizer.text = python_files[0].content.clone();
         code_app.show_debug_visuals = false; // Hide debug visuals in code editor
+        code_app.scroll_y = 0.0; // Start scroll at the top
         
         // Create the terminal text app (empty initially)
         let mut terminal_app = TextApp::new();
@@ -146,6 +194,10 @@ impl CoderApp {
             viewport_last_tap_time: None,
             viewport_last_tap_x: 0.0,
             viewport_last_tap_y: 0.0,
+            code_view_mode: CodeViewMode::Editor,
+            python_files,
+            current_file_index: 0,
+            file_list_scroll_y: 0.0,
         }
     }
 
@@ -514,6 +566,126 @@ builtins.print = __custom_print__
             && y < (tab_y + tab_height as i32) as f32
     }
 
+    fn load_file(&mut self, file_index: usize) {
+        if file_index < self.python_files.len() {
+            self.current_file_index = file_index;
+            self.code_app.text_rasterizer.text = self.python_files[file_index].content.clone();
+            self.code_app.cursor_position = 0;
+            self.code_app.scroll_y = 0.0; // Start at top when loading a file
+            self.code_view_mode = CodeViewMode::Editor;
+            
+            // Update the tab label to show the current file name
+            self.code_tab_label.set_text(self.python_files[file_index].name.clone());
+        }
+    }
+    
+    fn save_current_file(&mut self) {
+        // Save the current editor content back to the file in memory
+        if self.current_file_index < self.python_files.len() {
+            self.python_files[self.current_file_index].content = self.code_app.text_rasterizer.text.clone();
+        }
+    }
+    
+    fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32) {
+        // Draw file list background
+        let bg_color = (20, 20, 20);
+        for y in 0..(viewport_height as i32) {
+            if y >= 0 && y < canvas_height as i32 {
+                for x in 0..(canvas_width as i32) {
+                    let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
+                    buffer[idx + 0] = bg_color.0;
+                    buffer[idx + 1] = bg_color.1;
+                    buffer[idx + 2] = bg_color.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+        
+        // Draw file list
+        let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
+        let font = fontdue::Font::from_bytes(
+            font_data as &[u8],
+            fontdue::FontSettings::default(),
+        ).expect("Failed to load font");
+        
+        let item_height = 60.0;
+        let padding = 10.0;
+        let text_size = 24.0;
+        
+        for (i, file) in self.python_files.iter().enumerate() {
+            let y_offset = i as f32 * item_height - self.file_list_scroll_y;
+            
+            // Skip if not visible
+            if y_offset + item_height < 0.0 || y_offset > viewport_height {
+                continue;
+            }
+            
+            // Draw item background (highlight if current file)
+            let item_bg_color = if i == self.current_file_index {
+                (40, 60, 80) // Highlight current file
+            } else {
+                (30, 30, 30)
+            };
+            
+            for dy in 0..(item_height as i32) {
+                let y = y_offset as i32 + dy;
+                if y >= 0 && y < viewport_height as i32 {
+                    for x in 0..(canvas_width as i32) {
+                        let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
+                        buffer[idx + 0] = item_bg_color.0;
+                        buffer[idx + 1] = item_bg_color.1;
+                        buffer[idx + 2] = item_bg_color.2;
+                        buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+            
+            // Draw file name text
+            let text_color = (200, 200, 200);
+            let mut text_x = padding;
+            let text_y = y_offset + (item_height - text_size) / 2.0;
+            
+            for ch in file.name.chars() {
+                let (metrics, bitmap) = font.rasterize(ch, text_size);
+                
+                for (bitmap_y, row) in bitmap.chunks(metrics.width).enumerate() {
+                    for (bitmap_x, &alpha) in row.iter().enumerate() {
+                        if alpha == 0 {
+                            continue;
+                        }
+                        
+                        let px = (text_x + bitmap_x as f32) as i32;
+                        let py = (text_y + bitmap_y as f32) as i32;
+                        
+                        if px >= 0 && px < canvas_width as i32 && py >= 0 && py < viewport_height as i32 {
+                            let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
+                            
+                            // Blend text color with alpha
+                            let alpha_f = alpha as f32 / 255.0;
+                            buffer[idx + 0] = ((text_color.0 as f32 * alpha_f) + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
+                            buffer[idx + 1] = ((text_color.1 as f32 * alpha_f) + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
+                            buffer[idx + 2] = ((text_color.2 as f32 * alpha_f) + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                        }
+                    }
+                }
+                
+                text_x += metrics.advance_width;
+            }
+            
+            // Draw separator line
+            let separator_y = (y_offset + item_height - 1.0) as i32;
+            if separator_y >= 0 && separator_y < viewport_height as i32 {
+                for x in 0..(canvas_width as i32) {
+                    let idx = ((separator_y as u32 * canvas_width + x as u32) * 4) as usize;
+                    buffer[idx + 0] = 50;
+                    buffer[idx + 1] = 50;
+                    buffer[idx + 2] = 50;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+    }
+
     fn draw_button_with_color(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, is_hovered: bool, color: (u8, u8, u8)) {
         let x = self.run_button.x;
         let y = self.run_button.y;
@@ -667,7 +839,12 @@ impl Application for CoderApp {
         
         // Delegate to active text app (but not console - it gets special handling)
         match self.active_tab {
-            Tab::Code => self.code_app.tick(state),
+            Tab::Code => {
+                if self.code_view_mode == CodeViewMode::Editor {
+                    self.code_app.tick(state)
+                }
+                // File explorer is drawn separately in the buffer drawing code below
+            }
             Tab::Terminal => self.terminal_app.tick(state),
             Tab::Viewport => {
                 // Render Python app if available, otherwise show black screen
@@ -808,8 +985,15 @@ impl Application for CoderApp {
         // Update clear button label
         self.clear_button_label.tick(width, height);
         
-        // Get buffer again for drawing console, tabs and buttons on top
+        // Get buffer again for drawing console, file explorer, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
+        
+        // Draw file explorer if in file explorer mode on code tab
+        if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
+            // Calculate the viewport height (everything above the tabs)
+            let viewport_height = tabs_top_y;
+            self.draw_file_explorer(buffer, width as u32, height as u32, viewport_height);
+        }
         
         // Draw console above tabs (only when on terminal tab)
         if show_console {
@@ -1019,7 +1203,17 @@ impl Application for CoderApp {
 
     fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
         match self.active_tab {
-            Tab::Code => self.code_app.on_scroll(state, dx, dy),
+            Tab::Code => {
+                if self.code_view_mode == CodeViewMode::FileExplorer {
+                    // Scroll the file list
+                    self.file_list_scroll_y += dy;
+                    // Clamp to valid range
+                    let max_scroll = (self.python_files.len() as f32 * 60.0).max(0.0);
+                    self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
+                } else {
+                    self.code_app.on_scroll(state, dx, dy)
+                }
+            }
             Tab::Terminal => self.terminal_app.on_scroll(state, dx, dy),
             Tab::Viewport => {
                 // No scrolling in viewport
@@ -1030,8 +1224,10 @@ impl Application for CoderApp {
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
         match self.active_tab {
             Tab::Code => {
-                // On code tab, input goes to code editor
-                self.code_app.on_key_char(state, ch);
+                // On code tab, input goes to code editor (only if not in file explorer)
+                if self.code_view_mode == CodeViewMode::Editor {
+                    self.code_app.on_key_char(state, ch);
+                }
             }
             Tab::Terminal => {
                 // On terminal tab, check if Enter key - execute console command
@@ -1056,7 +1252,11 @@ impl Application for CoderApp {
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         match self.active_tab {
-            Tab::Code => self.code_app.on_mouse_move(state),
+            Tab::Code => {
+                if self.code_view_mode == CodeViewMode::Editor {
+                    self.code_app.on_mouse_move(state)
+                }
+            }
             Tab::Terminal => self.terminal_app.on_mouse_move(state),
             Tab::Viewport => {
                 // Forward to Python app if available
@@ -1100,7 +1300,25 @@ impl Application for CoderApp {
         // Check if click is on code.py tab
         if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
             println!("Code tab clicked");
-            self.active_tab = Tab::Code;
+            if self.active_tab == Tab::Code {
+                // Already on code tab - toggle file explorer
+                match self.code_view_mode {
+                    CodeViewMode::Editor => {
+                        // Save current file before switching to explorer
+                        self.save_current_file();
+                        self.code_view_mode = CodeViewMode::FileExplorer;
+                        println!("Switched to file explorer");
+                    }
+                    CodeViewMode::FileExplorer => {
+                        self.code_view_mode = CodeViewMode::Editor;
+                        println!("Switched to editor");
+                    }
+                }
+            } else {
+                // Switching from another tab - go to editor mode
+                self.active_tab = Tab::Code;
+                self.code_view_mode = CodeViewMode::Editor;
+            }
             return;
         }
         
@@ -1171,11 +1389,31 @@ impl Application for CoderApp {
             return;
         }
         
-        println!("Click not on any button, delegating to text app");
+        println!("Click not on any button, checking file explorer or delegating to text app");
+        
+        // Check if we're in file explorer mode and clicked on a file
+        if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
+            // Calculate file list item positions (same as in draw_file_explorer)
+            let item_height = 60.0;
+            
+            // Check if click is within the file list area
+            if mouse_y < tabs_top_y {
+                let clicked_index = ((mouse_y + self.file_list_scroll_y) / item_height) as usize;
+                if clicked_index < self.python_files.len() {
+                    println!("Clicked on file: {}", self.python_files[clicked_index].name);
+                    self.load_file(clicked_index);
+                    return;
+                }
+            }
+        }
         
         // Otherwise delegate to active text app or handle viewport
         match self.active_tab {
-            Tab::Code => self.code_app.on_mouse_down(state),
+            Tab::Code => {
+                if self.code_view_mode == CodeViewMode::Editor {
+                    self.code_app.on_mouse_down(state)
+                }
+            }
             Tab::Terminal => self.terminal_app.on_mouse_down(state),
             Tab::Viewport => {
                 // Handle double-tap to show/hide keyboard in viewport
@@ -1217,7 +1455,11 @@ impl Application for CoderApp {
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
         match self.active_tab {
-            Tab::Code => self.code_app.on_mouse_up(state),
+            Tab::Code => {
+                if self.code_view_mode == CodeViewMode::Editor {
+                    self.code_app.on_mouse_up(state)
+                }
+            }
             Tab::Terminal => self.terminal_app.on_mouse_up(state),
             Tab::Viewport => {
                 // Forward to Python app if available
