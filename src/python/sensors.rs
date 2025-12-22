@@ -33,39 +33,38 @@ _mag_instance = Magnetometer()
     }
 }
 
-/// magnetometer.read() - Read current magnetometer values
+/// magnetometer.read() - Read current magnetometer values (waits for real data)
 fn magnetometer_read(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     #[cfg(target_os = "ios")]
     {
-        let mut x = 0.0;
-        let mut y = 0.0;
-        let mut z = 0.0;
-        
-        let result = unsafe {
-            xos_magnetometer_get_latest(&mut x, &mut y, &mut z)
-        };
-        
-        match result {
-            0 => {
-                // Success - return tuple (x, y, z)
-                let tuple = vm.ctx.new_tuple(vec![
-                    vm.ctx.new_float(x).into(),
-                    vm.ctx.new_float(y).into(),
-                    vm.ctx.new_float(z).into(),
-                ]);
-                Ok(tuple.into())
-            }
-            1 => {
-                // No data available yet - return (0.0, 0.0, 0.0)
-                let tuple = vm.ctx.new_tuple(vec![
-                    vm.ctx.new_float(0.0).into(),
-                    vm.ctx.new_float(0.0).into(),
-                    vm.ctx.new_float(0.0).into(),
-                ]);
-                Ok(tuple.into())
-            }
-            _ => {
-                Err(vm.new_runtime_error("Magnetometer error".to_string()))
+        // Loop until we get real data (not zeros)
+        loop {
+            let mut x = 0.0;
+            let mut y = 0.0;
+            let mut z = 0.0;
+            
+            let result = unsafe {
+                xos_magnetometer_get_latest(&mut x, &mut y, &mut z)
+            };
+            
+            match result {
+                0 => {
+                    // Success - return tuple (x, y, z)
+                    let tuple = vm.ctx.new_tuple(vec![
+                        vm.ctx.new_float(x).into(),
+                        vm.ctx.new_float(y).into(),
+                        vm.ctx.new_float(z).into(),
+                    ]);
+                    return Ok(tuple.into());
+                }
+                1 => {
+                    // No data available yet - sleep briefly and try again
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                _ => {
+                    return Err(vm.new_runtime_error("Magnetometer error".to_string()));
+                }
             }
         }
     }
