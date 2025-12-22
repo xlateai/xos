@@ -4,6 +4,7 @@ import xos
 BALL_RADIUS = 0.005
 SPEED_MULTIPLIER = 0.005
 NUM_BALLS = 512
+BUFFER_SIZE = 128  # Keep last 128 magnetometer readings
 
 class MagnetoBalls(xos.Application):
     def __init__(self):
@@ -14,15 +15,21 @@ class MagnetoBalls(xos.Application):
         self.radii = None
         self.magnetometer = None
         
-        # Simple running average
-        self.mag_x = 0.0
-        self.mag_y = 0.0
-        self.mag_z = 0.0
+        # Circular buffer for magnetometer readings
+        self.mag_buffer_x = []
+        self.mag_buffer_y = []
+        self.mag_buffer_z = []
+        self.buffer_index = 0
     
     def setup(self):
         """Initialize the game and magnetometer"""
         # Initialize magnetometer
         self.magnetometer = xos.sensors.magnetometer()
+        
+        # Initialize circular buffers
+        self.mag_buffer_x = [0.0] * BUFFER_SIZE
+        self.mag_buffer_y = [0.0] * BUFFER_SIZE
+        self.mag_buffer_z = [0.0] * BUFFER_SIZE
         
         # Initialize balls (same as ball.py)
         initial_positions = []
@@ -47,23 +54,40 @@ class MagnetoBalls(xos.Application):
     
     def tick(self):
         """Update and render one frame"""
-        # Read magnetometer and smooth it
+        # Read magnetometer
         x, y, z = self.magnetometer.read()
         
-        # Simple exponential moving average
-        alpha = 0.1
-        self.mag_x = alpha * x + (1 - alpha) * self.mag_x
-        self.mag_y = alpha * y + (1 - alpha) * self.mag_y
-        self.mag_z = alpha * z + (1 - alpha) * self.mag_z
+        # Add to circular buffer
+        self.mag_buffer_x[self.buffer_index] = x
+        self.mag_buffer_y[self.buffer_index] = y
+        self.mag_buffer_z[self.buffer_index] = z
+        self.buffer_index = (self.buffer_index + 1) % BUFFER_SIZE
         
-        # Calculate magnitude
-        magnitude = (self.mag_x**2 + self.mag_y**2 + self.mag_z**2) ** 0.5
+        # Calculate min/max for each axis from buffer
+        min_x = min(self.mag_buffer_x)
+        max_x = max(self.mag_buffer_x)
+        min_y = min(self.mag_buffer_y)
+        max_y = max(self.mag_buffer_y)
+        min_z = min(self.mag_buffer_z)
+        max_z = max(self.mag_buffer_z)
         
-        # Map to color (Earth's field is typically 25-65 µT)
-        # Scale to 0-255 range
-        red = int(min(255, abs(self.mag_x) * 3))
-        green = int(min(255, magnitude * 2))
-        blue = int(min(255, abs(self.mag_z) * 3))
+        # Normalize current values relative to buffer range (0.0 to 1.0)
+        def normalize(value, min_val, max_val):
+            if max_val - min_val < 0.1:  # Avoid division by near-zero
+                return 0.5
+            return (value - min_val) / (max_val - min_val)
+        
+        norm_x = normalize(x, min_x, max_x)
+        norm_y = normalize(y, min_y, max_y)
+        norm_z = normalize(z, min_z, max_z)
+        
+        # Map normalized values to RGB (0-255)
+        # Red: X axis position in recent range
+        # Green: Y axis position in recent range
+        # Blue: Z axis position in recent range
+        red = int(norm_x * 255)
+        green = int(norm_y * 255)
+        blue = int(norm_z * 255)
         ball_color = (red, green, blue, 255)
         
         # Update ball positions (same as ball.py)
