@@ -116,7 +116,8 @@ impl CoderApp {
         let mut code_app = TextApp::new();
         code_app.text_rasterizer.text = python_files[0].content.clone();
         code_app.show_debug_visuals = false; // Hide debug visuals in code editor
-        code_app.scroll_y = 0.0; // Start scroll at the top
+        // On iOS, start at top like terminal. On macOS, start at top too.
+        code_app.scroll_y = 0.0;
         
         // Create the terminal text app (empty initially)
         let mut terminal_app = TextApp::new();
@@ -177,8 +178,8 @@ impl CoderApp {
         clear_button_label.set_text("×".to_string()); // Multiplication sign
 
         // Create text rasterizers for each file in the file explorer
-        // Larger font size for better touch targets on mobile
-        let file_list_font_size = if cfg!(target_os = "ios") { 32.0 } else { 24.0 };
+        // Larger font size for better touch targets on mobile (30% bigger on iOS)
+        let file_list_font_size = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let mut file_list_rasterizers = Vec::new();
         for file in &python_files {
             let mut rasterizer = TextRasterizer::new(font.clone(), file_list_font_size);
@@ -623,9 +624,9 @@ builtins.print = __custom_print__
             }
         }
         
-        // Larger touch targets for iOS
-        let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
-        let padding = if cfg!(target_os = "ios") { 20.0 } else { 10.0 };
+        // Larger touch targets for iOS (30% bigger)
+        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
+        let padding = if cfg!(target_os = "ios") { 26.0 } else { 10.0 };
         
         for (i, rasterizer) in self.file_list_rasterizers.iter().enumerate() {
             let y_offset = safe_region_top_y + i as f32 * item_height - self.file_list_scroll_y;
@@ -637,7 +638,7 @@ builtins.print = __custom_print__
             
             // Draw item background (highlight if current file)
             let item_bg_color = if i == self.current_file_index {
-                (50, 80, 120) // Brighter highlight for current file against pitch black
+                (30, 30, 30) // Slightly lighter gray for active file
             } else {
                 (15, 15, 15) // Slightly off-black for file items
             };
@@ -656,7 +657,11 @@ builtins.print = __custom_print__
             }
             
             // Draw file name text using TextRasterizer
-            let text_color = (220, 220, 220); // Brighter text against pitch black
+            let text_color = if i == self.current_file_index {
+                (0, 255, 0) // Neon green for active file
+            } else {
+                (220, 220, 220) // Brighter text against pitch black
+            };
             let text_y_offset = y_offset + (item_height - rasterizer.font_size) / 2.0;
             
             for character in &rasterizer.characters {
@@ -1229,8 +1234,8 @@ impl Application for CoderApp {
                 if self.code_view_mode == CodeViewMode::FileExplorer {
                     // Scroll the file list
                     self.file_list_scroll_y += dy;
-                    // Clamp to valid range (use platform-specific item height)
-                    let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
+                    // Clamp to valid range (use platform-specific item height, 30% bigger on iOS)
+                    let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
                     let max_scroll = (self.python_files.len() as f32 * item_height).max(0.0);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                 } else {
@@ -1416,8 +1421,8 @@ impl Application for CoderApp {
         
         // Check if we're in file explorer mode and clicked on a file
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
-            // Calculate file list item positions (same as in draw_file_explorer)
-            let item_height = if cfg!(target_os = "ios") { 90.0 } else { 60.0 };
+            // Calculate file list item positions (same as in draw_file_explorer, 30% bigger on iOS)
+            let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
             
             // Get safe region top boundary
             let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
