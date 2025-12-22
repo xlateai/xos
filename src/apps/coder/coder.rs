@@ -66,6 +66,8 @@ pub struct CoderApp {
     // Background Python execution
     python_output_buffer: Arc<Mutex<String>>,
     python_thread_handle: Option<thread::JoinHandle<()>>,
+    python_thread_running: Arc<Mutex<bool>>,
+    python_thread_generation: Arc<Mutex<u64>>, // Incremented each run; old threads ignored
 }
 
 impl CoderApp {
@@ -254,12 +256,16 @@ impl CoderApp {
             file_explorer_last_tap_y: 0.0,
             python_output_buffer: Arc::new(Mutex::new(String::new())),
             python_thread_handle: None,
+            python_thread_running: Arc::new(Mutex::new(false)),
+            python_thread_generation: Arc::new(Mutex::new(0)),
         }
     }
 
     fn execute_python_code(&mut self, code: &str) {
         // Wait for any previous thread to complete
         if let Some(handle) = self.python_thread_handle.take() {
+            // Mark as not running before waiting
+            *self.python_thread_running.lock().unwrap() = false;
             let _ = handle.join();
         }
         
@@ -353,6 +359,18 @@ impl CoderApp {
         // Clone what we need for the thread
         let code_str = code.to_string();
         let output_buffer = Arc::clone(&self.python_output_buffer);
+        let running_flag = Arc::clone(&self.python_thread_running);
+        let generation_counter = Arc::clone(&self.python_thread_generation);
+        
+        // Increment generation (invalidates any previous thread's output)
+        let current_generation = {
+            let mut gen = self.python_thread_generation.lock().unwrap();
+            *gen += 1;
+            *gen
+        };
+        
+        // Mark thread as running
+        *self.python_thread_running.lock().unwrap() = true;
         
         // Spawn background thread to execute Python
         let handle = thread::spawn(move || {
@@ -368,13 +386,19 @@ impl CoderApp {
             
                 // Create a native function that writes to the output buffer
                 let buffer_clone = Arc::clone(&output_buffer);
+                let generation_clone = Arc::clone(&generation_counter);
                 let write_output_fn = vm.new_function(
                     "__write_output__",
                     move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
-                        if let Some(text_obj) = args.args.first() {
-                            if let Ok(text) = text_obj.str(_vm) {
-                                if let Ok(mut buffer) = buffer_clone.lock() {
-                                    buffer.push_str(&text.to_string());
+                        // Only write if this thread's generation is still current
+                        if let Ok(current_gen) = generation_clone.lock() {
+                            if *current_gen == current_generation {
+                                if let Some(text_obj) = args.args.first() {
+                                    if let Ok(text) = text_obj.str(_vm) {
+                                        if let Ok(mut buffer) = buffer_clone.lock() {
+                                            buffer.push_str(&text.to_string());
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -406,43 +430,60 @@ builtins.print = __custom_print__
                 let restore_code = "builtins.print = __original_print__";
                 vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
             
-                // Handle errors by writing to buffer
+                // Handle errors by writing to buffer (only if still current generation)
                 if let Err(py_exc) = exec_result {
-                    let class_name = py_exc.class().name();
-                    let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
-                        .ok()
-                        .and_then(|result| result.str(vm).ok())
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-                    
-                    let error_text = if !error_msg.is_empty() {
-                        format!("\n{}: {}\n", class_name, error_msg)
-                    } else {
-                        format!("\n{}\n", class_name)
-                    };
-                    
-                    if let Ok(mut buffer) = output_buffer.lock() {
-                        buffer.push_str(&error_text);
+                    if let Ok(current_gen) = generation_counter.lock() {
+                        if *current_gen == current_generation {
+                            let class_name = py_exc.class().name();
+                            let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
+                                .ok()
+                                .and_then(|result| result.str(vm).ok())
+                                .map(|s| s.to_string())
+                                .unwrap_or_default();
+                            
+                            let error_text = if !error_msg.is_empty() {
+                                format!("\n{}: {}\n", class_name, error_msg)
+                            } else {
+                                format!("\n{}\n", class_name)
+                            };
+                            
+                            if let Ok(mut buffer) = output_buffer.lock() {
+                                buffer.push_str(&error_text);
+                            }
+                        }
                     }
                 } else {
-                    // Check for viewport app
-                    if let Ok(Some(_)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                        if let Ok(mut buffer) = output_buffer.lock() {
-                            buffer.push_str("\n[xos] Application registered - switch to viewport tab\n");
-                        }
-                    } else {
-                        // Add "(no output)" if buffer is still empty
-                        if let Ok(buffer) = output_buffer.lock() {
-                            if buffer.trim().is_empty() {
-                                drop(buffer);
+                    // Check for viewport app (only if still current generation)
+                    if let Ok(current_gen) = generation_counter.lock() {
+                        if *current_gen == current_generation {
+                            if let Ok(Some(_)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
                                 if let Ok(mut buffer) = output_buffer.lock() {
-                                    buffer.push_str("(no output)\n");
+                                    buffer.push_str("\n[xos] Application registered - switch to viewport tab\n");
+                                }
+                            } else {
+                                // Add "(no output)" if buffer is still empty
+                                if let Ok(buffer) = output_buffer.lock() {
+                                    if buffer.trim().is_empty() {
+                                        drop(buffer);
+                                        if let Ok(mut buffer) = output_buffer.lock() {
+                                            buffer.push_str("(no output)\n");
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             });
+            
+            // Mark thread as no longer running (only if still current generation)
+            if let Ok(current_gen) = generation_counter.lock() {
+                if *current_gen == current_generation {
+                    if let Ok(mut flag) = running_flag.lock() {
+                        *flag = false;
+                    }
+                }
+            }
         });
         
         // Store the thread handle
@@ -922,6 +963,15 @@ impl Application for CoderApp {
             }
         }
         
+        // Check if background thread is done and clean it up
+        if let Some(handle) = &self.python_thread_handle {
+            if handle.is_finished() {
+                if let Some(handle) = self.python_thread_handle.take() {
+                    let _ = handle.join();
+                }
+            }
+        }
+        
         // Process onscreen keyboard input for console (on terminal tab)
         if self.active_tab == Tab::Terminal {
             // Process any pending keyboard characters for console
@@ -1257,12 +1307,14 @@ impl Application for CoderApp {
         // Draw viewport tab next to terminal
         self.draw_tab(buffer, width as u32, height as u32, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height, &self.viewport_tab_label, self.active_tab == Tab::Viewport);
         
-        // Check if viewport app is running
-        let is_app_running = self.viewport_app.is_some();
+        // Check if viewport app or background thread is running
+        let is_viewport_app_running = self.viewport_app.is_some();
+        let is_background_thread_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+        let is_any_app_running = is_viewport_app_running || is_background_thread_running;
         
         // Position buttons on the right side
         // If app is running, show stop button to the left of run button
-        if is_app_running {
+        if is_any_app_running {
             // Stop button to the left, run button to the right
             self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
             self.run_button.y = tab_top_y;
@@ -1520,15 +1572,44 @@ impl Application for CoderApp {
             }
         }
         
-        // Check if click is on the stop button (only visible when app is running)
-        if self.viewport_app.is_some() && self.stop_button.contains_point(mouse_x, mouse_y) {
-            println!("Stop button clicked - stopping viewport app");
-            // Stop the viewport app
-            self.viewport_app = None;
-            self.viewport_app_setup_done = false;
+        // Check if click is on the stop button (only visible when app/thread is running)
+        let is_viewport_running = self.viewport_app.is_some();
+        let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+        
+        if (is_viewport_running || is_background_running) && self.stop_button.contains_point(mouse_x, mouse_y) {
+            println!("Stop button clicked");
             
-            // Clear the terminal to show stop message
-            self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
+            // Stop viewport app if running
+            if is_viewport_running {
+                println!("  - Stopping viewport app");
+                self.viewport_app = None;
+                self.viewport_app_setup_done = false;
+                self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
+            }
+            
+            // Stop background thread if running
+            if is_background_running {
+                println!("  - Stopping background thread");
+                
+                // Increment generation counter - this orphans the old thread's output
+                if let Ok(mut gen) = self.python_thread_generation.lock() {
+                    *gen += 1;
+                }
+                
+                // Mark as not running
+                if let Ok(mut flag) = self.python_thread_running.lock() {
+                    *flag = false;
+                }
+                
+                // Drop the thread handle - let it finish in background
+                self.python_thread_handle = None;
+                
+                // Update terminal with final message
+                if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                    buffer.push_str("\n[xos] Script stopped by user\n");
+                }
+            }
+            
             return;
         }
         

@@ -1,13 +1,12 @@
-import xos
+import time
 
 print("Starting sleep test...")
 print("This should not freeze the UI!")
+print("Click the red STOP button to stop early!\n")
 
-for i in range(5):
+for i in range(20):
     print(f"Count: {i+1}")
-
-    # NOTE: time.sleep() should also work just fine.
-    xos.sleep(1.0)
+    time.sleep(1.0)
     
-print("Sleep test complete!")
+print("\nSleep test complete!")
 

@@ -1,4 +1,5 @@
 import xos
+import time
 
 # Magnetometer test script with sleep
 # Now runs in background thread - won't freeze UI!
@@ -15,10 +16,11 @@ except Exception as e:
 
 # Read every 3 seconds for 15 seconds
 print("\nReading magnetometer every 3 seconds...")
-print("(UI should remain responsive!)\n")
+print("(UI should remain responsive!)")
+print("Click the red STOP button to stop early!\n")
 
 for i in range(5):
-    xos.sleep(3.0)
+    time.sleep(3.0)
     
     try:
         readings = mag.drain_readings()
