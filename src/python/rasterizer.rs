@@ -153,8 +153,194 @@ fn draw_circle_direct(
     }
 }
 
+/// xos.rasterizer.lines() - efficiently draw lines directly on the Rust frame buffer
+/// 
+/// Usage: xos.rasterizer.lines(frame, start_points, end_points, thicknesses, color)
+/// - frame: frame object (ignored, we use the global context)
+/// - start_points: list of (x, y) tuples in pixel coordinates
+/// - end_points: list of (x, y) tuples in pixel coordinates
+/// - thicknesses: list of line thicknesses in pixels
+/// - color: (r, g, b, a) tuple
+fn lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    // Extract arguments
+    let args_vec = args.args;
+    if args_vec.len() != 5 {
+        return Err(vm.new_type_error(format!(
+            "lines() takes exactly 5 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    let _frame_dict = &args_vec[0]; // Ignored, we use global context
+    let start_points_list = &args_vec[1];
+    let end_points_list = &args_vec[2];
+    let thicknesses_list = &args_vec[3];
+    let color_tuple = &args_vec[4];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. Rasterizer must be called during tick().".to_string())
+    })?;
+    
+    // Parse color tuple (r, g, b, a)
+    let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_vec = color_obj.as_slice();
+    if color_vec.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+    let a: i32 = color_vec[3].clone().try_into_value(vm)?;
+    let color = (r as u8, g as u8, b as u8, a as u8);
+    
+    // Get lists
+    let start_points = start_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("start_points must be a list".to_string()))?;
+    let end_points = end_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("end_points must be a list".to_string()))?;
+    let thicknesses = thicknesses_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("thicknesses must be a list".to_string()))?;
+    
+    // Collect all line data first before drawing
+    let start_points_vec = start_points.borrow_vec();
+    let end_points_vec = end_points.borrow_vec();
+    let thicknesses_vec = thicknesses.borrow_vec();
+    
+    let mut lines_to_draw = Vec::new();
+    
+    for (i, start_obj) in start_points_vec.iter().enumerate() {
+        if i >= end_points_vec.len() {
+            break;
+        }
+        
+        // Parse start point tuple
+        let start_tuple = start_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("start point must be a tuple".to_string()))?;
+        let start_vec = start_tuple.as_slice();
+        if start_vec.len() != 2 {
+            return Err(vm.new_type_error("start point must be (x, y)".to_string()));
+        }
+        let x1: f64 = start_vec[0].clone().try_into_value(vm)?;
+        let y1: f64 = start_vec[1].clone().try_into_value(vm)?;
+        
+        // Parse end point tuple
+        let end_tuple = end_points_vec[i].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("end point must be a tuple".to_string()))?;
+        let end_vec = end_tuple.as_slice();
+        if end_vec.len() != 2 {
+            return Err(vm.new_type_error("end point must be (x, y)".to_string()));
+        }
+        let x2: f64 = end_vec[0].clone().try_into_value(vm)?;
+        let y2: f64 = end_vec[1].clone().try_into_value(vm)?;
+        
+        // Get thickness
+        let thickness: f64 = if i < thicknesses_vec.len() {
+            thicknesses_vec[i].clone().try_into_value(vm)?
+        } else if !thicknesses_vec.is_empty() {
+            thicknesses_vec[0].clone().try_into_value(vm)?
+        } else {
+            return Err(vm.new_type_error("thicknesses list is empty".to_string()));
+        };
+        
+        lines_to_draw.push((x1 as f32, y1 as f32, x2 as f32, y2 as f32, thickness as f32));
+    }
+    
+    // Drop borrows before drawing
+    drop(start_points_vec);
+    drop(end_points_vec);
+    drop(thicknesses_vec);
+    
+    // Get mutable buffer slice
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Now draw all lines directly to the Rust buffer
+    for (x1, y1, x2, y2, thickness) in lines_to_draw {
+        draw_line_direct(buffer, width, height, x1, y1, x2, y2, thickness, color);
+    }
+    
+    Ok(vm.ctx.none())
+}
+
+fn draw_line_direct(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    thickness: f32,
+    color: (u8, u8, u8, u8),
+) {
+    let radius = thickness / 2.0;
+    let radius_squared = radius * radius;
+    
+    // Calculate line vector and length
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let length = (dx * dx + dy * dy).sqrt();
+    
+    if length < 0.001 {
+        // Degenerate line, just draw a circle
+        draw_circle_direct(buffer, width, height, x1, y1, radius, color);
+        return;
+    }
+    
+    // Normalized perpendicular vector
+    let perp_x = -dy / length;
+    let perp_y = dx / length;
+    
+    // Bounding box for the line
+    let min_x = (x1.min(x2) - radius).max(0.0) as usize;
+    let max_x = ((x1.max(x2) + radius + 1.0) as usize).min(width);
+    let min_y = (y1.min(y2) - radius).max(0.0) as usize;
+    let max_y = ((y1.max(y2) + radius + 1.0) as usize).min(height);
+    
+    // For each pixel in bounding box, check if it's close enough to the line
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let px = x as f32;
+            let py = y as f32;
+            
+            // Vector from line start to pixel
+            let to_px = px - x1;
+            let to_py = py - y1;
+            
+            // Project pixel onto line (t = 0 at start, t = 1 at end)
+            let t = ((to_px * dx + to_py * dy) / (length * length)).max(0.0).min(1.0);
+            
+            // Closest point on line segment
+            let closest_x = x1 + t * dx;
+            let closest_y = y1 + t * dy;
+            
+            // Distance from pixel to closest point
+            let dist_x = px - closest_x;
+            let dist_y = py - closest_y;
+            let dist_squared = dist_x * dist_x + dist_y * dist_y;
+            
+            if dist_squared <= radius_squared {
+                let idx = (y * width + x) * 4;
+                if idx + 3 < buffer.len() {
+                    buffer[idx + 0] = color.0;
+                    buffer[idx + 1] = color.1;
+                    buffer[idx + 2] = color.2;
+                    buffer[idx + 3] = color.3;
+                }
+            }
+        }
+    }
+}
+
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
+    module.set_attr("lines", vm.new_function("lines", lines), vm).unwrap();
     module
 }
