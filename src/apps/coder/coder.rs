@@ -1,6 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::text::TextApp;
 use crate::apps::coder::button::Button;
+use crate::text::text_rasterization::TextRasterizer;
 
 #[cfg(feature = "python")]
 use rustpython_vm::{Interpreter, AsObject};
@@ -18,15 +19,19 @@ pub struct CoderApp {
     #[cfg(feature = "python")]
     pub interpreter: Interpreter,
     pub run_button: Button,
+    pub code_tab_label: TextRasterizer,
+    pub terminal_tab_label: TextRasterizer,
 }
 
 impl CoderApp {
     pub fn new() -> Self {
-        // Create the code editor text app
-        let code_app = TextApp::new();
+        // Create the code editor text app with default code
+        let mut code_app = TextApp::new();
+        code_app.text_rasterizer.text = r#"print("Hello World! Double tap screen to show keyboard")"#.to_string();
         
-        // Create the terminal text app (read-only for now)
-        let terminal_app = TextApp::new();
+        // Create the terminal text app with prompt
+        let mut terminal_app = TextApp::new();
+        terminal_app.text_rasterizer.text = "Run code.py".to_string();
 
         // Initialize RustPython interpreter with xos module
         #[cfg(feature = "python")]
@@ -37,6 +42,20 @@ impl CoderApp {
 
         // Create run button (position will be updated in tick)
         let run_button = Button::new(0, 0, 160, 60, "Run".to_string());
+        
+        // Load font for tab labels
+        let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
+        let font = fontdue::Font::from_bytes(
+            font_data as &[u8],
+            fontdue::FontSettings::default(),
+        ).expect("Failed to load font");
+        
+        // Create text rasterizers for tab labels
+        let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0);
+        code_tab_label.set_text("code.py".to_string());
+        
+        let mut terminal_tab_label = TextRasterizer::new(font, 20.0);
+        terminal_tab_label.set_text("terminal".to_string());
 
         Self {
             code_app,
@@ -45,6 +64,8 @@ impl CoderApp {
             #[cfg(feature = "python")]
             interpreter,
             run_button,
+            code_tab_label,
+            terminal_tab_label,
         }
     }
 
@@ -52,9 +73,8 @@ impl CoderApp {
     fn execute_python_code(&mut self, code: &str) {
         use std::io::Write;
         
-        // Clear terminal and add header
+        // Clear terminal - just show the raw output
         self.terminal_app.text_rasterizer.text.clear();
-        self.terminal_app.text_rasterizer.text.push_str("=== Executing Python Code ===\n");
         
         // Capture stdout using a custom writer
         let mut output_buffer = Vec::new();
@@ -78,9 +98,9 @@ impl CoderApp {
                     .unwrap_or_default();
                 
                 let error_text = if !error_msg.is_empty() {
-                    format!("Python Error: {}: {}", class_name, error_msg)
+                    format!("{}: {}", class_name, error_msg)
                 } else {
-                    format!("Python Error: {}", class_name)
+                    format!("{}", class_name)
                 };
                 
                 writeln!(&mut output_buffer, "{}", error_text).ok();
@@ -89,7 +109,7 @@ impl CoderApp {
             
             // Check if an xos.Application was registered
             if let Ok(Some(_app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                writeln!(&mut output_buffer, "\n[xos] Application instance registered in coder!").ok();
+                writeln!(&mut output_buffer, "[xos] Application instance registered in coder!").ok();
                 writeln!(&mut output_buffer, "[xos] Note: The coder app cannot launch the xos engine window.").ok();
                 writeln!(&mut output_buffer, "[xos] To run this application with a window, save it to a file and run:").ok();
                 writeln!(&mut output_buffer, "[xos]   xos python <filename>.py").ok();
@@ -98,17 +118,15 @@ impl CoderApp {
             Ok(())
         });
 
-        // Add output to terminal
+        // Add output to terminal (just the raw output)
         if let Ok(output_str) = String::from_utf8(output_buffer) {
             self.terminal_app.text_rasterizer.text.push_str(&output_str);
         }
         
-        match result {
-            Ok(_) => {
-                self.terminal_app.text_rasterizer.text.push_str("\n--- Execution Complete ---\n");
-            }
-            Err(_) => {
-                self.terminal_app.text_rasterizer.text.push_str("\n--- Execution Failed ---\n");
+        // If terminal is empty after execution, show a message
+        if self.terminal_app.text_rasterizer.text.is_empty() {
+            if result.is_ok() {
+                self.terminal_app.text_rasterizer.text.push_str("(no output)");
             }
         }
         
@@ -121,7 +139,7 @@ impl CoderApp {
         println!("\n=== Python execution not available (python feature disabled) ===\n");
     }
 
-    fn draw_tab(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, x: i32, y: i32, width: u32, height: u32, label: &str, is_active: bool) {
+    fn draw_tab(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, x: i32, y: i32, width: u32, height: u32, label_rasterizer: &TextRasterizer, is_active: bool) {
         let bg_color = if is_active { (60, 60, 60) } else { (40, 40, 40) };
         let text_color = if is_active { (255, 255, 255) } else { (150, 150, 150) };
         
@@ -191,8 +209,39 @@ impl CoderApp {
             }
         }
         
-        // TODO: Draw label text using font rendering
-        let _ = label; // Suppress unused warning for now
+        // Draw label text centered in the tab
+        for character in &label_rasterizer.characters {
+            // Center the text horizontally in the tab
+            let text_width = label_rasterizer.characters.iter()
+                .map(|c| c.metrics.advance_width)
+                .sum::<f32>();
+            let text_offset_x = (width as f32 - text_width) / 2.0;
+            let text_offset_y = (height as f32 - label_rasterizer.font_size) / 2.0;
+            
+            let char_x = x as f32 + character.x + text_offset_x;
+            let char_y = y as f32 + character.y + text_offset_y;
+            
+            for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
+                for (bitmap_x, &alpha) in row.iter().enumerate() {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    
+                    let px = (char_x + bitmap_x as f32) as i32;
+                    let py = (char_y + bitmap_y as f32) as i32;
+                    
+                    if px >= 0 && px < canvas_width as i32 && py >= 0 && py < canvas_height as i32 {
+                        let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
+                        
+                        // Blend text color with alpha
+                        let alpha_f = alpha as f32 / 255.0;
+                        buffer[idx + 0] = ((text_color.0 as f32 * alpha_f) + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
+                        buffer[idx + 1] = ((text_color.1 as f32 * alpha_f) + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
+                        buffer[idx + 2] = ((text_color.2 as f32 * alpha_f) + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                    }
+                }
+            }
+        }
     }
 
     fn tab_contains_point(&self, x: f32, y: f32, tab_x: i32, tab_y: i32, tab_width: u32, tab_height: u32) -> bool {
@@ -229,12 +278,16 @@ impl Application for CoderApp {
             Tab::Terminal => self.terminal_app.tick(state),
         }
         
+        // Update tab label rasterizers
+        self.code_tab_label.tick(width, height);
+        self.terminal_tab_label.tick(width, height);
+        
         // Get buffer again for drawing tabs and button on top
         let buffer = state.frame_buffer_mut();
         
-        // Draw tabs aligned with keyboard edge
-        let tab_height = 40;
-        let tab_width = 120;
+        // Draw tabs aligned with keyboard edge - same size as button
+        let tab_height = 60;
+        let tab_width = 160;
         let padding = 10;
         
         // Position tabs just above the keyboard (same logic as button)
@@ -243,10 +296,10 @@ impl Application for CoderApp {
         let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
         
         // Draw code.py tab on the left
-        self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, "code.py", self.active_tab == Tab::Code);
+        self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, &self.code_tab_label, self.active_tab == Tab::Code);
         
         // Draw terminal tab next to it
-        self.draw_tab(buffer, width as u32, height as u32, padding + tab_width as i32, tab_top_y, tab_width, tab_height, "terminal", self.active_tab == Tab::Terminal);
+        self.draw_tab(buffer, width as u32, height as u32, padding + tab_width as i32, tab_top_y, tab_width, tab_height, &self.terminal_tab_label, self.active_tab == Tab::Terminal);
         
         // Position button on the right side, same vertical alignment as tabs
         let button_height = self.run_button.height as f32;
@@ -288,8 +341,8 @@ impl Application for CoderApp {
         let mouse_y = state.mouse.y;
         
         // Tab dimensions (must match tick())
-        let tab_height = 40;
-        let tab_width = 120;
+        let tab_height = 60;
+        let tab_width = 160;
         let padding = 10;
         
         // Calculate tab position (same as in tick)
