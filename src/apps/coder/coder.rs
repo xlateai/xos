@@ -71,13 +71,14 @@ impl CoderApp {
 
     #[cfg(feature = "python")]
     fn execute_python_code(&mut self, code: &str) {
-        use std::io::Write;
+        use std::sync::{Arc, Mutex};
         
         // Clear terminal - just show the raw output
         self.terminal_app.text_rasterizer.text.clear();
         
-        // Capture stdout using a custom writer
-        let mut output_buffer = Vec::new();
+        // Shared buffer accessible from Python
+        let output_buffer = Arc::new(Mutex::new(String::new()));
+        let buffer_clone = output_buffer.clone();
         
         let result = self.interpreter.enter(|vm| {
             let scope = vm.new_scope_with_builtins();
@@ -85,8 +86,51 @@ impl CoderApp {
             // Set __name__ to "__main__" so if __name__ == "__main__" works
             let _ = scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
             
-            // Run the code
+            // Store output buffer reference in scope so we can access it
+            // We'll use a simple Python list to capture output
+            let output_list = vm.ctx.new_list(vec![]);
+            scope.globals.set_item("__output_lines__", output_list.clone().into(), vm).ok();
+            
+            // Override print in builtins to capture output
+            let setup_code = r#"
+import builtins
+__original_print__ = builtins.print
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __output_lines__.append(output)
+
+builtins.print = __custom_print__
+"#;
+            
+            // Set up print capture
+            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                eprintln!("Failed to set up print capture: {:?}", e);
+            }
+            
+            // Run the user's code
             let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
+            
+            // Restore original print
+            let restore_code = "builtins.print = __original_print__";
+            vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
+            
+            // Extract the captured output from the list
+            let captured_output = if let Ok(output_obj) = scope.globals.get_item("__output_lines__", vm) {
+                if let Ok(output_list) = output_obj.downcast::<rustpython_vm::builtins::PyList>() {
+                    let mut result = String::new();
+                    for item in output_list.borrow_vec().iter() {
+                        if let Ok(s) = item.str(vm) {
+                            result.push_str(&s.to_string());
+                        }
+                    }
+                    result
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
             
             // Handle errors with detailed messages
             if let Err(py_exc) = exec_result {
@@ -103,30 +147,31 @@ impl CoderApp {
                     format!("{}", class_name)
                 };
                 
-                writeln!(&mut output_buffer, "{}", error_text).ok();
-                return Err(error_text);
+                return Err((error_text, captured_output));
             }
             
             // Check if an xos.Application was registered
+            let mut extra_output = String::new();
             if let Ok(Some(_app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                writeln!(&mut output_buffer, "[xos] Application instance registered in coder!").ok();
-                writeln!(&mut output_buffer, "[xos] Note: The coder app cannot launch the xos engine window.").ok();
-                writeln!(&mut output_buffer, "[xos] To run this application with a window, save it to a file and run:").ok();
-                writeln!(&mut output_buffer, "[xos]   xos python <filename>.py").ok();
+                extra_output.push_str("[xos] Application instance registered in coder!\n");
+                extra_output.push_str("[xos] Note: The coder app cannot launch the xos engine window.\n");
+                extra_output.push_str("[xos] To run this application with a window, save it to a file and run:\n");
+                extra_output.push_str("[xos]   xos python <filename>.py\n");
             }
             
-            Ok(())
+            Ok((captured_output, extra_output))
         });
 
-        // Add output to terminal (just the raw output)
-        if let Ok(output_str) = String::from_utf8(output_buffer) {
-            self.terminal_app.text_rasterizer.text.push_str(&output_str);
-        }
-        
-        // If terminal is empty after execution, show a message
-        if self.terminal_app.text_rasterizer.text.is_empty() {
-            if result.is_ok() {
-                self.terminal_app.text_rasterizer.text.push_str("(no output)");
+        // Display output in terminal
+        match result {
+            Ok((output, extra)) => {
+                self.terminal_app.text_rasterizer.text = output + &extra;
+                if self.terminal_app.text_rasterizer.text.trim().is_empty() {
+                    self.terminal_app.text_rasterizer.text = "(no output)".to_string();
+                }
+            }
+            Err((error, output)) => {
+                self.terminal_app.text_rasterizer.text = output + &error + "\n";
             }
         }
         
