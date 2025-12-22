@@ -10,10 +10,21 @@ fn magnetometer_new(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             return Err(vm.new_runtime_error(format!("Failed to initialize magnetometer (error code: {})", result)));
         }
         
-        // Return a simple dict with a read function
-        let dict = vm.ctx.new_dict();
-        dict.set_item("read", vm.new_function("read", magnetometer_read).into(), vm)?;
-        Ok(dict.into())
+        // Create a Python class with a read method
+        let code = r#"
+class Magnetometer:
+    def read(self):
+        import xos
+        return xos.sensors._magnetometer_read()
+
+_mag_instance = Magnetometer()
+"#;
+        let scope = vm.new_scope_with_builtins();
+        vm.run_code_string(scope.clone(), code, "<magnetometer>".to_string())?;
+        
+        // Get the instance from the scope
+        let instance = scope.globals.get_item("_mag_instance", vm)?;
+        Ok(instance)
     }
     
     #[cfg(not(target_os = "ios"))]
@@ -71,6 +82,9 @@ pub fn make_sensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     
     // Public API: xos.sensors.magnetometer() - creates instance with read() method
     module.set_attr("magnetometer", vm.new_function("magnetometer", magnetometer_new), vm).unwrap();
+    
+    // Internal function used by Magnetometer.read()
+    module.set_attr("_magnetometer_read", vm.new_function("_magnetometer_read", magnetometer_read), vm).unwrap();
     
     module
 }
