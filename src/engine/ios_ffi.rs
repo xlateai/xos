@@ -399,3 +399,125 @@ pub extern "C" fn xos_engine_cleanup() {
     *state = None;
 }
 
+// ===== Magnetometer FFI =====
+
+#[cfg(target_os = "ios")]
+struct MagnetometerWrapper(crate::sensors::Magnetometer);
+
+// Safe because iOS FFI is single-threaded on main thread
+#[cfg(target_os = "ios")]
+unsafe impl Send for MagnetometerWrapper {}
+
+#[cfg(target_os = "ios")]
+static MAGNETOMETER: Mutex<Option<MagnetometerWrapper>> = Mutex::new(None);
+
+/// Initialize magnetometer sensor
+/// Returns 0 on success, non-zero on error
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_magnetometer_init() -> i32 {
+    let mut mag = match MAGNETOMETER.lock() {
+        Ok(m) => m,
+        Err(_) => return 1,
+    };
+    
+    match crate::sensors::Magnetometer::new() {
+        Ok(m) => {
+            *mag = Some(MagnetometerWrapper(m));
+            0
+        }
+        Err(e) => {
+            log_to_ios(&format!("Failed to initialize magnetometer: {}", e));
+            2
+        }
+    }
+}
+
+/// Get latest magnetometer reading
+/// Returns 0 on success with values written to out parameters, 1 if no data available, 2 on error
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_magnetometer_get_latest(x: *mut f64, y: *mut f64, z: *mut f64) -> i32 {
+    let mut mag = match MAGNETOMETER.lock() {
+        Ok(m) => m,
+        Err(_) => return 2,
+    };
+    
+    if let Some(ref mut wrapper) = *mag {
+        if let Some(reading) = wrapper.0.get_latest_reading() {
+            unsafe {
+                if !x.is_null() { *x = reading.x; }
+                if !y.is_null() { *y = reading.y; }
+                if !z.is_null() { *z = reading.z; }
+            }
+            0
+        } else {
+            1 // No data available
+        }
+    } else {
+        2 // Not initialized
+    }
+}
+
+/// Drain all magnetometer readings since last call
+/// Returns number of readings, or -1 on error
+/// Readings are written to the arrays (must be pre-allocated with sufficient size)
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_magnetometer_drain_readings(
+    x_array: *mut f64,
+    y_array: *mut f64,
+    z_array: *mut f64,
+    max_count: usize,
+) -> i32 {
+    let mut mag = match MAGNETOMETER.lock() {
+        Ok(m) => m,
+        Err(_) => return -1,
+    };
+    
+    if let Some(ref mut wrapper) = *mag {
+        let readings = wrapper.0.drain_readings();
+        let count = readings.len().min(max_count);
+        
+        unsafe {
+            for (i, reading) in readings.iter().take(count).enumerate() {
+                if !x_array.is_null() { *x_array.add(i) = reading.x; }
+                if !y_array.is_null() { *y_array.add(i) = reading.y; }
+                if !z_array.is_null() { *z_array.add(i) = reading.z; }
+            }
+        }
+        
+        count as i32
+    } else {
+        -1
+    }
+}
+
+/// Get total number of readings received
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_magnetometer_get_total_readings() -> u64 {
+    let mag = match MAGNETOMETER.lock() {
+        Ok(m) => m,
+        Err(_) => return 0,
+    };
+    
+    if let Some(ref wrapper) = *mag {
+        wrapper.0.get_total_readings()
+    } else {
+        0
+    }
+}
+
+/// Cleanup magnetometer
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_magnetometer_cleanup() {
+    let mut mag = match MAGNETOMETER.lock() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    
+    *mag = None;
+}
+

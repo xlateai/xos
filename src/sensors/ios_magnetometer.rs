@@ -45,7 +45,7 @@ impl Magnetometer {
             let producer_wrapper_ptr = Box::into_raw(producer_wrapper) as *mut std::ffi::c_void;
 
             // Create the magnetometer
-            let mut magnetometer = Self {
+            let magnetometer = Self {
                 magnetometer_id,
                 consumer,
                 producer_wrapper_ptr,

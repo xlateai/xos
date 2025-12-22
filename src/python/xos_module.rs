@@ -33,6 +33,16 @@ fn xos_print(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.sleep() - sleep for a number of seconds
+/// NOTE: This blocks the main thread, so it's not recommended for use in the coder app
+/// For periodic updates, use a viewport app with tick() instead
+fn xos_sleep(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let seconds: f64 = args.bind(vm)?;
+    let duration = std::time::Duration::from_secs_f64(seconds);
+    std::thread::sleep(duration);
+    Ok(vm.ctx.none())
+}
+
 /// Create the xos module with Application base class
 pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos", vm.ctx.new_dict(), None);
@@ -42,6 +52,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("get_frame_buffer", vm.new_function("get_frame_buffer", get_frame_buffer), vm).unwrap();
     module.set_attr("get_mouse", vm.new_function("get_mouse", get_mouse), vm).unwrap();
     module.set_attr("print", vm.new_function("print", xos_print), vm).unwrap();
+    module.set_attr("sleep", vm.new_function("sleep", xos_sleep), vm).unwrap();
     
     // Add the random submodule
     let random_module = crate::python::random::random::make_random_module(vm);
@@ -50,6 +61,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the rasterizer submodule
     let rasterizer_module = crate::python::rasterizer::make_rasterizer_module(vm);
     module.set_attr("rasterizer", rasterizer_module, vm).unwrap();
+    
+    // Add the sensors submodule
+    let sensors_module = crate::python::sensors::make_sensors_module(vm);
+    module.set_attr("sensors", sensors_module, vm).unwrap();
     
     // Add the arrays submodule  
     let arrays_module = crate::python::arrays::make_arrays_module(vm);

@@ -4,6 +4,8 @@ use crate::apps::coder::button::Button;
 use crate::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
 use include_dir::{include_dir, Dir};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 // Embed the entire python/ directory at compile time
 static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/python");
@@ -61,6 +63,9 @@ pub struct CoderApp {
     file_explorer_last_mouse_y: f32,
     file_explorer_last_tap_x: f32,
     file_explorer_last_tap_y: f32,
+    // Background Python execution
+    python_output_buffer: Arc<Mutex<String>>,
+    python_thread_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl CoderApp {
@@ -247,78 +252,59 @@ impl CoderApp {
             file_explorer_last_mouse_y: 0.0,
             file_explorer_last_tap_x: 0.0,
             file_explorer_last_tap_y: 0.0,
+            python_output_buffer: Arc::new(Mutex::new(String::new())),
+            python_thread_handle: None,
         }
     }
 
     fn execute_python_code(&mut self, code: &str) {
-        // Clear terminal - just show the raw output
-        self.terminal_app.text_rasterizer.text.clear();
+        // Wait for any previous thread to complete
+        if let Some(handle) = self.python_thread_handle.take() {
+            let _ = handle.join();
+        }
+        
+        // Clear terminal and output buffer
+        self.terminal_app.text_rasterizer.text = "Running...\n".to_string();
+        {
+            let mut buffer = self.python_output_buffer.lock().unwrap();
+            buffer.clear();
+        }
         
         // Clear any previous viewport app before execution
         self.viewport_app = None;
         self.viewport_app_setup_done = false;
         
+        // Detect if this is a viewport app (contains xos.Application)
+        let is_viewport_app = code.contains("xos.Application") || code.contains("class") && code.contains("Application");
+        
+        if is_viewport_app {
+            // Execute in main thread for viewport apps (they use tick(), not sleep)
+            self.execute_viewport_app(code);
+        } else {
+            // Execute in background thread for scripts with sleep/print
+            self.execute_background_script(code);
+        }
+    }
+    
+    fn execute_viewport_app(&mut self, code: &str) {
         let result = self.interpreter.enter(|vm| {
-            // Clear the previous app instance from builtins to prevent context bleed
+            // Clear the previous app instance from builtins
             let _ = vm.builtins.as_object().to_owned().del_attr("__xos_app_instance__", vm);
+            
             // Get or create persistent scope
             let scope = if let Some(ref existing_scope) = self.persistent_scope {
                 existing_scope.clone()
             } else {
                 let new_scope = vm.new_scope_with_builtins();
-                // Set __name__ to "__main__" so if __name__ == "__main__" works
                 let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
                 self.persistent_scope = Some(new_scope.clone());
                 new_scope
             };
             
-            // Store output buffer reference in scope so we can access it
-            // We'll use a simple Python list to capture output
-            let output_list = vm.ctx.new_list(vec![]);
-            scope.globals.set_item("__output_lines__", output_list.clone().into(), vm).ok();
-            
-            // Override print in builtins to capture output
-            let setup_code = r#"
-import builtins
-__original_print__ = builtins.print
-
-def __custom_print__(*args, sep=' ', end='\n', **kwargs):
-    output = sep.join(str(arg) for arg in args) + end
-    __output_lines__.append(output)
-
-builtins.print = __custom_print__
-"#;
-            
-            // Set up print capture
-            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
-                eprintln!("Failed to set up print capture: {:?}", e);
-            }
-            
-            // Run the user's code
+            // Run the code
             let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
             
-            // Restore original print
-            let restore_code = "builtins.print = __original_print__";
-            vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
-            
-            // Extract the captured output from the list
-            let captured_output = if let Ok(output_obj) = scope.globals.get_item("__output_lines__", vm) {
-                if let Ok(output_list) = output_obj.downcast::<rustpython_vm::builtins::PyList>() {
-                    let mut result = String::new();
-                    for item in output_list.borrow_vec().iter() {
-                        if let Ok(s) = item.str(vm) {
-                            result.push_str(&s.to_string());
-                        }
-                    }
-                    result
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-            
-            // Handle errors with detailed messages
+            // Handle errors
             if let Err(py_exc) = exec_result {
                 let class_name = py_exc.class().name();
                 let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
@@ -333,52 +319,139 @@ builtins.print = __custom_print__
                     format!("{}", class_name)
                 };
                 
-                return Err((error_text, captured_output));
+                return Err(error_text);
             }
             
             // Check if an xos.Application was registered
-            let mut extra_output = String::new();
-            let app_registered = if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                extra_output.push_str("[xos] Application registered - rendering to viewport tab\n");
-                
-                // Store the app instance for viewport rendering
+            if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
                 self.viewport_app = Some(app_instance_obj);
                 self.viewport_app_setup_done = false;
-                
-                true
+                Ok("[xos] Application registered - rendering to viewport tab\n".to_string())
             } else {
-                false
-            };
-            
-            Ok((captured_output, extra_output, app_registered))
+                Ok("(no output)".to_string())
+            }
         });
-
-        // Display output in terminal
-        let should_show_viewport = match result {
-            Ok((output, extra, app_registered)) => {
-                self.terminal_app.text_rasterizer.text = output + &extra;
-                if self.terminal_app.text_rasterizer.text.trim().is_empty() {
-                    self.terminal_app.text_rasterizer.text = "(no output)".to_string();
-                }
-                app_registered
-            }
-            Err((error, output)) => {
-                self.terminal_app.text_rasterizer.text = output + &error + "\n";
-                false
-            }
-        };
         
-        // Smart tab switching: only switch if currently on Code tab
-        if self.active_tab == Tab::Code {
-            if should_show_viewport {
-                // App registered - switch to viewport to show the running app
-                self.active_tab = Tab::Viewport;
-            } else {
-                // No app - switch to terminal to show output
-                self.active_tab = Tab::Terminal;
+        // Display result
+        match result {
+            Ok(msg) => {
+                self.terminal_app.text_rasterizer.text = msg;
+                if self.active_tab == Tab::Code {
+                    self.active_tab = Tab::Viewport;
+                }
+            }
+            Err(error) => {
+                self.terminal_app.text_rasterizer.text = error + "\n";
+                if self.active_tab == Tab::Code {
+                    self.active_tab = Tab::Terminal;
+                }
             }
         }
-        // If already on Terminal or Viewport, stay there
+    }
+    
+    fn execute_background_script(&mut self, code: &str) {
+        // Clone what we need for the thread
+        let code_str = code.to_string();
+        let output_buffer = Arc::clone(&self.python_output_buffer);
+        
+        // Spawn background thread to execute Python
+        let handle = thread::spawn(move || {
+            // Create interpreter in this thread
+            let interpreter = Interpreter::with_init(Default::default(), |vm| {
+                vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
+            });
+            
+            interpreter.enter(|vm| {
+                // Create a new scope for this execution
+                let scope = vm.new_scope_with_builtins();
+                let _ = scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+            
+                // Create a native function that writes to the output buffer
+                let buffer_clone = Arc::clone(&output_buffer);
+                let write_output_fn = vm.new_function(
+                    "__write_output__",
+                    move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
+                        if let Some(text_obj) = args.args.first() {
+                            if let Ok(text) = text_obj.str(_vm) {
+                                if let Ok(mut buffer) = buffer_clone.lock() {
+                                    buffer.push_str(&text.to_string());
+                                }
+                            }
+                        }
+                        Ok(_vm.ctx.none())
+                    },
+                );
+                scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
+                
+                // Override print to write directly to buffer
+                let setup_code = r#"
+import builtins
+__original_print__ = builtins.print
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __write_output__(output)
+
+builtins.print = __custom_print__
+"#;
+                
+                if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                    eprintln!("Failed to set up print capture: {:?}", e);
+                }
+                
+                // Run the user's code
+                let exec_result = vm.run_code_string(scope.clone(), &code_str, "<coder>".to_string());
+                
+                // Restore original print
+                let restore_code = "builtins.print = __original_print__";
+                vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
+            
+                // Handle errors by writing to buffer
+                if let Err(py_exc) = exec_result {
+                    let class_name = py_exc.class().name();
+                    let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
+                        .ok()
+                        .and_then(|result| result.str(vm).ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    
+                    let error_text = if !error_msg.is_empty() {
+                        format!("\n{}: {}\n", class_name, error_msg)
+                    } else {
+                        format!("\n{}\n", class_name)
+                    };
+                    
+                    if let Ok(mut buffer) = output_buffer.lock() {
+                        buffer.push_str(&error_text);
+                    }
+                } else {
+                    // Check for viewport app
+                    if let Ok(Some(_)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
+                        if let Ok(mut buffer) = output_buffer.lock() {
+                            buffer.push_str("\n[xos] Application registered - switch to viewport tab\n");
+                        }
+                    } else {
+                        // Add "(no output)" if buffer is still empty
+                        if let Ok(buffer) = output_buffer.lock() {
+                            if buffer.trim().is_empty() {
+                                drop(buffer);
+                                if let Ok(mut buffer) = output_buffer.lock() {
+                                    buffer.push_str("(no output)\n");
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+        
+        // Store the thread handle
+        self.python_thread_handle = Some(handle);
+        
+        // Switch to terminal tab to show output
+        if self.active_tab == Tab::Code {
+            self.active_tab = Tab::Terminal;
+        }
     }
 
     fn execute_console_command(&mut self, command: &str) {
@@ -842,6 +915,13 @@ impl Application for CoderApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        // Update terminal from background thread output
+        if let Ok(buffer) = self.python_output_buffer.try_lock() {
+            if !buffer.is_empty() {
+                self.terminal_app.text_rasterizer.text = buffer.clone();
+            }
+        }
+        
         // Process onscreen keyboard input for console (on terminal tab)
         if self.active_tab == Tab::Terminal {
             // Process any pending keyboard characters for console
