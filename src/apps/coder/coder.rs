@@ -164,7 +164,7 @@ impl CoderApp {
         
         // Create text rasterizers for tab labels
         let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0);
-        code_tab_label.set_text("code.py".to_string());
+        code_tab_label.set_text(python_files[0].name.clone());
         
         let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
         terminal_tab_label.set_text("terminal".to_string());
