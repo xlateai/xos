@@ -1,7 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::text::text_rasterization::TextRasterizer;
-use crate::text::onscreen_keyboard::{OnScreenKeyboard, KeyType};
-use crate::apps::partitions::partition::Partition;
+use crate::text::onscreen_keyboard::KeyType;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 
@@ -29,7 +28,6 @@ pub struct TextApp {
     pub scroll_y: f32,
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
-    keyboard: OnScreenKeyboard,
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
     last_tap_y: f32,
@@ -88,7 +86,6 @@ impl TextApp {
             scroll_y: initial_scroll_y,
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
-            keyboard: OnScreenKeyboard::new(),
             last_tap_time: None,
             last_tap_x: 0.0,
             last_tap_y: 0.0,
@@ -173,47 +170,32 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        // Process any pending keyboard characters first
+        while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
+            self.on_key_char(state, ch);
+        }
+        
         // Extract all needed values in a block to release borrows
-        let (width, height, content_top, keyboard_top, keyboard_bottom_safe, content_bottom) = {
+        let (width, height, content_top, content_bottom) = {
             let shape = state.frame.array.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
             
             let safe_region = &state.frame.safe_region_boundaries;
             
-            // Content area uses the safe region bounds
-            // Keyboard sits at the bottom of the safe region
-            let keyboard_height = 0.30; // 30% of screen height
-            let keyboard_bottom_safe = safe_region.y2; // Bottom of safe region
-            let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(safe_region.y1);
-            let content_top = safe_region.y1 * height; // Top of safe region
-            let content_bottom = keyboard_top * height; // Top of keyboard area
+            // Get keyboard top edge (whether visible or not)
+            let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
             
-            (width, height, content_top, keyboard_top, keyboard_bottom_safe, content_bottom)
+            let content_top = safe_region.y1 * height; // Top of safe region
+            let content_bottom = keyboard_top_y * height; // Top of keyboard area
+            
+            (width, height, content_top, content_bottom)
         };
         
         // Now get mutable buffer (after all immutable borrows are released)
         let buffer = state.frame_buffer_mut();
-        
-        // Position keyboard partition just above bottom safe region
-        // The keyboard's internal coordinates (0-1) work within this partition automatically
-        self.keyboard.data_mut().top = keyboard_top;
-        self.keyboard.data_mut().bottom = keyboard_bottom_safe;
-        self.keyboard.data_mut().left = 0.0;
-        self.keyboard.data_mut().right = 1.0;
     
         self.text_rasterizer.tick(width, content_bottom - content_top);
-    
-        // Handle on-screen keyboard repeat
-        let now = Instant::now();
-        let mut keys_to_process: Vec<char> = Vec::new();
-        
-        if let Some(ch) = self.keyboard.check_key_hold_repeat(now) {
-            keys_to_process.push(ch);
-        }
-        
-        // Store keys to process after we're done with buffer
-        let keys_to_process_after = keys_to_process;
     
         // Clear screen
         for i in (0..buffer.len()).step_by(4) {
@@ -412,58 +394,6 @@ impl Application for TextApp {
                 }
             }
         }
-    
-        // Draw keyboard
-        let width_u32 = width as u32;
-        let height_u32 = height as u32;
-        self.keyboard.draw(buffer, width_u32, height_u32);
-        
-        // Draw black area with green border below keyboard (in unsafe region)
-        // Only draw if keyboard is visible
-        if !self.keyboard.is_minimized() {
-            let keyboard_bottom_px = keyboard_bottom_safe * height;
-            let screen_bottom = height;
-            
-            if keyboard_bottom_px < screen_bottom {
-                let border_y = keyboard_bottom_px.round() as i32;
-                let fill_start_y = (border_y + 1).max(0);
-                let fill_end_y = screen_bottom as i32;
-                
-                // Draw green border line
-                if border_y >= 0 && border_y < height as i32 {
-                    for x in 0..width as i32 {
-                        let idx = ((border_y as u32 * width as u32 + x as u32) * 4) as usize;
-                        if idx + 3 < buffer.len() {
-                            buffer[idx + 0] = 0;   // R
-                            buffer[idx + 1] = 255; // G
-                            buffer[idx + 2] = 0;   // B
-                            buffer[idx + 3] = 0xff; // A
-                        }
-                    }
-                }
-                
-                // Fill black pixels below keyboard
-                for y in fill_start_y..fill_end_y {
-                    if y >= 0 && y < height as i32 {
-                        for x in 0..width as i32 {
-                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                            if idx + 3 < buffer.len() {
-                                buffer[idx + 0] = 0;   // R
-                                buffer[idx + 1] = 0;   // G
-                                buffer[idx + 2] = 0;   // B
-                                buffer[idx + 3] = 0xff; // A
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Process repeated keys now that we're done with buffer
-        // Buffer borrow ends here, so we can borrow state again
-        for ch in keys_to_process_after {
-            self.on_key_char(state, ch);
-        }
     }
     
 
@@ -559,11 +489,8 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Update keyboard hover state
-        self.keyboard.update_hover(state.mouse.x, state.mouse.y, width, height);
-        
         // Check if shift is held for cursor movement (laser dot mode)
-        if let Some(KeyType::Shift) = self.keyboard.get_held_key_type() {
+        if let Some(KeyType::Shift) = state.keyboard.onscreen.get_held_key_type() {
             // Initialize dot position if not set (start at current cursor position)
             if self.shift_dot_x.is_none() || self.shift_dot_y.is_none() {
                 // Find current cursor screen position
@@ -693,43 +620,19 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check if click is in keyboard area first (even if keyboard is hidden)
-        let keyboard_data = self.keyboard.data();
-        let keyboard_left = keyboard_data.left * width;
-        let keyboard_right = keyboard_data.right * width;
-        let keyboard_top = keyboard_data.top * height;
-        let keyboard_bottom = keyboard_data.bottom * height;
-        
-        // Also check the area below keyboard (unsafe region) where keyboard used to be
-        let screen_bottom = height;
-        
-        let is_in_keyboard_area = state.mouse.x >= keyboard_left 
-            && state.mouse.x <= keyboard_right 
-            && state.mouse.y >= keyboard_top 
-            && state.mouse.y <= keyboard_bottom;
-        
-        // Check if click is in the area where keyboard would be (including hidden area)
-        let is_in_keyboard_region = state.mouse.x >= keyboard_left 
-            && state.mouse.x <= keyboard_right 
-            && state.mouse.y >= keyboard_top 
-            && state.mouse.y <= screen_bottom;
-        
-        if is_in_keyboard_area && !self.keyboard.is_minimized() {
-            // Keyboard is visible and click is on it
+        // Check if keyboard handled the event
+        if state.keyboard.onscreen.on_mouse_down(state.mouse.x, state.mouse.y, width, height) {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
-            
-            // Handle keyboard key press (handles dismiss button internally)
-            // Shift dot initialization happens in on_mouse_move when shift is detected as held
-            if let Some(ch) = self.keyboard.check_key_press(state.mouse.x, state.mouse.y, width, height, Instant::now()) {
-                // Route through on_key_char to ensure it works on all platforms
-                self.on_key_char(state, ch);
-            }
             return;
         }
         
         // Touch started outside keyboard or keyboard is hidden
         self.touch_started_on_keyboard = false;
+        
+        // Get keyboard region for double-tap detection
+        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let keyboard_region_top = keyboard_top_y * height;
         
         // Check for double tap in content area OR in keyboard region (even if hidden)
         let now = Instant::now();
@@ -744,7 +647,7 @@ impl Application for TextApp {
         
         if is_double_tap {
             // Toggle keyboard (works from content area or keyboard region)
-            self.keyboard.toggle_minimize();
+            state.keyboard.onscreen.toggle_minimize();
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
             // Clear pending cursor position
@@ -754,7 +657,7 @@ impl Application for TextApp {
         }
         
         // If single tap in keyboard region while keyboard is hidden, don't move cursor
-        if is_in_keyboard_region && self.keyboard.is_minimized() {
+        if state.mouse.y >= keyboard_region_top && !state.keyboard.onscreen.is_shown() {
             // Just update tap tracking for potential double-tap
             self.last_tap_time = Some(now);
             self.last_tap_x = state.mouse.x;
@@ -779,8 +682,8 @@ impl Application for TextApp {
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
-        // Release all keys when mouse is released
-        self.keyboard.release_keys();
+        // Release all keyboard keys
+        state.keyboard.onscreen.on_mouse_up();
         
         // Check if we should move cursor (only if user didn't scroll and didn't drag)
         if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {

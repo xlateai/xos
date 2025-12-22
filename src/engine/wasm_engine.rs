@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use super::engine::{Application, EngineState, MouseState, KeyboardState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
 
 
 #[cfg(target_arch = "wasm32")]
@@ -53,6 +53,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 is_left_clicking: false,
                 is_right_clicking: false,
                 style: CursorStyleSetter::new(),
+            },
+            keyboard: KeyboardState {
+                onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
         },
         app,
@@ -339,7 +342,23 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 
                 // Update game state
                 state.engine_state.frame_buffer_mut().fill(0);
+                
+                // Tick the app first
                 state.app.tick(&mut state.engine_state);
+                
+                // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
+                {
+                    let mouse_x = state.engine_state.mouse.x;
+                    let mouse_y = state.engine_state.mouse.y;
+                    let safe_region = state.engine_state.frame.safe_region_boundaries.clone();
+                    // Split borrows: get buffer and keyboard separately
+                    let (buffer, keyboard) = {
+                        let buffer_ptr = state.engine_state.frame.buffer_mut() as *mut [u8];
+                        let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut state.engine_state.keyboard.onscreen;
+                        (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+                    };
+                    keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+                }
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();

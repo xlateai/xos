@@ -30,7 +30,7 @@ enum SymbolMode {
     Symbols2,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum KeyType {
     Char(char),
     Backspace,
@@ -64,6 +64,18 @@ pub struct OnScreenKeyboard {
     last_repeat_time: Option<Instant>,
     // Shift tap tracking (for quick tap vs hold)
     shift_press_time: Option<Instant>,
+    // Queue for pending characters
+    pending_chars: Vec<char>,
+}
+
+impl std::fmt::Debug for OnScreenKeyboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OnScreenKeyboard")
+            .field("minimized", &self.minimized)
+            .field("shift_pressed", &self.shift_pressed)
+            .field("num_keys", &self.keys.len())
+            .finish()
+    }
 }
 
 impl OnScreenKeyboard {
@@ -88,10 +100,147 @@ impl OnScreenKeyboard {
             held_key_start_time: None,
             last_repeat_time: None,
             shift_press_time: None,
+            pending_chars: Vec::new(),
         };
 
         keyboard.layout_keys();
         keyboard
+    }
+
+    /// Main tick function to handle keyboard rendering and logic
+    /// Call this from the engine before drawing
+    pub fn tick(&mut self, buffer: &mut [u8], width: u32, height: u32, mouse_x: f32, mouse_y: f32, safe_region: &crate::engine::SafeRegionBoundingRectangle) {
+        // Position keyboard partition just above bottom safe region
+        let keyboard_height = 0.30; // 30% of screen height
+        let keyboard_bottom_safe = safe_region.y2; // Bottom of safe region
+        let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(safe_region.y1);
+        
+        self.data_mut().top = keyboard_top;
+        self.data_mut().bottom = keyboard_bottom_safe;
+        self.data_mut().left = 0.0;
+        self.data_mut().right = 1.0;
+
+        // Handle on-screen keyboard repeat
+        let now = Instant::now();
+        if let Some(ch) = self.check_key_hold_repeat(now) {
+            self.pending_chars.push(ch);
+        }
+
+        // Update hover state
+        self.update_hover(mouse_x, mouse_y, width as f32, height as f32);
+
+        // Draw keyboard
+        self.draw(buffer, width, height);
+        
+        // Draw black area with green border below keyboard (in unsafe region)
+        // Only draw if keyboard is visible
+        if !self.is_minimized() {
+            let height_f = height as f32;
+            let keyboard_bottom_px = keyboard_bottom_safe * height_f;
+            let screen_bottom = height_f;
+            
+            if keyboard_bottom_px < screen_bottom {
+                let border_y = keyboard_bottom_px.round() as i32;
+                let fill_start_y = (border_y + 1).max(0);
+                let fill_end_y = screen_bottom as i32;
+                
+                // Draw green border line
+                if border_y >= 0 && border_y < height as i32 {
+                    for x in 0..width as i32 {
+                        let idx = ((border_y as u32 * width + x as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx + 0] = 0;   // R
+                            buffer[idx + 1] = 255; // G
+                            buffer[idx + 2] = 0;   // B
+                            buffer[idx + 3] = 0xff; // A
+                        }
+                    }
+                }
+                
+                // Fill black pixels below keyboard
+                for y in fill_start_y..fill_end_y {
+                    if y >= 0 && y < height as i32 {
+                        for x in 0..width as i32 {
+                            let idx = ((y as u32 * width + x as u32) * 4) as usize;
+                            if idx + 3 < buffer.len() {
+                                buffer[idx + 0] = 0;   // R
+                                buffer[idx + 1] = 0;   // G
+                                buffer[idx + 2] = 0;   // B
+                                buffer[idx + 3] = 0xff; // A
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pop and return a pending character from the queue, if any
+    pub fn pop_pending_char(&mut self) -> Option<char> {
+        if self.pending_chars.is_empty() {
+            None
+        } else {
+            Some(self.pending_chars.remove(0))
+        }
+    }
+
+    /// Show the keyboard
+    pub fn show(&mut self) {
+        self.minimized = false;
+    }
+
+    /// Hide the keyboard
+    pub fn hide(&mut self) {
+        self.minimized = true;
+    }
+
+    /// Check if the keyboard is shown
+    pub fn is_shown(&self) -> bool {
+        !self.minimized
+    }
+
+    /// Get the top edge coordinates of the keyboard (or bottom of screen if hidden)
+    /// Returns (x1, y1, x2, y2) where (x1, y1) is the left top corner and (x2, y2) is the right top corner
+    /// All values are normalized from 0.0 to 1.0
+    pub fn top_edge_coordinates(&self) -> (f32, f32, f32, f32) {
+        if self.minimized {
+            // When hidden, return the bottom edge of the safe region
+            (0.0, self.data.bottom, 1.0, self.data.bottom)
+        } else {
+            // When visible, return the top edge of the keyboard
+            (self.data.left, self.data.top, self.data.right, self.data.top)
+        }
+    }
+
+    /// Handle mouse up event
+    pub fn on_mouse_up(&mut self) {
+        self.release_keys();
+    }
+
+    /// Handle mouse down event - returns true if the keyboard handled the event
+    pub fn on_mouse_down(&mut self, mouse_x: f32, mouse_y: f32, width: f32, height: f32) -> bool {
+        if self.minimized {
+            return false;
+        }
+
+        // Check if click is within keyboard partition bounds
+        let keyboard_left = self.data.left * width;
+        let keyboard_right = self.data.right * width;
+        let keyboard_top = self.data.top * height;
+        let keyboard_bottom = self.data.bottom * height;
+        
+        // Only process if click is within keyboard bounds
+        if mouse_x < keyboard_left || mouse_x > keyboard_right || mouse_y < keyboard_top || mouse_y > keyboard_bottom {
+            return false;
+        }
+
+        // Handle key press
+        let now = Instant::now();
+        if let Some(ch) = self.check_key_press(mouse_x, mouse_y, width, height, now) {
+            self.pending_chars.push(ch);
+        }
+
+        true // Event was handled by keyboard
     }
 
     pub fn is_minimized(&self) -> bool {

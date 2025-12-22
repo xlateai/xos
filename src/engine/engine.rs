@@ -176,10 +176,16 @@ pub struct MouseState {
 }
 
 #[derive(Debug)]
+pub struct KeyboardState {
+    pub onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard,
+}
+
+#[derive(Debug)]
 pub struct EngineState {
     /// Frame state containing pixel array and safe region boundaries
     pub frame: FrameState,
     pub mouse: MouseState,
+    pub keyboard: KeyboardState,
 }
 
 impl EngineState {

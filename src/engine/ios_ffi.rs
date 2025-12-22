@@ -148,6 +148,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             is_right_clicking: false,
             style: CursorStyleSetter::new(),
         },
+        keyboard: KeyboardState {
+            onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+        },
     };
 
     // Call setup
@@ -196,12 +199,35 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // Clear frame buffer
         ios_state.engine_state.frame_buffer_mut().fill(0);
         
-        // Run tick with panic handling
+        // Run app tick first with panic handling
         // We use AssertUnwindSafe because we know the FFI boundary is safe
         // and we're catching panics to prevent them from crossing the boundary unsafely
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             ios_state.app.tick(&mut ios_state.engine_state);
         }));
+        
+        // Check for panic first
+        if let Err(_) = result {
+            return 2; // Panic occurred
+        }
+        
+        // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
+        {
+            let width = ios_state.width;
+            let height = ios_state.height;
+            let mouse_x = ios_state.engine_state.mouse.x;
+            let mouse_y = ios_state.engine_state.mouse.y;
+            let safe_region = ios_state.engine_state.frame.safe_region_boundaries.clone();
+            // Split borrows: get buffer and keyboard separately
+            let (buffer, keyboard) = {
+                let buffer_ptr = ios_state.engine_state.frame.buffer_mut() as *mut [u8];
+                let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut ios_state.engine_state.keyboard.onscreen;
+                (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+            };
+            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+        }
+        
+        let result = Ok(()); // Already checked for panic above
         
         match result {
             Ok(_) => {

@@ -9,7 +9,7 @@ use winit::{
     window::{CursorIcon, Window, WindowId},
 };
 
-use super::engine::{Application, EngineState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use super::engine::{Application, EngineState, KeyboardState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -42,7 +42,25 @@ impl ApplicationHandler for AppState {
 
                 // Clear the frame buffer
                 self.engine_state.frame_buffer_mut().fill(0);
+                
+                // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
+                
+                // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
+                {
+                    let width = self.size.width;
+                    let height = self.size.height;
+                    let mouse_x = self.engine_state.mouse.x;
+                    let mouse_y = self.engine_state.mouse.y;
+                    let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
+                    // Split borrows: get buffer and keyboard separately through engine_state
+                    let (buffer, keyboard) = {
+                        let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
+                        let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut self.engine_state.keyboard.onscreen;
+                        (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+                    };
+                    keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+                }
 
                 let frame = self.pixels.frame_mut();
                 let buffer = self.engine_state.frame_buffer_mut();
@@ -247,6 +265,9 @@ impl ApplicationHandler for AppStateWrapper {
                     is_left_clicking: false,
                     is_right_clicking: false,
                     style: CursorStyleSetter::new(),
+                },
+                keyboard: KeyboardState {
+                    onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
             };
 

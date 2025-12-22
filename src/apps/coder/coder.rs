@@ -110,16 +110,25 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
+        // Get keyboard top edge coordinates (normalized 0-1)
+        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        
         // Delegate to text app
         self.text_app.tick(state);
         
         // Get buffer again for drawing button on top
         let buffer = state.frame_buffer_mut();
         
-        // Update button position (bottom right)
+        // Position button just above the keyboard (whether visible or not)
         let padding = 10;
+        let button_height = self.run_button.height as f32;
+        // keyboard_top_y is normalized (0-1), convert to pixels and position button above it
+        let keyboard_top_px = keyboard_top_y * height;
+        let button_bottom_y = keyboard_top_px - padding as f32;
+        let button_top_y = button_bottom_y - button_height;
+        
         self.run_button.x = (width as i32) - (self.run_button.width as i32) - padding;
-        self.run_button.y = (height as i32) - (self.run_button.height as i32) - padding;
+        self.run_button.y = button_top_y as i32;
         
         // Check if mouse is hovering over button
         let is_hovered = self.run_button.contains_point(mouse_x, mouse_y);
