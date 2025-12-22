@@ -231,35 +231,47 @@ builtins.print = __custom_print__
             
             // Check if an xos.Application was registered
             let mut extra_output = String::new();
-            if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
+            let app_registered = if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
                 extra_output.push_str("[xos] Application registered - rendering to viewport tab\n");
                 
                 // Store the app instance for viewport rendering
                 self.viewport_app = Some(app_instance_obj);
                 self.viewport_app_setup_done = false;
                 
-                // Switch to viewport tab to show the app
-                self.active_tab = Tab::Viewport;
-            }
+                true
+            } else {
+                false
+            };
             
-            Ok((captured_output, extra_output))
+            Ok((captured_output, extra_output, app_registered))
         });
 
         // Display output in terminal
-        match result {
-            Ok((output, extra)) => {
+        let should_show_viewport = match result {
+            Ok((output, extra, app_registered)) => {
                 self.terminal_app.text_rasterizer.text = output + &extra;
                 if self.terminal_app.text_rasterizer.text.trim().is_empty() {
                     self.terminal_app.text_rasterizer.text = "(no output)".to_string();
                 }
+                app_registered
             }
             Err((error, output)) => {
                 self.terminal_app.text_rasterizer.text = output + &error + "\n";
+                false
+            }
+        };
+        
+        // Smart tab switching: only switch if currently on Code tab
+        if self.active_tab == Tab::Code {
+            if should_show_viewport {
+                // App registered - switch to viewport to show the running app
+                self.active_tab = Tab::Viewport;
+            } else {
+                // No app - switch to terminal to show output
+                self.active_tab = Tab::Terminal;
             }
         }
-        
-        // Switch to terminal tab to show output
-        self.active_tab = Tab::Terminal;
+        // If already on Terminal or Viewport, stay there
     }
 
     fn execute_console_command(&mut self, command: &str) {
