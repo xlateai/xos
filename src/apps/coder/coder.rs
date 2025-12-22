@@ -575,6 +575,25 @@ impl Application for CoderApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        // Process onscreen keyboard input for console (on terminal tab)
+        if self.active_tab == Tab::Terminal {
+            // Process any pending keyboard characters for console
+            while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
+                // Check if it's Enter - execute and clear console
+                if ch == '\n' || ch == '\r' {
+                    let command = self.console_app.text_rasterizer.text.clone();
+                    if !command.trim().is_empty() {
+                        self.execute_console_command(&command);
+                        self.console_app.text_rasterizer.text.clear();
+                        self.console_app.cursor_position = 0;
+                    }
+                } else {
+                    // Pass other characters to console
+                    self.console_app.on_key_char(state, ch);
+                }
+            }
+        }
+        
         // Get dimensions before mutable borrow
         let shape = state.frame.array.shape();
         let width = shape[1] as f32;
@@ -775,23 +794,26 @@ impl Application for CoderApp {
             self.run_button.draw(buffer, width as u32, height as u32, is_run_hovered);
         }
         
-        // Position and draw clear button (only when console is shown and has text)
+        // Position and draw clear "×" (only when console is shown and has text)
         if show_console && console_has_text {
             // Position clear button on right side of console, vertically centered in console area
             self.clear_button.x = self.run_button.x + (self.run_button.width as i32 - self.clear_button.width as i32);
             let console_center_y = (console_top_y + console_bottom_y) / 2.0;
             self.clear_button.y = (console_center_y - (self.clear_button.height as f32 / 2.0)) as i32;
             
-            // Check if mouse is hovering over clear button
+            // Check if mouse is hovering over clear button area
             let is_clear_hovered = self.clear_button.contains_point(mouse_x, mouse_y);
             
-            // Draw clear button background
-            self.clear_button.draw(buffer, width as u32, height as u32, is_clear_hovered);
+            // Draw "×" label (no background, just the character)
+            // Use gray when not hovered, lighter gray when hovered
+            let text_color = if is_clear_hovered {
+                (180, 180, 180) // Lighter gray on hover
+            } else {
+                (120, 120, 120) // Gray
+            };
             
-            // Draw "×" label centered in button
-            let text_color = (255, 255, 255);
             for character in &self.clear_button_label.characters {
-                // Center the text in the button
+                // Center the text in the button area
                 let text_width = self.clear_button_label.characters.iter()
                     .map(|c| c.metrics.advance_width)
                     .sum::<f32>();
