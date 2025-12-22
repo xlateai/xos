@@ -8,8 +8,15 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::{CursorIcon, Window, WindowId},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 use super::engine::{Application, EngineState, KeyboardState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+
+#[cfg(not(target_arch = "wasm32"))]
+static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -27,6 +34,13 @@ impl ApplicationHandler for AppState {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        // Check if Ctrl+C was pressed
+        if SHOULD_EXIT.load(Ordering::Relaxed) {
+            println!("Shutting down...");
+            event_loop.exit();
+            return;
+        }
+        
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -195,7 +209,14 @@ impl ApplicationHandler for AppState {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Check if Ctrl+C was pressed
+        if SHOULD_EXIT.load(Ordering::Relaxed) {
+            println!("Shutting down...");
+            event_loop.exit();
+            return;
+        }
+        
         // Update cursor style
         match self.engine_state.mouse.style.get() {
             CursorStyle::Hidden => {
@@ -302,6 +323,13 @@ impl ApplicationHandler for AppStateWrapper {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+    // Install Ctrl+C handler for clean shutdown
+    let should_exit = SHOULD_EXIT.clone();
+    ctrlc::set_handler(move || {
+        println!("\nReceived Ctrl+C, shutting down gracefully...");
+        should_exit.store(true, Ordering::Relaxed);
+    }).expect("Error setting Ctrl+C handler");
+    
     let event_loop = EventLoop::new().unwrap();
     
     let mut wrapper = AppStateWrapper {
