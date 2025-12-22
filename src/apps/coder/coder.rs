@@ -215,7 +215,13 @@ impl CoderApp {
         // Clear terminal - just show the raw output
         self.terminal_app.text_rasterizer.text.clear();
         
+        // Clear any previous viewport app before execution
+        self.viewport_app = None;
+        self.viewport_app_setup_done = false;
+        
         let result = self.interpreter.enter(|vm| {
+            // Clear the previous app instance from builtins to prevent context bleed
+            let _ = vm.builtins.as_object().to_owned().del_attr("__xos_app_instance__", vm);
             // Get or create persistent scope
             let scope = if let Some(ref existing_scope) = self.persistent_scope {
                 existing_scope.clone()
