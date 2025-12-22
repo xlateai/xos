@@ -77,7 +77,9 @@ class BallGame(xos.Application):
             py = pos_data[i*2+1] * height
             pixel_positions.append((px, py))
         
-        radii_list = [BALL_RADIUS * width for _ in range(self.num_balls)]  # Convert normalized radius to pixels
+        # Use the wider dimension for consistent ball size across orientations
+        max_dimension = max(width, height)
+        radii_list = [BALL_RADIUS * max_dimension for _ in range(self.num_balls)]  # Convert normalized radius to pixels
         
         # Use fast Rust rasterizer
         xos.rasterizer.circles(self.frame, pixel_positions, radii_list, BALL_COLOR)

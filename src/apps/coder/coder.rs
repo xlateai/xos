@@ -56,6 +56,11 @@ pub struct CoderApp {
     current_file_index: usize,
     file_list_scroll_y: f32,
     file_list_rasterizers: Vec<TextRasterizer>,
+    // File explorer dragging
+    file_explorer_dragging: bool,
+    file_explorer_last_mouse_y: f32,
+    file_explorer_last_tap_x: f32,
+    file_explorer_last_tap_y: f32,
 }
 
 impl CoderApp {
@@ -238,6 +243,10 @@ impl CoderApp {
             current_file_index: 0,
             file_list_scroll_y: 0.0,
             file_list_rasterizers,
+            file_explorer_dragging: false,
+            file_explorer_last_mouse_y: 0.0,
+            file_explorer_last_tap_x: 0.0,
+            file_explorer_last_tap_y: 0.0,
         }
     }
 
@@ -825,6 +834,10 @@ impl Application for CoderApp {
         self.code_app.setup(state)?;
         self.terminal_app.setup(state)?;
         self.console_app.setup(state)?;
+        
+        // Override code_app scroll to start at top (TextApp's setup sets it to 1/3 down on iOS)
+        self.code_app.scroll_y = 0.0;
+        
         Ok(())
     }
 
@@ -1310,6 +1323,30 @@ impl Application for CoderApp {
             Tab::Code => {
                 if self.code_view_mode == CodeViewMode::Editor {
                     self.code_app.on_mouse_move(state)
+                } else if self.code_view_mode == CodeViewMode::FileExplorer {
+                    // Handle dragging for file explorer scrolling
+                    if !self.file_explorer_dragging && state.mouse.is_left_clicking {
+                        let dx = (state.mouse.x - self.file_explorer_last_tap_x).abs();
+                        let dy = (state.mouse.y - self.file_explorer_last_tap_y).abs();
+                        // Start dragging if moved more than 5 pixels
+                        if dx > 5.0 || dy > 5.0 {
+                            self.file_explorer_dragging = true;
+                            self.file_explorer_last_mouse_y = state.mouse.y;
+                        }
+                    }
+                    
+                    // Handle dragging - update scroll
+                    if self.file_explorer_dragging {
+                        let dy = state.mouse.y - self.file_explorer_last_mouse_y;
+                        self.file_list_scroll_y -= dy;
+                        
+                        // Clamp to valid range
+                        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
+                        let max_scroll = (self.python_files.len() as f32 * item_height).max(0.0);
+                        self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
+                        
+                        self.file_explorer_last_mouse_y = state.mouse.y;
+                    }
                 }
             }
             Tab::Terminal => self.terminal_app.on_mouse_move(state),
@@ -1446,23 +1483,14 @@ impl Application for CoderApp {
         
         println!("Click not on any button, checking file explorer or delegating to text app");
         
-        // Check if we're in file explorer mode and clicked on a file
+        // Check if we're in file explorer mode - track tap position for dragging
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
-            // Calculate file list item positions (same as in draw_file_explorer, 30% bigger on iOS)
-            let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
-            
-            // Get safe region top boundary
-            let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
-            
-            // Check if click is within the file list area (below safe region, above tabs)
-            if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
-                let clicked_index = ((mouse_y - safe_region_top_y + self.file_list_scroll_y) / item_height) as usize;
-                if clicked_index < self.python_files.len() {
-                    println!("Clicked on file: {}", self.python_files[clicked_index].name);
-                    self.load_file(clicked_index);
-                    return;
-                }
-            }
+            // Track tap position for drag detection
+            self.file_explorer_last_tap_x = mouse_x;
+            self.file_explorer_last_tap_y = mouse_y;
+            self.file_explorer_dragging = false;
+            // Don't load file yet - wait for mouse_up to distinguish tap from drag
+            return;
         }
         
         // Otherwise delegate to active text app or handle viewport
@@ -1516,6 +1544,43 @@ impl Application for CoderApp {
             Tab::Code => {
                 if self.code_view_mode == CodeViewMode::Editor {
                     self.code_app.on_mouse_up(state)
+                } else if self.code_view_mode == CodeViewMode::FileExplorer {
+                    // Check if this was a tap (not a drag) to select a file
+                    let mouse_x = state.mouse.x;
+                    let mouse_y = state.mouse.y;
+                    
+                    let dx = (mouse_x - self.file_explorer_last_tap_x).abs();
+                    let dy = (mouse_y - self.file_explorer_last_tap_y).abs();
+                    let drag_threshold = 10.0; // pixels
+                    
+                    // Only select file if user didn't drag
+                    if !self.file_explorer_dragging && dx < drag_threshold && dy < drag_threshold {
+                        // Calculate which file was tapped
+                        let shape = state.frame.array.shape();
+                        let height = shape[0] as f32;
+                        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
+                        
+                        // Get safe region and tabs position
+                        let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
+                        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+                        let keyboard_top_px = keyboard_top_y * height;
+                        let padding = 10;
+                        let (_, button_height) = Self::get_button_size();
+                        let tabs_bottom_y = keyboard_top_px - padding as f32;
+                        let tabs_top_y = tabs_bottom_y - button_height as f32;
+                        
+                        // Check if tap is within the file list area
+                        if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
+                            let clicked_index = ((mouse_y - safe_region_top_y + self.file_list_scroll_y) / item_height) as usize;
+                            if clicked_index < self.python_files.len() {
+                                println!("Selected file: {}", self.python_files[clicked_index].name);
+                                self.load_file(clicked_index);
+                            }
+                        }
+                    }
+                    
+                    // Stop dragging
+                    self.file_explorer_dragging = false;
                 }
             }
             Tab::Terminal => self.terminal_app.on_mouse_up(state),
