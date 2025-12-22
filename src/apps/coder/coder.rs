@@ -19,6 +19,7 @@ pub struct CoderApp {
     pub interpreter: Interpreter,
     pub run_button: Button,
     pub clear_button: Button,
+    pub clear_button_label: TextRasterizer,
     pub code_tab_label: TextRasterizer,
     pub terminal_tab_label: TextRasterizer,
     pub viewport_tab_label: TextRasterizer,
@@ -101,8 +102,12 @@ print(x)"#.to_string();
         let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
         terminal_tab_label.set_text("terminal".to_string());
         
-        let mut viewport_tab_label = TextRasterizer::new(font, 20.0);
+        let mut viewport_tab_label = TextRasterizer::new(font.clone(), 20.0);
         viewport_tab_label.set_text("viewport".to_string());
+        
+        // Create text rasterizer for clear button "x" label
+        let mut clear_button_label = TextRasterizer::new(font, 30.0);
+        clear_button_label.set_text("×".to_string()); // Multiplication sign
 
         Self {
             code_app,
@@ -112,6 +117,7 @@ print(x)"#.to_string();
             interpreter,
             run_button,
             clear_button,
+            clear_button_label,
             code_tab_label,
             terminal_tab_label,
             viewport_tab_label,
@@ -628,6 +634,9 @@ impl Application for CoderApp {
         self.terminal_tab_label.tick(width, height);
         self.viewport_tab_label.tick(width, height);
         
+        // Update clear button label
+        self.clear_button_label.tick(width, height);
+        
         // Get buffer again for drawing console, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
         
@@ -768,15 +777,51 @@ impl Application for CoderApp {
         
         // Position and draw clear button (only when console is shown and has text)
         if show_console && console_has_text {
-            // Position clear button on right side of console, aligned beneath run button
+            // Position clear button on right side of console, vertically centered in console area
             self.clear_button.x = self.run_button.x + (self.run_button.width as i32 - self.clear_button.width as i32);
-            self.clear_button.y = console_top_y as i32 + padding;
+            let console_center_y = (console_top_y + console_bottom_y) / 2.0;
+            self.clear_button.y = (console_center_y - (self.clear_button.height as f32 / 2.0)) as i32;
             
             // Check if mouse is hovering over clear button
             let is_clear_hovered = self.clear_button.contains_point(mouse_x, mouse_y);
             
-            // Draw clear button
+            // Draw clear button background
             self.clear_button.draw(buffer, width as u32, height as u32, is_clear_hovered);
+            
+            // Draw "×" label centered in button
+            let text_color = (255, 255, 255);
+            for character in &self.clear_button_label.characters {
+                // Center the text in the button
+                let text_width = self.clear_button_label.characters.iter()
+                    .map(|c| c.metrics.advance_width)
+                    .sum::<f32>();
+                let text_offset_x = (self.clear_button.width as f32 - text_width) / 2.0;
+                let text_offset_y = (self.clear_button.height as f32 - self.clear_button_label.font_size) / 2.0;
+                
+                let char_x = self.clear_button.x as f32 + character.x + text_offset_x;
+                let char_y = self.clear_button.y as f32 + character.y + text_offset_y;
+                
+                for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
+                    for (bitmap_x, &alpha) in row.iter().enumerate() {
+                        if alpha == 0 {
+                            continue;
+                        }
+                        
+                        let px = (char_x + bitmap_x as f32) as i32;
+                        let py = (char_y + bitmap_y as f32) as i32;
+                        
+                        if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                            let idx = ((py as u32 * width as u32 + px as u32) * 4) as usize;
+                            
+                            // Blend text color with alpha
+                            let alpha_f = alpha as f32 / 255.0;
+                            buffer[idx + 0] = ((text_color.0 as f32 * alpha_f) + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
+                            buffer[idx + 1] = ((text_color.1 as f32 * alpha_f) + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
+                            buffer[idx + 2] = ((text_color.2 as f32 * alpha_f) + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -802,6 +847,9 @@ impl Application for CoderApp {
                     // Execute console command
                     let command = self.console_app.text_rasterizer.text.clone();
                     self.execute_console_command(&command);
+                    // Clear the console input after execution
+                    self.console_app.text_rasterizer.text.clear();
+                    self.console_app.cursor_position = 0;
                     return;
                 }
                 
