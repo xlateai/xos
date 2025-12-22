@@ -190,6 +190,14 @@ class ViewController: UIViewController {
         return .fade
     }
     
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        return .portrait
+    }
+    
+    override var shouldAutorotate: Bool {
+        return false
+    }
+    
     // MARK: - Gesture Recognizer
     
     private func setupGestureRecognizer() {
