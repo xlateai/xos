@@ -24,6 +24,19 @@ pub struct CoderApp {
 }
 
 impl CoderApp {
+    // Get button/tab dimensions based on platform
+    fn get_button_size() -> (u32, u32) {
+        #[cfg(target_os = "ios")]
+        {
+            // 75% bigger on iOS for better touch targets
+            (280, 105)
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            (160, 60)
+        }
+    }
+    
     pub fn new() -> Self {
         // Create the code editor text app with default code
         let mut code_app = TextApp::new();
@@ -41,7 +54,8 @@ impl CoderApp {
         });
 
         // Create run button (position will be updated in tick)
-        let run_button = Button::new(0, 0, 160, 60, "Run".to_string());
+        let (button_width, button_height) = Self::get_button_size();
+        let run_button = Button::new(0, 0, button_width, button_height, "Run".to_string());
         
         // Load font for tab labels
         let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
@@ -181,6 +195,8 @@ builtins.print = __custom_print__
 
     #[cfg(not(feature = "python"))]
     fn execute_python_code(&mut self, _code: &str) {
+        self.terminal_app.text_rasterizer.text = "Python execution not available (python feature disabled)".to_string();
+        self.active_tab = Tab::Terminal;
         println!("\n=== Python execution not available (python feature disabled) ===\n");
     }
 
@@ -331,8 +347,7 @@ impl Application for CoderApp {
         let buffer = state.frame_buffer_mut();
         
         // Draw tabs aligned with keyboard edge - same size as button
-        let tab_height = 60;
-        let tab_width = 160;
+        let (tab_width, tab_height) = Self::get_button_size();
         let padding = 10;
         
         // Position tabs just above the keyboard (same logic as button)
@@ -385,9 +400,10 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
+        println!("Mouse down at ({}, {})", mouse_x, mouse_y);
+        
         // Tab dimensions (must match tick())
-        let tab_height = 60;
-        let tab_width = 160;
+        let (tab_width, tab_height) = Self::get_button_size();
         let padding = 10;
         
         // Calculate tab position (same as in tick)
@@ -398,27 +414,39 @@ impl Application for CoderApp {
         let tab_bottom_y = keyboard_top_px - padding as f32;
         let tab_top_y = (tab_bottom_y - tab_height as f32) as i32;
         
+        println!("Button position - x: {}, y: {}, width: {}, height: {}", 
+                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height);
+        println!("Tab position - y: {}, height: {}", tab_top_y, tab_height);
+        
         // Check if click is on code.py tab
         if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
+            println!("Code tab clicked");
             self.active_tab = Tab::Code;
             return;
         }
         
         // Check if click is on terminal tab
         if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
+            println!("Terminal tab clicked");
             self.active_tab = Tab::Terminal;
             return;
         }
         
         // Check if click is on the run button
         if self.run_button.contains_point(mouse_x, mouse_y) {
+            println!("Run button clicked at ({}, {})", mouse_x, mouse_y);
             // Execute the Python code from code tab
             let code = self.code_app.text_rasterizer.text.clone();
+            println!("Code to execute: {}", code);
             if !code.trim().is_empty() {
                 self.execute_python_code(&code);
+            } else {
+                println!("Code was empty!");
             }
             return;
         }
+        
+        println!("Click not on any button, delegating to text app");
         
         // Otherwise delegate to active text app
         match self.active_tab {
