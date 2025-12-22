@@ -51,6 +51,7 @@ pub struct CoderApp {
     python_files: Vec<PythonFile>,
     current_file_index: usize,
     file_list_scroll_y: f32,
+    file_list_rasterizers: Vec<TextRasterizer>,
 }
 
 impl CoderApp {
@@ -172,8 +173,16 @@ impl CoderApp {
         viewport_tab_label.set_text("viewport".to_string());
         
         // Create text rasterizer for clear button "x" label
-        let mut clear_button_label = TextRasterizer::new(font, 30.0);
+        let mut clear_button_label = TextRasterizer::new(font.clone(), 30.0);
         clear_button_label.set_text("×".to_string()); // Multiplication sign
+
+        // Create text rasterizers for each file in the file explorer
+        let mut file_list_rasterizers = Vec::new();
+        for file in &python_files {
+            let mut rasterizer = TextRasterizer::new(font.clone(), 24.0);
+            rasterizer.set_text(file.name.clone());
+            file_list_rasterizers.push(rasterizer);
+        }
 
         Self {
             code_app,
@@ -198,6 +207,7 @@ impl CoderApp {
             python_files,
             current_file_index: 0,
             file_list_scroll_y: 0.0,
+            file_list_rasterizers,
         }
     }
 
@@ -601,18 +611,10 @@ builtins.print = __custom_print__
             }
         }
         
-        // Draw file list
-        let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
-        let font = fontdue::Font::from_bytes(
-            font_data as &[u8],
-            fontdue::FontSettings::default(),
-        ).expect("Failed to load font");
-        
         let item_height = 60.0;
         let padding = 10.0;
-        let text_size = 24.0;
         
-        for (i, file) in self.python_files.iter().enumerate() {
+        for (i, rasterizer) in self.file_list_rasterizers.iter().enumerate() {
             let y_offset = i as f32 * item_height - self.file_list_scroll_y;
             
             // Skip if not visible
@@ -640,22 +642,22 @@ builtins.print = __custom_print__
                 }
             }
             
-            // Draw file name text
+            // Draw file name text using TextRasterizer
             let text_color = (200, 200, 200);
-            let mut text_x = padding;
-            let text_y = y_offset + (item_height - text_size) / 2.0;
+            let text_y_offset = y_offset + (item_height - rasterizer.font_size) / 2.0;
             
-            for ch in file.name.chars() {
-                let (metrics, bitmap) = font.rasterize(ch, text_size);
+            for character in &rasterizer.characters {
+                let char_x = padding + character.x;
+                let char_y = text_y_offset + character.y;
                 
-                for (bitmap_y, row) in bitmap.chunks(metrics.width).enumerate() {
+                for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
                     for (bitmap_x, &alpha) in row.iter().enumerate() {
                         if alpha == 0 {
                             continue;
                         }
                         
-                        let px = (text_x + bitmap_x as f32) as i32;
-                        let py = (text_y + bitmap_y as f32) as i32;
+                        let px = (char_x + bitmap_x as f32) as i32;
+                        let py = (char_y + bitmap_y as f32) as i32;
                         
                         if px >= 0 && px < canvas_width as i32 && py >= 0 && py < viewport_height as i32 {
                             let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
@@ -668,8 +670,6 @@ builtins.print = __custom_print__
                         }
                     }
                 }
-                
-                text_x += metrics.advance_width;
             }
             
             // Draw separator line
@@ -984,6 +984,11 @@ impl Application for CoderApp {
         
         // Update clear button label
         self.clear_button_label.tick(width, height);
+        
+        // Update file list rasterizers
+        for rasterizer in &mut self.file_list_rasterizers {
+            rasterizer.tick(width, height);
+        }
         
         // Get buffer again for drawing console, file explorer, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
