@@ -231,8 +231,50 @@ pub fn launch_ios_app(app_name: &str) {
     }
     #[cfg(not(target_os = "ios"))]
     {
-        // No-op on non-iOS platforms
-        let _ = app_name;
+        use std::process::{Command, Stdio};
+        
+        let _ = app_name; // Unused on macOS - deployment script handles everything
+        
+        // Find project root (same logic as main.rs)
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        let project_root = loop {
+            if current_dir.join("build-ios.sh").exists() || current_dir.join("Cargo.toml").exists() {
+                break current_dir;
+            }
+            let xos_subdir = current_dir.join("xos");
+            if xos_subdir.join("build-ios.sh").exists() || xos_subdir.join("Cargo.toml").exists() {
+                break xos_subdir;
+            }
+            match current_dir.parent() {
+                Some(parent) => current_dir = parent.to_path_buf(),
+                None => {
+                    eprintln!("❌ Could not find xos project root");
+                    std::process::exit(1);
+                }
+            }
+        };
+        
+        let launch_script = project_root.join("ios").join("launch-device.sh");
+        
+        if !launch_script.exists() {
+            eprintln!("❌ launch-device.sh not found at: {}", launch_script.display());
+            eprintln!("   Expected location: ios/launch-device.sh");
+            std::process::exit(1);
+        }
+        
+        println!("📱 Deploying app to iOS device...");
+        
+        let mut cmd = Command::new("bash");
+        cmd.arg(&launch_script);
+        cmd.current_dir(project_root.join("ios"));
+        cmd.stdout(Stdio::inherit());
+        cmd.stderr(Stdio::inherit());
+        
+        let status = cmd.status().expect("Failed to run launch-device.sh");
+        if !status.success() {
+            eprintln!("❌ iOS deployment failed");
+            std::process::exit(1);
+        }
     }
 }
 
