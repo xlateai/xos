@@ -3,6 +3,10 @@ use crate::apps::text::text::TextApp;
 use crate::apps::coder::button::Button;
 use crate::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
+use include_dir::{include_dir, Dir};
+
+// Embed the entire python/ directory at compile time
+static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/python");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tab {
@@ -83,34 +87,57 @@ impl CoderApp {
     }
     
     pub fn new() -> Self {
-        // Load all Python files from the python/ directory
-        let python_files = vec![
-            PythonFile {
-                name: "ball.py".to_string(),
-                content: include_str!("../../../python/ball.py").to_string(),
-                path: "ball.py".to_string(),
-            },
-            PythonFile {
-                name: "hello.py".to_string(),
-                content: include_str!("../../../python/hello.py").to_string(),
-                path: "hello.py".to_string(),
-            },
-            PythonFile {
-                name: "old/galaxy.py".to_string(),
-                content: include_str!("../../../python/old/galaxy.py").to_string(),
-                path: "old/galaxy.py".to_string(),
-            },
-            PythonFile {
-                name: "old/python_camera.py".to_string(),
-                content: include_str!("../../../python/old/python_camera.py").to_string(),
-                path: "old/python_camera.py".to_string(),
-            },
-            PythonFile {
-                name: "old/setup.py".to_string(),
-                content: include_str!("../../../python/old/setup.py").to_string(),
-                path: "old/setup.py".to_string(),
-            },
-        ];
+        // Discover all Python files from the embedded directory
+        let mut python_files = Vec::new();
+        
+        fn collect_py_files(dir: &Dir, base_path: &str, files: &mut Vec<PythonFile>) {
+            // Collect all .py files in this directory
+            for file in dir.files() {
+                if let Some(filename) = file.path().file_name() {
+                    if filename.to_string_lossy().ends_with(".py") {
+                        let relative_path = if base_path.is_empty() {
+                            filename.to_string_lossy().to_string()
+                        } else {
+                            format!("{}/{}", base_path, filename.to_string_lossy())
+                        };
+                        
+                        if let Ok(content) = std::str::from_utf8(file.contents()) {
+                            files.push(PythonFile {
+                                name: relative_path.clone(),
+                                content: content.to_string(),
+                                path: relative_path,
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // Recursively collect from subdirectories
+            for subdir in dir.dirs() {
+                if let Some(dirname) = subdir.path().file_name() {
+                    let new_base = if base_path.is_empty() {
+                        dirname.to_string_lossy().to_string()
+                    } else {
+                        format!("{}/{}", base_path, dirname.to_string_lossy())
+                    };
+                    collect_py_files(subdir, &new_base, files);
+                }
+            }
+        }
+        
+        collect_py_files(&PYTHON_DIR, "", &mut python_files);
+        
+        // Sort by name for consistent ordering
+        python_files.sort_by(|a, b| a.name.cmp(&b.name));
+        
+        // Ensure we have at least one file
+        if python_files.is_empty() {
+            python_files.push(PythonFile {
+                name: "empty.py".to_string(),
+                content: "# No Python files found\nprint('Hello, World!')".to_string(),
+                path: "empty.py".to_string(),
+            });
+        }
         
         // Create the code editor text app with default code from ball.py
         let mut code_app = TextApp::new();

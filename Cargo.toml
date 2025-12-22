@@ -20,6 +20,7 @@ fontdue = "0.9.3"
 delaunator = "1.0"
 rustpython-vm = "0.3.0"
 ringbuf = "0.3"
+include_dir = "0.7"
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies
