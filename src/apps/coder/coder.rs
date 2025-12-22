@@ -147,7 +147,7 @@ impl Application for CoderApp {
         // Check if click is on the run button first
         if self.run_button.contains_point(mouse_x, mouse_y) {
             // Execute the Python code
-            let code = self.text_app.text_engine.text.clone();
+            let code = self.text_app.text_rasterizer.text.clone();
             if !code.trim().is_empty() {
                 self.execute_python_code(&code);
             }

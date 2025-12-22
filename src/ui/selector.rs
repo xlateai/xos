@@ -1,5 +1,5 @@
 use crate::engine::EngineState;
-use crate::apps::text::geometric::GeometricText;
+use crate::text::text_rasterization::TextRasterizer;
 use crate::text::fonts;
 
 /// A simple, reusable selector component for choosing between options
@@ -15,7 +15,7 @@ pub struct Selector {
     /// Animation speed (how fast it opens/closes)
     animation_speed: f32,
     /// Text renderers for each option
-    text_renderers: Vec<GeometricText>,
+    text_renderers: Vec<TextRasterizer>,
     /// Font size for option text
     _font_size: f32,
 }
@@ -27,10 +27,10 @@ impl Selector {
         
         // Create a text renderer for each option
         // Each renderer gets its own font instance (fontdue Font is not Clone)
-        let text_renderers: Vec<GeometricText> = options.iter()
+        let text_renderers: Vec<TextRasterizer> = options.iter()
             .map(|option| {
                 let font = fonts::jetbrains_mono();
-                let mut renderer = GeometricText::new(font, font_size);
+                let mut renderer = TextRasterizer::new(font, font_size);
                 renderer.set_text(option.clone());
                 renderer
             })

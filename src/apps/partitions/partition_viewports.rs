@@ -1,5 +1,5 @@
 use super::partition::{Partition, PartitionData};
-use crate::apps::text::geometric::GeometricText;
+use crate::text::text_rasterization::TextRasterizer;
 use fontdue::{Font, FontSettings};
 use std::cell::RefCell;
 
@@ -10,19 +10,19 @@ const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 
 pub struct PartitionA {
     pub data: PartitionData,
-    text_engine: RefCell<GeometricText>,
+    text_rasterizer: RefCell<TextRasterizer>,
 }
 
 impl PartitionA {
     pub fn new(left: f32, right: f32, top: f32, bottom: f32) -> Self {
         let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
-        let mut text_engine = GeometricText::new(font, 24.0);
-        text_engine.set_text("Hello, welcome to the partition view display demo. I hope this finds you well, as it's become a priority of xos to make simple and powerful design tooling available at all levels of the system.".to_string());
+        let mut text_rasterizer = TextRasterizer::new(font, 24.0);
+        text_rasterizer.set_text("Hello, welcome to the partition view display demo. I hope this finds you well, as it's become a priority of xos to make simple and powerful design tooling available at all levels of the system.".to_string());
 
         Self {
             data: PartitionData::new(left, right, top, bottom, COLOR_A),
-            text_engine: RefCell::new(text_engine),
+            text_rasterizer: RefCell::new(text_rasterizer),
         }
     }
 }
@@ -65,8 +65,8 @@ impl Partition for PartitionA {
         }
 
         // Draw centered text
-        let mut text_engine = self.text_engine.borrow_mut();
-        text_engine.tick(rect_w as f32, rect_h as f32);
+        let mut text_rasterizer = self.text_rasterizer.borrow_mut();
+        text_rasterizer.tick(rect_w as f32, rect_h as f32);
 
         // Calculate text bounding box
         let mut text_min_x = f32::MAX;
@@ -74,14 +74,14 @@ impl Partition for PartitionA {
         let mut text_min_y = f32::MAX;
         let mut text_max_y = f32::MIN;
 
-        for character in &text_engine.characters {
+        for character in &text_rasterizer.characters {
             text_min_x = text_min_x.min(character.x);
             text_max_x = text_max_x.max(character.x + character.width);
             text_min_y = text_min_y.min(character.y);
             text_max_y = text_max_y.max(character.y + character.height);
         }
 
-        if text_engine.characters.is_empty() {
+        if text_rasterizer.characters.is_empty() {
             return;
         }
 
@@ -93,7 +93,7 @@ impl Partition for PartitionA {
         let offset_y = (rect_h as f32 - text_height) / 2.0 - text_min_y;
 
         // Draw each character
-        for character in &text_engine.characters {
+        for character in &text_rasterizer.characters {
             let px = x0 + (character.x + offset_x) as i32;
             let py = y0 + (character.y + offset_y) as i32;
 

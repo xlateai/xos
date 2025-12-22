@@ -1,7 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::tuneable::write_all_to_source;
 use crate::tuneables;
-use crate::apps::text::geometric::GeometricText;
+use crate::text::text_rasterization::TextRasterizer;
 use fontdue::{Font, FontSettings};
 
 tuneables! {
@@ -30,7 +30,7 @@ enum DragRegion {
 }
 
 pub struct WireframeText {
-    pub text_engine: GeometricText,
+    pub text_rasterizer: TextRasterizer,
     dragging: DragRegion,
     drag_offset_x: f32,
     drag_offset_y: f32,
@@ -40,11 +40,11 @@ impl WireframeText {
     pub fn new() -> Self {
         let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).unwrap();
-        let mut text_engine = GeometricText::new(font, 24.0);
-        text_engine.set_text("start typing...".to_string());
+        let mut text_rasterizer = TextRasterizer::new(font, 24.0);
+        text_rasterizer.set_text("start typing...".to_string());
 
         Self {
-            text_engine,
+            text_rasterizer,
             dragging: DragRegion::None,
             drag_offset_x: 0.0,
             drag_offset_y: 0.0,
@@ -91,9 +91,9 @@ impl WireframeText {
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
-        self.text_engine.tick(tw as f32, th as f32);
+        self.text_rasterizer.tick(tw as f32, th as f32);
 
-        for character in &self.text_engine.characters {
+        for character in &self.text_rasterizer.characters {
             let px = tx + character.x as i32;
             let py = ty + character.y as i32;
 
@@ -267,12 +267,12 @@ impl Application for WireframeText {
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         match ch {
-            '\t' => self.text_engine.text.push_str("    "),
-            '\n' | '\r' => self.text_engine.text.push('\n'),
+            '\t' => self.text_rasterizer.text.push_str("    "),
+            '\n' | '\r' => self.text_rasterizer.text.push('\n'),
             '\u{8}' => {
-                self.text_engine.text.pop();
+                self.text_rasterizer.text.pop();
             }
-            _ if !ch.is_control() => self.text_engine.text.push(ch),
+            _ if !ch.is_control() => self.text_rasterizer.text.push(ch),
             _ => {}
         }
     }

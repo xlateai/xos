@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::sensors::{Magnetometer, MagnetometerReading};
-use crate::apps::text::geometric::GeometricText;
+use crate::text::text_rasterization::TextRasterizer;
 use crate::ui::Selector;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
@@ -45,11 +45,11 @@ impl SensorType {
 
 pub struct IosSensorsApp {
     magnetometer: Option<Magnetometer>,
-    magnitude_text: GeometricText,
-    coordinates_text: GeometricText,
-    count_text: GeometricText,
-    rate_text: GeometricText,
-    button_text: GeometricText,
+    magnitude_text: TextRasterizer,
+    coordinates_text: TextRasterizer,
+    count_text: TextRasterizer,
+    rate_text: TextRasterizer,
+    button_text: TextRasterizer,
     last_reading: Option<MagnetometerReading>,
     // For calculating readings per second
     last_rate_calc_time: Instant,
@@ -97,11 +97,11 @@ impl IosSensorsApp {
         let button_font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
 
-        let magnitude_text = GeometricText::new(magnitude_font, magnitude_font_size);
-        let coordinates_text = GeometricText::new(coordinates_font, coordinates_font_size);
-        let count_text = GeometricText::new(count_font, small_font_size);
-        let rate_text = GeometricText::new(rate_font, small_font_size);
-        let button_text = GeometricText::new(button_font, small_font_size);
+        let magnitude_text = TextRasterizer::new(magnitude_font, magnitude_font_size);
+        let coordinates_text = TextRasterizer::new(coordinates_font, coordinates_font_size);
+        let count_text = TextRasterizer::new(count_font, small_font_size);
+        let rate_text = TextRasterizer::new(rate_font, small_font_size);
+        let button_text = TextRasterizer::new(button_font, small_font_size);
 
         // Create sensor selector with all sensor options
         let sensor_options = vec![
@@ -388,8 +388,8 @@ impl Application for IosSensorsApp {
 }
 
 impl IosSensorsApp {
-    fn draw_text_geometric(&self, buffer: &mut [u8], width: u32, height: u32, text_engine: &GeometricText, offset_x: f32, offset_y: f32) {
-        for character in &text_engine.characters {
+    fn draw_text_geometric(&self, buffer: &mut [u8], width: u32, height: u32, text_rasterizer: &TextRasterizer, offset_x: f32, offset_y: f32) {
+        for character in &text_rasterizer.characters {
             let px = (character.x + offset_x) as i32;
             let py = (character.y + offset_y) as i32;
 

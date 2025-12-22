@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
-use crate::apps::text::geometric::GeometricText;
-use crate::apps::text::onscreen_keyboard::{OnScreenKeyboard, KeyType};
+use crate::text::text_rasterization::TextRasterizer;
+use crate::text::onscreen_keyboard::{OnScreenKeyboard, KeyType};
 use crate::apps::partitions::partition::Partition;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
@@ -25,7 +25,7 @@ const ARROW_DOWN: char = '\u{2193}';  // ↓
 use std::collections::HashMap;
 
 pub struct TextApp {
-    pub text_engine: GeometricText,
+    pub text_rasterizer: TextRasterizer,
     pub scroll_y: f32,
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
@@ -63,7 +63,7 @@ impl TextApp {
             base_font_size
         };
 
-        let mut text_engine = GeometricText::new(font, font_size);
+        let mut text_rasterizer = TextRasterizer::new(font, font_size);
 
         // Set default text on iOS and calculate initial scroll
         let mut initial_scroll_y = 0.0;
@@ -71,7 +71,7 @@ impl TextApp {
         
         if cfg!(target_os = "ios") {
             let default_text = "double tap screen to open keyboard".to_string();
-            text_engine.set_text(default_text.clone());
+            text_rasterizer.set_text(default_text.clone());
             // Set cursor to end of default text
             initial_cursor_pos = default_text.chars().count();
             
@@ -84,7 +84,7 @@ impl TextApp {
         }
 
         Self {
-            text_engine,
+            text_rasterizer,
             scroll_y: initial_scroll_y,
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
@@ -146,7 +146,7 @@ impl TextApp {
 impl Application for TextApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         // On iOS, adjust scroll to position default text in top 2/3rds of screen
-        if cfg!(target_os = "ios") && !self.text_engine.text.is_empty() {
+        if cfg!(target_os = "ios") && !self.text_rasterizer.text.is_empty() {
             let shape = state.frame.array.shape();
             let height = shape[0] as f32;
             let safe_region = &state.frame.safe_region_boundaries;
@@ -154,10 +154,10 @@ impl Application for TextApp {
             let content_height = height - content_top;
             
             // Tick the engine once to calculate line positions
-            self.text_engine.tick(shape[1] as f32, content_height);
+            self.text_rasterizer.tick(shape[1] as f32, content_height);
             
             // Find the first line's baseline
-            if let Some(first_line) = self.text_engine.lines.first() {
+            if let Some(first_line) = self.text_rasterizer.lines.first() {
                 // We want the text to appear starting at roughly 1/3 from top of content area
                 // So the first line's baseline should be at: content_top + (content_height / 3)
                 let target_y = content_top + (content_height / 3.0);
@@ -202,7 +202,7 @@ impl Application for TextApp {
         self.keyboard.data_mut().left = 0.0;
         self.keyboard.data_mut().right = 1.0;
     
-        self.text_engine.tick(width, content_bottom - content_top);
+        self.text_rasterizer.tick(width, content_bottom - content_top);
     
         // Handle on-screen keyboard repeat
         let now = Instant::now();
@@ -225,7 +225,7 @@ impl Application for TextApp {
     
         // Draw baselines (offset by content_top)
         if DRAW_BASELINES {
-            for line in &self.text_engine.lines {
+            for line in &self.text_rasterizer.lines {
                 let y = ((line.baseline_y - self.scroll_y) + content_top) as i32;
                 if y >= 0 && y < height as i32 {
                     for x in 0..width as i32 {
@@ -240,7 +240,7 @@ impl Application for TextApp {
         }
     
         // Draw characters with fade and slide-in (offset by content_top)
-        for character in &self.text_engine.characters {
+        for character in &self.text_rasterizer.characters {
             let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
             let fade = self.fade_map.entry(fade_key).or_insert(0.0);
             *fade = (*fade + 0.16).min(1.0); // Fast fade
@@ -280,7 +280,7 @@ impl Application for TextApp {
         // Draw cursor (offset by content_top)
         // Find cursor position based on cursor_position index
         // First, find which line the cursor is on
-        let line_info_with_idx = self.text_engine.lines.iter()
+        let line_info_with_idx = self.text_rasterizer.lines.iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
@@ -288,7 +288,7 @@ impl Application for TextApp {
         
         let (target_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
             // Found the line - check if there are characters in this line
-            let chars_in_line: Vec<_> = self.text_engine.characters.iter()
+            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
                 .filter(|c| c.line_index == line_idx)
                 .collect();
             
@@ -305,7 +305,7 @@ impl Application for TextApp {
                     let mut found_char = None;
                     let mut char_after = None;
                     
-                    for character in self.text_engine.characters.iter() {
+                    for character in self.text_rasterizer.characters.iter() {
                         if character.char_index == self.cursor_position {
                             found_char = Some(character);
                             break;
@@ -333,18 +333,18 @@ impl Application for TextApp {
             }
         } else if self.cursor_position == 0 {
             // Cursor at very start (before any lines)
-            if let Some(first_line) = self.text_engine.lines.first() {
+            if let Some(first_line) = self.text_rasterizer.lines.first() {
                 (0.0, first_line.baseline_y)
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
-        } else if self.cursor_position >= self.text_engine.text.chars().count() {
+        } else if self.cursor_position >= self.text_rasterizer.text.chars().count() {
             // Cursor at end of text
-            if let Some(last_line) = self.text_engine.lines.last() {
+            if let Some(last_line) = self.text_rasterizer.lines.last() {
                 // Find the line index
-                let last_line_idx = self.text_engine.lines.len() - 1;
+                let last_line_idx = self.text_rasterizer.lines.len() - 1;
                 // Check if last line has characters
-                let chars_in_last_line: Vec<_> = self.text_engine.characters.iter()
+                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == last_line_idx)
                     .collect();
                 
@@ -355,26 +355,26 @@ impl Application for TextApp {
                 } else {
                     (0.0, last_line.baseline_y)
                 }
-            } else if let Some(last) = self.text_engine.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else if let Some(last) = self.text_rasterizer.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
         } else {
             // Fallback: cursor position is out of bounds somehow
             // Try to find nearest line or character
-            if let Some(last) = self.text_engine.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            if let Some(last) = self.text_rasterizer.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
         };
         
         // Smooth the x-position (linear interpolation)
         self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
         
-        let cursor_top = ((baseline_y - self.text_engine.ascent - self.scroll_y) + content_top).round() as i32;
-        let cursor_bottom = ((baseline_y + self.text_engine.descent - self.scroll_y) + content_top).round() as i32;
+        let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
+        let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round() as i32;
         let cx = self.smooth_cursor_x.round() as i32;
         
         for y in cursor_top..cursor_bottom {
@@ -489,7 +489,7 @@ impl Application for TextApp {
             }
             '\t' => {
                 // Insert tab at cursor position
-                let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
                 for (i, &c) in text_chars.iter().enumerate() {
                     if i == self.cursor_position {
@@ -500,12 +500,12 @@ impl Application for TextApp {
                 if self.cursor_position >= text_chars.len() {
                     new_text.push_str("    ");
                 }
-                self.text_engine.text = new_text;
+                self.text_rasterizer.text = new_text;
                 self.cursor_position += 4;
             }
             '\r' | '\n' => {
                 // Insert newline at cursor position
-                let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
                 for (i, &c) in text_chars.iter().enumerate() {
                     if i == self.cursor_position {
@@ -516,27 +516,27 @@ impl Application for TextApp {
                 if self.cursor_position >= text_chars.len() {
                     new_text.push('\n');
                 }
-                self.text_engine.text = new_text;
+                self.text_rasterizer.text = new_text;
                 self.cursor_position += 1;
             }
             '\u{8}' => {
                 // Backspace - delete character before cursor
                 if self.cursor_position > 0 {
-                    let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
                     for (i, &c) in text_chars.iter().enumerate() {
                         if i != self.cursor_position - 1 {
                             new_text.push(c);
                         }
                     }
-                    self.text_engine.text = new_text;
+                    self.text_rasterizer.text = new_text;
                     self.cursor_position -= 1;
                 }
             }
             _ => {
                 if !ch.is_control() {
                     // Insert character at cursor position
-                    let text_chars: Vec<char> = self.text_engine.text.chars().collect();
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
                     for (i, &c) in text_chars.iter().enumerate() {
                         if i == self.cursor_position {
@@ -547,7 +547,7 @@ impl Application for TextApp {
                     if self.cursor_position >= text_chars.len() {
                         new_text.push(ch);
                     }
-                    self.text_engine.text = new_text;
+                    self.text_rasterizer.text = new_text;
                     self.cursor_position += 1;
                 }
             }
@@ -606,15 +606,15 @@ impl Application for TextApp {
                 let dot_text_y = new_dot_y - content_top + self.scroll_y;
                 
                 // Find nearest character or line to dot position
-                let mut best_char_index = self.text_engine.text.chars().count();
+                let mut best_char_index = self.text_rasterizer.text.chars().count();
                 let mut min_distance_sq = f32::MAX;
                 
                 // Check empty lines first
-                for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
                     let line_y = line.baseline_y;
                     
-                    if dot_text_y >= line_y - self.text_engine.ascent && dot_text_y <= line_y + self.text_engine.descent {
-                        let has_chars = self.text_engine.characters.iter()
+                    if dot_text_y >= line_y - self.text_rasterizer.ascent && dot_text_y <= line_y + self.text_rasterizer.descent {
+                        let has_chars = self.text_rasterizer.characters.iter()
                             .any(|c| c.line_index == line_idx);
                         
                         if !has_chars {
@@ -629,7 +629,7 @@ impl Application for TextApp {
                 }
                 
                 // Check characters
-                for character in &self.text_engine.characters {
+                for character in &self.text_rasterizer.characters {
                     let char_center_x = character.x + character.width / 2.0;
                     let char_center_y = character.y + character.height / 2.0;
                     
@@ -649,7 +649,7 @@ impl Application for TextApp {
                 }
                 
                 // Update cursor to nearest valid position
-                self.cursor_position = best_char_index.min(self.text_engine.text.chars().count());
+                self.cursor_position = best_char_index.min(self.text_rasterizer.text.chars().count());
             }
             
             // Update last finger position
@@ -806,13 +806,13 @@ impl Application for TextApp {
                 
                 // Check if tap is on an empty line
                 let mut found_line: Option<usize> = None;
-                for (line_idx, line) in self.text_engine.lines.iter().enumerate() {
+                for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
                     let line_y = line.baseline_y;
                     
                     // Check if tap is within this line's vertical bounds
-                    if text_y >= line_y - self.text_engine.ascent && text_y <= line_y + self.text_engine.descent {
+                    if text_y >= line_y - self.text_rasterizer.ascent && text_y <= line_y + self.text_rasterizer.descent {
                         // Check if this line is empty (no characters in this line)
-                        let has_chars = self.text_engine.characters.iter()
+                        let has_chars = self.text_rasterizer.characters.iter()
                             .any(|c| c.line_index == line_idx);
                         
                         if !has_chars {
@@ -826,10 +826,10 @@ impl Application for TextApp {
                 
                 // If not on empty line, find nearest character
                 if found_line.is_none() {
-                    let mut nearest_char_index = self.text_engine.text.chars().count();
+                    let mut nearest_char_index = self.text_rasterizer.text.chars().count();
                     let mut min_distance_sq = f32::MAX;
                     
-                    for character in &self.text_engine.characters {
+                    for character in &self.text_rasterizer.characters {
                         let char_center_x = character.x + character.width / 2.0;
                         let char_center_y = character.y + character.height / 2.0;
                         
@@ -855,7 +855,7 @@ impl Application for TextApp {
                         }
                     }
                     
-                    self.cursor_position = nearest_char_index.min(self.text_engine.text.chars().count());
+                    self.cursor_position = nearest_char_index.min(self.text_rasterizer.text.chars().count());
                 }
             }
             
@@ -879,14 +879,14 @@ impl Application for TextApp {
 impl TextApp {
     fn get_cursor_text_position(&self) -> (f32, f32) {
         // Find cursor position based on cursor_position index
-        let line_info_with_idx = self.text_engine.lines.iter()
+        let line_info_with_idx = self.text_rasterizer.lines.iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
             });
         
         if let Some((line_idx, line)) = line_info_with_idx {
-            let chars_in_line: Vec<_> = self.text_engine.characters.iter()
+            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
                 .filter(|c| c.line_index == line_idx)
                 .collect();
             
@@ -899,7 +899,7 @@ impl TextApp {
                     let mut found_char = None;
                     let mut char_after = None;
                     
-                    for character in self.text_engine.characters.iter() {
+                    for character in self.text_rasterizer.characters.iter() {
                         if character.char_index == self.cursor_position {
                             found_char = Some(character);
                             break;
@@ -921,15 +921,15 @@ impl TextApp {
                 }
             }
         } else if self.cursor_position == 0 {
-            if let Some(first_line) = self.text_engine.lines.first() {
+            if let Some(first_line) = self.text_rasterizer.lines.first() {
                 (0.0, first_line.baseline_y)
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
-        } else if self.cursor_position >= self.text_engine.text.chars().count() {
-            if let Some(last_line) = self.text_engine.lines.last() {
-                let last_line_idx = self.text_engine.lines.len() - 1;
-                let chars_in_last_line: Vec<_> = self.text_engine.characters.iter()
+        } else if self.cursor_position >= self.text_rasterizer.text.chars().count() {
+            if let Some(last_line) = self.text_rasterizer.lines.last() {
+                let last_line_idx = self.text_rasterizer.lines.len() - 1;
+                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == last_line_idx)
                     .collect();
                 
@@ -940,16 +940,16 @@ impl TextApp {
                 } else {
                     (0.0, last_line.baseline_y)
                 }
-            } else if let Some(last) = self.text_engine.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            } else if let Some(last) = self.text_rasterizer.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
         } else {
-            if let Some(last) = self.text_engine.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_engine.lines.last().map_or(self.text_engine.ascent, |line| line.baseline_y))
+            if let Some(last) = self.text_rasterizer.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
             } else {
-                (0.0, self.text_engine.ascent)
+                (0.0, self.text_rasterizer.ascent)
             }
         }
     }
@@ -961,7 +961,7 @@ impl TextApp {
     }
 
     fn move_cursor_right(&mut self) {
-        let text_len = self.text_engine.text.chars().count();
+        let text_len = self.text_rasterizer.text.chars().count();
         if self.cursor_position < text_len {
             self.cursor_position += 1;
         }
@@ -969,7 +969,7 @@ impl TextApp {
 
     fn move_cursor_up(&mut self) {
         // Find current line
-        let line_idx_opt = self.text_engine.lines.iter()
+        let line_idx_opt = self.text_rasterizer.lines.iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
@@ -979,13 +979,13 @@ impl TextApp {
         if let Some(line_idx) = line_idx_opt {
             if line_idx > 0 {
                 // Move to previous line
-                let prev_line = &self.text_engine.lines[line_idx - 1];
+                let prev_line = &self.text_rasterizer.lines[line_idx - 1];
                 
                 // Find current x position in current line
-                let current_x = if let Some(char_at_cursor) = self.text_engine.characters.iter()
+                let current_x = if let Some(char_at_cursor) = self.text_rasterizer.characters.iter()
                     .find(|c| c.char_index == self.cursor_position) {
                     char_at_cursor.x
-                } else if let Some(last_in_line) = self.text_engine.characters.iter()
+                } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx)
                     .last() {
                     last_in_line.x + last_in_line.metrics.advance_width
@@ -997,7 +997,7 @@ impl TextApp {
                 let mut best_char_index = prev_line.end_index;
                 let mut min_distance = f32::MAX;
                 
-                for character in self.text_engine.characters.iter()
+                for character in self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx - 1) {
                     let distance = (character.x - current_x).abs();
                     if distance < min_distance {
@@ -1022,7 +1022,7 @@ impl TextApp {
 
     fn move_cursor_down(&mut self) {
         // Find current line
-        let line_idx_opt = self.text_engine.lines.iter()
+        let line_idx_opt = self.text_rasterizer.lines.iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
@@ -1030,15 +1030,15 @@ impl TextApp {
             .map(|(idx, _)| idx);
         
         if let Some(line_idx) = line_idx_opt {
-            if line_idx < self.text_engine.lines.len() - 1 {
+            if line_idx < self.text_rasterizer.lines.len() - 1 {
                 // Move to next line
-                let next_line = &self.text_engine.lines[line_idx + 1];
+                let next_line = &self.text_rasterizer.lines[line_idx + 1];
                 
                 // Find current x position in current line
-                let current_x = if let Some(char_at_cursor) = self.text_engine.characters.iter()
+                let current_x = if let Some(char_at_cursor) = self.text_rasterizer.characters.iter()
                     .find(|c| c.char_index == self.cursor_position) {
                     char_at_cursor.x
-                } else if let Some(last_in_line) = self.text_engine.characters.iter()
+                } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx)
                     .last() {
                     last_in_line.x + last_in_line.metrics.advance_width
@@ -1050,7 +1050,7 @@ impl TextApp {
                 let mut best_char_index = next_line.end_index;
                 let mut min_distance = f32::MAX;
                 
-                for character in self.text_engine.characters.iter()
+                for character in self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx + 1) {
                     let distance = (character.x - current_x).abs();
                     if distance < min_distance {
@@ -1068,7 +1068,7 @@ impl TextApp {
                 self.cursor_position = best_char_index.min(next_line.end_index);
             } else {
                 // Already at last line, move to end
-                self.cursor_position = self.text_engine.text.chars().count();
+                self.cursor_position = self.text_rasterizer.text.chars().count();
             }
         }
     }

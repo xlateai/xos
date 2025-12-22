@@ -21,7 +21,7 @@ pub struct LineInfo {
     pub end_index: usize,
 }
 
-pub struct GeometricText {
+pub struct TextRasterizer {
     pub text: String,
     pub characters: Vec<Character>,
     pub lines: Vec<LineInfo>,
@@ -32,7 +32,7 @@ pub struct GeometricText {
     pub font: Font,
 }
 
-impl GeometricText {
+impl TextRasterizer {
     pub fn new(font: Font, font_size: f32) -> Self {
         let metrics = font
             .horizontal_line_metrics(font_size)
@@ -124,3 +124,4 @@ impl GeometricText {
     }
     
 }
+

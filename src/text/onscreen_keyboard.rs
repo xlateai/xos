@@ -68,7 +68,7 @@ pub struct OnScreenKeyboard {
 
 impl OnScreenKeyboard {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("Failed to load font");
 
