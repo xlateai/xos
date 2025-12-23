@@ -123,7 +123,7 @@ impl OnScreenKeyboard {
     /// Call this from the engine before drawing
     pub fn tick(&mut self, buffer: &mut [u8], width: u32, height: u32, mouse_x: f32, mouse_y: f32, safe_region: &crate::engine::SafeRegionBoundingRectangle) {
         // Position keyboard partition just above bottom safe region
-        let keyboard_height = 0.30; // 30% of screen height
+        let keyboard_height = 0.33; // 33% of screen height (10% increase from 30%)
         let keyboard_bottom_safe = safe_region.y2; // Bottom of safe region
         let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(safe_region.y1);
         
@@ -244,6 +244,19 @@ impl OnScreenKeyboard {
         // Only process if click is within keyboard bounds
         if mouse_x < keyboard_left || mouse_x > keyboard_right || mouse_y < keyboard_top || mouse_y > keyboard_bottom {
             return false;
+        }
+
+        // In trackpad mode, check if click is in trackpad area (below action row)
+        if self.trackpad_mode && !self.keys.is_empty() {
+            // Calculate action row bottom
+            let keyboard_height = keyboard_bottom - keyboard_top;
+            let first_key = &self.keys[0];
+            let action_row_bottom = keyboard_top + (first_key.y + first_key.height) * keyboard_height;
+            
+            // If clicking below action row in trackpad mode, don't handle it
+            if mouse_y > action_row_bottom {
+                return false; // Let text app handle trackpad interaction
+            }
         }
 
         // Handle key press
