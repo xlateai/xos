@@ -608,7 +608,7 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check if we're in trackpad mode
+        // Check if we're in trackpad mode AND actively using it
         if state.keyboard.onscreen.is_trackpad_mode() {
             // Initialize laser if not set (center of content area)
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
@@ -667,9 +667,10 @@ impl Application for TextApp {
                 // Update last mouse position
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
                 self.trackpad_last_mouse_y = Some(state.mouse.y);
+                
+                // Don't allow normal scrolling when actively using trackpad
+                return;
             }
-            
-            return;
         } else {
             // Not in trackpad mode - clear laser
             self.trackpad_laser_x = None;

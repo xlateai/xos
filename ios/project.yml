@@ -10,6 +10,7 @@ targets:
     deploymentTarget: "15.1"
     sources:
       - path: xos
+      - path: XosModule
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.xlate.xos
       SWIFT_VERSION: "5.9"
