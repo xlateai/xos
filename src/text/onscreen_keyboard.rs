@@ -7,6 +7,7 @@ const KEY_COLOR: (u8, u8, u8) = (40, 40, 40);
 const KEY_PRESSED_COLOR: (u8, u8, u8) = (80, 80, 80);
 const KEY_TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const TOP_LINE_COLOR: (u8, u8, u8) = (0, 255, 0); // Green line
+const TRACKPAD_COLOR: (u8, u8, u8) = (20, 20, 20); // Slightly darker than keys
 
 // QWERTY layout
 const ROW1: &[char] = &['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
@@ -376,6 +377,25 @@ impl OnScreenKeyboard {
             return None;
         }
         
+        // In trackpad mode, only process clicks on keys (not in trackpad area)
+        // Find the first key to determine where keys start (after action row)
+        if self.trackpad_mode {
+            // Only allow clicks in the action row area (top row)
+            let action_row_height = if !self.keys.is_empty() {
+                // Get the height of the first key (action keys)
+                let first_key = &self.keys[0];
+                let key_y1 = keyboard_top + (first_key.y + first_key.height) * keyboard_height;
+                key_y1
+            } else {
+                keyboard_top
+            };
+            
+            // If click is below action row in trackpad mode, ignore it
+            if my > action_row_height {
+                return None;
+            }
+        }
+        
         // First, try to find a key that directly contains the click
         let mut clicked_key: Option<usize> = None;
         for (i, key) in self.keys.iter().enumerate() {
@@ -390,9 +410,12 @@ impl OnScreenKeyboard {
             }
         }
         
-        // If no key was directly clicked, find the nearest key
+        // If no key was directly clicked, find the nearest key (but only if not in trackpad mode)
         let key_index = if let Some(idx) = clicked_key {
             idx
+        } else if self.trackpad_mode {
+            // In trackpad mode, don't try to find nearest key - just return None
+            return None;
         } else {
             // Find nearest key by calculating distance to center of each key
             let mut nearest_idx = 0;
@@ -1087,7 +1110,14 @@ impl Partition for OnScreenKeyboard {
         let rect_w = (x1 - x0).max(0) as u32;
         let rect_h = (y1 - y0).max(0) as u32;
 
-        // Draw keyboard background (pitch black)
+        // Draw keyboard background
+        // In trackpad mode, use darker color for the trackpad area
+        let bg_color = if self.trackpad_mode {
+            TRACKPAD_COLOR
+        } else {
+            KEYBOARD_BG_COLOR
+        };
+        
         for dy in 0..rect_h {
             for dx in 0..rect_w {
                 let sx = x0 + dx as i32;
@@ -1095,9 +1125,9 @@ impl Partition for OnScreenKeyboard {
 
                 if sx >= 0 && sy >= 0 && (sx as u32) < width && (sy as u32) < height {
                     let idx = ((sy as u32 * width + sx as u32) * 4) as usize;
-                    buffer[idx + 0] = KEYBOARD_BG_COLOR.0;
-                    buffer[idx + 1] = KEYBOARD_BG_COLOR.1;
-                    buffer[idx + 2] = KEYBOARD_BG_COLOR.2;
+                    buffer[idx + 0] = bg_color.0;
+                    buffer[idx + 1] = bg_color.1;
+                    buffer[idx + 2] = bg_color.2;
                     buffer[idx + 3] = 0xff;
                 }
             }

@@ -44,6 +44,16 @@ pub struct TextApp {
     trackpad_active: bool,
     trackpad_last_tap_time: Option<Instant>,
     trackpad_selecting: bool,
+    // Trackpad laser pointer
+    trackpad_laser_x: Option<f32>, // Screen coordinates
+    trackpad_laser_y: Option<f32>, // Screen coordinates
+    trackpad_last_mouse_x: Option<f32>,
+    trackpad_last_mouse_y: Option<f32>,
+    // Clipboard
+    clipboard_content: String,
+    // Undo/redo history
+    undo_stack: Vec<(String, usize)>, // (text, cursor_position)
+    redo_stack: Vec<(String, usize)>,
     // Text selection state
     selection_start: Option<usize>, // Character index where selection starts
     selection_end: Option<usize>,   // Character index where selection ends
@@ -107,6 +117,13 @@ impl TextApp {
             trackpad_active: false,
             trackpad_last_tap_time: None,
             trackpad_selecting: false,
+            trackpad_laser_x: None,
+            trackpad_laser_y: None,
+            trackpad_last_mouse_x: None,
+            trackpad_last_mouse_y: None,
+            clipboard_content: String::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             selection_start: None,
             selection_end: None,
             selecting: false,
@@ -194,7 +211,7 @@ impl Application for TextApp {
         }
         
         // Extract all needed values in a block to release borrows
-        let (width, height, content_top, content_bottom) = {
+        let (width, height, content_top, content_bottom, is_trackpad_mode) = {
             let shape = state.frame.array.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
@@ -207,7 +224,9 @@ impl Application for TextApp {
             let content_top = safe_region.y1 * height; // Top of safe region
             let content_bottom = keyboard_top_y * height; // Top of keyboard area
             
-            (width, height, content_top, content_bottom)
+            let is_trackpad_mode = state.keyboard.onscreen.is_trackpad_mode();
+            
+            (width, height, content_top, content_bottom, is_trackpad_mode)
         };
         
         // Now get mutable buffer (after all immutable borrows are released)
@@ -446,7 +465,42 @@ impl Application for TextApp {
                 }
             }
         }
-    
+        
+        // Draw trackpad laser pointer if in trackpad mode
+        if is_trackpad_mode {
+            // Initialize laser if not already set
+            if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
+                // Center of available content area (using already extracted values)
+                self.trackpad_laser_x = Some(width / 2.0);
+                self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
+            }
+            
+            if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                let dot_radius = 6.0;
+                let dot_x_i = laser_x.round() as i32;
+                let dot_y_i = laser_y.round() as i32;
+                
+                // Draw a bright circular laser dot
+                for dy in -(dot_radius as i32)..=(dot_radius as i32) {
+                    for dx in -(dot_radius as i32)..=(dot_radius as i32) {
+                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                        if distance <= dot_radius {
+                            let x = dot_x_i + dx;
+                            let y = dot_y_i + dy;
+                            if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                                let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                                // Bright cyan/blue dot with soft edges
+                                let alpha = (1.0 - (distance / dot_radius)).max(0.0);
+                                buffer[idx + 0] = (100.0 * alpha) as u8; // R
+                                buffer[idx + 1] = (200.0 * alpha) as u8; // G
+                                buffer[idx + 2] = (255.0 * alpha) as u8; // B
+                                buffer[idx + 3] = (255.0 * alpha) as u8; // A
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
 
@@ -476,6 +530,7 @@ impl Application for TextApp {
                 self.move_cursor_down();
             }
             '\t' => {
+                self.save_undo_state();
                 // Insert tab at cursor position
                 let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
@@ -492,6 +547,7 @@ impl Application for TextApp {
                 self.cursor_position += 4;
             }
             '\r' | '\n' => {
+                self.save_undo_state();
                 // Insert newline at cursor position
                 let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
@@ -510,6 +566,7 @@ impl Application for TextApp {
             '\u{8}' => {
                 // Backspace - delete character before cursor
                 if self.cursor_position > 0 {
+                    self.save_undo_state();
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
                     for (i, &c) in text_chars.iter().enumerate() {
@@ -523,6 +580,7 @@ impl Application for TextApp {
             }
             _ => {
                 if !ch.is_control() {
+                    self.save_undo_state();
                     // Insert character at cursor position
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
@@ -544,23 +602,65 @@ impl Application for TextApp {
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let shape = state.frame.array.shape();
+        let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check if we're in trackpad mode and the mouse is in the trackpad area
-        if state.keyboard.onscreen.is_trackpad_mode() && self.trackpad_active {
-            // Trackpad mode - move cursor based on trackpad movement
-            // If selecting, update selection
-            if self.trackpad_selecting {
+        // Check if we're in trackpad mode
+        if state.keyboard.onscreen.is_trackpad_mode() {
+            // Initialize laser if not set (center of content area)
+            if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 let safe_region = &state.frame.safe_region_boundaries;
                 let content_top = safe_region.y1 * height;
-                let text_x = state.mouse.x;
-                let text_y = state.mouse.y - content_top + self.scroll_y;
+                let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+                let content_bottom = keyboard_top_y * height;
                 
-                let char_index = self.find_nearest_char_index(text_x, text_y);
-                self.selection_end = Some(char_index);
-                self.cursor_position = char_index;
+                // Center of available content area
+                self.trackpad_laser_x = Some(width / 2.0);
+                self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
             }
+            
+            // If mouse is in trackpad area and active, move the laser
+            if self.trackpad_active {
+                if let (Some(laser_x), Some(laser_y), Some(last_mouse_x), Some(last_mouse_y)) = 
+                    (self.trackpad_laser_x, self.trackpad_laser_y, self.trackpad_last_mouse_x, self.trackpad_last_mouse_y) {
+                    
+                    let mouse_dx = state.mouse.x - last_mouse_x;
+                    let mouse_dy = state.mouse.y - last_mouse_y;
+                    
+                    // Move laser 1:1 with mouse movement (no acceleration)
+                    let new_laser_x = (laser_x + mouse_dx).max(0.0).min(width);
+                    let new_laser_y = (laser_y + mouse_dy).max(0.0).min(height);
+                    
+                    self.trackpad_laser_x = Some(new_laser_x);
+                    self.trackpad_laser_y = Some(new_laser_y);
+                    
+                    // Update cursor position based on laser
+                    let safe_region = &state.frame.safe_region_boundaries;
+                    let content_top = safe_region.y1 * height;
+                    let text_x = new_laser_x;
+                    let text_y = new_laser_y - content_top + self.scroll_y;
+                    
+                    let char_index = self.find_nearest_char_index(text_x, text_y);
+                    
+                    // If selecting, update selection end; otherwise just move cursor
+                    if self.trackpad_selecting {
+                        self.selection_end = Some(char_index);
+                    }
+                    self.cursor_position = char_index;
+                }
+                
+                // Update last mouse position
+                self.trackpad_last_mouse_x = Some(state.mouse.x);
+                self.trackpad_last_mouse_y = Some(state.mouse.y);
+            }
+            
             return;
+        } else {
+            // Not in trackpad mode - clear laser
+            self.trackpad_laser_x = None;
+            self.trackpad_laser_y = None;
+            self.trackpad_last_mouse_x = None;
+            self.trackpad_last_mouse_y = None;
         }
         
         // Don't allow scrolling if touch started on keyboard
@@ -659,6 +759,22 @@ impl Application for TextApp {
             // Check if clicking in the trackpad area (keyboard region)
             if state.mouse.y >= keyboard_region_top {
                 self.trackpad_active = true;
+                
+                // Initialize laser position and last mouse position
+                if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
+                    let safe_region = &state.frame.safe_region_boundaries;
+                    let content_top = safe_region.y1 * height;
+                    let shape = state.frame.array.shape();
+                    let width = shape[1] as f32;
+                    let content_bottom = keyboard_region_top;
+                    
+                    // Center of available content area
+                    self.trackpad_laser_x = Some(width / 2.0);
+                    self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
+                }
+                
+                self.trackpad_last_mouse_x = Some(state.mouse.x);
+                self.trackpad_last_mouse_y = Some(state.mouse.y);
                 
                 // Check for double-tap to start selection
                 let now = Instant::now();
@@ -785,9 +901,11 @@ impl Application for TextApp {
         self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        // Clear trackpad tracking
+        // Clear trackpad tracking (but keep laser visible)
         self.trackpad_active = false;
         self.trackpad_selecting = false;
+        self.trackpad_last_mouse_x = None;
+        self.trackpad_last_mouse_y = None;
     }
 }
 
@@ -962,6 +1080,17 @@ impl TextApp {
         nearest_char_index.min(self.text_rasterizer.text.chars().count())
     }
     
+    fn save_undo_state(&mut self) {
+        // Save current state to undo stack
+        self.undo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
+        // Limit undo stack size
+        if self.undo_stack.len() > 100 {
+            self.undo_stack.remove(0);
+        }
+        // Clear redo stack when new action is performed
+        self.redo_stack.clear();
+    }
+    
     fn handle_action_key(&mut self, action: KeyType, _state: &mut EngineState) {
         match action {
             KeyType::Mouse => {
@@ -971,22 +1100,64 @@ impl TextApp {
                 self.trackpad_selecting = false;
             }
             KeyType::Copy => {
-                // Copy selected text to clipboard (placeholder - would need platform clipboard API)
+                // Copy selected text to clipboard
                 if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
                     let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
-                    // TODO: Copy to clipboard - for now just log
-                    eprintln!("Copy: {}", selected_text);
+                    
+                    // Store in internal clipboard
+                    self.clipboard_content = selected_text.clone();
+                    
+                    // Also try to copy to system clipboard
+                    #[cfg(target_os = "macos")]
+                    {
+                        use std::process::Command;
+                        let _ = Command::new("pbcopy")
+                            .arg(&selected_text)
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                            .and_then(|mut child| {
+                                use std::io::Write;
+                                if let Some(stdin) = child.stdin.as_mut() {
+                                    stdin.write_all(selected_text.as_bytes())?;
+                                }
+                                child.wait()
+                            });
+                    }
+                    
+                    eprintln!("Copied: {}", selected_text);
                 }
             }
             KeyType::Cut => {
                 // Cut selected text (copy + delete)
                 if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                    self.save_undo_state();
+                    
                     let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
-                    // TODO: Copy to clipboard
+                    
+                    // Store in internal clipboard
+                    self.clipboard_content = selected_text.clone();
+                    
+                    // Also try to copy to system clipboard
+                    #[cfg(target_os = "macos")]
+                    {
+                        use std::process::Command;
+                        let _ = Command::new("pbcopy")
+                            .arg(&selected_text)
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                            .and_then(|mut child| {
+                                use std::io::Write;
+                                if let Some(stdin) = child.stdin.as_mut() {
+                                    stdin.write_all(selected_text.as_bytes())?;
+                                }
+                                child.wait()
+                            });
+                    }
+                    
                     eprintln!("Cut: {}", selected_text);
                     
                     // Delete selected text
@@ -1003,38 +1174,96 @@ impl TextApp {
                 }
             }
             KeyType::Paste => {
-                // Paste from clipboard (placeholder)
-                // TODO: Get from clipboard - for now use dummy text
-                let clipboard_text = "";
+                // Paste from clipboard
+                self.save_undo_state();
+                
+                // Try to get from system clipboard first
+                let clipboard_text = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        use std::process::Command;
+                        Command::new("pbpaste")
+                            .output()
+                            .ok()
+                            .and_then(|output| String::from_utf8(output.stdout).ok())
+                            .unwrap_or_else(|| self.clipboard_content.clone())
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        self.clipboard_content.clone()
+                    }
+                };
+                
                 if !clipboard_text.is_empty() {
+                    // Delete selection if any
+                    if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                        let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
+                        let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                        let mut new_text = String::new();
+                        for (i, &c) in text_chars.iter().enumerate() {
+                            if i < start_idx || i >= end_idx {
+                                new_text.push(c);
+                            }
+                        }
+                        self.text_rasterizer.text = new_text;
+                        self.cursor_position = start_idx;
+                        self.selection_start = None;
+                        self.selection_end = None;
+                    }
+                    
+                    // Insert clipboard text
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
                     for (i, &c) in text_chars.iter().enumerate() {
                         if i == self.cursor_position {
-                            new_text.push_str(clipboard_text);
+                            new_text.push_str(&clipboard_text);
                         }
                         new_text.push(c);
                     }
                     if self.cursor_position >= text_chars.len() {
-                        new_text.push_str(clipboard_text);
+                        new_text.push_str(&clipboard_text);
                     }
                     self.text_rasterizer.text = new_text;
                     self.cursor_position += clipboard_text.chars().count();
                 }
             }
             KeyType::SelectAll => {
-                // Select all text
-                self.selection_start = Some(0);
-                self.selection_end = Some(self.text_rasterizer.text.chars().count());
-                self.cursor_position = self.text_rasterizer.text.chars().count();
+                let text_len = self.text_rasterizer.text.chars().count();
+                // Toggle: if everything is selected, deselect; otherwise select all
+                if self.selection_start == Some(0) && self.selection_end == Some(text_len) {
+                    // Deselect all
+                    self.selection_start = None;
+                    self.selection_end = None;
+                } else {
+                    // Select all text
+                    self.selection_start = Some(0);
+                    self.selection_end = Some(text_len);
+                    self.cursor_position = text_len;
+                }
             }
             KeyType::Undo => {
-                // TODO: Implement undo functionality (would need history tracking)
-                eprintln!("Undo pressed");
+                if let Some((text, cursor)) = self.undo_stack.pop() {
+                    // Save current state to redo stack
+                    self.redo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
+                    // Restore previous state
+                    self.text_rasterizer.text = text;
+                    self.cursor_position = cursor;
+                    // Clear selection
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
             }
             KeyType::Redo => {
-                // TODO: Implement redo functionality (would need history tracking)
-                eprintln!("Redo pressed");
+                if let Some((text, cursor)) = self.redo_stack.pop() {
+                    // Save current state to undo stack
+                    self.undo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
+                    // Restore redone state
+                    self.text_rasterizer.text = text;
+                    self.cursor_position = cursor;
+                    // Clear selection
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
             }
             _ => {}
         }
