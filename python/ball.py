@@ -45,6 +45,9 @@ class BallGame(xos.Application):
     
     def tick(self):
         """Update and render one frame"""
+        # Clear the frame (no longer auto-cleared)
+        xos.rasterizer.clear()
+        
         # TODO: Vectorized update in Rust
         # For now, update positions manually
         pos_data = self.positions["_data"]

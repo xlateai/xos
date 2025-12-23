@@ -139,6 +139,9 @@ impl Application for BallGame {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        // Clear the frame (no longer auto-cleared)
+        state.frame.clear();
+        
         for ball in &mut self.balls {
             ball.update(state.frame.array.shape()[1] as f32, state.frame.array.shape()[0] as f32);
         }

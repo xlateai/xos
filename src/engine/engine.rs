@@ -99,6 +99,11 @@ impl FrameState {
         self.array = Array::new_on_device(data, shape, Device::Cpu);
         // Safe region is normalized, so it doesn't need to change
     }
+
+    /// Clear the frame buffer to black (all zeros)
+    pub fn clear(&mut self) {
+        self.buffer_mut().fill(0);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,10 +2,39 @@ use rustpython_vm::{Interpreter, PyObjectRef, AsObject};
 use crate::engine::{Application, EngineState};
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
+class _ArrayWrapper:
+    """Wrapper for array dict that supports slice assignment"""
+    def __init__(self, data):
+        self._data = data
+    
+    def __getitem__(self, key):
+        if isinstance(key, slice) and key == slice(None, None, None):
+            # Return the underlying data dict for full slice access
+            return self._data
+        return self._data[key]
+    
+    def __setitem__(self, key, value):
+        if isinstance(key, slice) and key == slice(None, None, None):
+            # Full slice assignment - call Rust function to fill buffer
+            import xos
+            xos.rasterizer._fill_buffer(self._data, value)
+        else:
+            self._data[key] = value
+    
+    @property
+    def shape(self):
+        return self._data.get('shape', ())
+
 class _FrameWrapper:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
         self._data = data
+        self._array_wrapper = _ArrayWrapper(data.get('array', {}))
+    
+    @property
+    def array(self):
+        """Get the array wrapper with slice assignment support"""
+        return self._array_wrapper
     
     def get_width(self):
         return self._data['width']

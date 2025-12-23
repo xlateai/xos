@@ -363,9 +363,77 @@ fn draw_line_bresenham(
     }
 }
 
+/// xos.rasterizer.clear() - clear the frame buffer to black
+/// 
+/// Efficiently clears the entire frame buffer to black (all zeros)
+fn clear(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. clear must be called during tick().".to_string())
+    })?;
+    
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Clear to black
+    buffer.fill(0);
+    
+    Ok(vm.ctx.none())
+}
+
+/// xos.rasterizer._fill_buffer(array_dict, values) - fill buffer 1:1 with values
+/// 
+/// Internal function to efficiently fill the frame buffer with a list of values
+/// This is called by _ArrayWrapper when doing slice assignment: array[:] = values
+fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "_fill_buffer() takes exactly 2 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    let _array_dict = &args_vec[0]; // For future use if needed
+    let values_list = &args_vec[1];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. _fill_buffer must be called during tick().".to_string())
+    })?;
+    
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Parse values list
+    let values = values_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("values must be a list".to_string()))?;
+    
+    let values_vec = values.borrow_vec();
+    
+    // Copy values 1:1 into buffer
+    let copy_len = values_vec.len().min(buffer_len);
+    for i in 0..copy_len {
+        let val: i32 = values_vec[i].clone().try_into_value(vm)?;
+        buffer[i] = val.clamp(0, 255) as u8;
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
     module.set_attr("lines", vm.new_function("lines", lines), vm).unwrap();
+    module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();
+    module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module
 }

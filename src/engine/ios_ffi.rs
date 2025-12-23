@@ -196,9 +196,6 @@ pub extern "C" fn xos_engine_tick() -> i32 {
     };
 
     if let Some(ref mut ios_state) = *state {
-        // Clear frame buffer
-        ios_state.engine_state.frame_buffer_mut().fill(0);
-        
         // Run app tick first with panic handling
         // We use AssertUnwindSafe because we know the FFI boundary is safe
         // and we're catching panics to prevent them from crossing the boundary unsafely

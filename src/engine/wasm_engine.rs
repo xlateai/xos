@@ -340,9 +340,6 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     state.engine_state.resize_frame(width, height);
                 }
                 
-                // Update game state
-                state.engine_state.frame_buffer_mut().fill(0);
-                
                 // Tick the app first
                 state.app.tick(&mut state.engine_state);
                 

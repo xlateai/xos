@@ -57,9 +57,6 @@ impl ApplicationHandler for AppState {
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
                 }
-
-                // Clear the frame buffer
-                self.engine_state.frame_buffer_mut().fill(0);
                 
                 // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
