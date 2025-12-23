@@ -9,6 +9,7 @@ const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 const CURSOR_COLOR: (u8, u8, u8) = (0, 255, 0);
 const BOUND_COLOR: (u8, u8, u8) = (255, 0, 0);
 const BASELINE_COLOR: (u8, u8, u8) = (100, 100, 100);
+const SELECTION_COLOR: (u8, u8, u8, u8) = (50, 120, 200, 128); // Semi-transparent blue
 
 const SHOW_BOUNDING_RECTANGLES: bool = true;
 const DRAW_BASELINES: bool = true;
@@ -44,6 +45,14 @@ pub struct TextApp {
     shift_dot_y: Option<f32>, // Screen coordinates
     shift_last_finger_x: Option<f32>,
     shift_last_finger_y: Option<f32>,
+    // Text selection state
+    selection_start: Option<usize>, // Character index where selection starts
+    selection_end: Option<usize>,   // Character index where selection ends
+    selecting: bool,                // True when actively selecting text (dragging)
+    // iOS laser selection mode
+    laser_selection_mode: bool,     // True when laser is in selection mode
+    #[allow(dead_code)] // Used in iOS-specific code
+    laser_selection_anchor: Option<usize>, // Anchor point for laser selection
     // Configuration flags
     pub show_cursor: bool,
     pub show_debug_visuals: bool,
@@ -104,6 +113,11 @@ impl TextApp {
             shift_dot_y: None,
             shift_last_finger_x: None,
             shift_last_finger_y: None,
+            selection_start: None,
+            selection_end: None,
+            selecting: false,
+            laser_selection_mode: false,
+            laser_selection_anchor: None,
             show_cursor: true,
             show_debug_visuals: true,
             read_only: false,
@@ -223,6 +237,64 @@ impl Application for TextApp {
                         buffer[idx + 1] = BASELINE_COLOR.1;
                         buffer[idx + 2] = BASELINE_COLOR.2;
                         buffer[idx + 3] = 0xff;
+                    }
+                }
+            }
+        }
+        
+        // Draw selection highlighting
+        if let (Some(sel_start), Some(sel_end)) = (self.selection_start, self.selection_end) {
+            let (start_idx, end_idx) = if sel_start <= sel_end {
+                (sel_start, sel_end)
+            } else {
+                (sel_end, sel_start)
+            };
+            
+            // Group selected characters by line and find min/max x positions per line
+            use std::collections::HashMap;
+            let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new(); // line_idx -> (min_x, max_x, baseline_y)
+            
+            for character in &self.text_rasterizer.characters {
+                if character.char_index >= start_idx && character.char_index < end_idx {
+                    let char_left = character.x;
+                    let char_right = character.x + character.metrics.advance_width;
+                    
+                    line_selections.entry(character.line_index)
+                        .and_modify(|(min_x, max_x, baseline_y)| {
+                            *min_x = min_x.min(char_left);
+                            *max_x = max_x.max(char_right);
+                            *baseline_y = self.text_rasterizer.lines.get(character.line_index)
+                                .map(|line| line.baseline_y)
+                                .unwrap_or(*baseline_y);
+                        })
+                        .or_insert_with(|| {
+                            let baseline_y = self.text_rasterizer.lines.get(character.line_index)
+                                .map(|line| line.baseline_y)
+                                .unwrap_or(0.0);
+                            (char_left, char_right, baseline_y)
+                        });
+                }
+            }
+            
+            // Draw selection rectangles per line
+            for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
+                let sel_left = *min_x as i32;
+                let sel_right = *max_x as i32;
+                let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top) as i32;
+                let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top) as i32;
+                
+                // Draw semi-transparent selection rectangle
+                for y in sel_top..sel_bottom {
+                    for x in sel_left..sel_right {
+                        if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                            // Alpha blend the selection color
+                            let alpha = SELECTION_COLOR.3 as f32 / 255.0;
+                            let inv_alpha = 1.0 - alpha;
+                            buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
+                            buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
+                            buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
+                        }
                     }
                 }
             }
@@ -589,8 +661,15 @@ impl Application for TextApp {
                     }
                 }
                 
-                // Update cursor to nearest valid position
-                self.cursor_position = best_char_index.min(self.text_rasterizer.text.chars().count());
+                let best_char_index = best_char_index.min(self.text_rasterizer.text.chars().count());
+                
+                // If in laser selection mode, update selection end
+                if self.laser_selection_mode {
+                    self.selection_end = Some(best_char_index);
+                } else {
+                    // Normal cursor movement
+                    self.cursor_position = best_char_index;
+                }
             }
             
             // Update last finger position
@@ -598,7 +677,7 @@ impl Application for TextApp {
             self.shift_last_finger_y = Some(state.mouse.y);
             return;
         } else {
-            // Shift not held - clear tracking
+            // Shift not held - clear laser tracking (but not selection mode)
             self.shift_dot_x = None;
             self.shift_dot_y = None;
             self.shift_last_finger_x = None;
@@ -610,15 +689,62 @@ impl Application for TextApp {
             return;
         }
         
-        // Check if mouse moved significantly from tap position (start dragging)
-        if !self.dragging && state.mouse.is_left_clicking {
+        // Check if mouse moved significantly from tap position (start dragging or selecting)
+        if !self.dragging && !self.selecting && state.mouse.is_left_clicking {
             let dx = (state.mouse.x - self.last_tap_x).abs();
             let dy = (state.mouse.y - self.last_tap_y).abs();
-            // Start dragging if moved more than 5 pixels
+            // Start dragging/selecting if moved more than 5 pixels
             if dx > 5.0 || dy > 5.0 {
-                self.dragging = true;
-                self.last_mouse_y = state.mouse.y;
+                // On non-iOS platforms or when keyboard is hidden, horizontal movement starts selection
+                // On iOS with keyboard visible, vertical movement is scrolling
+                #[cfg(target_os = "ios")]
+                {
+                    if state.keyboard.onscreen.is_shown() {
+                        // iOS with keyboard: vertical is scroll, horizontal is selection
+                        if dx > dy {
+                            self.selecting = true;
+                            // Start selection at cursor position
+                            self.selection_start = Some(self.cursor_position);
+                            self.selection_end = Some(self.cursor_position);
+                        } else {
+                            self.dragging = true;
+                            self.last_mouse_y = state.mouse.y;
+                        }
+                    } else {
+                        // iOS without keyboard: start selection
+                        self.selecting = true;
+                        self.selection_start = Some(self.cursor_position);
+                        self.selection_end = Some(self.cursor_position);
+                    }
+                }
+                #[cfg(not(target_os = "ios"))]
+                {
+                    // Non-iOS: horizontal movement is selection, vertical is scroll
+                    if dx > dy {
+                        self.selecting = true;
+                        self.selection_start = Some(self.cursor_position);
+                        self.selection_end = Some(self.cursor_position);
+                    } else {
+                        self.dragging = true;
+                        self.last_mouse_y = state.mouse.y;
+                    }
+                }
             }
+        }
+        
+        // Handle text selection while dragging
+        if self.selecting && state.mouse.is_left_clicking {
+            let safe_region = &state.frame.safe_region_boundaries;
+            let content_top = safe_region.y1 * height;
+            
+            // Convert mouse coordinates to text coordinates
+            let text_x = state.mouse.x;
+            let text_y = state.mouse.y - content_top + self.scroll_y;
+            
+            // Find nearest character to mouse position
+            let char_index = self.find_nearest_char_index(text_x, text_y);
+            self.selection_end = Some(char_index);
+            self.cursor_position = char_index;
         }
         
         // Handle dragging for scrolling (like scroll.rs) - only scroll, don't move cursor
@@ -638,11 +764,34 @@ impl Application for TextApp {
         if state.keyboard.onscreen.on_mouse_down(state.mouse.x, state.mouse.y, width, height) {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
+            
+            // iOS laser selection mode: if shift was just pressed and we have an anchor, enter selection mode
+            #[cfg(target_os = "ios")]
+            {
+                if state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift) {
+                    if let Some(anchor) = self.laser_selection_anchor {
+                        // Enter laser selection mode
+                        self.laser_selection_mode = true;
+                        self.selection_start = Some(anchor);
+                        self.selection_end = Some(self.cursor_position);
+                    }
+                }
+            }
+            
             return;
         }
         
         // Touch started outside keyboard or keyboard is hidden
         self.touch_started_on_keyboard = false;
+        
+        // Exit laser selection mode if clicking outside keyboard
+        #[cfg(target_os = "ios")]
+        {
+            if self.laser_selection_mode {
+                self.laser_selection_mode = false;
+                self.laser_selection_anchor = None;
+            }
+        }
         
         // Get keyboard region for double-tap detection
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
@@ -696,10 +845,24 @@ impl Application for TextApp {
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
-        // Release all keyboard keys
+        // Release all keyboard keys (but track if shift was held)
+        #[cfg(target_os = "ios")]
+        let was_shift_held = state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift);
         state.keyboard.onscreen.on_mouse_up();
         
-        // Check if we should move cursor (only if user didn't scroll and didn't drag)
+        // iOS laser selection mode: if shift was held and released, prepare for selection mode
+        #[cfg(target_os = "ios")]
+        {
+            if was_shift_held && self.shift_dot_x.is_some() {
+                // User released shift laser - next shift activation enters selection mode
+                if !self.laser_selection_mode {
+                    // Mark that we're ready to enter selection mode on next shift press
+                    self.laser_selection_anchor = Some(self.cursor_position);
+                }
+            }
+        }
+        
+        // Check if we should move cursor (only if user didn't scroll and didn't drag/select)
         if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {
             // Check if user scrolled (scroll_y changed significantly)
             let scroll_delta = (self.scroll_y - self.initial_scroll_y).abs();
@@ -709,8 +872,8 @@ impl Application for TextApp {
             let drag_distance = ((state.mouse.x - tap_x).powi(2) + (state.mouse.y - tap_y).powi(2)).sqrt();
             let drag_threshold = 10.0; // pixels
             
-            // Only move cursor if user didn't scroll and didn't drag
-            if scroll_delta < scroll_threshold && (!self.dragging || drag_distance < drag_threshold) {
+            // Only move cursor if user didn't scroll and didn't drag/select
+            if scroll_delta < scroll_threshold && !self.selecting && (!self.dragging || drag_distance < drag_threshold) {
                 // Move cursor to tap location
                 let shape = state.frame.array.shape();
                 let height = shape[0] as f32;
@@ -721,59 +884,12 @@ impl Application for TextApp {
                 let text_x = tap_x;
                 let text_y = tap_y - content_top + self.scroll_y;
                 
-                // Check if tap is on an empty line
-                let mut found_line: Option<usize> = None;
-                for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
-                    let line_y = line.baseline_y;
-                    
-                    // Check if tap is within this line's vertical bounds
-                    if text_y >= line_y - self.text_rasterizer.ascent && text_y <= line_y + self.text_rasterizer.descent {
-                        // Check if this line is empty (no characters in this line)
-                        let has_chars = self.text_rasterizer.characters.iter()
-                            .any(|c| c.line_index == line_idx);
-                        
-                        if !has_chars {
-                            // Empty line - place cursor at start of line
-                            found_line = Some(line_idx);
-                            self.cursor_position = line.start_index;
-                            break;
-                        }
-                    }
-                }
+                let char_index = self.find_nearest_char_index(text_x, text_y);
+                self.cursor_position = char_index;
                 
-                // If not on empty line, find nearest character
-                if found_line.is_none() {
-                    let mut nearest_char_index = self.text_rasterizer.text.chars().count();
-                    let mut min_distance_sq = f32::MAX;
-                    
-                    for character in &self.text_rasterizer.characters {
-                        let char_center_x = character.x + character.width / 2.0;
-                        let char_center_y = character.y + character.height / 2.0;
-                        
-                        let dx = text_x - char_center_x;
-                        let dy = text_y - char_center_y;
-                        let distance_sq = dx * dx + dy * dy;
-                        
-                        // Check if tap is before this character horizontally
-                        if text_x < character.x && character.line_index == 0 {
-                            // Tap is before this character, cursor should be at this character's index
-                            if distance_sq < min_distance_sq {
-                                min_distance_sq = distance_sq;
-                                nearest_char_index = character.char_index;
-                            }
-                        } else if distance_sq < min_distance_sq {
-                            min_distance_sq = distance_sq;
-                            // If tap is to the right of character center, cursor goes after it
-                            if text_x > char_center_x {
-                                nearest_char_index = character.char_index + 1;
-                            } else {
-                                nearest_char_index = character.char_index;
-                            }
-                        }
-                    }
-                    
-                    self.cursor_position = nearest_char_index.min(self.text_rasterizer.text.chars().count());
-                }
+                // Clear selection when clicking without drag
+                self.selection_start = None;
+                self.selection_end = None;
             }
             
             // Clear pending cursor position
@@ -781,11 +897,12 @@ impl Application for TextApp {
             self.pending_cursor_tap_y = None;
         }
         
-        // Stop dragging
+        // Stop dragging and selecting
         self.dragging = false;
+        self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        // Clear shift dot tracking
+        // Clear shift dot tracking (but not selection mode)
         self.shift_dot_x = None;
         self.shift_dot_y = None;
         self.shift_last_finger_x = None;
@@ -988,5 +1105,56 @@ impl TextApp {
                 self.cursor_position = self.text_rasterizer.text.chars().count();
             }
         }
+    }
+    
+    fn find_nearest_char_index(&self, text_x: f32, text_y: f32) -> usize {
+        // Check if tap is on an empty line
+        for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
+            let line_y = line.baseline_y;
+            
+            // Check if tap is within this line's vertical bounds
+            if text_y >= line_y - self.text_rasterizer.ascent && text_y <= line_y + self.text_rasterizer.descent {
+                // Check if this line is empty (no characters in this line)
+                let has_chars = self.text_rasterizer.characters.iter()
+                    .any(|c| c.line_index == line_idx);
+                
+                if !has_chars {
+                    // Empty line - place cursor at start of line
+                    return line.start_index;
+                }
+            }
+        }
+        
+        // If not on empty line, find nearest character
+        let mut nearest_char_index = self.text_rasterizer.text.chars().count();
+        let mut min_distance_sq = f32::MAX;
+        
+        for character in &self.text_rasterizer.characters {
+            let char_center_x = character.x + character.width / 2.0;
+            let char_center_y = character.y + character.height / 2.0;
+            
+            let dx = text_x - char_center_x;
+            let dy = text_y - char_center_y;
+            let distance_sq = dx * dx + dy * dy;
+            
+            // Check if tap is before this character horizontally
+            if text_x < character.x && character.line_index == 0 {
+                // Tap is before this character, cursor should be at this character's index
+                if distance_sq < min_distance_sq {
+                    min_distance_sq = distance_sq;
+                    nearest_char_index = character.char_index;
+                }
+            } else if distance_sq < min_distance_sq {
+                min_distance_sq = distance_sq;
+                // If tap is to the right of character center, cursor goes after it
+                if text_x > char_center_x {
+                    nearest_char_index = character.char_index + 1;
+                } else {
+                    nearest_char_index = character.char_index;
+                }
+            }
+        }
+        
+        nearest_char_index.min(self.text_rasterizer.text.chars().count())
     }
 }
