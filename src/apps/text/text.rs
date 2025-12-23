@@ -763,22 +763,21 @@ impl Application for TextApp {
             self.cursor_position = char_index;
         }
         
-        // Handle dragging for scrolling (like scroll.rs) - only scroll, don't move cursor
+        // Handle dragging for scrolling (velocity-based) - accumulate velocity instead of directly updating position
         if self.dragging {
             let now = Instant::now();
             let dy = state.mouse.y - self.last_mouse_y;
-            self.scroll_y -= dy;
             self.last_mouse_y = state.mouse.y;
             
-            // Track velocity for momentum on release
+            // Calculate velocity based on swipe speed
             if let Some(last_time) = self.last_drag_time {
                 let dt = now.duration_since(last_time).as_secs_f32();
                 if dt > 0.0 {
                     // Calculate instantaneous velocity in pixels per second
-                    // Scale down by 0.1 for natural-feeling momentum
-                    let instant_velocity = (-dy / dt) * 0.1;
+                    // Higher multiplier (0.5 instead of 0.1) for more responsive velocity-based scrolling
+                    let instant_velocity = (-dy / dt) * 0.5;
                     // Exponential moving average for smoother velocity
-                    self.scroll_velocity = self.scroll_velocity * 0.7 + instant_velocity * 0.3;
+                    self.scroll_velocity = self.scroll_velocity * 0.5 + instant_velocity * 0.5;
                 }
             }
             self.last_drag_time = Some(now);

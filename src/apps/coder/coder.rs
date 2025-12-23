@@ -1181,6 +1181,9 @@ impl Application for CoderApp {
         // Get safe region top boundary (in pixels) before mutable borrow
         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
         
+        // Check if keyboard is shown - only draw accessories if keyboard is visible
+        let keyboard_is_shown = state.keyboard.onscreen.is_shown();
+        
         // Get buffer again for drawing console, file explorer, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
         
@@ -1190,6 +1193,11 @@ impl Application for CoderApp {
             let viewport_height = tabs_top_y;
             
             self.draw_file_explorer(buffer, width as u32, height as u32, viewport_height, safe_region_top_y);
+        }
+        
+        // Only draw keyboard accessories when keyboard is shown
+        if !keyboard_is_shown {
+            return;
         }
         
         // Draw console above tabs (only when on terminal tab)
@@ -1501,6 +1509,9 @@ impl Application for CoderApp {
         
         println!("Mouse down at ({}, {})", mouse_x, mouse_y);
         
+        // Check if keyboard is shown - only handle keyboard accessories if keyboard is visible
+        let keyboard_is_shown = state.keyboard.onscreen.is_shown();
+        
         // Tab dimensions (must match tick())
         let (_, tab_height) = Self::get_button_size();
         let tab_width = Self::get_tab_width();
@@ -1521,128 +1532,131 @@ impl Application for CoderApp {
                  self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height);
         println!("Tab position - y: {}, height: {}", tab_top_y, tab_height);
         
-        // Check if click is on code.py tab
-        if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
-            println!("Code tab clicked");
-            if self.active_tab == Tab::Code {
-                // Already on code tab - toggle file explorer
-                match self.code_view_mode {
-                    CodeViewMode::Editor => {
-                        // Save current file before switching to explorer
-                        self.save_current_file();
-                        self.code_view_mode = CodeViewMode::FileExplorer;
-                        println!("Switched to file explorer");
+        // Only handle clicks on keyboard accessories when keyboard is shown
+        if keyboard_is_shown {
+            // Check if click is on code.py tab
+            if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
+                println!("Code tab clicked");
+                if self.active_tab == Tab::Code {
+                    // Already on code tab - toggle file explorer
+                    match self.code_view_mode {
+                        CodeViewMode::Editor => {
+                            // Save current file before switching to explorer
+                            self.save_current_file();
+                            self.code_view_mode = CodeViewMode::FileExplorer;
+                            println!("Switched to file explorer");
+                        }
+                        CodeViewMode::FileExplorer => {
+                            self.code_view_mode = CodeViewMode::Editor;
+                            println!("Switched to editor");
+                        }
                     }
-                    CodeViewMode::FileExplorer => {
-                        self.code_view_mode = CodeViewMode::Editor;
-                        println!("Switched to editor");
-                    }
+                } else {
+                    // Switching from another tab - go to editor mode
+                    self.active_tab = Tab::Code;
+                    self.code_view_mode = CodeViewMode::Editor;
                 }
-            } else {
-                // Switching from another tab - go to editor mode
-                self.active_tab = Tab::Code;
-                self.code_view_mode = CodeViewMode::Editor;
-            }
-            return;
-        }
-        
-        // Check if click is on terminal tab
-        if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
-            println!("Terminal tab clicked");
-            self.active_tab = Tab::Terminal;
-            return;
-        }
-        
-        // Check if click is on viewport tab
-        if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
-            println!("Viewport tab clicked");
-            self.active_tab = Tab::Viewport;
-            return;
-        }
-        
-        // Check if click is on clear button (only visible when console has text)
-        let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
-        if self.active_tab == Tab::Terminal && console_has_text {
-            if self.clear_button.contains_point(mouse_x, mouse_y) {
-                println!("Clear button clicked");
-                // Clear the console input
-                self.console_app.text_rasterizer.text.clear();
-                self.console_app.cursor_position = 0;
                 return;
             }
-        }
-        
-        // Check if click is on the stop button (only visible when app/thread is running)
-        let is_viewport_running = self.viewport_app.is_some();
-        let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
-        
-        if (is_viewport_running || is_background_running) && self.stop_button.contains_point(mouse_x, mouse_y) {
-            println!("Stop button clicked");
             
-            // Stop viewport app if running
-            if is_viewport_running {
-                println!("  - Stopping viewport app");
-                self.viewport_app = None;
-                self.viewport_app_setup_done = false;
-                self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
+            // Check if click is on terminal tab
+            if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
+                println!("Terminal tab clicked");
+                self.active_tab = Tab::Terminal;
+                return;
             }
             
-            // Stop background thread if running
-            if is_background_running {
-                println!("  - Stopping background thread");
-                
-                // Increment generation counter - this orphans the old thread's output
-                if let Ok(mut gen) = self.python_thread_generation.lock() {
-                    *gen += 1;
-                }
-                
-                // Mark as not running
-                if let Ok(mut flag) = self.python_thread_running.lock() {
-                    *flag = false;
-                }
-                
-                // Drop the thread handle - let it finish in background
-                self.python_thread_handle = None;
-                
-                // Update terminal with final message
-                if let Ok(mut buffer) = self.python_output_buffer.lock() {
-                    buffer.push_str("\n[xos] Script stopped by user\n");
-                }
+            // Check if click is on viewport tab
+            if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
+                println!("Viewport tab clicked");
+                self.active_tab = Tab::Viewport;
+                return;
             }
             
-            return;
-        }
-        
-        // Check if click is on the run button
-        if self.run_button.contains_point(mouse_x, mouse_y) {
-            println!("Run button clicked at ({}, {})", mouse_x, mouse_y);
-            
-            // Determine if we should execute console command or run code
-            let show_console = self.active_tab == Tab::Terminal;
+            // Check if click is on clear button (only visible when console has text)
             let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
-            
-            if show_console && console_has_text {
-                // Execute console command and clear it
-                println!("Executing console command");
-                let command = self.console_app.text_rasterizer.text.clone();
-                self.execute_console_command(&command);
-                // Clear the console input after execution
-                self.console_app.text_rasterizer.text.clear();
-                self.console_app.cursor_position = 0;
-            } else {
-                // Execute the Python code from code tab
-                let code = self.code_app.text_rasterizer.text.clone();
-                println!("Code to execute: {}", code);
-                if !code.trim().is_empty() {
-                    self.execute_python_code(&code);
-                } else {
-                    println!("Code was empty!");
+            if self.active_tab == Tab::Terminal && console_has_text {
+                if self.clear_button.contains_point(mouse_x, mouse_y) {
+                    println!("Clear button clicked");
+                    // Clear the console input
+                    self.console_app.text_rasterizer.text.clear();
+                    self.console_app.cursor_position = 0;
+                    return;
                 }
             }
-            return;
-        }
-        
-        println!("Click not on any button, checking file explorer or delegating to text app");
+            
+            // Check if click is on the stop button (only visible when app/thread is running)
+            let is_viewport_running = self.viewport_app.is_some();
+            let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+            
+            if (is_viewport_running || is_background_running) && self.stop_button.contains_point(mouse_x, mouse_y) {
+                println!("Stop button clicked");
+                
+                // Stop viewport app if running
+                if is_viewport_running {
+                    println!("  - Stopping viewport app");
+                    self.viewport_app = None;
+                    self.viewport_app_setup_done = false;
+                    self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
+                }
+                
+                // Stop background thread if running
+                if is_background_running {
+                    println!("  - Stopping background thread");
+                    
+                    // Increment generation counter - this orphans the old thread's output
+                    if let Ok(mut gen) = self.python_thread_generation.lock() {
+                        *gen += 1;
+                    }
+                    
+                    // Mark as not running
+                    if let Ok(mut flag) = self.python_thread_running.lock() {
+                        *flag = false;
+                    }
+                    
+                    // Drop the thread handle - let it finish in background
+                    self.python_thread_handle = None;
+                    
+                    // Update terminal with final message
+                    if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                        buffer.push_str("\n[xos] Script stopped by user\n");
+                    }
+                }
+                
+                return;
+            }
+            
+            // Check if click is on the run button
+            if self.run_button.contains_point(mouse_x, mouse_y) {
+                println!("Run button clicked at ({}, {})", mouse_x, mouse_y);
+                
+                // Determine if we should execute console command or run code
+                let show_console = self.active_tab == Tab::Terminal;
+                let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
+                
+                if show_console && console_has_text {
+                    // Execute console command and clear it
+                    println!("Executing console command");
+                    let command = self.console_app.text_rasterizer.text.clone();
+                    self.execute_console_command(&command);
+                    // Clear the console input after execution
+                    self.console_app.text_rasterizer.text.clear();
+                    self.console_app.cursor_position = 0;
+                } else {
+                    // Execute the Python code from code tab
+                    let code = self.code_app.text_rasterizer.text.clone();
+                    println!("Code to execute: {}", code);
+                    if !code.trim().is_empty() {
+                        self.execute_python_code(&code);
+                    } else {
+                        println!("Code was empty!");
+                    }
+                }
+                return;
+            }
+            
+            println!("Click not on any button, checking file explorer or delegating to text app");
+        } // End keyboard_is_shown check
         
         // Check if we're in file explorer mode - track tap position for dragging
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
