@@ -1,5 +1,6 @@
 mod shift;
 mod convolution;
+mod depthwise_conv;
 
 use rustpython_vm::{VirtualMachine, builtins::PyModule, PyRef};
 
@@ -9,6 +10,7 @@ pub fn make_ops_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     
     module.set_attr("shift", vm.new_function("shift", shift::shift), vm).unwrap();
     module.set_attr("convolve", vm.new_function("convolve", convolution::convolve), vm).unwrap();
+    module.set_attr("convolve_depthwise", vm.new_function("convolve_depthwise", depthwise_conv::convolve_depthwise), vm).unwrap();
     
     module
 }
