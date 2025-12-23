@@ -534,6 +534,8 @@ impl Application for TextApp {
             }
             '\t' => {
                 self.save_undo_state();
+                // Delete selection if present
+                self.delete_selection();
                 // Insert tab at cursor position
                 let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
@@ -551,6 +553,8 @@ impl Application for TextApp {
             }
             '\r' | '\n' => {
                 self.save_undo_state();
+                // Delete selection if present
+                self.delete_selection();
                 // Insert newline at cursor position
                 let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                 let mut new_text = String::new();
@@ -567,23 +571,28 @@ impl Application for TextApp {
                 self.cursor_position += 1;
             }
             '\u{8}' => {
-                // Backspace - delete character before cursor
-                if self.cursor_position > 0 {
-                    self.save_undo_state();
-                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                    let mut new_text = String::new();
-                    for (i, &c) in text_chars.iter().enumerate() {
-                        if i != self.cursor_position - 1 {
-                            new_text.push(c);
+                // Backspace - delete selection if present, otherwise delete character before cursor
+                self.save_undo_state();
+                if !self.delete_selection() {
+                    // No selection, delete character before cursor
+                    if self.cursor_position > 0 {
+                        let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                        let mut new_text = String::new();
+                        for (i, &c) in text_chars.iter().enumerate() {
+                            if i != self.cursor_position - 1 {
+                                new_text.push(c);
+                            }
                         }
+                        self.text_rasterizer.text = new_text;
+                        self.cursor_position -= 1;
                     }
-                    self.text_rasterizer.text = new_text;
-                    self.cursor_position -= 1;
                 }
             }
             _ => {
                 if !ch.is_control() {
                     self.save_undo_state();
+                    // Delete selection if present
+                    self.delete_selection();
                     // Insert character at cursor position
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let mut new_text = String::new();
@@ -635,8 +644,8 @@ impl Application for TextApp {
                         self.trackpad_moved = true;
                     }
                     
-                    // Move laser 1.1x with mouse movement (10% faster)
-                    let new_laser_x = (laser_x + mouse_dx * 1.1).max(0.0).min(width);
+                    // Move laser 2x with mouse movement (double speed)
+                    let new_laser_x = (laser_x + mouse_dx * 2.0).max(0.0).min(width);
                     
                     // Constrain laser to stay above keyboard
                     let safe_region = &state.frame.safe_region_boundaries;
@@ -644,7 +653,7 @@ impl Application for TextApp {
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                     let keyboard_top = keyboard_top_y * height;
                     
-                    let new_laser_y = (laser_y + mouse_dy * 1.1).max(content_top).min(keyboard_top);
+                    let new_laser_y = (laser_y + mouse_dy * 2.0).max(content_top).min(keyboard_top);
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
@@ -1116,6 +1125,33 @@ impl TextApp {
         }
         // Clear redo stack when new action is performed
         self.redo_stack.clear();
+    }
+    
+    /// Delete the current selection and return true if a selection was deleted
+    fn delete_selection(&mut self) -> bool {
+        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+            let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
+            let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+            
+            // Build new text without selected range
+            let mut new_text = String::new();
+            for (i, &c) in text_chars.iter().enumerate() {
+                if i < start_idx || i >= end_idx {
+                    new_text.push(c);
+                }
+            }
+            
+            self.text_rasterizer.text = new_text;
+            self.cursor_position = start_idx;
+            
+            // Clear selection
+            self.selection_start = None;
+            self.selection_end = None;
+            
+            true
+        } else {
+            false
+        }
     }
     
     fn handle_action_key(&mut self, action: KeyType, _state: &mut EngineState) {
