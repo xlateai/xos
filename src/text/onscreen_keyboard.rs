@@ -39,6 +39,14 @@ pub enum KeyType {
     Return,
     Symbol,      // Left of spacebar: "123" (Standard) or "ABC" (Symbols1/Symbols2)
     SymbolToggle, // Row 3: "#+=" (Symbols1) or "123" (Symbols2), toggles Symbols1 ↔ Symbols2
+    // Action keys (top row)
+    Mouse,       // Toggle trackpad mode
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+    Undo,
+    Redo,
 }
 
 struct Key {
@@ -66,6 +74,8 @@ pub struct OnScreenKeyboard {
     shift_press_time: Option<Instant>,
     // Queue for pending characters
     pending_chars: Vec<char>,
+    // Trackpad mode
+    trackpad_mode: bool,
 }
 
 impl std::fmt::Debug for OnScreenKeyboard {
@@ -101,6 +111,7 @@ impl OnScreenKeyboard {
             last_repeat_time: None,
             shift_press_time: None,
             pending_chars: Vec::new(),
+            trackpad_mode: false,
         };
 
         keyboard.layout_keys();
@@ -250,6 +261,10 @@ impl OnScreenKeyboard {
     pub fn get_held_key_type(&self) -> Option<KeyType> {
         self.held_key_type
     }
+    
+    pub fn is_trackpad_mode(&self) -> bool {
+        self.trackpad_mode
+    }
 
     pub fn check_key_type_at_position(&self, mx: f32, my: f32, w: f32, h: f32) -> Option<KeyType> {
         if self.minimized {
@@ -324,8 +339,23 @@ impl OnScreenKeyboard {
             KeyType::Backspace => Some('\u{8}'),
             KeyType::Space => Some(' '),
             KeyType::Return => Some('\n'),
-            _ => None, // Shift, Symbol, SymbolToggle don't output characters
+            _ => None, // Shift, Symbol, SymbolToggle, and action keys don't output characters
         }
+    }
+    
+    /// Check if a key was pressed and return its type (for action keys)
+    pub fn get_last_action_key(&mut self) -> Option<KeyType> {
+        if let Some(key_type) = self.last_pressed_key {
+            match key_type {
+                KeyType::Copy | KeyType::Cut | KeyType::Paste | 
+                KeyType::SelectAll | KeyType::Undo | KeyType::Redo => {
+                    self.last_pressed_key = None; // Clear after reading
+                    return Some(key_type);
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     pub fn check_key_press(&mut self, mx: f32, my: f32, w: f32, h: f32, now: Instant) -> Option<char> {
@@ -472,6 +502,20 @@ impl OnScreenKeyboard {
                 self.last_pressed_key = Some(key_type);
                 None // SymbolToggle doesn't output a character
             }
+            KeyType::Mouse => {
+                // Toggle trackpad mode
+                self.trackpad_mode = !self.trackpad_mode;
+                // Relayout keys to show/hide keyboard
+                self.layout_keys();
+                self.last_pressed_key = Some(key_type);
+                None
+            }
+            KeyType::Copy | KeyType::Cut | KeyType::Paste | 
+            KeyType::SelectAll | KeyType::Undo | KeyType::Redo => {
+                // Action keys - store for app to handle
+                self.last_pressed_key = Some(key_type);
+                None // Action keys don't output characters
+            }
         }
     }
 
@@ -512,14 +556,38 @@ impl OnScreenKeyboard {
         let key_spacing_ratio = 0.0075; // 0.75% spacing between keys (50% of original)
         // No side padding - all rows span exactly 0.0 to 1.0
         
-        // We have 4 rows: 3 rows of keys + 1 spacebar row
-        let num_key_rows = 3.0;
+        // We have 5 rows: 1 action row + 3 rows of keys + 1 spacebar row
+        let num_key_rows = 4.0; // action row + 3 letter rows
         
         // Calculate relative positions (will be scaled in draw_key)
         // Store as 0.0-1.0 relative to keyboard area
         // Start below green line
         let mut key_y = top_line_height;
         let row_height = (1.0 - top_line_height) / (num_key_rows + 1.0); // +1 for spacebar
+        
+        // Action row (top): Mouse, Copy, Cut, Paste, Select All, Undo, Redo (7 buttons)
+        let action_key_width = (1.0 - key_spacing_ratio * 6.0) / 7.0;
+        let action_keys = [KeyType::Mouse, KeyType::Copy, KeyType::Cut, KeyType::Paste, KeyType::SelectAll, KeyType::Undo, KeyType::Redo];
+        let mut x = 0.0;
+        for &key_type in &action_keys {
+            self.keys.push(Key {
+                key_type,
+                x,
+                y: key_y,
+                width: action_key_width,
+                height: row_height,
+                pressed: false,
+            });
+            x += action_key_width + key_spacing_ratio;
+        }
+        
+        // Move to next row
+        key_y += row_height + key_spacing_ratio;
+        
+        // If in trackpad mode, skip drawing the rest of the keys
+        if self.trackpad_mode {
+            return;
+        }
         
         match self.symbol_mode {
             SymbolMode::Standard => {
@@ -1074,6 +1142,14 @@ impl Partition for OnScreenKeyboard {
                     SymbolMode::Symbols1 => "#+=".to_string(),
                     SymbolMode::Symbols2 => "123".to_string(),
                 },
+                // Action keys
+                KeyType::Mouse => if self.trackpad_mode { "keys" } else { "mouse" }.to_string(),
+                KeyType::Copy => "copy".to_string(),
+                KeyType::Cut => "cut".to_string(),
+                KeyType::Paste => "paste".to_string(),
+                KeyType::SelectAll => "all".to_string(),
+                KeyType::Undo => "undo".to_string(),
+                KeyType::Redo => "redo".to_string(),
             };
             self.draw_key(buffer, width, height, key, &label);
         }

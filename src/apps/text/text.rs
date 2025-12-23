@@ -40,18 +40,14 @@ pub struct TextApp {
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
     initial_scroll_y: f32,
-    // Shift cursor movement tracking (laser dot)
-    shift_dot_x: Option<f32>, // Screen coordinates
-    shift_dot_y: Option<f32>, // Screen coordinates
-    shift_last_finger_x: Option<f32>,
-    shift_last_finger_y: Option<f32>,
+    // Trackpad mode tracking
+    trackpad_active: bool,
+    trackpad_last_tap_time: Option<Instant>,
+    trackpad_selecting: bool,
     // Text selection state
     selection_start: Option<usize>, // Character index where selection starts
     selection_end: Option<usize>,   // Character index where selection ends
     selecting: bool,                // True when actively selecting text (dragging)
-    // Laser selection mode (works on any platform with onscreen keyboard)
-    laser_selection_mode: bool,     // True when laser is in selection mode
-    laser_selection_anchor: Option<usize>, // Anchor point for laser selection
     // Configuration flags
     pub show_cursor: bool,
     pub show_debug_visuals: bool,
@@ -108,15 +104,12 @@ impl TextApp {
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
             initial_scroll_y: 0.0,
-            shift_dot_x: None,
-            shift_dot_y: None,
-            shift_last_finger_x: None,
-            shift_last_finger_y: None,
+            trackpad_active: false,
+            trackpad_last_tap_time: None,
+            trackpad_selecting: false,
             selection_start: None,
             selection_end: None,
             selecting: false,
-            laser_selection_mode: false,
-            laser_selection_anchor: None,
             show_cursor: true,
             show_debug_visuals: true,
             read_only: false,
@@ -193,6 +186,11 @@ impl Application for TextApp {
         // Process any pending keyboard characters first
         while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
             self.on_key_char(state, ch);
+        }
+        
+        // Process action keys from keyboard
+        if let Some(action) = state.keyboard.onscreen.get_last_action_key() {
+            self.handle_action_key(action, state);
         }
         
         // Extract all needed values in a block to release borrows
@@ -449,31 +447,6 @@ impl Application for TextApp {
             }
         }
     
-        // Draw laser dot if shift is held
-        if let (Some(dot_x), Some(dot_y)) = (self.shift_dot_x, self.shift_dot_y) {
-            let dot_radius = 4.0;
-            let dot_x_i = dot_x.round() as i32;
-            let dot_y_i = dot_y.round() as i32;
-            
-            // Draw a small circle/dot
-            for dy in -dot_radius as i32..=dot_radius as i32 {
-                for dx in -dot_radius as i32..=dot_radius as i32 {
-                    let distance_sq = (dx * dx + dy * dy) as f32;
-                    if distance_sq <= dot_radius * dot_radius {
-                        let x = dot_x_i + dx;
-                        let y = dot_y_i + dy;
-                        if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                            // Bright red dot
-                            buffer[idx + 0] = 255; // R
-                            buffer[idx + 1] = 0;   // G
-                            buffer[idx + 2] = 0;   // B
-                            buffer[idx + 3] = 0xff; // A
-                        }
-                    }
-                }
-            }
-        }
     }
     
 
@@ -571,116 +544,23 @@ impl Application for TextApp {
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let shape = state.frame.array.shape();
-        let width = shape[1] as f32;
         let height = shape[0] as f32;
         
-        // Check if shift is held for cursor movement (laser dot mode)
-        if let Some(KeyType::Shift) = state.keyboard.onscreen.get_held_key_type() {
-            // Initialize dot position if not set (start at current cursor position)
-            if self.shift_dot_x.is_none() || self.shift_dot_y.is_none() {
-                // Find current cursor screen position
+        // Check if we're in trackpad mode and the mouse is in the trackpad area
+        if state.keyboard.onscreen.is_trackpad_mode() && self.trackpad_active {
+            // Trackpad mode - move cursor based on trackpad movement
+            // If selecting, update selection
+            if self.trackpad_selecting {
                 let safe_region = &state.frame.safe_region_boundaries;
                 let content_top = safe_region.y1 * height;
+                let text_x = state.mouse.x;
+                let text_y = state.mouse.y - content_top + self.scroll_y;
                 
-                // Get cursor text position
-                let (cursor_text_x, cursor_baseline_y) = self.get_cursor_text_position();
-                
-                // Convert to screen coordinates
-                self.shift_dot_x = Some(cursor_text_x);
-                self.shift_dot_y = Some((cursor_baseline_y - self.scroll_y) + content_top);
-                self.shift_last_finger_x = Some(state.mouse.x);
-                self.shift_last_finger_y = Some(state.mouse.y);
+                let char_index = self.find_nearest_char_index(text_x, text_y);
+                self.selection_end = Some(char_index);
+                self.cursor_position = char_index;
             }
-            
-            // Move dot 5x faster than finger movement
-            if let (Some(dot_x), Some(dot_y), Some(last_finger_x), Some(last_finger_y)) = 
-                (self.shift_dot_x, self.shift_dot_y, self.shift_last_finger_x, self.shift_last_finger_y) {
-                let finger_dx = state.mouse.x - last_finger_x;
-                let finger_dy = state.mouse.y - last_finger_y;
-                
-                // Dot moves 4x faster (20% slower than 5x)
-                let dot_dx = finger_dx * 4.0;
-                let dot_dy = finger_dy * 4.0;
-                
-                // Update dot position and constrain to screen bounds
-                let new_dot_x = (dot_x + dot_dx).max(0.0).min(width);
-                let new_dot_y = (dot_y + dot_dy).max(0.0).min(height);
-                
-                self.shift_dot_x = Some(new_dot_x);
-                self.shift_dot_y = Some(new_dot_y);
-                
-                // Find nearest valid cursor position to dot
-                let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = safe_region.y1 * height;
-                
-                // Convert dot screen coordinates to text coordinates
-                let dot_text_x = new_dot_x;
-                let dot_text_y = new_dot_y - content_top + self.scroll_y;
-                
-                // Find nearest character or line to dot position
-                let mut best_char_index = self.text_rasterizer.text.chars().count();
-                let mut min_distance_sq = f32::MAX;
-                
-                // Check empty lines first
-                for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
-                    let line_y = line.baseline_y;
-                    
-                    if dot_text_y >= line_y - self.text_rasterizer.ascent && dot_text_y <= line_y + self.text_rasterizer.descent {
-                        let has_chars = self.text_rasterizer.characters.iter()
-                            .any(|c| c.line_index == line_idx);
-                        
-                        if !has_chars {
-                            // Empty line - check distance to start
-                            let distance_sq = dot_text_x * dot_text_x + (dot_text_y - line_y) * (dot_text_y - line_y);
-                            if distance_sq < min_distance_sq {
-                                min_distance_sq = distance_sq;
-                                best_char_index = line.start_index;
-                            }
-                        }
-                    }
-                }
-                
-                // Check characters
-                for character in &self.text_rasterizer.characters {
-                    let char_center_x = character.x + character.width / 2.0;
-                    let char_center_y = character.y + character.height / 2.0;
-                    
-                    let dx = dot_text_x - char_center_x;
-                    let dy = dot_text_y - char_center_y;
-                    let distance_sq = dx * dx + dy * dy;
-                    
-                    if distance_sq < min_distance_sq {
-                        min_distance_sq = distance_sq;
-                        // If dot is to the right of character center, cursor goes after it
-                        if dot_text_x > char_center_x {
-                            best_char_index = character.char_index + 1;
-                        } else {
-                            best_char_index = character.char_index;
-                        }
-                    }
-                }
-                
-                let best_char_index = best_char_index.min(self.text_rasterizer.text.chars().count());
-                
-                // If in laser selection mode, update selection end
-                if self.laser_selection_mode {
-                    self.selection_end = Some(best_char_index);
-                } else {
-                    // Normal cursor movement
-                    self.cursor_position = best_char_index;
-                }
-            }
-            
-            // Update last finger position
-            self.shift_last_finger_x = Some(state.mouse.x);
-            self.shift_last_finger_y = Some(state.mouse.y);
             return;
-        } else {
-            // Shift not held - clear laser tracking (but not selection mode)
-            self.shift_dot_x = None;
-            self.shift_dot_y = None;
-            self.shift_last_finger_x = None;
-            self.shift_last_finger_y = None;
         }
         
         // Don't allow scrolling if touch started on keyboard
@@ -703,20 +583,18 @@ impl Application for TextApp {
                         self.dragging = true;
                         self.last_mouse_y = state.mouse.y;
                     } else {
-                        // Horizontal movement dominates - select (but only if not using laser mode)
-                        if !self.laser_selection_mode {
-                            self.selecting = true;
-                            // Get character index at initial tap position for selection start
-                            let safe_region = &state.frame.safe_region_boundaries;
-                            let content_top = safe_region.y1 * height;
-                            let text_x = self.last_tap_x;
-                            let text_y = self.last_tap_y - content_top + self.scroll_y;
-                            let start_char_idx = self.find_nearest_char_index(text_x, text_y);
-                            
-                            self.selection_start = Some(start_char_idx);
-                            self.selection_end = Some(start_char_idx);
-                            self.cursor_position = start_char_idx;
-                        }
+                        // Horizontal movement dominates - select
+                        self.selecting = true;
+                        // Get character index at initial tap position for selection start
+                        let safe_region = &state.frame.safe_region_boundaries;
+                        let content_top = safe_region.y1 * height;
+                        let text_x = self.last_tap_x;
+                        let text_y = self.last_tap_y - content_top + self.scroll_y;
+                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                        
+                        self.selection_start = Some(start_char_idx);
+                        self.selection_end = Some(start_char_idx);
+                        self.cursor_position = start_char_idx;
                     }
                 } else {
                     // Desktop mode (keyboard hidden): horizontal drag selects, vertical drag scrolls
@@ -764,35 +642,49 @@ impl Application for TextApp {
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         let shape = state.frame.array.shape();
-        let width = shape[1] as f32;
         let height = shape[0] as f32;
         
         // Check if keyboard handled the event
-        if state.keyboard.onscreen.on_mouse_down(state.mouse.x, state.mouse.y, width, height) {
+        if state.keyboard.onscreen.on_mouse_down(state.mouse.x, state.mouse.y, shape[1] as f32, height) {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
-            
-            // Laser selection mode: if shift was just pressed and we have an anchor, enter selection mode
-            if state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift) {
-                if let Some(anchor) = self.laser_selection_anchor {
-                    // Enter laser selection mode
-                    self.laser_selection_mode = true;
-                    self.selection_start = Some(anchor);
-                    self.selection_end = Some(self.cursor_position);
-                }
-            }
-            
             return;
+        }
+        
+        // Check if we're in trackpad mode and clicking in the trackpad area
+        if state.keyboard.onscreen.is_trackpad_mode() {
+            let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+            let keyboard_region_top = keyboard_top_y * height;
+            
+            // Check if clicking in the trackpad area (keyboard region)
+            if state.mouse.y >= keyboard_region_top {
+                self.trackpad_active = true;
+                
+                // Check for double-tap to start selection
+                let now = Instant::now();
+                let is_double_tap = if let Some(last_time) = self.trackpad_last_tap_time {
+                    let time_since_last = now.duration_since(last_time);
+                    time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS)
+                } else {
+                    false
+                };
+                
+                if is_double_tap {
+                    // Start selection mode
+                    self.trackpad_selecting = true;
+                    self.selection_start = Some(self.cursor_position);
+                    self.selection_end = Some(self.cursor_position);
+                    self.trackpad_last_tap_time = None; // Reset to prevent triple-tap
+                } else {
+                    self.trackpad_last_tap_time = Some(now);
+                }
+                
+                return;
+            }
         }
         
         // Touch started outside keyboard or keyboard is hidden
         self.touch_started_on_keyboard = false;
-        
-        // Exit laser selection mode if clicking outside keyboard
-        if self.laser_selection_mode {
-            self.laser_selection_mode = false;
-            self.laser_selection_anchor = None;
-        }
         
         // Get keyboard region for double-tap detection
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
@@ -850,18 +742,8 @@ impl Application for TextApp {
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
-        // Release all keyboard keys (but track if shift was held)
-        let was_shift_held = state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift);
+        // Release all keyboard keys
         state.keyboard.onscreen.on_mouse_up();
-        
-        // Laser selection mode: if shift was held and released, prepare for selection mode
-        if was_shift_held && self.shift_dot_x.is_some() {
-            // User released shift laser - next shift activation enters selection mode
-            if !self.laser_selection_mode {
-                // Mark that we're ready to enter selection mode on next shift press
-                self.laser_selection_anchor = Some(self.cursor_position);
-            }
-        }
         
         // Check if we should move cursor (only if user didn't scroll and didn't drag/select)
         if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {
@@ -903,92 +785,13 @@ impl Application for TextApp {
         self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        // Clear shift dot tracking (but not selection mode)
-        self.shift_dot_x = None;
-        self.shift_dot_y = None;
-        self.shift_last_finger_x = None;
-        self.shift_last_finger_y = None;
+        // Clear trackpad tracking
+        self.trackpad_active = false;
+        self.trackpad_selecting = false;
     }
 }
 
 impl TextApp {
-    fn get_cursor_text_position(&self) -> (f32, f32) {
-        // Find cursor position based on cursor_position index
-        let line_info_with_idx = self.text_rasterizer.lines.iter()
-            .enumerate()
-            .find(|(_, line)| {
-                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
-            });
-        
-        if let Some((line_idx, line)) = line_info_with_idx {
-            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
-                .filter(|c| c.line_index == line_idx)
-                .collect();
-            
-            if chars_in_line.is_empty() {
-                (0.0, line.baseline_y)
-            } else {
-                if self.cursor_position == line.start_index {
-                    (0.0, line.baseline_y)
-                } else {
-                    let mut found_char = None;
-                    let mut char_after = None;
-                    
-                    for character in self.text_rasterizer.characters.iter() {
-                        if character.char_index == self.cursor_position {
-                            found_char = Some(character);
-                            break;
-                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
-                            char_after = Some(character);
-                            break;
-                        }
-                    }
-                    
-                    if let Some(char_at_cursor) = found_char {
-                        (char_at_cursor.x, line.baseline_y)
-                    } else if let Some(char_after_cursor) = char_after {
-                        (char_after_cursor.x, line.baseline_y)
-                    } else if let Some(last_in_line) = chars_in_line.last() {
-                        (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
-                    } else {
-                        (0.0, line.baseline_y)
-                    }
-                }
-            }
-        } else if self.cursor_position == 0 {
-            if let Some(first_line) = self.text_rasterizer.lines.first() {
-                (0.0, first_line.baseline_y)
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        } else if self.cursor_position >= self.text_rasterizer.text.chars().count() {
-            if let Some(last_line) = self.text_rasterizer.lines.last() {
-                let last_line_idx = self.text_rasterizer.lines.len() - 1;
-                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
-                    .filter(|c| c.line_index == last_line_idx)
-                    .collect();
-                
-                if chars_in_last_line.is_empty() {
-                    (0.0, last_line.baseline_y)
-                } else if let Some(last_char) = chars_in_last_line.last() {
-                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
-                } else {
-                    (0.0, last_line.baseline_y)
-                }
-            } else if let Some(last) = self.text_rasterizer.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        } else {
-            if let Some(last) = self.text_rasterizer.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        }
-    }
-
     fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
@@ -1157,5 +960,83 @@ impl TextApp {
         }
         
         nearest_char_index.min(self.text_rasterizer.text.chars().count())
+    }
+    
+    fn handle_action_key(&mut self, action: KeyType, _state: &mut EngineState) {
+        match action {
+            KeyType::Mouse => {
+                // Mouse/trackpad toggle is handled by the keyboard itself
+                // Just clear any active state here
+                self.trackpad_active = false;
+                self.trackpad_selecting = false;
+            }
+            KeyType::Copy => {
+                // Copy selected text to clipboard (placeholder - would need platform clipboard API)
+                if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                    let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                    let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
+                    // TODO: Copy to clipboard - for now just log
+                    eprintln!("Copy: {}", selected_text);
+                }
+            }
+            KeyType::Cut => {
+                // Cut selected text (copy + delete)
+                if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                    let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                    let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
+                    // TODO: Copy to clipboard
+                    eprintln!("Cut: {}", selected_text);
+                    
+                    // Delete selected text
+                    let mut new_text = String::new();
+                    for (i, &c) in text_chars.iter().enumerate() {
+                        if i < start_idx || i >= end_idx {
+                            new_text.push(c);
+                        }
+                    }
+                    self.text_rasterizer.text = new_text;
+                    self.cursor_position = start_idx;
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
+            }
+            KeyType::Paste => {
+                // Paste from clipboard (placeholder)
+                // TODO: Get from clipboard - for now use dummy text
+                let clipboard_text = "";
+                if !clipboard_text.is_empty() {
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                    let mut new_text = String::new();
+                    for (i, &c) in text_chars.iter().enumerate() {
+                        if i == self.cursor_position {
+                            new_text.push_str(clipboard_text);
+                        }
+                        new_text.push(c);
+                    }
+                    if self.cursor_position >= text_chars.len() {
+                        new_text.push_str(clipboard_text);
+                    }
+                    self.text_rasterizer.text = new_text;
+                    self.cursor_position += clipboard_text.chars().count();
+                }
+            }
+            KeyType::SelectAll => {
+                // Select all text
+                self.selection_start = Some(0);
+                self.selection_end = Some(self.text_rasterizer.text.chars().count());
+                self.cursor_position = self.text_rasterizer.text.chars().count();
+            }
+            KeyType::Undo => {
+                // TODO: Implement undo functionality (would need history tracking)
+                eprintln!("Undo pressed");
+            }
+            KeyType::Redo => {
+                // TODO: Implement redo functionality (would need history tracking)
+                eprintln!("Redo pressed");
+            }
+            _ => {}
+        }
     }
 }
