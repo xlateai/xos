@@ -2,7 +2,7 @@ import xos
 
 # Red ball color (normalized 0-1)
 BALL_COLOR = (255, 50, 50, 255)  # RGBA: Red
-LINE_COLOR = (180, 80, 80, 255)  # RGBA: Lighter red for lines
+LINE_COLOR = (10, 80, 80, 255)  # RGBA: Lighter red for lines
 BALL_RADIUS = 0.003  # Smaller balls (was 0.005)
 LINE_THICKNESS = 0.0008  # Thinner lines (was 0.002)
 SPEED_MULTIPLIER = 0.005  # Normalized speed
