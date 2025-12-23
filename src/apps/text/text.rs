@@ -703,9 +703,16 @@ impl Application for TextApp {
                         // iOS with keyboard: vertical is scroll, horizontal is selection
                         if dx > dy {
                             self.selecting = true;
-                            // Start selection at cursor position
-                            self.selection_start = Some(self.cursor_position);
-                            self.selection_end = Some(self.cursor_position);
+                            // Get character index at initial tap position for selection start
+                            let safe_region = &state.frame.safe_region_boundaries;
+                            let content_top = safe_region.y1 * height;
+                            let text_x = self.last_tap_x;
+                            let text_y = self.last_tap_y - content_top + self.scroll_y;
+                            let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                            
+                            self.selection_start = Some(start_char_idx);
+                            self.selection_end = Some(start_char_idx);
+                            self.cursor_position = start_char_idx;
                         } else {
                             self.dragging = true;
                             self.last_mouse_y = state.mouse.y;
@@ -713,8 +720,15 @@ impl Application for TextApp {
                     } else {
                         // iOS without keyboard: start selection
                         self.selecting = true;
-                        self.selection_start = Some(self.cursor_position);
-                        self.selection_end = Some(self.cursor_position);
+                        let safe_region = &state.frame.safe_region_boundaries;
+                        let content_top = safe_region.y1 * height;
+                        let text_x = self.last_tap_x;
+                        let text_y = self.last_tap_y - content_top + self.scroll_y;
+                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                        
+                        self.selection_start = Some(start_char_idx);
+                        self.selection_end = Some(start_char_idx);
+                        self.cursor_position = start_char_idx;
                     }
                 }
                 #[cfg(not(target_os = "ios"))]
@@ -722,8 +736,15 @@ impl Application for TextApp {
                     // Non-iOS: horizontal movement is selection, vertical is scroll
                     if dx > dy {
                         self.selecting = true;
-                        self.selection_start = Some(self.cursor_position);
-                        self.selection_end = Some(self.cursor_position);
+                        let safe_region = &state.frame.safe_region_boundaries;
+                        let content_top = safe_region.y1 * height;
+                        let text_x = self.last_tap_x;
+                        let text_y = self.last_tap_y - content_top + self.scroll_y;
+                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                        
+                        self.selection_start = Some(start_char_idx);
+                        self.selection_end = Some(start_char_idx);
+                        self.cursor_position = start_char_idx;
                     } else {
                         self.dragging = true;
                         self.last_mouse_y = state.mouse.y;
@@ -834,6 +855,10 @@ impl Application for TextApp {
         self.pending_cursor_tap_x = Some(state.mouse.x);
         self.pending_cursor_tap_y = Some(state.mouse.y);
         self.initial_scroll_y = self.scroll_y;
+        
+        // Clear any existing selection when starting a new interaction
+        self.selection_start = None;
+        self.selection_end = None;
         
         // Update tap tracking
         self.last_tap_time = Some(now);
