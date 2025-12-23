@@ -2,6 +2,7 @@ use crate::engine::{Application, EngineState};
 use crate::text::text_rasterization::TextRasterizer;
 use crate::text::onscreen_keyboard::KeyType;
 use crate::clipboard;
+use crate::keyboard::shortcuts::ShortcutAction;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 
@@ -16,6 +17,12 @@ const SHOW_BOUNDING_RECTANGLES: bool = true;
 const DRAW_BASELINES: bool = true;
 const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
 const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
+
+// Scroll physics constants
+const SCROLL_MOMENTUM_DECAY: f32 = 0.92; // How quickly momentum decays (0-1, higher = longer momentum)
+const SCROLL_MOMENTUM_THRESHOLD: f32 = 0.1; // Stop momentum below this velocity
+const SCROLL_ELASTIC_STRENGTH: f32 = 0.08; // Strength of elastic bounce at edges (lower = softer)
+const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 5.0; // Don't trigger double-tap if scrolling faster than this
 
 // Arrow key characters (using Unicode arrow symbols)
 const ARROW_LEFT: char = '\u{2190}';  // ←
@@ -33,6 +40,7 @@ pub struct TextApp {
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
     last_tap_y: f32,
+    last_tap_scrolled: bool, // Track if user scrolled between taps
     pub cursor_position: usize, // Character index where cursor should be
     dragging: bool,
     last_mouse_y: f32,
@@ -41,6 +49,9 @@ pub struct TextApp {
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
     initial_scroll_y: f32,
+    // Scroll momentum
+    scroll_velocity: f32,
+    last_frame_time: Option<Instant>,
     // Trackpad mode tracking
     trackpad_active: bool,
     trackpad_last_tap_time: Option<Instant>,
@@ -83,32 +94,25 @@ impl TextApp {
 
         let mut text_rasterizer = TextRasterizer::new(font, font_size);
 
-        // Set default text on iOS and calculate initial scroll
-        let mut initial_scroll_y = 0.0;
-        let mut initial_cursor_pos = 0;
-        
-        if cfg!(target_os = "ios") {
+        // Set default text on iOS
+        let initial_cursor_pos = if cfg!(target_os = "ios") {
             let default_text = "double tap screen to open keyboard".to_string();
-            text_rasterizer.set_text(default_text.clone());
-            // Set cursor to end of default text
-            initial_cursor_pos = default_text.chars().count();
-            
-            // Calculate initial scroll to position text in top 2/3rds of screen
-            // We'll adjust this in setup() after we know the actual screen dimensions
-            // For now, estimate based on font size - text starts at ascent
-            // We want it to appear at roughly 1/3 from top (so top 2/3rds are visible)
-            // This is a rough estimate, will be refined in setup()
-            initial_scroll_y = -(font_size * 0.3); // Negative scroll moves content up
-        }
+            let cursor_pos = default_text.chars().count();
+            text_rasterizer.set_text(default_text);
+            cursor_pos
+        } else {
+            0
+        };
 
         Self {
             text_rasterizer,
-            scroll_y: initial_scroll_y,
+            scroll_y: 0.0, // Always start at 0 (top of safe region)
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
             last_tap_time: None,
             last_tap_x: 0.0,
             last_tap_y: 0.0,
+            last_tap_scrolled: false,
             cursor_position: initial_cursor_pos,
             dragging: false,
             last_mouse_y: 0.0,
@@ -116,6 +120,8 @@ impl TextApp {
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
             initial_scroll_y: 0.0,
+            scroll_velocity: 0.0,
+            last_frame_time: None,
             trackpad_active: false,
             trackpad_last_tap_time: None,
             trackpad_selecting: false,
@@ -175,7 +181,7 @@ impl TextApp {
 
 impl Application for TextApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        // On iOS, adjust scroll to position default text in top 2/3rds of screen
+        // On iOS, initialize scroll to 0 (text starts at safe region top)
         if cfg!(target_os = "ios") && !self.text_rasterizer.text.is_empty() {
             let shape = state.frame.array.shape();
             let height = shape[0] as f32;
@@ -186,18 +192,8 @@ impl Application for TextApp {
             // Tick the engine once to calculate line positions
             self.text_rasterizer.tick(shape[1] as f32, content_height);
             
-            // Find the first line's baseline
-            if let Some(first_line) = self.text_rasterizer.lines.first() {
-                // We want the text to appear starting at roughly 1/3 from top of content area
-                // So the first line's baseline should be at: content_top + (content_height / 3)
-                let target_y = content_top + (content_height / 3.0);
-                
-                // Adjust scroll_y so first line appears at target position
-                // target_y = (first_line.baseline_y - scroll_y) + content_top
-                // target_y - content_top = first_line.baseline_y - scroll_y
-                // scroll_y = first_line.baseline_y - (target_y - content_top)
-                self.scroll_y = first_line.baseline_y - (target_y - content_top);
-            }
+            // Start with scroll at 0 (text at top of safe region)
+            self.scroll_y = 0.0;
         }
         Ok(())
     }
@@ -210,6 +206,12 @@ impl Application for TextApp {
         
         // Process action keys from keyboard
         if let Some(action) = state.keyboard.onscreen.get_last_action_key() {
+            self.handle_action_key(action, state);
+        }
+        
+        // Process action key repeats (for undo/redo hold)
+        let now = Instant::now();
+        if let Some(action) = state.keyboard.onscreen.check_action_key_hold_repeat(now) {
             self.handle_action_key(action, state);
         }
         
@@ -232,6 +234,60 @@ impl Application for TextApp {
             
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
+        
+        // === SIMPLIFIED SCROLL PHYSICS ===
+        
+        // 1. Apply momentum with decay
+        let current_time = Instant::now();
+        if let Some(last_time) = self.last_frame_time {
+            let dt = current_time.duration_since(last_time).as_secs_f32();
+            
+            // Apply velocity to scroll position
+            if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
+                self.scroll_y += self.scroll_velocity * dt * 60.0; // Normalize to 60 FPS
+                self.scroll_velocity *= SCROLL_MOMENTUM_DECAY; // Decay momentum
+            } else {
+                self.scroll_velocity = 0.0; // Stop if below threshold
+            }
+        }
+        self.last_frame_time = Some(current_time);
+        
+        // 2. Calculate elastic bounds based on safe regions
+        // Text should be able to scroll from top safe region to bottom safe region
+        // With symmetric overscroll allowance beyond both edges
+        let visible_height = content_bottom - content_top;
+        
+        // Natural bounds: 0 (top of text) to height of all text
+        let line_height = self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
+        let text_content_height = if !self.text_rasterizer.lines.is_empty() {
+            let first_y = self.text_rasterizer.lines.first().map(|l| l.baseline_y).unwrap_or(0.0);
+            let last_y = self.text_rasterizer.lines.last().map(|l| l.baseline_y).unwrap_or(0.0);
+            (last_y - first_y).abs() + line_height * 2.0
+        } else {
+            line_height
+        };
+        
+        // 3. Apply elastic resistance when beyond natural bounds
+        // Keep text on screen: don't let it scroll completely off either edge
+        let natural_min = 0.0;
+        let natural_max = (text_content_height - visible_height).max(0.0); // Keep at least one screen visible
+        
+        if self.scroll_y < natural_min {
+            // Scrolled above top - pull back
+            let overshoot = natural_min - self.scroll_y;
+            self.scroll_y += overshoot * SCROLL_ELASTIC_STRENGTH;
+            self.scroll_velocity *= 0.8; // Dampen momentum at edge
+        } else if self.scroll_y > natural_max {
+            // Scrolled below bottom - pull back
+            let overshoot = self.scroll_y - natural_max;
+            self.scroll_y -= overshoot * SCROLL_ELASTIC_STRENGTH;
+            self.scroll_velocity *= 0.8; // Dampen momentum at edge
+        }
+        
+        // 4. Hard clamp to keep text on screen (with small overscroll allowance)
+        let hard_min = natural_min - line_height; // Allow one line height overscroll up
+        let hard_max = natural_max + line_height; // Allow one line height overscroll down
+        self.scroll_y = self.scroll_y.max(hard_min).min(hard_max);
         
         // Now get mutable buffer (after all immutable borrows are released)
         let buffer = state.frame_buffer_mut();
@@ -360,97 +416,7 @@ impl Application for TextApp {
     
         // Draw cursor (offset by content_top)
         if self.show_cursor {
-            // Find cursor position based on cursor_position index
-            // First, find which line the cursor is on
-            let line_info_with_idx = self.text_rasterizer.lines.iter()
-                .enumerate()
-                .find(|(_, line)| {
-                    line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
-                });
-            
-            let (target_x, baseline_y) = if let Some((line_idx, line)) = line_info_with_idx {
-            // Found the line - check if there are characters in this line
-            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
-                .filter(|c| c.line_index == line_idx)
-                .collect();
-            
-            if chars_in_line.is_empty() {
-                // Empty line - cursor at start
-                (0.0, line.baseline_y)
-            } else {
-                // Line has characters - find the appropriate x position
-                // Check if cursor is at the start of the line
-                if self.cursor_position == line.start_index {
-                    (0.0, line.baseline_y)
-                } else {
-                    // Find character at or before cursor position
-                    let mut found_char = None;
-                    let mut char_after = None;
-                    
-                    for character in self.text_rasterizer.characters.iter() {
-                        if character.char_index == self.cursor_position {
-                            found_char = Some(character);
-                            break;
-                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
-                            char_after = Some(character);
-                            break;
-                        }
-                    }
-                    
-                    if let Some(char_at_cursor) = found_char {
-                        // Cursor is before this character
-                        (char_at_cursor.x, line.baseline_y)
-                    } else if let Some(char_after_cursor) = char_after {
-                        // Cursor is before this character (on same line)
-                        (char_after_cursor.x, line.baseline_y)
-                    } else {
-                        // Cursor is at end of line - find last character's end position
-                        if let Some(last_in_line) = chars_in_line.last() {
-                            (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
-                        } else {
-                            (0.0, line.baseline_y)
-                        }
-                    }
-                }
-            }
-        } else if self.cursor_position == 0 {
-            // Cursor at very start (before any lines)
-            if let Some(first_line) = self.text_rasterizer.lines.first() {
-                (0.0, first_line.baseline_y)
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        } else if self.cursor_position >= self.text_rasterizer.text.chars().count() {
-            // Cursor at end of text
-            if let Some(last_line) = self.text_rasterizer.lines.last() {
-                // Find the line index
-                let last_line_idx = self.text_rasterizer.lines.len() - 1;
-                // Check if last line has characters
-                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
-                    .filter(|c| c.line_index == last_line_idx)
-                    .collect();
-                
-                if chars_in_last_line.is_empty() {
-                    (0.0, last_line.baseline_y)
-                } else if let Some(last_char) = chars_in_last_line.last() {
-                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
-                } else {
-                    (0.0, last_line.baseline_y)
-                }
-            } else if let Some(last) = self.text_rasterizer.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        } else {
-            // Fallback: cursor position is out of bounds somehow
-            // Try to find nearest line or character
-            if let Some(last) = self.text_rasterizer.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
-            } else {
-                (0.0, self.text_rasterizer.ascent)
-            }
-        };
+            let (target_x, baseline_y) = self.get_cursor_screen_position();
         
             // Smooth the x-position (linear interpolation)
             self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
@@ -508,9 +474,10 @@ impl Application for TextApp {
     
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        // Use same scrolling approach as scroll.rs
-        self.scroll_y += dy;
-        // Don't clamp to 0 - allow scrolling up to see content above
+        // Add to scroll velocity for momentum (accumulates with multiple flicks)
+        self.scroll_velocity += dy;
+        // Mark that scrolling occurred (for double-tap detection)
+        self.last_tap_scrolled = true;
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
@@ -836,12 +803,16 @@ impl Application for TextApp {
         let keyboard_region_top = keyboard_top_y * height;
         
         // Check for double tap in content area OR in keyboard region (even if hidden)
+        // Only trigger if user didn't scroll between taps AND velocity is low
         let now = Instant::now();
         let is_double_tap = if let Some(last_time) = self.last_tap_time {
             let time_since_last = now.duration_since(last_time);
             let distance = ((state.mouse.x - self.last_tap_x).powi(2) + (state.mouse.y - self.last_tap_y).powi(2)).sqrt();
             
-            time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) && distance < DOUBLE_TAP_DISTANCE
+            time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) 
+                && distance < DOUBLE_TAP_DISTANCE 
+                && !self.last_tap_scrolled // Don't trigger if user scrolled
+                && self.scroll_velocity.abs() < SCROLL_VELOCITY_THRESHOLD_FOR_TAP // Don't trigger if fast scrolling
         } else {
             false
         };
@@ -851,6 +822,7 @@ impl Application for TextApp {
             state.keyboard.onscreen.toggle_minimize();
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
+            self.last_tap_scrolled = false;
             // Clear pending cursor position
             self.pending_cursor_tap_x = None;
             self.pending_cursor_tap_y = None;
@@ -863,6 +835,7 @@ impl Application for TextApp {
             self.last_tap_time = Some(now);
             self.last_tap_x = state.mouse.x;
             self.last_tap_y = state.mouse.y;
+            self.last_tap_scrolled = false; // Reset scroll flag for new tap
             return;
         }
         
@@ -881,6 +854,7 @@ impl Application for TextApp {
         self.last_tap_time = Some(now);
         self.last_tap_x = state.mouse.x;
         self.last_tap_y = state.mouse.y;
+        self.last_tap_scrolled = false; // Reset scroll flag for new tap
         
         // Don't start dragging immediately - wait for mouse movement
         // Dragging will be started in on_mouse_move if mouse moves significantly
@@ -942,6 +916,19 @@ impl Application for TextApp {
         self.trackpad_moved = false;
         self.trackpad_last_mouse_x = None;
         self.trackpad_last_mouse_y = None;
+    }
+    
+    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
+        // Map shortcuts to KeyType actions
+        let key_type = match shortcut {
+            ShortcutAction::Copy => KeyType::Copy,
+            ShortcutAction::Cut => KeyType::Cut,
+            ShortcutAction::Paste => KeyType::Paste,
+            ShortcutAction::SelectAll => KeyType::SelectAll,
+            ShortcutAction::Undo => KeyType::Undo,
+            ShortcutAction::Redo => KeyType::Redo,
+        };
+        self.handle_action_key(key_type, state);
     }
 }
 
@@ -1125,6 +1112,95 @@ impl TextApp {
         }
         // Clear redo stack when new action is performed
         self.redo_stack.clear();
+    }
+    
+    /// Get the cursor position in text coordinates (x, y)
+    fn get_cursor_screen_position(&self) -> (f32, f32) {
+        // Find cursor position based on cursor_position index
+        // First, find which line the cursor is on
+        let line_info_with_idx = self.text_rasterizer.lines.iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
+            });
+        
+        if let Some((line_idx, line)) = line_info_with_idx {
+            // Found the line - check if there are characters in this line
+            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
+                .filter(|c| c.line_index == line_idx)
+                .collect();
+            
+            if chars_in_line.is_empty() {
+                // Empty line - cursor at start
+                (0.0, line.baseline_y)
+            } else {
+                // Line has characters - find the appropriate x position
+                // Check if cursor is at the start of the line
+                if self.cursor_position == line.start_index {
+                    (0.0, line.baseline_y)
+                } else {
+                    // Find character at or before cursor position
+                    let mut found_char = None;
+                    let mut char_after = None;
+                    
+                    for character in self.text_rasterizer.characters.iter() {
+                        if character.char_index == self.cursor_position {
+                            found_char = Some(character);
+                            break;
+                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
+                            char_after = Some(character);
+                            break;
+                        }
+                    }
+                    
+                    if let Some(char_at_cursor) = found_char {
+                        // Cursor is before this character
+                        (char_at_cursor.x, line.baseline_y)
+                    } else if let Some(char_after_cursor) = char_after {
+                        // Cursor is before this character (on same line)
+                        (char_after_cursor.x, line.baseline_y)
+                    } else {
+                        // Cursor is at end of line - find last character's end position
+                        if let Some(last_in_line) = chars_in_line.last() {
+                            (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
+                        } else {
+                            (0.0, line.baseline_y)
+                        }
+                    }
+                }
+            }
+        } else if self.cursor_position == 0 {
+            // Cursor at very start (before any lines)
+            if let Some(first_line) = self.text_rasterizer.lines.first() {
+                (0.0, first_line.baseline_y)
+            } else {
+                (0.0, self.text_rasterizer.ascent)
+            }
+        } else if self.cursor_position >= self.text_rasterizer.text.chars().count() {
+            // Cursor at end of text
+            if let Some(last_line) = self.text_rasterizer.lines.last() {
+                // Find the line index
+                let last_line_idx = self.text_rasterizer.lines.len() - 1;
+                // Check if last line has characters
+                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
+                    .filter(|c| c.line_index == last_line_idx)
+                    .collect();
+                
+                if chars_in_last_line.is_empty() {
+                    (0.0, last_line.baseline_y)
+                } else if let Some(last_char) = chars_in_last_line.last() {
+                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
+                } else {
+                    (0.0, last_line.baseline_y)
+                }
+            } else if let Some(last) = self.text_rasterizer.characters.last() {
+                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
+            } else {
+                (0.0, self.text_rasterizer.ascent)
+            }
+        } else {
+            (0.0, self.text_rasterizer.ascent)
+        }
     }
     
     /// Delete the current selection and return true if a selection was deleted

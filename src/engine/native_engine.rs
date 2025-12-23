@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::engine::{Application, EngineState, KeyboardState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use crate::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
@@ -25,6 +26,10 @@ struct AppState {
     engine_state: EngineState,
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
+    // Modifier key tracking for shortcuts
+    command_held: bool,
+    shift_held: bool,
+    alt_held: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -164,6 +169,21 @@ impl ApplicationHandler for AppState {
                     _ => {}
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                // Update modifier key states
+                // On macOS, Super is Command; on Windows/Linux, Control is Ctrl
+                #[cfg(target_os = "macos")]
+                {
+                    self.command_held = modifiers.state().super_key();
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.command_held = modifiers.state().control_key();
+                }
+                
+                self.shift_held = modifiers.state().shift_key();
+                self.alt_held = modifiers.state().alt_key();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     // Handle special keys
@@ -195,6 +215,13 @@ impl ApplicationHandler for AppState {
                             // check the text field as a fallback
                             if let Some(text) = event.text.as_ref() {
                                 for ch in text.chars() {
+                                    // Check for keyboard shortcuts first (desktop only, not iOS)
+                                    #[cfg(not(target_os = "ios"))]
+                                    if let Some(shortcut) = detect_shortcut(ch, self.command_held, self.shift_held) {
+                                        self.app.on_key_shortcut(&mut self.engine_state, shortcut);
+                                        continue; // Don't process as regular character
+                                    }
+                                    
                                     if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
                                         let _ = self.app.on_key_char(&mut self.engine_state, ch);
                                     }
@@ -302,6 +329,9 @@ impl ApplicationHandler for AppStateWrapper {
                 engine_state,
                 app,
                 size,
+                command_held: false,
+                shift_held: false,
+                alt_held: false,
             });
         }
     }

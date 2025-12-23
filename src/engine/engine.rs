@@ -210,4 +210,5 @@ pub trait Application {
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
     fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
     fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {}
+    fn on_key_shortcut(&mut self, _state: &mut EngineState, _shortcut: crate::keyboard::shortcuts::ShortcutAction) {}
 }

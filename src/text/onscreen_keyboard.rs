@@ -341,6 +341,36 @@ impl OnScreenKeyboard {
         None
     }
     
+    /// Check if an action key should repeat (for undo/redo)
+    pub fn check_action_key_hold_repeat(&mut self, now: Instant) -> Option<KeyType> {
+        if let Some(key_type) = self.held_key_type {
+            // Only repeat undo/redo keys
+            match key_type {
+                KeyType::Undo | KeyType::Redo => {
+                    if let Some(start_time) = self.held_key_start_time {
+                        // 0.3s delay before starting repeat (faster than text keys)
+                        let repeat_delay = Duration::from_millis(300);
+                        let repeat_interval = Duration::from_millis(100); // Moderate speed
+                        
+                        if now.duration_since(start_time) >= repeat_delay {
+                            if let Some(last_repeat) = self.last_repeat_time {
+                                if now.duration_since(last_repeat) >= repeat_interval {
+                                    self.last_repeat_time = Some(now);
+                                    return Some(key_type);
+                                }
+                            } else {
+                                self.last_repeat_time = Some(now);
+                                return Some(key_type);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    
     fn key_type_to_char(&self, key_type: KeyType) -> Option<char> {
         match key_type {
             KeyType::Char(ch) => {
@@ -469,6 +499,7 @@ impl OnScreenKeyboard {
         // Shift is tracked separately for cursor movement, not repeat
         let should_repeat = match key_type {
             KeyType::Char(_) | KeyType::Backspace | KeyType::Space | KeyType::Return => true,
+            KeyType::Undo | KeyType::Redo => true, // Allow undo/redo to repeat
             KeyType::Shift => {
                 // Track shift for cursor movement, but don't repeat
                 self.held_key_type = Some(key_type);

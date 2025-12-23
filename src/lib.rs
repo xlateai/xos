@@ -20,6 +20,7 @@ pub mod tensor;
 pub mod shapes;
 pub mod python;
 pub mod clipboard;
+pub mod keyboard;
 
 pub mod py_engine {
     // Python application wrapper - TODO: Reimplement with proper rustpython API
