@@ -80,3 +80,4 @@ The clipboard bridge works as follows:
    - `UIPasteboard` doesn't require special permissions
    - Works automatically on iOS 15.1+
 
+

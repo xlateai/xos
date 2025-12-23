@@ -480,24 +480,37 @@ impl Application for TextApp {
         self.last_tap_scrolled = true;
     }
 
-    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+    fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
         // Don't process keys if read-only
         if self.read_only {
             return;
         }
         
+        // Get content height for cursor visibility checks
+        let shape = state.frame.array.shape();
+        let height = shape[0] as f32;
+        let safe_region = &state.frame.safe_region_boundaries;
+        let content_top = safe_region.y1 * height;
+        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let content_bottom = keyboard_top_y * height;
+        let content_height = content_bottom - content_top;
+        
         match ch {
             ARROW_LEFT => {
                 self.move_cursor_left();
+                self.ensure_cursor_visible(content_height);
             }
             ARROW_RIGHT => {
                 self.move_cursor_right();
+                self.ensure_cursor_visible(content_height);
             }
             ARROW_UP => {
                 self.move_cursor_up();
+                self.ensure_cursor_visible(content_height);
             }
             ARROW_DOWN => {
                 self.move_cursor_down();
+                self.ensure_cursor_visible(content_height);
             }
             '\t' => {
                 self.save_undo_state();
@@ -517,6 +530,7 @@ impl Application for TextApp {
                 }
                 self.text_rasterizer.text = new_text;
                 self.cursor_position += 4;
+                self.ensure_cursor_visible(content_height);
             }
             '\r' | '\n' => {
                 self.save_undo_state();
@@ -536,6 +550,7 @@ impl Application for TextApp {
                 }
                 self.text_rasterizer.text = new_text;
                 self.cursor_position += 1;
+                self.ensure_cursor_visible(content_height);
             }
             '\u{8}' => {
                 // Backspace - delete selection if present, otherwise delete character before cursor
@@ -554,6 +569,7 @@ impl Application for TextApp {
                         self.cursor_position -= 1;
                     }
                 }
+                self.ensure_cursor_visible(content_height);
             }
             _ => {
                 if !ch.is_control() {
@@ -574,6 +590,7 @@ impl Application for TextApp {
                     }
                     self.text_rasterizer.text = new_text;
                     self.cursor_position += 1;
+                    self.ensure_cursor_visible(content_height);
                 }
             }
         }
@@ -933,6 +950,34 @@ impl Application for TextApp {
 }
 
 impl TextApp {
+    /// Auto-scroll to keep cursor visible on screen
+    fn ensure_cursor_visible(&mut self, content_height: f32) {
+        let (_, cursor_baseline_y) = self.get_cursor_screen_position();
+        let line_height = self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
+        
+        // Calculate cursor top and bottom in text coordinates
+        let cursor_top = cursor_baseline_y - self.text_rasterizer.ascent;
+        let cursor_bottom = cursor_baseline_y + self.text_rasterizer.descent;
+        
+        // Calculate visible range in text coordinates
+        let visible_top = self.scroll_y;
+        let visible_bottom = self.scroll_y + content_height;
+        
+        // Add padding to make scrolling feel more natural
+        let padding = line_height * 0.5;
+        
+        // If cursor is above visible area, scroll up
+        if cursor_top < visible_top + padding {
+            self.scroll_y = (cursor_top - padding).max(0.0);
+            self.scroll_velocity = 0.0; // Stop momentum when auto-scrolling
+        }
+        // If cursor is below visible area, scroll down
+        else if cursor_bottom > visible_bottom - padding {
+            self.scroll_y = cursor_bottom + padding - content_height;
+            self.scroll_velocity = 0.0; // Stop momentum when auto-scrolling
+        }
+    }
+    
     fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
@@ -1230,7 +1275,16 @@ impl TextApp {
         }
     }
     
-    fn handle_action_key(&mut self, action: KeyType, _state: &mut EngineState) {
+    fn handle_action_key(&mut self, action: KeyType, state: &mut EngineState) {
+        // Get content height for cursor visibility checks
+        let shape = state.frame.array.shape();
+        let height = shape[0] as f32;
+        let safe_region = &state.frame.safe_region_boundaries;
+        let content_top = safe_region.y1 * height;
+        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let content_bottom = keyboard_top_y * height;
+        let content_height = content_bottom - content_top;
+        
         match action {
             KeyType::Mouse => {
                 // Mouse/trackpad toggle is handled by the keyboard itself
@@ -1250,8 +1304,6 @@ impl TextApp {
                     
                     // Copy to system clipboard
                     let _ = clipboard::set_contents(&selected_text);
-                    
-                    eprintln!("Copied: {}", selected_text);
                 }
             }
             KeyType::Cut => {
@@ -1269,8 +1321,6 @@ impl TextApp {
                     // Copy to system clipboard
                     let _ = clipboard::set_contents(&selected_text);
                     
-                    eprintln!("Cut: {}", selected_text);
-                    
                     // Delete selected text
                     let mut new_text = String::new();
                     for (i, &c) in text_chars.iter().enumerate() {
@@ -1282,6 +1332,7 @@ impl TextApp {
                     self.cursor_position = start_idx;
                     self.selection_start = None;
                     self.selection_end = None;
+                    self.ensure_cursor_visible(content_height);
                 }
             }
             KeyType::Paste => {
@@ -1323,6 +1374,7 @@ impl TextApp {
                     }
                     self.text_rasterizer.text = new_text;
                     self.cursor_position += clipboard_text.chars().count();
+                    self.ensure_cursor_visible(content_height);
                 }
             }
             KeyType::SelectAll => {
@@ -1349,6 +1401,7 @@ impl TextApp {
                     // Clear selection
                     self.selection_start = None;
                     self.selection_end = None;
+                    self.ensure_cursor_visible(content_height);
                 }
             }
             KeyType::Redo => {
@@ -1361,6 +1414,7 @@ impl TextApp {
                     // Clear selection
                     self.selection_start = None;
                     self.selection_end = None;
+                    self.ensure_cursor_visible(content_height);
                 }
             }
             _ => {}
