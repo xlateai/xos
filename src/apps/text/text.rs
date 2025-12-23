@@ -49,9 +49,8 @@ pub struct TextApp {
     selection_start: Option<usize>, // Character index where selection starts
     selection_end: Option<usize>,   // Character index where selection ends
     selecting: bool,                // True when actively selecting text (dragging)
-    // iOS laser selection mode
+    // Laser selection mode (works on any platform with onscreen keyboard)
     laser_selection_mode: bool,     // True when laser is in selection mode
-    #[allow(dead_code)] // Used in iOS-specific code
     laser_selection_anchor: Option<usize>, // Anchor point for laser selection
     // Configuration flags
     pub show_cursor: bool,
@@ -695,13 +694,17 @@ impl Application for TextApp {
             let dy = (state.mouse.y - self.last_tap_y).abs();
             // Start dragging/selecting if moved more than 5 pixels
             if dx > 5.0 || dy > 5.0 {
-                // On non-iOS platforms or when keyboard is hidden, horizontal movement starts selection
-                // On iOS with keyboard visible, vertical movement is scrolling
-                #[cfg(target_os = "ios")]
-                {
-                    if state.keyboard.onscreen.is_shown() {
-                        // iOS with keyboard: vertical is scroll, horizontal is selection
-                        if dx > dy {
+                // When keyboard is shown (mobile mode): vertical is scroll, horizontal is selection
+                // When keyboard is hidden (desktop mode): horizontal is selection, vertical is scroll
+                if state.keyboard.onscreen.is_shown() {
+                    // Mobile mode (keyboard visible): vertical drag scrolls, horizontal drag selects
+                    if dy > dx {
+                        // Vertical movement dominates - scroll
+                        self.dragging = true;
+                        self.last_mouse_y = state.mouse.y;
+                    } else {
+                        // Horizontal movement dominates - select (but only if not using laser mode)
+                        if !self.laser_selection_mode {
                             self.selecting = true;
                             // Get character index at initial tap position for selection start
                             let safe_region = &state.frame.safe_region_boundaries;
@@ -713,27 +716,10 @@ impl Application for TextApp {
                             self.selection_start = Some(start_char_idx);
                             self.selection_end = Some(start_char_idx);
                             self.cursor_position = start_char_idx;
-                        } else {
-                            self.dragging = true;
-                            self.last_mouse_y = state.mouse.y;
                         }
-                    } else {
-                        // iOS without keyboard: start selection
-                        self.selecting = true;
-                        let safe_region = &state.frame.safe_region_boundaries;
-                        let content_top = safe_region.y1 * height;
-                        let text_x = self.last_tap_x;
-                        let text_y = self.last_tap_y - content_top + self.scroll_y;
-                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
-                        
-                        self.selection_start = Some(start_char_idx);
-                        self.selection_end = Some(start_char_idx);
-                        self.cursor_position = start_char_idx;
                     }
-                }
-                #[cfg(not(target_os = "ios"))]
-                {
-                    // Non-iOS: horizontal movement is selection, vertical is scroll
+                } else {
+                    // Desktop mode (keyboard hidden): horizontal drag selects, vertical drag scrolls
                     if dx > dy {
                         self.selecting = true;
                         let safe_region = &state.frame.safe_region_boundaries;
@@ -786,16 +772,13 @@ impl Application for TextApp {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
             
-            // iOS laser selection mode: if shift was just pressed and we have an anchor, enter selection mode
-            #[cfg(target_os = "ios")]
-            {
-                if state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift) {
-                    if let Some(anchor) = self.laser_selection_anchor {
-                        // Enter laser selection mode
-                        self.laser_selection_mode = true;
-                        self.selection_start = Some(anchor);
-                        self.selection_end = Some(self.cursor_position);
-                    }
+            // Laser selection mode: if shift was just pressed and we have an anchor, enter selection mode
+            if state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift) {
+                if let Some(anchor) = self.laser_selection_anchor {
+                    // Enter laser selection mode
+                    self.laser_selection_mode = true;
+                    self.selection_start = Some(anchor);
+                    self.selection_end = Some(self.cursor_position);
                 }
             }
             
@@ -806,12 +789,9 @@ impl Application for TextApp {
         self.touch_started_on_keyboard = false;
         
         // Exit laser selection mode if clicking outside keyboard
-        #[cfg(target_os = "ios")]
-        {
-            if self.laser_selection_mode {
-                self.laser_selection_mode = false;
-                self.laser_selection_anchor = None;
-            }
+        if self.laser_selection_mode {
+            self.laser_selection_mode = false;
+            self.laser_selection_anchor = None;
         }
         
         // Get keyboard region for double-tap detection
@@ -871,19 +851,15 @@ impl Application for TextApp {
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
         // Release all keyboard keys (but track if shift was held)
-        #[cfg(target_os = "ios")]
         let was_shift_held = state.keyboard.onscreen.get_held_key_type() == Some(KeyType::Shift);
         state.keyboard.onscreen.on_mouse_up();
         
-        // iOS laser selection mode: if shift was held and released, prepare for selection mode
-        #[cfg(target_os = "ios")]
-        {
-            if was_shift_held && self.shift_dot_x.is_some() {
-                // User released shift laser - next shift activation enters selection mode
-                if !self.laser_selection_mode {
-                    // Mark that we're ready to enter selection mode on next shift press
-                    self.laser_selection_anchor = Some(self.cursor_position);
-                }
+        // Laser selection mode: if shift was held and released, prepare for selection mode
+        if was_shift_held && self.shift_dot_x.is_some() {
+            // User released shift laser - next shift activation enters selection mode
+            if !self.laser_selection_mode {
+                // Mark that we're ready to enter selection mode on next shift press
+                self.laser_selection_anchor = Some(self.cursor_position);
             }
         }
         
