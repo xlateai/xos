@@ -3,14 +3,13 @@ import xos
 # Configuration
 NUM_LINES = 256
 BUFFER_SIZE = 256
-
-# Use only the most recent K samples to compute normalization.
-# Smaller = more responsive, larger = more stable.
 NORM_WINDOW = 32
 
 BASELINE_LENGTH = 0.04
 MAX_EXTRA_LENGTH = 0.45
 LINE_THICKNESS = 0.0012
+
+EPSILON = 1e-6  # threshold for "non-zero" magnetometer
 
 
 class MagnetoHorizontalWaveform(xos.Application):
@@ -24,21 +23,21 @@ class MagnetoHorizontalWaveform(xos.Application):
         self.y_raw = [0.0] * BUFFER_SIZE
         self.z_raw = [0.0] * BUFFER_SIZE
 
-        # Committed ring (rendered; never recomputed)
+        # Committed (write-once)
         self.mag_norm = [0.0] * BUFFER_SIZE
         self.colors = [(128, 128, 128, 255)] * BUFFER_SIZE
 
         self.buffer_index = 0
         self.sample_count = 0
+
         self.seeded = False
+        self.waiting_for_signal = True  # 👈 KEY ADDITION
 
     def setup(self):
         self.magnetometer = xos.sensors.magnetometer()
-        xos.print("Magneto Horizontal Waveform — window-norm + frozen propagation")
+        xos.print("Magneto Horizontal Waveform — waiting for first valid signal")
 
     def _compute_window_minmax(self, window_n):
-        # Compute min/max over the most recent window_n samples in ring order.
-        # The newest sample is at (buffer_index - 1).
         newest = (self.buffer_index - 1) % BUFFER_SIZE
 
         min_mag = max_mag = self.mag_raw[newest]
@@ -70,9 +69,23 @@ class MagnetoHorizontalWaveform(xos.Application):
 
     def tick(self):
         mx, my, mz = self.magnetometer.read()
-        magnitude = (mx * mx + my * my + mz * mz) ** 0.5
+        mag_sq = mx * mx + my * my + mz * mz
 
-        # Seed once so the whole screen starts "defined" immediately
+        # --------------------------------------------------
+        # WAIT until first non-zero magnetometer reading
+        # --------------------------------------------------
+        if self.waiting_for_signal:
+            if mag_sq < EPSILON:
+                return  # do nothing yet
+            else:
+                self.waiting_for_signal = False
+                xos.print("Magnetometer active — starting waveform")
+
+        magnitude = mag_sq ** 0.5
+
+        # --------------------------------------------------
+        # Seed buffers ONCE with first valid sample
+        # --------------------------------------------------
         if not self.seeded:
             for k in range(BUFFER_SIZE):
                 self.mag_raw[k] = magnitude
@@ -81,11 +94,14 @@ class MagnetoHorizontalWaveform(xos.Application):
                 self.z_raw[k] = mz
                 self.mag_norm[k] = 0.0
                 self.colors[k] = (128, 128, 128, 255)
+
+            self.seeded = True
             self.sample_count = 1
             self.buffer_index = 0
-            self.seeded = True
 
-        # --- write raw sample into ring ---
+        # --------------------------------------------------
+        # Write raw sample
+        # --------------------------------------------------
         i = self.buffer_index
         self.mag_raw[i] = magnitude
         self.x_raw[i] = mx
@@ -96,10 +112,10 @@ class MagnetoHorizontalWaveform(xos.Application):
         if self.sample_count < BUFFER_SIZE:
             self.sample_count += 1
 
-        # --- compute min/max over recent true window (immediate responsiveness) ---
-        window_n = self.sample_count
-        if window_n > NORM_WINDOW:
-            window_n = NORM_WINDOW
+        # --------------------------------------------------
+        # Normalize using true rolling window
+        # --------------------------------------------------
+        window_n = min(self.sample_count, NORM_WINDOW)
 
         (min_mag, max_mag,
          min_x, max_x,
@@ -112,22 +128,21 @@ class MagnetoHorizontalWaveform(xos.Application):
                 return default
             return (v - vmin) / rng
 
-        # --- commit normalized values at the sample that was just written ---
-        # The sample we just wrote is at (buffer_index - 1)
         wrote_idx = (self.buffer_index - 1) % BUFFER_SIZE
 
-        mag_n = normalize(magnitude, min_mag, max_mag, 0.0)
+        self.mag_norm[wrote_idx] = normalize(magnitude, min_mag, max_mag, 0.0)
 
         r = int(normalize(mx, min_x, max_x, 0.5) * 255)
         g = int(normalize(my, min_y, max_y, 0.5) * 255)
         b = int(normalize(mz, min_z, max_z, 0.5) * 255)
-
-        self.mag_norm[wrote_idx] = mag_n
         self.colors[wrote_idx] = (r, g, b, 255)
 
-        # --- render committed waveform (no re-normalizing old samples) ---
+        # --------------------------------------------------
+        # Render committed waveform
+        # --------------------------------------------------
         width = self.get_width()
         height = self.get_height()
+
         center_x = width * 0.5
         spacing = height / NUM_LINES
         thickness_px = LINE_THICKNESS * height
@@ -154,6 +169,6 @@ class MagnetoHorizontalWaveform(xos.Application):
 
 
 if __name__ == "__main__":
-    xos.print("Magnetometer Horizontal Waveform — 256 lines")
+    xos.print("Magnetometer Horizontal Waveform — gated start")
     game = MagnetoHorizontalWaveform()
     game.run()
