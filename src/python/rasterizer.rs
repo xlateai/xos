@@ -2,14 +2,14 @@ use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, functio
 use std::sync::Mutex;
 
 // Thread-safe wrapper for raw pointer
-struct FrameBufferPtr(*mut u8);
+pub(crate) struct FrameBufferPtr(pub(crate) *mut u8);
 unsafe impl Send for FrameBufferPtr {}
 unsafe impl Sync for FrameBufferPtr {}
 
 // Global pointer to the current frame buffer (set during tick)
-static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
-static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
-static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
+pub(crate) static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
+pub(crate) static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
+pub(crate) static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
 
 /// Called by PyApp before tick to set the frame buffer pointer
 pub fn set_frame_buffer_context(buffer: &mut [u8], width: usize, height: usize) {

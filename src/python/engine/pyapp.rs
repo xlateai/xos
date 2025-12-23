@@ -15,7 +15,12 @@ class _ArrayWrapper:
     
     def __setitem__(self, key, value):
         if isinstance(key, slice) and key == slice(None, None, None):
-            # Full slice assignment - call Rust function to fill buffer
+            # Full slice assignment
+            # Check if value is a sentinel dict indicating direct fill already happened
+            if isinstance(value, dict) and value.get('_direct_fill', False):
+                # Data already written directly to buffer by Rust - ZERO COPY! Do nothing.
+                return
+            # Otherwise, call Rust function to fill buffer
             import xos
             xos.rasterizer._fill_buffer(self._data, value)
         else:
