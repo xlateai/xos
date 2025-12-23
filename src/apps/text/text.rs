@@ -1,6 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::text::text_rasterization::TextRasterizer;
 use crate::text::onscreen_keyboard::KeyType;
+use crate::clipboard;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 
@@ -44,6 +45,7 @@ pub struct TextApp {
     trackpad_active: bool,
     trackpad_last_tap_time: Option<Instant>,
     trackpad_selecting: bool,
+    trackpad_moved: bool, // Track if mouse moved during tap (to distinguish tap from drag)
     // Trackpad laser pointer
     trackpad_laser_x: Option<f32>, // Screen coordinates
     trackpad_laser_y: Option<f32>, // Screen coordinates
@@ -117,6 +119,7 @@ impl TextApp {
             trackpad_active: false,
             trackpad_last_tap_time: None,
             trackpad_selecting: false,
+            trackpad_moved: false,
             trackpad_laser_x: None,
             trackpad_laser_y: None,
             trackpad_last_mouse_x: None,
@@ -211,7 +214,7 @@ impl Application for TextApp {
         }
         
         // Extract all needed values in a block to release borrows
-        let (width, height, content_top, content_bottom, is_trackpad_mode) = {
+        let (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown) = {
             let shape = state.frame.array.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
@@ -225,8 +228,9 @@ impl Application for TextApp {
             let content_bottom = keyboard_top_y * height; // Top of keyboard area
             
             let is_trackpad_mode = state.keyboard.onscreen.is_trackpad_mode();
+            let is_keyboard_shown = state.keyboard.onscreen.is_shown();
             
-            (width, height, content_top, content_bottom, is_trackpad_mode)
+            (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
         
         // Now get mutable buffer (after all immutable borrows are released)
@@ -466,8 +470,8 @@ impl Application for TextApp {
             }
         }
         
-        // Draw trackpad laser pointer if in trackpad mode
-        if is_trackpad_mode {
+        // Draw trackpad laser pointer if in trackpad mode AND keyboard is visible
+        if is_trackpad_mode && is_keyboard_shown {
             // Initialize laser if not already set
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 // Center of available content area (using already extracted values)
@@ -626,9 +630,21 @@ impl Application for TextApp {
                     let mouse_dx = state.mouse.x - last_mouse_x;
                     let mouse_dy = state.mouse.y - last_mouse_y;
                     
-                    // Move laser 1:1 with mouse movement (no acceleration)
-                    let new_laser_x = (laser_x + mouse_dx).max(0.0).min(width);
-                    let new_laser_y = (laser_y + mouse_dy).max(0.0).min(height);
+                    // Track if mouse moved (for tap vs drag detection)
+                    if mouse_dx.abs() > 2.0 || mouse_dy.abs() > 2.0 {
+                        self.trackpad_moved = true;
+                    }
+                    
+                    // Move laser 1.1x with mouse movement (10% faster)
+                    let new_laser_x = (laser_x + mouse_dx * 1.1).max(0.0).min(width);
+                    
+                    // Constrain laser to stay above keyboard
+                    let safe_region = &state.frame.safe_region_boundaries;
+                    let content_top = safe_region.y1 * height;
+                    let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+                    let keyboard_top = keyboard_top_y * height;
+                    
+                    let new_laser_y = (laser_y + mouse_dy * 1.1).max(content_top).min(keyboard_top);
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
@@ -791,8 +807,12 @@ impl Application for TextApp {
                     self.selection_end = Some(self.cursor_position);
                     self.trackpad_last_tap_time = None; // Reset to prevent triple-tap
                 } else {
+                    // Record tap time (selection will be cleared on release if no drag)
                     self.trackpad_last_tap_time = Some(now);
                 }
+                
+                // Reset moved flag
+                self.trackpad_moved = false;
                 
                 return;
             }
@@ -900,9 +920,16 @@ impl Application for TextApp {
         self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
+        // Clear selection on tap release if no drag occurred
+        if self.trackpad_active && !self.trackpad_moved && !self.trackpad_selecting {
+            self.selection_start = None;
+            self.selection_end = None;
+        }
+        
         // Clear trackpad tracking (but keep laser visible)
         self.trackpad_active = false;
         self.trackpad_selecting = false;
+        self.trackpad_moved = false;
         self.trackpad_last_mouse_x = None;
         self.trackpad_last_mouse_y = None;
     }
@@ -1105,25 +1132,11 @@ impl TextApp {
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
                     
-                    // Store in internal clipboard
+                    // Store in internal clipboard as fallback
                     self.clipboard_content = selected_text.clone();
                     
-                    // Also try to copy to system clipboard
-                    #[cfg(target_os = "macos")]
-                    {
-                        use std::process::Command;
-                        let _ = Command::new("pbcopy")
-                            .arg(&selected_text)
-                            .stdin(std::process::Stdio::piped())
-                            .spawn()
-                            .and_then(|mut child| {
-                                use std::io::Write;
-                                if let Some(stdin) = child.stdin.as_mut() {
-                                    stdin.write_all(selected_text.as_bytes())?;
-                                }
-                                child.wait()
-                            });
-                    }
+                    // Copy to system clipboard
+                    let _ = clipboard::set_contents(&selected_text);
                     
                     eprintln!("Copied: {}", selected_text);
                 }
@@ -1137,25 +1150,11 @@ impl TextApp {
                     let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
                     let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
                     
-                    // Store in internal clipboard
+                    // Store in internal clipboard as fallback
                     self.clipboard_content = selected_text.clone();
                     
-                    // Also try to copy to system clipboard
-                    #[cfg(target_os = "macos")]
-                    {
-                        use std::process::Command;
-                        let _ = Command::new("pbcopy")
-                            .arg(&selected_text)
-                            .stdin(std::process::Stdio::piped())
-                            .spawn()
-                            .and_then(|mut child| {
-                                use std::io::Write;
-                                if let Some(stdin) = child.stdin.as_mut() {
-                                    stdin.write_all(selected_text.as_bytes())?;
-                                }
-                                child.wait()
-                            });
-                    }
+                    // Copy to system clipboard
+                    let _ = clipboard::set_contents(&selected_text);
                     
                     eprintln!("Cut: {}", selected_text);
                     
@@ -1176,22 +1175,9 @@ impl TextApp {
                 // Paste from clipboard
                 self.save_undo_state();
                 
-                // Try to get from system clipboard first
-                let clipboard_text = {
-                    #[cfg(target_os = "macos")]
-                    {
-                        use std::process::Command;
-                        Command::new("pbpaste")
-                            .output()
-                            .ok()
-                            .and_then(|output| String::from_utf8(output.stdout).ok())
-                            .unwrap_or_else(|| self.clipboard_content.clone())
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        self.clipboard_content.clone()
-                    }
-                };
+                // Get from system clipboard, fall back to internal clipboard
+                let clipboard_text = clipboard::get_contents()
+                    .unwrap_or_else(|| self.clipboard_content.clone());
                 
                 if !clipboard_text.is_empty() {
                     // Delete selection if any
