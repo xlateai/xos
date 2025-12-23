@@ -2,6 +2,33 @@ use rustpython_vm::{Interpreter, PyObjectRef, AsObject};
 use crate::engine::{Application, EngineState};
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
+class _ArrayResult:
+    """Wrapper for list results that provides nice string representation"""
+    def __init__(self, data, shape=None):
+        self._data = data
+        self._shape = shape
+    
+    def __iter__(self):
+        return iter(self._data)
+    
+    def __len__(self):
+        return len(self._data)
+    
+    def __getitem__(self, idx):
+        return self._data[idx]
+    
+    def __str__(self):
+        if not self._data:
+            return "xos.Array(empty)"
+        min_val = min(self._data)
+        max_val = max(self._data)
+        mean_val = sum(self._data) / len(self._data)
+        shape_str = f"shape={self._shape}" if self._shape else f"len={len(self._data)}"
+        return f"xos.Array({shape_str}, min={min_val:.1f}, mean={mean_val:.1f}, max={max_val:.1f})"
+    
+    def __repr__(self):
+        return self.__str__()
+
 class _ArrayWrapper:
     """Wrapper for array dict that supports slice assignment"""
     def __init__(self, data):
@@ -20,7 +47,7 @@ class _ArrayWrapper:
             if isinstance(value, dict) and value.get('_direct_fill', False):
                 # Data already written directly to buffer by Rust - ZERO COPY! Do nothing.
                 return
-            # Otherwise, call Rust function to fill buffer
+            # Call Rust function to fill buffer (handles lists and _ArrayResult)
             import xos
             xos.rasterizer._fill_buffer(self._data, value)
         else:
@@ -29,6 +56,12 @@ class _ArrayWrapper:
     @property
     def shape(self):
         return self._data.get('shape', ())
+    
+    def __str__(self):
+        return f"xos.Array(shape={self.shape})"
+    
+    def __repr__(self):
+        return self.__str__()
 
 class _FrameWrapper:
     """Wrapper to make frame dict behave like an object with methods"""

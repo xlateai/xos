@@ -413,11 +413,27 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
-    // Parse values list
-    let values = values_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("values must be a list".to_string()))?;
+    // Parse values - can be a list or an object with _data attribute
+    // Get the data attribute upfront if needed (to avoid lifetime issues)
+    let data_attr_holder = if values_list.downcast_ref::<rustpython_vm::builtins::PyList>().is_none() {
+        vm.get_attribute_opt(values_list.clone(), "_data")
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     
-    let values_vec = values.borrow_vec();
+    // Now get the actual list
+    let actual_list = if let Some(list) = values_list.downcast_ref::<rustpython_vm::builtins::PyList>() {
+        list
+    } else if let Some(ref data_obj) = data_attr_holder {
+        data_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
+            .ok_or_else(|| vm.new_type_error("_data must be a list".to_string()))?
+    } else {
+        return Err(vm.new_type_error("values must be a list or have _data attribute".to_string()));
+    };
+    
+    let values_vec = actual_list.borrow_vec();
     
     // Copy values 1:1 into buffer
     let copy_len = values_vec.len().min(buffer_len);

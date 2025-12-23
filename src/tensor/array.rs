@@ -308,6 +308,80 @@ impl<T: Copy> Array<T> {
     }
 }
 
+impl Array<u8> {
+    /// Get the minimum value in the array
+    pub fn min(&self) -> Option<u8> {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().copied().min(),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => None,
+        }
+    }
+
+    /// Get the maximum value in the array
+    pub fn max(&self) -> Option<u8> {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().copied().max(),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => None,
+        }
+    }
+
+    /// Get the sum of all values
+    pub fn sum(&self) -> u64 {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().map(|&x| x as u64).sum(),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => 0,
+        }
+    }
+
+    /// Get the mean (average) value
+    pub fn mean(&self) -> f64 {
+        if self.is_empty() {
+            return 0.0;
+        }
+        self.sum() as f64 / self.len() as f64
+    }
+}
+
+impl Array<f32> {
+    /// Get the minimum value in the array
+    pub fn min(&self) -> Option<f32> {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().copied().min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => None,
+        }
+    }
+
+    /// Get the maximum value in the array
+    pub fn max(&self) -> Option<f32> {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().copied().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => None,
+        }
+    }
+
+    /// Get the sum of all values
+    pub fn sum(&self) -> f32 {
+        match &self.storage {
+            Storage::Cpu(vec) => vec.iter().sum(),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Storage::Metal { .. } => 0.0,
+        }
+    }
+
+    /// Get the mean (average) value
+    pub fn mean(&self) -> f32 {
+        if self.is_empty() {
+            return 0.0;
+        }
+        self.sum() / self.len() as f32
+    }
+}
+
 
 
 

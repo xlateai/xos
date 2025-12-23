@@ -1,8 +1,8 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs};
 
 /// xos.ops.shift(array, dimension=0, amount=1, fill_value=0.0)
 /// Fast shift operation for arrays
-fn shift(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn shift(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (array, dimension, amount, fill_value): (
         rustpython_vm::PyObjectRef,
         Option<i64>,
@@ -90,14 +90,5 @@ fn shift(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     Ok(vm.ctx.none())
-}
-
-/// Create the ops module
-pub fn make_ops_module(vm: &VirtualMachine) -> PyRef<PyModule> {
-    let module = vm.new_module("xos.ops", vm.ctx.new_dict(), None);
-    
-    module.set_attr("shift", vm.new_function("shift", shift), vm).unwrap();
-    
-    module
 }
 
