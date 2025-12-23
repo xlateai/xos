@@ -521,3 +521,43 @@ pub extern "C" fn xos_magnetometer_cleanup() {
     *mag = None;
 }
 
+// ===== Clipboard FFI =====
+
+/// Get clipboard contents from iOS UIPasteboard
+/// Returns a C string with the clipboard contents, or null if empty/error
+/// The caller must free the returned string with xos_clipboard_free_string
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_clipboard_get_contents() -> *mut c_char {
+    // This function should be called from Swift, which will interface with UIPasteboard
+    // For now, return null to indicate it needs Swift implementation
+    // Swift side will implement: UIPasteboard.general.string
+    ptr::null_mut()
+}
+
+/// Set clipboard contents to iOS UIPasteboard
+/// Returns 0 on success, non-zero on error
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_clipboard_set_contents(text: *const c_char) -> i32 {
+    if text.is_null() {
+        return 1;
+    }
+    
+    // This function should be called from Swift, which will interface with UIPasteboard
+    // For now, return error to indicate it needs Swift implementation
+    // Swift side will implement: UIPasteboard.general.string = text
+    1
+}
+
+/// Free a string returned by xos_clipboard_get_contents
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_clipboard_free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = CString::from_raw(ptr);
+        }
+    }
+}
+

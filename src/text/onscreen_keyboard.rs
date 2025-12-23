@@ -277,7 +277,8 @@ impl OnScreenKeyboard {
     }
     
     pub fn is_trackpad_mode(&self) -> bool {
-        self.trackpad_mode
+        // Trackpad mode is only active when keyboard is shown
+        self.trackpad_mode && !self.minimized
     }
 
     pub fn check_key_type_at_position(&self, mx: f32, my: f32, w: f32, h: f32) -> Option<KeyType> {
