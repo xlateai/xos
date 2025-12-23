@@ -21,8 +21,9 @@ const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixel
 // Scroll physics constants
 const SCROLL_MOMENTUM_DECAY: f32 = 0.95; // How quickly momentum decays (0-1, higher = longer momentum)
 const SCROLL_MOMENTUM_THRESHOLD: f32 = 0.1; // Stop momentum below this velocity
-const SCROLL_ELASTIC_STRENGTH: f32 = 0.096; // Strength of elastic bounce at edges (lower = softer) - increased by 20%
+const SCROLL_ELASTIC_STRENGTH: f32 = 0.04; // Strength of elastic bounce at edges (lower = softer, more springy)
 const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 5.0; // Don't trigger double-tap if scrolling faster than this
+const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25; // How far off-screen you can scroll (0.25 = 25% of visible height on each side)
 
 // Arrow key characters (using Unicode arrow symbols)
 const ARROW_LEFT: char = '\u{2190}';  // ←
@@ -240,22 +241,24 @@ impl Application for TextApp {
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
         
-        // === SIMPLIFIED SCROLL PHYSICS ===
+        // === SCROLL PHYSICS ===
         
-        // 1. Apply momentum with decay
-        let current_time = Instant::now();
-        if let Some(last_time) = self.last_frame_time {
-            let dt = current_time.duration_since(last_time).as_secs_f32();
-            
-            // Apply velocity to scroll position
-            if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
-                self.scroll_y += self.scroll_velocity * dt;
-                self.scroll_velocity *= SCROLL_MOMENTUM_DECAY; // Decay momentum
-            } else {
-                self.scroll_velocity = 0.0; // Stop if below threshold
+        // Only apply momentum when NOT dragging (after finger release)
+        if !self.dragging {
+            let current_time = Instant::now();
+            if let Some(last_time) = self.last_frame_time {
+                let dt = current_time.duration_since(last_time).as_secs_f32();
+                
+                // Apply velocity to scroll position
+                if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
+                    self.scroll_y += self.scroll_velocity * dt;
+                    self.scroll_velocity *= SCROLL_MOMENTUM_DECAY; // Decay momentum
+                } else {
+                    self.scroll_velocity = 0.0; // Stop if below threshold
+                }
             }
+            self.last_frame_time = Some(current_time);
         }
-        self.last_frame_time = Some(current_time);
         
         // 2. Calculate elastic bounds based on safe regions
         // Text should be able to scroll from top safe region to bottom safe region
@@ -272,40 +275,42 @@ impl Application for TextApp {
             line_height
         };
         
-        // 3. Apply elastic resistance when beyond natural bounds
-        // Keep text on screen: don't let it scroll completely off either edge
+        // 3. Calculate natural content bounds
         let natural_min = 0.0;
-        let natural_max = (text_content_height - visible_height).max(0.0); // Keep at least one screen visible
+        let natural_max = (text_content_height - visible_height).max(0.0);
         
-        if self.scroll_y < natural_min {
-            // Scrolled above top - pull back
-            let overshoot = natural_min - self.scroll_y;
-            self.scroll_y += overshoot * SCROLL_ELASTIC_STRENGTH;
-            self.scroll_velocity *= 0.8; // Dampen momentum at edge
-        } else if self.scroll_y > natural_max {
-            // Scrolled below bottom - pull back
-            let overshoot = self.scroll_y - natural_max;
-            self.scroll_y -= overshoot * SCROLL_ELASTIC_STRENGTH;
-            self.scroll_velocity *= 0.8; // Dampen momentum at edge
-        }
+        // 4. Calculate overscroll limits (based on screen percentage)
+        let overscroll_distance = visible_height * SCROLL_OVERSCROLL_LIMIT;
+        let limit_min = natural_min - overscroll_distance;
+        let limit_max = natural_max + overscroll_distance;
         
-        // 4. Hard clamp to keep text on screen (with generous overscroll for small content)
-        // For small content (1-2 lines), allow much more overscroll for better UX
-        let num_lines = self.text_rasterizer.lines.len();
-        let overscroll_allowance = if num_lines <= 2 {
-            // For 1-2 lines, allow 3x more overscroll
-            line_height * 3.0
-        } else if num_lines <= 5 {
-            // For 3-5 lines, allow 2x more overscroll
-            line_height * 2.0
+        // 5. Apply limits and physics
+        if !self.dragging {
+            // Only apply elastic resistance and dampening after finger release
+            
+            // Elastic pull-back when beyond natural bounds
+            if self.scroll_y < natural_min {
+                let overshoot = natural_min - self.scroll_y;
+                self.scroll_y += overshoot * SCROLL_ELASTIC_STRENGTH;
+                self.scroll_velocity *= 0.8; // Dampen momentum at edge
+            } else if self.scroll_y > natural_max {
+                let overshoot = self.scroll_y - natural_max;
+                self.scroll_y -= overshoot * SCROLL_ELASTIC_STRENGTH;
+                self.scroll_velocity *= 0.8; // Dampen momentum at edge
+            }
+            
+            // Hard clamp at absolute limits (with extra dampening)
+            if self.scroll_y < limit_min {
+                self.scroll_y = limit_min;
+                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
+            } else if self.scroll_y > limit_max {
+                self.scroll_y = limit_max;
+                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
+            }
         } else {
-            // For longer content, use normal overscroll
-            line_height
-        };
-        
-        let hard_min = natural_min - overscroll_allowance;
-        let hard_max = natural_max + overscroll_allowance;
-        self.scroll_y = self.scroll_y.max(hard_min).min(hard_max);
+            // While dragging: only apply hard limits (no elastic pull-back)
+            self.scroll_y = self.scroll_y.max(limit_min).min(limit_max);
+        }
         
         // Now get mutable buffer (after all immutable borrows are released)
         let buffer = state.frame_buffer_mut();
@@ -701,48 +706,63 @@ impl Application for TextApp {
             let dy = (state.mouse.y - self.last_tap_y).abs();
             // Start dragging/selecting if moved more than 5 pixels
             if dx > 5.0 || dy > 5.0 {
-                // When keyboard is shown (mobile mode): vertical is scroll, horizontal is selection
-                // When keyboard is hidden (desktop mode): horizontal is selection, vertical is scroll
-                if state.keyboard.onscreen.is_shown() {
-                    // Mobile mode (keyboard visible): vertical drag scrolls, horizontal drag selects
-                    if dy > dx {
-                        // Vertical movement dominates - scroll
-                        self.dragging = true;
-                        self.last_mouse_y = state.mouse.y;
-                        self.last_drag_time = Some(Instant::now());
-                        self.last_drag_y = state.mouse.y;
+                // On iOS: never allow text selection from touch, only from trackpad
+                // On macOS: allow text selection from mouse drag
+                #[cfg(target_os = "ios")]
+                {
+                    // iOS: Always scroll on touch, selection only via trackpad (handled separately)
+                    self.dragging = true;
+                    self.last_mouse_y = state.mouse.y;
+                    self.last_drag_time = Some(Instant::now());
+                    self.last_drag_y = state.mouse.y;
+                }
+                
+                #[cfg(not(target_os = "ios"))]
+                {
+                    // macOS/Desktop: Allow text selection from click-drag
+                    // When keyboard is shown (mobile mode): vertical is scroll, horizontal is selection
+                    // When keyboard is hidden (desktop mode): horizontal is selection, vertical is scroll
+                    if state.keyboard.onscreen.is_shown() {
+                        // Mobile mode (keyboard visible): vertical drag scrolls, horizontal drag selects
+                        if dy > dx {
+                            // Vertical movement dominates - scroll
+                            self.dragging = true;
+                            self.last_mouse_y = state.mouse.y;
+                            self.last_drag_time = Some(Instant::now());
+                            self.last_drag_y = state.mouse.y;
+                        } else {
+                            // Horizontal movement dominates - select
+                            self.selecting = true;
+                            // Get character index at initial tap position for selection start
+                            let safe_region = &state.frame.safe_region_boundaries;
+                            let content_top = safe_region.y1 * height;
+                            let text_x = self.last_tap_x;
+                            let text_y = self.last_tap_y - content_top + self.scroll_y;
+                            let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                            
+                            self.selection_start = Some(start_char_idx);
+                            self.selection_end = Some(start_char_idx);
+                            self.cursor_position = start_char_idx;
+                        }
                     } else {
-                        // Horizontal movement dominates - select
-                        self.selecting = true;
-                        // Get character index at initial tap position for selection start
-                        let safe_region = &state.frame.safe_region_boundaries;
-                        let content_top = safe_region.y1 * height;
-                        let text_x = self.last_tap_x;
-                        let text_y = self.last_tap_y - content_top + self.scroll_y;
-                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
-                        
-                        self.selection_start = Some(start_char_idx);
-                        self.selection_end = Some(start_char_idx);
-                        self.cursor_position = start_char_idx;
-                    }
-                } else {
-                    // Desktop mode (keyboard hidden): horizontal drag selects, vertical drag scrolls
-                    if dx > dy {
-                        self.selecting = true;
-                        let safe_region = &state.frame.safe_region_boundaries;
-                        let content_top = safe_region.y1 * height;
-                        let text_x = self.last_tap_x;
-                        let text_y = self.last_tap_y - content_top + self.scroll_y;
-                        let start_char_idx = self.find_nearest_char_index(text_x, text_y);
-                        
-                        self.selection_start = Some(start_char_idx);
-                        self.selection_end = Some(start_char_idx);
-                        self.cursor_position = start_char_idx;
-                    } else {
-                        self.dragging = true;
-                        self.last_mouse_y = state.mouse.y;
-                        self.last_drag_time = Some(Instant::now());
-                        self.last_drag_y = state.mouse.y;
+                        // Desktop mode (keyboard hidden): horizontal drag selects, vertical drag scrolls
+                        if dx > dy {
+                            self.selecting = true;
+                            let safe_region = &state.frame.safe_region_boundaries;
+                            let content_top = safe_region.y1 * height;
+                            let text_x = self.last_tap_x;
+                            let text_y = self.last_tap_y - content_top + self.scroll_y;
+                            let start_char_idx = self.find_nearest_char_index(text_x, text_y);
+                            
+                            self.selection_start = Some(start_char_idx);
+                            self.selection_end = Some(start_char_idx);
+                            self.cursor_position = start_char_idx;
+                        } else {
+                            self.dragging = true;
+                            self.last_mouse_y = state.mouse.y;
+                            self.last_drag_time = Some(Instant::now());
+                            self.last_drag_y = state.mouse.y;
+                        }
                     }
                 }
             }
@@ -763,19 +783,22 @@ impl Application for TextApp {
             self.cursor_position = char_index;
         }
         
-        // Handle dragging for scrolling (velocity-based) - accumulate velocity instead of directly updating position
+        // Handle dragging for scrolling (direct 1:1 finger tracking)
         if self.dragging {
             let now = Instant::now();
             let dy = state.mouse.y - self.last_mouse_y;
+            
+            // Direct scroll: move exactly with finger (1:1 tracking)
+            self.scroll_y -= dy;
+            
             self.last_mouse_y = state.mouse.y;
             
-            // Calculate velocity based on swipe speed
+            // Track velocity for momentum after release
             if let Some(last_time) = self.last_drag_time {
                 let dt = now.duration_since(last_time).as_secs_f32();
                 if dt > 0.0 {
                     // Calculate instantaneous velocity in pixels per second
-                    // Higher multiplier (0.5 instead of 0.1) for more responsive velocity-based scrolling
-                    let instant_velocity = (-dy / dt) * 0.5;
+                    let instant_velocity = (-dy / dt) * 0.5; // Scale factor for natural momentum
                     // Exponential moving average for smoother velocity
                     self.scroll_velocity = self.scroll_velocity * 0.5 + instant_velocity * 0.5;
                 }
