@@ -19,9 +19,16 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _image_dict = &args_vec[0]; // Image dict (we access frame buffer directly)
     let kernel_arg = &args_vec[1];
     
+    // Try to extract _data if kernel is an _ArrayWrapper or _ArrayResult
+    let kernel_list_obj = if let Ok(data_attr) = kernel_arg.get_attr("_data", vm) {
+        data_attr
+    } else {
+        kernel_arg.clone()
+    };
+    
     // Parse kernel as list of floats
-    let kernel_list = kernel_arg.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("kernel must be a list".to_string()))?;
+    let kernel_list = kernel_list_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("kernel must be a list or array".to_string()))?;
     
     let kernel_vec = kernel_list.borrow_vec();
     
@@ -188,9 +195,16 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _image_dict = &args_vec[0]; // Image dict (we access frame buffer directly)
     let kernel_arg = &args_vec[1];
     
+    // Try to extract _data if kernel is an _ArrayWrapper or _ArrayResult
+    let kernel_list_obj = if let Ok(data_attr) = kernel_arg.get_attr("_data", vm) {
+        data_attr
+    } else {
+        kernel_arg.clone()
+    };
+    
     // Parse kernel as list of floats
-    let kernel_list = kernel_arg.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("kernel must be a list".to_string()))?;
+    let kernel_list = kernel_list_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("kernel must be a list or array".to_string()))?;
     
     let kernel_vec = kernel_list.borrow_vec();
     

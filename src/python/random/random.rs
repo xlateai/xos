@@ -130,10 +130,11 @@ fn try_fill_random_metal(_buffer: &mut [u8], _low: f64, _high: f64) -> bool {
     false
 }
 
-/// xos.random.uniform(min, max, shape=None) - returns a random float or array
+/// xos.random.uniform(min, max, shape=None, dtype=None) - returns a random float or array
 /// 
 /// If shape is None (default), returns a single random float between min and max
-/// If shape is provided as a tuple, returns a list of random u8 values (0-255) for image data
+/// If shape is provided as a tuple, returns an array of random values
+/// dtype can be specified (default: inferred from context - float32 for kernels, uint8 for images)
 fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
@@ -145,18 +146,27 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let max: f64 = args_vec[1].clone().try_into_value(vm)?;
     
     // Check if shape argument was provided (as 3rd positional arg or as kwarg)
-    let shape_arg = if args_vec.len() > 2 {
+    let shape_arg = if args_vec.len() > 2 && !vm.is_none(&args_vec[2]) {
         Some(&args_vec[2])
     } else {
         // Check kwargs for 'shape' key
         args.kwargs.iter().find_map(|(k, v)| {
-            if k == "shape" {
+            if k == "shape" && !vm.is_none(v) {
                 Some(v)
             } else {
                 None
             }
         })
     };
+    
+    // Check for dtype argument
+    let dtype_arg = args.kwargs.iter().find_map(|(k, v)| {
+        if k == "dtype" {
+            Some(v)
+        } else {
+            None
+        }
+    });
     
     // If no shape, return a single float
     if shape_arg.is_none() || vm.is_none(shape_arg.unwrap()) {
@@ -176,7 +186,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     }
     
-    // Shape provided - generate array of random u8 values
+    // Shape provided - generate array of random values
     let shape_obj = shape_arg.unwrap();
     let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
         .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
@@ -187,38 +197,91 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let total_elements: usize = shape.iter().product();
     
-    // Generate random u8 values (0-255) for image data
-    let random_data: Vec<u8>;
+    // Determine if we should generate floats or integers
+    // Default: float32 if dtype is specified, otherwise uint8 for image compatibility
+    let use_float = if let Some(dtype_obj) = dtype_arg {
+        // Check if dtype has a 'name' attribute
+        if let Ok(name_attr) = dtype_obj.get_attr("name", vm) {
+            if let Ok(s) = name_attr.str(vm) {
+                let name = s.to_string();
+                name.contains("float")
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        // Default to uint8 for backward compatibility
+        false
+    };
     
-    #[cfg(target_arch = "wasm32")]
-    {
-        random_data = (0..total_elements)
-            .map(|_| {
-                let random = js_sys::Math::random();
-                let value = min + random * (max - min);
-                value.clamp(0.0, 255.0) as u8
-            })
+    if use_float {
+        // Generate random f32 values
+        let random_data: Vec<f32>;
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            random_data = (0..total_elements)
+                .map(|_| {
+                    let random = js_sys::Math::random();
+                    (min + random * (max - min)) as f32
+                })
+                .collect();
+        }
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rand::Rng;
+            let mut rng = rand::rng();
+            random_data = (0..total_elements)
+                .map(|_| {
+                    let value: f64 = rng.random_range(min..max);
+                    value as f32
+                })
+                .collect();
+        }
+        
+        // Convert to Python list
+        let py_list: Vec<PyObjectRef> = random_data.iter()
+            .map(|&f| vm.ctx.new_float(f as f64).into())
             .collect();
-    }
-    
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rand::Rng;
-        let mut rng = rand::rng();
-        random_data = (0..total_elements)
-            .map(|_| {
-                let value: f64 = rng.random_range(min..max);
-                value.clamp(0.0, 255.0) as u8
-            })
+        
+        Ok(vm.ctx.new_list(py_list).into())
+    } else {
+        // Generate random u8 values (0-255) for image data
+        let random_data: Vec<u8>;
+        
+        #[cfg(target_arch = "wasm32")]
+        {
+            random_data = (0..total_elements)
+                .map(|_| {
+                    let random = js_sys::Math::random();
+                    let value = min + random * (max - min);
+                    value.clamp(0.0, 255.0) as u8
+                })
+                .collect();
+        }
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rand::Rng;
+            let mut rng = rand::rng();
+            random_data = (0..total_elements)
+                .map(|_| {
+                    let value: f64 = rng.random_range(min..max);
+                    value.clamp(0.0, 255.0) as u8
+                })
+                .collect();
+        }
+        
+        // Convert to Python list
+        let py_list: Vec<PyObjectRef> = random_data.iter()
+            .map(|&b| vm.ctx.new_int(b).into())
             .collect();
+        
+        Ok(vm.ctx.new_list(py_list).into())
     }
-    
-    // Convert to Python list
-    let py_list: Vec<PyObjectRef> = random_data.iter()
-        .map(|&b| vm.ctx.new_int(b).into())
-        .collect();
-    
-    Ok(vm.ctx.new_list(py_list).into())
 }
 
 /// xos.random.uniform_fill(array, low, high) - fill array directly with random values (ZERO COPY)
