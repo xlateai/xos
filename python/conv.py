@@ -17,14 +17,18 @@ class Convolution(xos.Application):
         xos.print(f"Generated random {kernel_size}x{kernel_size}x3 kernel")
         xos.print("Setup complete! Will generate initial image and start convolution...")
     
+    def reset_state(self):
+        """Reset state by generating new random image"""
+        width = self.get_width()
+        height = self.get_height()
+        xos.print(f"Generating random {width}x{height} image...")
+        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+    
     def tick(self):
         """Generate initial random image on first tick, then apply convolution"""
         # First tick: generate initial random state
         if self.needs_init:
-            width = self.get_width()
-            height = self.get_height()
-            xos.print(f"Generating initial random {width}x{height} image...")
-            xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+            self.reset_state()
             xos.print("Starting convolution...")
             self.needs_init = False
             return
@@ -34,9 +38,9 @@ class Convolution(xos.Application):
         self.frame.array[:] = result
     
     def on_screen_size_change(self, width, height):
-        """Handle screen resize by regenerating random image"""
-        xos.print(f"Screen resized to {width}x{height}, regenerating image...")
-        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        """Handle screen resize by resetting state"""
+        xos.print(f"Screen resized to {width}x{height}")
+        self.reset_state()
 
 
 # Demo code

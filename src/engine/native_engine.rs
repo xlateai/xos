@@ -56,6 +56,8 @@ impl ApplicationHandler for AppState {
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
+                    // Notify app of screen size change
+                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
                 
                 // Tick the app first
@@ -85,6 +87,8 @@ impl ApplicationHandler for AppState {
                 } else {
                     // Resize if there's a mismatch
                     self.engine_state.resize_frame(self.size.width, self.size.height);
+                    // Notify app of screen size change
+                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                     let buffer = self.engine_state.frame_buffer_mut();
                     frame.copy_from_slice(buffer);
                     eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
@@ -95,6 +99,8 @@ impl ApplicationHandler for AppState {
                 let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                 let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                 self.engine_state.resize_frame(self.size.width, self.size.height);
+                // Notify app of screen size change
+                let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 self.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
@@ -104,6 +110,8 @@ impl ApplicationHandler for AppState {
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
+                    // Notify app of screen size change
+                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                     self.window.request_redraw();
                 }
             }

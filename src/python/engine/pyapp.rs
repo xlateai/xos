@@ -294,4 +294,27 @@ impl Application for PyApp {
             });
         }
     }
+
+    fn on_screen_size_change(&mut self, state: &mut EngineState, width: u32, height: u32) {
+        if let Some(ref app_instance) = self.app_instance {
+            // Set the frame buffer context so Python can write to it
+            let shape = state.frame.shape();
+            let frame_width = shape[1];
+            let frame_height = shape[0];
+            let buffer = state.frame.buffer_mut();
+            crate::python::rasterizer::set_frame_buffer_context(buffer, frame_width, frame_height);
+            
+            self.interpreter.enter(|vm| {
+                // Update frame data before calling the handler
+                if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
+                    let _ = crate::python::engine::py_bindings::update_py_frame_state(vm, frame_obj, &mut state.frame);
+                }
+                // Call the Python handler
+                let _ = vm.call_method(app_instance, "on_screen_size_change", (width, height));
+            });
+            
+            // Clear the frame buffer context after handler completes
+            crate::python::rasterizer::clear_frame_buffer_context();
+        }
+    }
 }

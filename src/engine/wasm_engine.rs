@@ -338,6 +338,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let shape = state.engine_state.frame.shape();
                 if shape[1] as u32 != width || shape[0] as u32 != height {
                     state.engine_state.resize_frame(width, height);
+                    // Notify app of screen size change
+                    state.app.on_screen_size_change(&mut state.engine_state, width, height);
                 }
                 
                 // Tick the app first

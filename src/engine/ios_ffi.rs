@@ -378,6 +378,8 @@ pub extern "C" fn xos_engine_resize(width: u32, height: u32) -> i32 {
         ios_state.width = width;
         ios_state.height = height;
         ios_state.engine_state.resize_frame(width, height);
+        // Notify app of screen size change
+        ios_state.app.on_screen_size_change(&mut ios_state.engine_state, width, height);
         0
     } else {
         1
