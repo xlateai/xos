@@ -1,5 +1,6 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs, PyObjectRef};
 use crate::tensor::array::{Array, Device};
+use crate::python::dtypes::DType;
 use std::sync::{Arc, Mutex};
 
 /// Python wrapper for Rust Array<f32>
@@ -17,7 +18,7 @@ impl PyArray {
         }
     }
     
-    pub fn to_py_dict(&self, vm: &VirtualMachine) -> PyResult {
+    pub fn to_py_dict(&self, vm: &VirtualMachine, dtype: DType) -> PyResult {
         let array = self.data.lock().unwrap();
         let shape = array.shape();
         let data = array.data();
@@ -30,14 +31,22 @@ impl PyArray {
             vm)?;
         
         // Add dtype
-        dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+        dict.set_item("dtype", vm.ctx.new_str(dtype.name()).into(), vm)?;
         
         // Add device
         dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
         
         // Store the PyArray wrapper itself so we can modify it
-        // For now, we'll create a Python list view of the data
-        let py_data: Vec<PyObjectRef> = data.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+        // Convert data based on dtype
+        let py_data: Vec<PyObjectRef> = data.iter().map(|&f| {
+            // Cast to the appropriate dtype for display
+            let casted = dtype.cast_from_f32(f);
+            if dtype.is_float() {
+                vm.ctx.new_float(casted as f64).into()
+            } else {
+                vm.ctx.new_int(casted as i64).into()
+            }
+        }).collect();
         dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
         
         // Store reference to self
@@ -47,7 +56,7 @@ impl PyArray {
     }
 }
 
-/// xos.array(data, shape=None) - create a Rust-backed array
+/// xos.array(data, shape=None, dtype=None) - create a Rust-backed array
 fn array(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.is_empty() {
@@ -55,6 +64,15 @@ fn array(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     let data_arg = &args_vec[0];
+    
+    // Parse optional dtype (3rd argument or from kwargs)
+    let dtype = if args_vec.len() > 2 && !vm.is_none(&args_vec[2]) {
+        DType::from_py_object(&args_vec[2], vm).unwrap_or(DType::Float32)
+    } else if let Some(dtype_kwarg) = args.kwargs.get("dtype") {
+        DType::from_py_object(dtype_kwarg, vm).unwrap_or(DType::Float32)
+    } else {
+        DType::Float32
+    };
     
     // Parse data as list of floats
     let data_list = data_arg.downcast_ref::<rustpython_vm::builtins::PyList>()
@@ -99,12 +117,17 @@ fn array(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         vec![flat_data.len()]
     };
     
+    // Apply dtype casting to the data
+    let casted_data: Vec<f32> = flat_data.iter()
+        .map(|&v| dtype.cast_from_f32(v))
+        .collect();
+    
     // Create Rust array on CPU (for Python array manipulation)
     // When we move physics to Rust, we can use Metal device
-    let rust_array = Array::new_on_device(flat_data, shape, Device::Cpu);
+    let rust_array = Array::new_on_device(casted_data, shape, Device::Cpu);
     let py_array = PyArray::new(rust_array);
     
-    let dict = py_array.to_py_dict(vm)?;
+    let dict = py_array.to_py_dict(vm, dtype)?;
     
     // Wrap in _ArrayWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
@@ -116,15 +139,37 @@ fn array(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(dict)
 }
 
-/// xos.zeros(shape) - create array filled with zeros
+/// xos.zeros(shape, dtype=float32) - create array filled with zeros
 fn zeros(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let shape_arg: Vec<usize> = args.bind(vm)?;
+    let args_vec = args.args;
+    if args_vec.is_empty() {
+        return Err(vm.new_type_error("zeros() requires 1 argument (shape)".to_string()));
+    }
+    
+    // Parse shape
+    let shape_arg: Vec<usize> = if let Some(shape_tuple) = args_vec[0].downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+        shape_tuple.as_slice().iter()
+            .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err(vm.new_type_error("shape must be a tuple".to_string()));
+    };
+    
+    // Parse optional dtype
+    let dtype = if args_vec.len() > 1 && !vm.is_none(&args_vec[1]) {
+        DType::from_py_object(&args_vec[1], vm).unwrap_or(DType::Float32)
+    } else if let Some(dtype_kwarg) = args.kwargs.get("dtype") {
+        DType::from_py_object(dtype_kwarg, vm).unwrap_or(DType::Float32)
+    } else {
+        DType::Float32
+    };
+    
     let total: usize = shape_arg.iter().product();
     let data = vec![0.0f32; total];
     // Create on CPU for Python manipulation
     let rust_array = Array::new_on_device(data, shape_arg, Device::Cpu);
     let py_array = PyArray::new(rust_array);
-    let dict = py_array.to_py_dict(vm)?;
+    let dict = py_array.to_py_dict(vm, dtype)?;
     
     // Wrap in _ArrayWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
@@ -136,15 +181,37 @@ fn zeros(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(dict)
 }
 
-/// xos.ones(shape) - create array filled with ones
+/// xos.ones(shape, dtype=float32) - create array filled with ones
 fn ones(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let shape_arg: Vec<usize> = args.bind(vm)?;
+    let args_vec = args.args;
+    if args_vec.is_empty() {
+        return Err(vm.new_type_error("ones() requires 1 argument (shape)".to_string()));
+    }
+    
+    // Parse shape
+    let shape_arg: Vec<usize> = if let Some(shape_tuple) = args_vec[0].downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+        shape_tuple.as_slice().iter()
+            .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        return Err(vm.new_type_error("shape must be a tuple".to_string()));
+    };
+    
+    // Parse optional dtype
+    let dtype = if args_vec.len() > 1 && !vm.is_none(&args_vec[1]) {
+        DType::from_py_object(&args_vec[1], vm).unwrap_or(DType::Float32)
+    } else if let Some(dtype_kwarg) = args.kwargs.get("dtype") {
+        DType::from_py_object(dtype_kwarg, vm).unwrap_or(DType::Float32)
+    } else {
+        DType::Float32
+    };
+    
     let total: usize = shape_arg.iter().product();
     let data = vec![1.0f32; total];
     // Create on CPU for Python manipulation
     let rust_array = Array::new_on_device(data, shape_arg, Device::Cpu);
     let py_array = PyArray::new(rust_array);
-    let dict = py_array.to_py_dict(vm)?;
+    let dict = py_array.to_py_dict(vm, dtype)?;
     
     // Wrap in _ArrayWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {

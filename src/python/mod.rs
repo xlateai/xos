@@ -6,5 +6,6 @@ pub mod rasterizer;
 pub mod arrays;
 pub mod sensors;
 pub mod ops;
+pub mod dtypes;
 
 pub use interactive_console::{run_python_file, run_python_interactive, run_python_app};

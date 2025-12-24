@@ -76,6 +76,48 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("zeros", arrays_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
     module.set_attr("ones", arrays_module.get_attr("ones", vm).unwrap(), vm).unwrap();
     
+    // Add the dtypes module and expose dtype constants
+    let dtypes_module = crate::python::dtypes::make_dtypes_module(vm);
+    // Expose all dtype constants directly on xos module
+    if let Ok(dtype) = dtypes_module.get_attr("float16", vm) {
+        module.set_attr("float16", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("float32", vm) {
+        module.set_attr("float32", dtype.clone(), vm).ok();
+        module.set_attr("float", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("float64", vm) {
+        module.set_attr("float64", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("int8", vm) {
+        module.set_attr("int8", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("int16", vm) {
+        module.set_attr("int16", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("int32", vm) {
+        module.set_attr("int32", dtype.clone(), vm).ok();
+        module.set_attr("int", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("int64", vm) {
+        module.set_attr("int64", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("uint8", vm) {
+        module.set_attr("uint8", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("uint16", vm) {
+        module.set_attr("uint16", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("uint32", vm) {
+        module.set_attr("uint32", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("uint64", vm) {
+        module.set_attr("uint64", dtype, vm).ok();
+    }
+    if let Ok(dtype) = dtypes_module.get_attr("bool", vm) {
+        module.set_attr("bool", dtype, vm).ok();
+    }
+    
     // Define the Application base class in Python
     let application_class_code = crate::python::engine::pyapp::APPLICATION_CLASS_CODE;
     
