@@ -74,6 +74,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let arrays_module = crate::python::arrays::make_arrays_module(vm);
     module.set_attr("array", arrays_module.get_attr("array", vm).unwrap(), vm).unwrap();
     module.set_attr("zeros", arrays_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
+    module.set_attr("ones", arrays_module.get_attr("ones", vm).unwrap(), vm).unwrap();
     
     // Define the Application base class in Python
     let application_class_code = crate::python::engine::pyapp::APPLICATION_CLASS_CODE;

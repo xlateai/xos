@@ -136,10 +136,31 @@ fn zeros(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(dict)
 }
 
+/// xos.ones(shape) - create array filled with ones
+fn ones(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let shape_arg: Vec<usize> = args.bind(vm)?;
+    let total: usize = shape_arg.iter().product();
+    let data = vec![1.0f32; total];
+    // Create on CPU for Python manipulation
+    let rust_array = Array::new_on_device(data, shape_arg, Device::Cpu);
+    let py_array = PyArray::new(rust_array);
+    let dict = py_array.to_py_dict(vm)?;
+    
+    // Wrap in _ArrayWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    
+    Ok(dict)
+}
+
 pub fn make_arrays_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.arrays", vm.ctx.new_dict(), None);
     module.set_attr("array", vm.new_function("array", array), vm).unwrap();
     module.set_attr("zeros", vm.new_function("zeros", zeros), vm).unwrap();
+    module.set_attr("ones", vm.new_function("ones", ones), vm).unwrap();
     module
 }
 
