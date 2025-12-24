@@ -172,16 +172,15 @@ impl AudioBuffer {
 
 /// Audio listener to capture audio from a device (iOS version)
 /// Same API as native_listener::AudioListener
-#[derive(Clone)]
 pub struct AudioListener {
-    /// The audio buffer
+    /// The audio buffer (shared via Arc for safe access)
     buffer: AudioBuffer,
     /// The listener ID for iOS FFI
     listener_id: u32,
     /// The device being listened to
     device_name: String,
-    /// Pointer to the buffer stored in heap for callback (must be freed on drop)
-    buffer_ptr: *mut std::ffi::c_void,
+    /// Raw pointer to boxed buffer for FFI (must be manually freed on drop)
+    buffer_ptr: *mut AudioBuffer,
 }
 
 impl AudioListener {
@@ -213,25 +212,25 @@ impl AudioListener {
             // Calculate buffer capacity
             let capacity = (buffer_duration_secs * sample_rate as f32) as usize;
             
-            // Create buffer
+            // Create buffer on heap for stable pointer across moves
             let buffer = AudioBuffer::new(capacity, sample_rate as u32, channels as u16);
+            let buffer_box = Box::new(buffer.clone());
+            let buffer_ptr = Box::into_raw(buffer_box);
             
-            // Create the listener first
-            let mut listener = Self {
+            // Create the listener (store the raw pointer, we'll manage it manually)
+            let listener = Self {
                 buffer,
                 listener_id,
                 device_name: audio_device.name.clone(),
-                buffer_ptr: std::ptr::null_mut(),
+                buffer_ptr,
             };
             
-            // Register the buffer callback with iOS (pass pointer to buffer in listener)
-            let buffer_ptr = &listener.buffer as *const AudioBuffer as *mut std::ffi::c_void;
-            listener.buffer_ptr = buffer_ptr;
+            // Register the buffer callback with iOS (pass stable heap pointer)
             unsafe {
                 xos_audio_listener_set_callback(
                     listener_id,
                     Some(audio_callback),
-                    buffer_ptr,
+                    buffer_ptr as *mut std::ffi::c_void,
                 );
             }
             
@@ -311,6 +310,12 @@ impl Drop for AudioListener {
                 // Clear callback before destroying
                 xos_audio_listener_set_callback(self.listener_id, None, std::ptr::null_mut());
                 xos_audio_listener_destroy(self.listener_id);
+                
+                // Manually free the boxed buffer
+                if !self.buffer_ptr.is_null() {
+                    let _ = Box::from_raw(self.buffer_ptr);
+                    // Box will be dropped here, freeing the heap allocation
+                }
             }
         }
     }

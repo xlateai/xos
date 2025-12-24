@@ -7,7 +7,6 @@ final class SharedAudioEngine {
     
     private var engine: AVAudioEngine?
     private let lock = NSLock()
-    private var microphoneRefCount = 0
     
     private init() {}
     
@@ -22,104 +21,22 @@ final class SharedAudioEngine {
         return engine!
     }
     
-    func acquireMicrophone() {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        microphoneRefCount += 1
-        print("[SharedAudioEngine] Microphone acquired (refCount: \(microphoneRefCount))")
-        
-        if engine == nil {
-            engine = AVAudioEngine()
-        }
-    }
-    
-    func startEngineIfNeeded() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        guard let engine = engine else {
-            throw NSError(domain: "SharedAudioEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Engine not created"])
-        }
-        
-        if !engine.isRunning {
-            try engine.start()
-            print("[SharedAudioEngine] Engine started")
-        }
-    }
-    
-    func withEngineModification<T>(_ block: (AVAudioEngine) throws -> T) throws -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        guard let engine = engine else {
-            throw NSError(
-                domain: "SharedAudioEngine",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Engine must exist before modification"]
-            )
-        }
-        
-        let wasRunning = engine.isRunning
-        if wasRunning {
-            engine.stop()
-            print("[SharedAudioEngine] Engine stopped for graph modification")
-        }
-        
-        defer {
-            if wasRunning {
-                do {
-                    try engine.start()
-                    print("[SharedAudioEngine] Engine restarted after graph modification")
-                } catch {
-                    print("[SharedAudioEngine] Failed to restart engine after modification: \(error.localizedDescription)")
-                }
-            }
-        }
-        
-        return try block(engine)
-    }
-    
-    func releaseMicrophone() {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        microphoneRefCount = max(0, microphoneRefCount - 1)
-        print("[SharedAudioEngine] Microphone released (refCount: \(microphoneRefCount))")
-        
-        if microphoneRefCount == 0 {
-            if let engine = engine, engine.isRunning {
-                engine.stop()
-                engine.reset()
-                print("[SharedAudioEngine] Engine stopped (no active modules)")
-            }
-        }
-    }
-    
     func configureAudioSession() throws {
         let audioSession = AVAudioSession.sharedInstance()
         
-        // Try to deactivate first to ensure clean state
-        try? audioSession.setActive(false)
-        
         // Set category for recording
-        try audioSession.setCategory(.record, mode: .default, options: [])
+        try audioSession.setCategory(.record, mode: .measurement, options: [])
         try audioSession.setActive(true)
-        print("[SharedAudioEngine] Audio session configured for record")
+        print("[SharedAudioEngine] Audio session configured for recording")
     }
     
-    func deactivateAudioSessionIfNeeded() {
+    func stopEngine() {
         lock.lock()
         defer { lock.unlock() }
         
-        // Only deactivate if microphone is inactive
-        if microphoneRefCount == 0 {
-            do {
-                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-                print("[SharedAudioEngine] Audio session deactivated")
-            } catch {
-                // Ignore errors when deactivating
-            }
+        if let engine = engine, engine.isRunning {
+            engine.stop()
+            print("[SharedAudioEngine] Engine stopped")
         }
     }
 }
@@ -182,218 +99,129 @@ final class AudioListenerManager {
 // Audio listener implementation
 final class AudioListener {
     private let listenerId: UInt32
+    private var engine: AVAudioEngine
     private var inputNode: AVAudioInputNode?
-    private var inputFormat: AVAudioFormat?
-    private var sampleBuffer: [Float] = []
-    private let queue = DispatchQueue(label: "com.xos.audio.buffer")
     private var callback: AudioCallback?
     private var callbackUserData: UnsafeMutableRawPointer?
     private let sampleRate: Double
     private let channels: UInt32
-    private let bufferDuration: Double
     
     init(deviceId: UInt32, listenerId: UInt32, sampleRate: Double, channels: UInt32, bufferDuration: Double) throws {
         self.listenerId = listenerId
         self.sampleRate = sampleRate
         self.channels = channels
-        self.bufferDuration = bufferDuration
         
-        // Request microphone permission first
+        // Create a dedicated engine for this listener
+        self.engine = AVAudioEngine()
+        print("[AudioListener] Created AVAudioEngine for listener ID=\(listenerId)")
+        
+        // Check and request microphone permission
         let audioSession = AVAudioSession.sharedInstance()
-        
-        // Check current permission status
         let currentStatus = audioSession.recordPermission
+        print("[AudioListener] Current permission status: \(currentStatus.rawValue)")
         
-        // If already denied, fail fast
+        // If already denied, fail with clear message
         if currentStatus == .denied {
+            print("[AudioListener] Permission already denied")
             throw NSError(
                 domain: "AudioListener",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Microphone permission has been denied in Settings"]
+                userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied. Please enable it in Settings > Privacy & Security > Microphone > XOS"]
             )
         }
         
-        // If not already granted, request permission
+        // If not yet determined, request permission synchronously
         if currentStatus != .granted {
-            let semaphore = DispatchSemaphore(value: 0)
+            print("[AudioListener] Requesting microphone permission...")
+            
             var permissionGranted = false
-            var permissionError: Error?
+            let semaphore = DispatchSemaphore(value: 0)
             
-            // Request permission - must be on main thread
-            // Use a background queue to wait, but request on main thread
-            let requestPermission = {
-                audioSession.requestRecordPermission { granted in
-                    print("[AudioListener] requestRecordPermission callback, granted=\(granted)")
-                    permissionGranted = granted
-                    if !granted {
-                        permissionError = NSError(
-                            domain: "AudioListener",
-                            code: 1,
-                            userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied by user"]
-                        )
-                    }
-                    semaphore.signal()
-                }
+            audioSession.requestRecordPermission { granted in
+                print("[AudioListener] Permission result: \(granted)")
+                permissionGranted = granted
+                semaphore.signal()
             }
             
-            // Always dispatch permission request to main thread
-            // Then wait on current thread (which might be background)
-            DispatchQueue.main.async {
-                requestPermission()
-            }
+            // Wait for permission response (10 second timeout)
+            _ = semaphore.wait(timeout: .now() + 10.0)
             
-            // Wait for permission response (with timeout)
-            // If we're on main thread, this will deadlock, so we need to handle it differently
-            if Thread.isMainThread {
-                // On main thread - use RunLoop to process events while waiting
-                let deadline = Date(timeIntervalSinceNow: 10.0)
-                var timedOut = true
-                
-                while Date() < deadline {
-                    // Check if semaphore is available without blocking
-                    let result = semaphore.wait(timeout: .now() + 0.1)
-                    if result == .success {
-                        timedOut = false
-                        break
-                    }
-                    // Process run loop events to allow async blocks and callbacks to execute
-                    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
-                }
-                
-                if timedOut {
-                    throw NSError(
-                        domain: "AudioListener",
-                        code: 3,
-                        userInfo: [NSLocalizedDescriptionKey: "Microphone permission request timed out"]
-                    )
-                }
-            } else {
-                // Not on main thread - can safely wait on semaphore
-                let timeout = semaphore.wait(timeout: .now() + 10.0)
-                if timeout == .timedOut {
-                    throw NSError(
-                        domain: "AudioListener",
-                        code: 3,
-                        userInfo: [NSLocalizedDescriptionKey: "Microphone permission request timed out"]
-                    )
-                }
-            }
-            
-            // Check results
-            if let error = permissionError {
-                throw error
-            }
             if !permissionGranted {
+                print("[AudioListener] Permission denied by user")
                 throw NSError(
                     domain: "AudioListener",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied"]
+                    userInfo: [NSLocalizedDescriptionKey: "Microphone permission denied by user"]
                 )
             }
+            
+            print("[AudioListener] Permission granted!")
+        } else {
+            print("[AudioListener] Permission already granted, proceeding...")
         }
         
         // Configure audio session
-        do {
-            try SharedAudioEngine.shared.configureAudioSession()
-        } catch {
-            // Fallback: try without options if it fails
-            print("[AudioListener] AVAudioSession primary configuration failed: \(error.localizedDescription)")
-            do {
-                let audioSession = AVAudioSession.sharedInstance()
-                try? audioSession.setActive(false)
-                try audioSession.setCategory(.record, mode: .default)
-                try audioSession.setActive(true)
-            } catch {
-                try? AVAudioSession.sharedInstance().setActive(true)
+        try SharedAudioEngine.shared.configureAudioSession()
+        
+        // Setup audio engine
+        let inputNode = engine.inputNode
+        self.inputNode = inputNode
+        
+        // Get the actual input format
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        print("[AudioListener] inputNode format: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+        
+        // Install tap on input node
+        let bufferSize: AVAudioFrameCount = 4096
+        print("[AudioListener] Installing tap with bufferSize=\(bufferSize)")
+        
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
+            guard let self = self else { return }
+            
+            // Get channel data (non-interleaved format)
+            guard let channelData = buffer.floatChannelData else {
+                return
             }
-        }
-        
-        // Use shared audio engine
-        SharedAudioEngine.shared.acquireMicrophone()
-        
-        // Safely modify engine graph
-        do {
-            try SharedAudioEngine.shared.withEngineModification { engine in
-                let inputNode = engine.inputNode
-                self.inputNode = inputNode
-                
-                // Get the actual input format
-                let inputFormat = inputNode.outputFormat(forBus: 0)
-                print("[AudioListener] inputNode.outputFormat: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
-                
-                self.inputFormat = inputFormat
-                
-                // Clear sample buffer
-                queue.async {
-                    self.sampleBuffer.removeAll()
-                }
-                
-                // Install tap on input node
-                let bufferSize: AVAudioFrameCount = 4096
-                print("[AudioListener] installing tap with bufferSize=\(bufferSize)")
-                
-                // Remove any existing tap first
-                inputNode.removeTap(onBus: 0)
-                
-                inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
-                    guard let self = self else { return }
-                    
-                    // Get channel data (non-interleaved format)
-                    guard let channelData = buffer.floatChannelData else {
-                        print("[AudioListener] Warning: buffer.floatChannelData is nil")
-                        return
-                    }
-                    
-                    let frameLength = Int(buffer.frameLength)
-                    let channelCount = Int(buffer.format.channelCount)
-                    
-                    // Safety check
-                    guard frameLength > 0 && channelCount > 0 else {
-                        print("[AudioListener] Warning: invalid frameLength=\(frameLength) or channelCount=\(channelCount)")
-                        return
-                    }
-                    
-                    // Extract samples - for mono, just use first channel
-                    // For multi-channel, we'll interleave them for the callback
-                    // The callback expects: [ch0_sample0, ch1_sample0, ch0_sample1, ch1_sample1, ...]
-                    var samples: [Float] = []
-                    samples.reserveCapacity(frameLength * channelCount)
-                    
-                    if channelCount == 1 {
-                        // Mono: just read from first channel
-                        let channelPtr = channelData[0]
-                        samples = Array(UnsafeBufferPointer(start: channelPtr, count: frameLength))
-                    } else {
-                        // Multi-channel: interleave samples
-                        for frame in 0..<frameLength {
-                            for channel in 0..<channelCount {
-                                samples.append(channelData[channel][frame])
-                            }
-                        }
-                    }
-                    
-                    // Call the Rust callback if set
-                    if let callback = self.callback, !samples.isEmpty {
-                        samples.withUnsafeBufferPointer { ptr in
-                            if let baseAddress = ptr.baseAddress {
-                                callback(baseAddress, ptr.count, self.callbackUserData)
-                            }
-                        }
+            
+            let frameLength = Int(buffer.frameLength)
+            let channelCount = Int(buffer.format.channelCount)
+            
+            // Safety check
+            guard frameLength > 0 && channelCount > 0 else {
+                return
+            }
+            
+            // Extract samples - for mono, just use first channel
+            // For multi-channel, interleave them for the callback
+            var samples: [Float] = []
+            samples.reserveCapacity(frameLength * channelCount)
+            
+            if channelCount == 1 {
+                // Mono: just read from first channel
+                let channelPtr = channelData[0]
+                samples = Array(UnsafeBufferPointer(start: channelPtr, count: frameLength))
+            } else {
+                // Multi-channel: interleave samples
+                for frame in 0..<frameLength {
+                    for channel in 0..<channelCount {
+                        samples.append(channelData[channel][frame])
                     }
                 }
             }
-        } catch {
-            SharedAudioEngine.shared.releaseMicrophone()
-            throw NSError(
-                domain: "AudioListener",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to configure audio engine: \(error.localizedDescription)"]
-            )
+            
+            // Call the Rust callback if set
+            if let callback = self.callback, !samples.isEmpty {
+                samples.withUnsafeBufferPointer { ptr in
+                    if let baseAddress = ptr.baseAddress {
+                        callback(baseAddress, ptr.count, self.callbackUserData)
+                    }
+                }
+            }
         }
         
-        // Ensure engine is running
-        try SharedAudioEngine.shared.startEngineIfNeeded()
-        print("[AudioListener] initialized successfully")
+        // Start the engine
+        try engine.start()
+        print("[AudioListener] Engine started successfully")
     }
     
     func setCallback(_ callback: @escaping AudioCallback, userData: UnsafeMutableRawPointer?) {
@@ -402,24 +230,33 @@ final class AudioListener {
     }
     
     func start() throws {
-        // Already started in init, but we can check if engine is running
-        try SharedAudioEngine.shared.startEngineIfNeeded()
+        if !engine.isRunning {
+            try engine.start()
+            print("[AudioListener] Engine started")
+        }
     }
     
     func pause() {
-        // Pause by pausing the engine
-        let engine = SharedAudioEngine.shared.getOrCreateEngine()
         if engine.isRunning {
             engine.pause()
+            print("[AudioListener] Engine paused")
         }
     }
     
     deinit {
+        print("[AudioListener] Deinitializing listener ID=\(listenerId)")
+        
+        // Remove tap first
         inputNode?.removeTap(onBus: 0)
+        
+        // Stop engine
+        if engine.isRunning {
+            engine.stop()
+        }
+        
         inputNode = nil
-        inputFormat = nil
-        SharedAudioEngine.shared.releaseMicrophone()
-        SharedAudioEngine.shared.deactivateAudioSessionIfNeeded()
+        
+        print("[AudioListener] Cleanup complete for listener ID=\(listenerId)")
     }
 }
 

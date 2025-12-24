@@ -45,6 +45,8 @@
 	</array>
 	<key>XOSDefaultApp</key>
 	<string>$(XOS_DEFAULT_APP)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access for audio visualization and recording features.</string>
 </dict>
 </plist>
 
