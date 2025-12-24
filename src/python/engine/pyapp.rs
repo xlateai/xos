@@ -57,8 +57,22 @@ class _ArrayWrapper:
     def shape(self):
         return self._data.get('shape', ())
     
+    @property
+    def dtype(self):
+        return self._data.get('dtype', 'unknown')
+    
     def __str__(self):
-        return f"xos.Array(shape={self.shape})"
+        # For regular arrays (not frame arrays), compute statistics
+        if '_data' in self._data:
+            data_list = self._data['_data']
+            if data_list and len(data_list) > 0:
+                min_val = min(data_list)
+                max_val = max(data_list)
+                mean_val = sum(data_list) / len(data_list)
+                return f"xos.Array(shape={self.shape}, dtype={self.dtype}, min={min_val:.3f}, max={max_val:.3f}, mean={mean_val:.3f})"
+            return f"xos.Array(shape={self.shape}, dtype={self.dtype}, empty)"
+        # For frame arrays (no _data field)
+        return f"xos.Array(shape={self.shape}, dtype=u8)"
     
     def __repr__(self):
         return self.__str__()

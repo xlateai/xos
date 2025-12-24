@@ -84,6 +84,14 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         eprintln!("Failed to create Application class: {:?}", e);
     }
     
+    // Add _ArrayWrapper and _ArrayResult to builtins so they're globally available
+    if let Ok(array_wrapper) = scope.globals.get_item("_ArrayWrapper", vm) {
+        vm.builtins.set_attr("_ArrayWrapper", array_wrapper, vm).ok();
+    }
+    if let Ok(array_result) = scope.globals.get_item("_ArrayResult", vm) {
+        vm.builtins.set_attr("_ArrayResult", array_result, vm).ok();
+    }
+    
     // Get the Application class and _FrameWrapper from the scope and add them to the module
     if let Ok(app_class) = scope.globals.get_item("Application", vm) {
         module.set_attr("Application", app_class, vm).unwrap();

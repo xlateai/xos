@@ -104,7 +104,16 @@ fn array(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let rust_array = Array::new_on_device(flat_data, shape, Device::Cpu);
     let py_array = PyArray::new(rust_array);
     
-    py_array.to_py_dict(vm)
+    let dict = py_array.to_py_dict(vm)?;
+    
+    // Wrap in _ArrayWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    
+    Ok(dict)
 }
 
 /// xos.zeros(shape) - create array filled with zeros
@@ -115,7 +124,16 @@ fn zeros(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Create on CPU for Python manipulation
     let rust_array = Array::new_on_device(data, shape_arg, Device::Cpu);
     let py_array = PyArray::new(rust_array);
-    py_array.to_py_dict(vm)
+    let dict = py_array.to_py_dict(vm)?;
+    
+    // Wrap in _ArrayWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    
+    Ok(dict)
 }
 
 pub fn make_arrays_module(vm: &VirtualMachine) -> PyRef<PyModule> {
