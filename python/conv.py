@@ -13,19 +13,20 @@ class Convolution(xos.Application):
         # Generate random 3x3x3 kernel (RGB convolution kernel)
         # Each channel has its own 3x3 kernel
         kernel_size = 3
-        kernel_flat = []
-        for _ in range(kernel_size):  # height
-            for _ in range(kernel_size):  # width
-                for _ in range(3):  # channels (RGB)
-                    kernel_flat.append(xos.random.uniform(-0.2, 0.2))
+        # kernel_flat = []
+        # for _ in range(kernel_size):  # height
+        #     for _ in range(kernel_size):  # width
+        #         for _ in range(3):  # channels (RGB)
+        #             kernel_flat.append(xos.random.uniform(-0.2, 0.2))
+        self.kernel = xos.random.uniform(-1.0, 1.0, shape=(kernel_size, kernel_size, 3), dtype=xos.float32)
         
         # Add identity in the center to preserve original image somewhat
-        center_idx = ((kernel_size // 2) * kernel_size + (kernel_size // 2)) * 3
-        kernel_flat[center_idx + 0] += 0.8  # Red center
-        kernel_flat[center_idx + 1] += 0.8  # Green center
-        kernel_flat[center_idx + 2] += 0.8  # Blue center
+        # center_idx = ((kernel_size // 2) * kernel_size + (kernel_size // 2)) * 3
+        # kernel_flat[center_idx + 0] += 0.8  # Red center
+        # kernel_flat[center_idx + 1] += 0.8  # Green center
+        # kernel_flat[center_idx + 2] += 0.8  # Blue center
         
-        self.kernel = kernel_flat
+        # self.kernel = kernel_flat
         xos.print(f"Generated random {kernel_size}x{kernel_size}x3 kernel")
         xos.print("Setup complete! Will generate initial image and start convolution...")
     
