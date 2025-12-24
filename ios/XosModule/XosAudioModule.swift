@@ -143,11 +143,26 @@ final class AudioListener {
                 semaphore.signal()
             }
             
-            // Wait for permission response (10 second timeout)
-            _ = semaphore.wait(timeout: .now() + 10.0)
+            // Wait for permission response with proper main thread handling
+            if Thread.isMainThread {
+                // On main thread - process run loop while waiting
+                print("[AudioListener] Waiting for permission on main thread...")
+                let deadline = Date(timeIntervalSinceNow: 15.0)
+                while Date() < deadline {
+                    if semaphore.wait(timeout: .now()) == .success {
+                        break
+                    }
+                    // Process run loop to allow callbacks to execute
+                    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+                }
+            } else {
+                // Not on main thread - can safely block
+                print("[AudioListener] Waiting for permission on background thread...")
+                _ = semaphore.wait(timeout: .now() + 15.0)
+            }
             
             if !permissionGranted {
-                print("[AudioListener] Permission denied by user")
+                print("[AudioListener] Permission denied or timed out")
                 throw NSError(
                     domain: "AudioListener",
                     code: 1,
