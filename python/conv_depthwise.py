@@ -14,7 +14,7 @@ class DepthwiseConvolution(xos.Application):
         kernel_flat = []
         for _ in range(3):  # height
             for _ in range(3):  # width
-                kernel_flat.append(xos.random.uniform(-0.2, 0.2))
+                kernel_flat.append(xos.random.uniform(-1.0, 1.0))
         
         # Normalize kernel - add identity in center
         center_idx = 1 * 3 + 1  # Middle of 3x3
