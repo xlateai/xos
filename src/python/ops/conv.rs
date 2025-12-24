@@ -5,8 +5,10 @@ use crate::tensor::conv::{ConvBackend, ConvParams};
 /// Fast 2D convolution operation using tensor backend
 /// 
 /// - image: frame.array (modified in-place)
-/// - kernel: 3D array [height, width, channels] - typically 3x3x3 for RGB
+/// - kernel: 3D array [height, width, channels] - e.g., KxKx3 for RGB
 /// - padding: "same" (default) maintains image dimensions
+/// 
+/// Note: Automatically detects kernel size from array length
 pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
@@ -23,19 +25,31 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let kernel_vec = kernel_list.borrow_vec();
     
-    // Kernel should be flattened 3x3x3 = 27 elements
-    if kernel_vec.len() != 27 {
+    // Infer kernel size: for RGB conv, length should be K*K*3
+    // where K is the spatial kernel size
+    let kernel_len = kernel_vec.len();
+    if kernel_len % 3 != 0 {
         return Err(vm.new_value_error(format!(
-            "kernel must have 27 elements (3x3x3), got {}",
-            kernel_vec.len()
+            "kernel length must be divisible by 3 (for RGB), got {}",
+            kernel_len
+        )));
+    }
+    
+    let spatial_len = kernel_len / 3;
+    let kernel_size = (spatial_len as f32).sqrt() as usize;
+    
+    if kernel_size * kernel_size * 3 != kernel_len {
+        return Err(vm.new_value_error(format!(
+            "kernel must be square (KxKx3), got {} elements",
+            kernel_len
         )));
     }
     
     // Parse kernel values
-    let mut kernel: [f32; 27] = [0.0; 27];
-    for (i, val) in kernel_vec.iter().enumerate() {
+    let mut kernel: Vec<f32> = Vec::with_capacity(kernel_len);
+    for val in kernel_vec.iter() {
         let f: f64 = val.clone().try_into_value(vm)?;
-        kernel[i] = f as f32;
+        kernel.push(f as f32);
     }
     
     drop(kernel_vec);
@@ -76,17 +90,17 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     // Reorganize kernel from [ky, kx, channel] to [out_channel, in_channel, ky, kx]
-    // For RGB conv: kernel is [3x3x3] where each RGB output depends on all RGB inputs
-    // Output format: [3, 3, 3, 3] = [out_c=3, in_c=3, kh=3, kw=3]
-    let mut kernel_nchw = vec![0.0f32; 3 * 3 * 3 * 3];
+    // For RGB conv: kernel is [KxKx3] where each RGB output depends on all RGB inputs
+    // Output format: [3, 3, K, K] = [out_c=3, in_c=3, kh=K, kw=K]
+    let mut kernel_nchw = vec![0.0f32; 3 * 3 * kernel_size * kernel_size];
     for out_c in 0..3 {
         for in_c in 0..3 {
-            for ky in 0..3 {
-                for kx in 0..3 {
-                    // Old format: [ky, kx, channel_triplet] = [(ky*3 + kx)*3 + channel]
-                    let src_idx = (ky * 3 + kx) * 3 + in_c;
+            for ky in 0..kernel_size {
+                for kx in 0..kernel_size {
+                    // Old format: [ky, kx, channel_triplet] = [(ky*K + kx)*3 + channel]
+                    let src_idx = (ky * kernel_size + kx) * 3 + in_c;
                     // New format: [out_c, in_c, ky, kx]
-                    let dst_idx = ((out_c * 3 + in_c) * 3 + ky) * 3 + kx;
+                    let dst_idx = ((out_c * 3 + in_c) * kernel_size + ky) * kernel_size + kx;
                     kernel_nchw[dst_idx] = kernel[src_idx];
                 }
             }
@@ -94,19 +108,20 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     // Set up convolution parameters for "same" padding
-    // For "same" padding with stride=1 and kernel=3x3, we need pad=1
+    // For "same" padding with stride=1, pad = (kernel_size - 1) / 2
+    let pad = (kernel_size - 1) / 2;
     let params = ConvParams {
         batch: 1,
         in_channels: 3,
         out_channels: 3,
         in_h: height as u32,
         in_w: width as u32,
-        kernel_h: 3,
-        kernel_w: 3,
+        kernel_h: kernel_size as u32,
+        kernel_w: kernel_size as u32,
         stride_h: 1,
         stride_w: 1,
-        pad_h: 1,
-        pad_w: 1,
+        pad_h: pad as u32,
+        pad_w: pad as u32,
         out_h: height as u32,
         out_w: width as u32,
     };
@@ -159,8 +174,10 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Fast 2D depthwise convolution - each channel processed independently using tensor backend
 /// 
 /// - image: frame.array (modified in-place)
-/// - kernel: 2D array [height, width] = 3x3 = 9 values (applied to each channel separately)
+/// - kernel: 2D array [height, width] = KxK values (applied to each channel separately)
 /// - padding: "same" (default) maintains image dimensions
+/// 
+/// Note: Automatically detects kernel size from array length
 pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
@@ -177,19 +194,22 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let kernel_vec = kernel_list.borrow_vec();
     
-    // Kernel should be flattened 3x3 = 9 elements (applied per channel)
-    if kernel_vec.len() != 9 {
+    // Infer kernel size: for depthwise conv, length should be K*K
+    let kernel_len = kernel_vec.len();
+    let kernel_size = (kernel_len as f32).sqrt() as usize;
+    
+    if kernel_size * kernel_size != kernel_len {
         return Err(vm.new_value_error(format!(
-            "kernel must have 9 elements (3x3 depthwise), got {}",
-            kernel_vec.len()
+            "kernel must be square (KxK), got {} elements",
+            kernel_len
         )));
     }
     
     // Parse kernel values
-    let mut kernel: [f32; 9] = [0.0; 9];
-    for (i, val) in kernel_vec.iter().enumerate() {
+    let mut kernel: Vec<f32> = Vec::with_capacity(kernel_len);
+    for val in kernel_vec.iter() {
         let f: f64 = val.clone().try_into_value(vm)?;
-        kernel[i] = f as f32;
+        kernel.push(f as f32);
     }
     
     drop(kernel_vec);
@@ -229,31 +249,33 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     // Organize kernel for depthwise conv: [channel, ky, kx]
-    // Each channel gets its own 3x3 kernel
-    let mut kernel_depthwise = vec![0.0f32; 3 * 3 * 3];
+    // Each channel gets its own KxK kernel
+    let mut kernel_depthwise = vec![0.0f32; 3 * kernel_size * kernel_size];
     for c in 0..3 {
-        for ky in 0..3 {
-            for kx in 0..3 {
-                let src_idx = ky * 3 + kx;
-                let dst_idx = (c * 3 + ky) * 3 + kx;
+        for ky in 0..kernel_size {
+            for kx in 0..kernel_size {
+                let src_idx = ky * kernel_size + kx;
+                let dst_idx = (c * kernel_size + ky) * kernel_size + kx;
                 kernel_depthwise[dst_idx] = kernel[src_idx];
             }
         }
     }
     
     // Set up depthwise convolution parameters
+    // For "same" padding with stride=1, pad = (kernel_size - 1) / 2
+    let pad = (kernel_size - 1) / 2;
     let params = ConvParams {
         batch: 1,
         in_channels: 3,
         out_channels: 3,  // Same as input for depthwise
         in_h: height as u32,
         in_w: width as u32,
-        kernel_h: 3,
-        kernel_w: 3,
+        kernel_h: kernel_size as u32,
+        kernel_w: kernel_size as u32,
         stride_h: 1,
         stride_w: 1,
-        pad_h: 1,
-        pad_w: 1,
+        pad_h: pad as u32,
+        pad_w: pad as u32,
         out_h: height as u32,
         out_w: width as u32,
     };

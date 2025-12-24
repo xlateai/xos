@@ -135,6 +135,10 @@ class Application:
         """Called when mouse moves. Override this method (optional)."""
         pass
     
+    def on_screen_size_change(self, width, height):
+        """Called when screen size changes. Override this method (optional)."""
+        pass
+    
     def run(self):
         """Run the application with the xos engine."""
         # Store self in builtins so Rust can find it from any scope

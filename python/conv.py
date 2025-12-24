@@ -12,21 +12,21 @@ class Convolution(xos.Application):
         
         # Generate random 3x3x3 kernel (RGB convolution kernel)
         # Each channel has its own 3x3 kernel
+        kernel_size = 3
         kernel_flat = []
-        for _ in range(3):  # height
-            for _ in range(3):  # width
+        for _ in range(kernel_size):  # height
+            for _ in range(kernel_size):  # width
                 for _ in range(3):  # channels (RGB)
                     kernel_flat.append(xos.random.uniform(-0.2, 0.2))
         
-        # Normalize kernel so it doesn't darken/brighten the image too much
         # Add identity in the center to preserve original image somewhat
-        center_idx = (1 * 3 + 1) * 3  # Middle of 3x3, start of RGB triplet
+        center_idx = ((kernel_size // 2) * kernel_size + (kernel_size // 2)) * 3
         kernel_flat[center_idx + 0] += 0.8  # Red center
         kernel_flat[center_idx + 1] += 0.8  # Green center
         kernel_flat[center_idx + 2] += 0.8  # Blue center
         
         self.kernel = kernel_flat
-        xos.print(f"Generated random 3x3x3 kernel (normalized)")
+        xos.print(f"Generated random {kernel_size}x{kernel_size}x3 kernel")
         xos.print("Setup complete! Will generate initial image and start convolution...")
     
     def tick(self):
@@ -43,9 +43,12 @@ class Convolution(xos.Application):
         
         # Every subsequent tick: apply convolution and update frame
         result = xos.ops.convolve(self.frame.array, self.kernel)
-        # xos.print(f"Convolution result: {result}")
         self.frame.array[:] = result
-        # print(result)
+    
+    def on_screen_size_change(self, width, height):
+        """Handle screen resize by regenerating random image"""
+        xos.print(f"Screen resized to {width}x{height}, regenerating image...")
+        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
 
 
 # Demo code

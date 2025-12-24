@@ -11,17 +11,18 @@ class DepthwiseConvolution(xos.Application):
         xos.print("Depthwise Convolution Demo initialized")
         
         # Generate random 3x3 kernel (same kernel applied to each RGB channel)
+        kernel_size = 3
         kernel_flat = []
-        for _ in range(3):  # height
-            for _ in range(3):  # width
-                kernel_flat.append(xos.random.uniform(-1.0, 1.0))
+        for _ in range(kernel_size):  # height
+            for _ in range(kernel_size):  # width
+                kernel_flat.append(xos.random.uniform(-0.2, 0.2))
         
-        # Normalize kernel - add identity in center
-        center_idx = 1 * 3 + 1  # Middle of 3x3
+        # Add identity in center
+        center_idx = (kernel_size // 2) * kernel_size + (kernel_size // 2)
         kernel_flat[center_idx] += 0.8
         
         self.kernel = kernel_flat
-        xos.print(f"Generated random 3x3 depthwise kernel (normalized)")
+        xos.print(f"Generated random {kernel_size}x{kernel_size} depthwise kernel")
         xos.print("Setup complete! Will generate initial image and start convolution...")
     
     def tick(self):
@@ -38,6 +39,11 @@ class DepthwiseConvolution(xos.Application):
         
         # Every subsequent tick: apply depthwise convolution and update frame
         self.frame.array[:] = xos.ops.convolve_depthwise(self.frame.array, self.kernel)
+    
+    def on_screen_size_change(self, width, height):
+        """Handle screen resize by regenerating random image"""
+        xos.print(f"Screen resized to {width}x{height}, regenerating image...")
+        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
 
 
 # Demo code
