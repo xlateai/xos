@@ -12,7 +12,7 @@ class DepthwiseConvolution(xos.Application):
         
         # Generate random 3x3 kernel (same kernel applied to each RGB channel)
         kernel_size = 3
-        self.kernel = xos.random.uniform(-0.2, 0.2, shape=(kernel_size, kernel_size), dtype=xos.float32)
+        self.kernel = xos.random.uniform(-1.0, 1.0, shape=(kernel_size, kernel_size), dtype=xos.float32)
         xos.print(f"Generated random {kernel_size}x{kernel_size} depthwise kernel")
         xos.print("Setup complete! Will generate initial image and start convolution...")
     
