@@ -12,3 +12,6 @@ print(ones_array)
 
 ones_array_dtype = xos.ones((4, 4), dtype=xos.int32)
 print(ones_array_dtype)
+
+zeros_array_dtype = xos.zeros((4, 4), dtype=xos.int32)
+print(zeros_array_dtype)
