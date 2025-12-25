@@ -268,6 +268,129 @@ fn lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.lines_batched() - efficiently draw lines with individual colors
+/// 
+/// Usage: xos.rasterizer.lines_batched(frame, start_points, end_points, thicknesses, colors)
+/// - frame: frame object (ignored, we use the global context)
+/// - start_points: list of (x, y) tuples in pixel coordinates
+/// - end_points: list of (x, y) tuples in pixel coordinates
+/// - thicknesses: list of line thicknesses in pixels
+/// - colors: list of (r, g, b, a) tuples (one per line)
+fn lines_batched(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    // Extract arguments
+    let args_vec = args.args;
+    if args_vec.len() != 5 {
+        return Err(vm.new_type_error(format!(
+            "lines_batched() takes exactly 5 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    let _frame_dict = &args_vec[0]; // Ignored, we use global context
+    let start_points_list = &args_vec[1];
+    let end_points_list = &args_vec[2];
+    let thicknesses_list = &args_vec[3];
+    let colors_list = &args_vec[4];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. Rasterizer must be called during tick().".to_string())
+    })?;
+    
+    // Get lists
+    let start_points = start_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("start_points must be a list".to_string()))?;
+    let end_points = end_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("end_points must be a list".to_string()))?;
+    let thicknesses = thicknesses_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("thicknesses must be a list".to_string()))?;
+    let colors = colors_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("colors must be a list".to_string()))?;
+    
+    // Collect all line data first before drawing
+    let start_points_vec = start_points.borrow_vec();
+    let end_points_vec = end_points.borrow_vec();
+    let thicknesses_vec = thicknesses.borrow_vec();
+    let colors_vec = colors.borrow_vec();
+    
+    let mut lines_to_draw = Vec::new();
+    
+    for (i, start_obj) in start_points_vec.iter().enumerate() {
+        if i >= end_points_vec.len() {
+            break;
+        }
+        
+        // Parse start point tuple
+        let start_tuple = start_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("start point must be a tuple".to_string()))?;
+        let start_vec = start_tuple.as_slice();
+        if start_vec.len() != 2 {
+            return Err(vm.new_type_error("start point must be (x, y)".to_string()));
+        }
+        let x1: f64 = start_vec[0].clone().try_into_value(vm)?;
+        let y1: f64 = start_vec[1].clone().try_into_value(vm)?;
+        
+        // Parse end point tuple
+        let end_tuple = end_points_vec[i].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("end point must be a tuple".to_string()))?;
+        let end_vec = end_tuple.as_slice();
+        if end_vec.len() != 2 {
+            return Err(vm.new_type_error("end point must be (x, y)".to_string()));
+        }
+        let x2: f64 = end_vec[0].clone().try_into_value(vm)?;
+        let y2: f64 = end_vec[1].clone().try_into_value(vm)?;
+        
+        // Get thickness
+        let thickness: f64 = if i < thicknesses_vec.len() {
+            thicknesses_vec[i].clone().try_into_value(vm)?
+        } else if !thicknesses_vec.is_empty() {
+            thicknesses_vec[0].clone().try_into_value(vm)?
+        } else {
+            return Err(vm.new_type_error("thicknesses list is empty".to_string()));
+        };
+        
+        // Parse color tuple for this line
+        let color = if i < colors_vec.len() {
+            let color_obj = colors_vec[i].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+            let color_slice = color_obj.as_slice();
+            if color_slice.len() != 4 {
+                return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+            }
+            let r: i32 = color_slice[0].clone().try_into_value(vm)?;
+            let g: i32 = color_slice[1].clone().try_into_value(vm)?;
+            let b: i32 = color_slice[2].clone().try_into_value(vm)?;
+            let a: i32 = color_slice[3].clone().try_into_value(vm)?;
+            (r as u8, g as u8, b as u8, a as u8)
+        } else {
+            return Err(vm.new_type_error("colors list must have same length as points".to_string()));
+        };
+        
+        lines_to_draw.push((x1 as f32, y1 as f32, x2 as f32, y2 as f32, thickness as f32, color));
+    }
+    
+    // Drop borrows before drawing
+    drop(start_points_vec);
+    drop(end_points_vec);
+    drop(thicknesses_vec);
+    drop(colors_vec);
+    
+    // Get mutable buffer slice
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Now draw all lines directly to the Rust buffer
+    for (x1, y1, x2, y2, thickness, color) in lines_to_draw {
+        draw_line_direct(buffer, width, height, x1, y1, x2, y2, thickness, color);
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 fn draw_line_direct(
     buffer: &mut [u8],
     width: usize,
@@ -385,6 +508,58 @@ fn clear(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.fill() - fill the entire frame buffer with a solid color
+/// 
+/// Usage: xos.rasterizer.fill(frame, color)
+/// - frame: frame object (ignored, we use the global context)
+/// - color: (r, g, b, a) tuple
+fn fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "fill() takes exactly 2 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    let _frame_dict = &args_vec[0]; // Ignored, we use global context
+    let color_tuple = &args_vec[1];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. fill must be called during tick().".to_string())
+    })?;
+    
+    // Parse color tuple (r, g, b, a)
+    let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_vec = color_obj.as_slice();
+    if color_vec.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+    let a: i32 = color_vec[3].clone().try_into_value(vm)?;
+    
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Fill buffer with color (RGBA pattern)
+    for pixel in buffer.chunks_exact_mut(4) {
+        pixel[0] = r as u8;
+        pixel[1] = g as u8;
+        pixel[2] = b as u8;
+        pixel[3] = a as u8;
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 /// xos.rasterizer._fill_buffer(array_dict, values) - fill buffer 1:1 with values
 /// 
 /// Internal function to efficiently fill the frame buffer with a list of values
@@ -449,7 +624,9 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
     module.set_attr("lines", vm.new_function("lines", lines), vm).unwrap();
+    module.set_attr("lines_batched", vm.new_function("lines_batched", lines_batched), vm).unwrap();
     module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();
+    module.set_attr("fill", vm.new_function("fill", fill), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module
 }
