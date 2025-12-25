@@ -41,12 +41,13 @@ fn list(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     collect_entries(&PYTHON_DIR, "", &mut entries);
     entries.sort();
     
-    // Print all entries
-    for entry in &entries {
-        println!("{}", entry);
-    }
+    // Return a Python list of all entries
+    let py_entries: Vec<_> = entries
+        .iter()
+        .map(|entry| vm.ctx.new_str(entry.as_str()).into())
+        .collect();
     
-    Ok(vm.ctx.none())
+    Ok(vm.ctx.new_list(py_entries).into())
 }
 
 /// Helper function to find a file in the embedded directory
@@ -93,7 +94,33 @@ fn read_line(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// xos.data.read_lines(path, start, end) - Read lines from a file with optional range
 fn read_lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let (path, start, end): (String, Option<usize>, Option<usize>) = args.bind(vm)?;
+    // Manually parse arguments to support optional parameters
+    let path: String = args.args.get(0)
+        .ok_or_else(|| vm.new_type_error("read_lines() missing required argument: 'path'".to_string()))?
+        .clone()
+        .try_into_value(vm)?;
+    
+    let start: Option<usize> = if args.args.len() > 1 {
+        let start_arg = &args.args[1];
+        if vm.is_none(start_arg) {
+            None
+        } else {
+            Some(start_arg.clone().try_into_value(vm)?)
+        }
+    } else {
+        None
+    };
+    
+    let end: Option<usize> = if args.args.len() > 2 {
+        let end_arg = &args.args[2];
+        if vm.is_none(end_arg) {
+            None
+        } else {
+            Some(end_arg.clone().try_into_value(vm)?)
+        }
+    } else {
+        None
+    };
     
     match find_file(&path) {
         Some(contents) => {
