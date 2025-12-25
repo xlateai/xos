@@ -3,8 +3,8 @@ import xos
 # =========================
 # Configuration
 # =========================
-FFT_SIZE = 256                      # FFT size (must be power of 2)
-NUM_FREQUENCY_BINS = 128            # Number of frequency bins to display
+FFT_SIZE = 128                      # FFT size (must be power of 2) - smaller = faster
+NUM_FREQUENCY_BINS = 128             # Number of frequency bins to display
 MAGNITUDE_SCALE = 1.0               # Scale for audio magnitudes
 
 
@@ -20,10 +20,6 @@ class MicrophoneWaterfall(xos.Application):
         # Waterfall history: list of color rows (pre-computed), newest at index 0
         self.waterfall_history = []
         self.max_history = None  # Will be calculated based on screen size
-        
-        # Normalization
-        self.min_val = 0.0
-        self.max_val = 0.1
         
         # Debug
         self.fft_count = 0
@@ -78,11 +74,14 @@ class MicrophoneWaterfall(xos.Application):
             print(f"⚠️  FFT failed: {e}")
             return [0.0] * NUM_FREQUENCY_BINS
     
-    def magnitude_to_color(self, magnitude):
-        """Convert magnitude to color"""
-        # Simple normalization
-        norm = magnitude / self.max_val
-        norm = max(0.0, min(1.0, norm))
+    def magnitude_to_color(self, magnitude, min_val, max_val):
+        """Convert magnitude to color using per-row normalization"""
+        # Normalize based on this row's min/max
+        if max_val - min_val < 1e-9:
+            norm = 0.5  # Default to mid-range if no variation
+        else:
+            norm = (magnitude - min_val) / (max_val - min_val)
+            norm = max(0.0, min(1.0, norm))
         
         # Hot colormap: black → blue → cyan → yellow → white
         if norm < 0.25:
@@ -144,15 +143,14 @@ class MicrophoneWaterfall(xos.Application):
                     windowed = self.apply_window(self.sample_buffer)
                     magnitudes = self.compute_fft_magnitude(windowed)
                     
-                    # Update max for normalization BEFORE computing colors
-                    max_mag = max(magnitudes)
-                    if max_mag > self.max_val:
-                        self.max_val = max_mag * 1.1
+                    # Per-row normalization: each row uses its OWN min/max
+                    row_min = min(magnitudes)
+                    row_max = max(magnitudes)
                     
-                    # Pre-compute colors for this row (so they don't change later)
+                    # Pre-compute colors for this row using row-specific normalization
                     color_row = []
                     for mag in magnitudes:
-                        color = self.magnitude_to_color(mag)
+                        color = self.magnitude_to_color(mag, row_min, row_max)
                         color_row.append(color)
                     
                     # Add color row to history at the beginning (newest)
@@ -163,7 +161,7 @@ class MicrophoneWaterfall(xos.Application):
                         self.waterfall_history.pop()
                     
                     if self.fft_count % 20 == 0:
-                        print(f"📊 FFT #{self.fft_count}: Max={max_mag:.4f}, History={len(self.waterfall_history)}/{self.max_history} rows")
+                        print(f"📊 FFT #{self.fft_count}: Min={row_min:.4f}, Max={row_max:.4f}, History={len(self.waterfall_history)}/{self.max_history} rows")
         
         # Render waterfall
         self.render_waterfall(width, height, pixel_size)
