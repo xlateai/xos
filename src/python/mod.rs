@@ -11,5 +11,6 @@ pub mod dialoguer;
 pub mod math;
 pub mod ops;
 pub mod dtypes;
+pub mod data;
 
 pub use interactive_console::{run_python_file, run_python_interactive, run_python_app};

@@ -92,6 +92,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("zeros", arrays_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
     module.set_attr("ones", arrays_module.get_attr("ones", vm).unwrap(), vm).unwrap();
     
+    // Add the data submodule
+    let data_module = crate::python::data::make_data_module(vm);
+    module.set_attr("data", data_module, vm).unwrap();
+    
     // Add the dtypes module and expose dtype constants
     let dtypes_module = crate::python::dtypes::make_dtypes_module(vm);
     // Expose all dtype constants directly on xos module
