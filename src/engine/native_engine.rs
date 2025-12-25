@@ -269,6 +269,7 @@ impl ApplicationHandler for AppState {
             }
         }
         
+        // Request continuous redraws to keep checking SHOULD_EXIT flag
         self.window.request_redraw();
     }
 }
@@ -361,6 +362,14 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     ctrlc::set_handler(move || {
         println!("\nReceived Ctrl+C, shutting down gracefully...");
         should_exit.store(true, Ordering::Relaxed);
+        // Force exit after a short timeout in case event loop doesn't respond
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if SHOULD_EXIT.load(Ordering::Relaxed) {
+                println!("Force exiting...");
+                std::process::exit(0);
+            }
+        });
     }).expect("Error setting Ctrl+C handler");
     
     let event_loop = EventLoop::new().unwrap();
@@ -371,5 +380,7 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     };
     
     event_loop.run_app(&mut wrapper)?;
+    
+    println!("Event loop exited cleanly");
     Ok(())
 }
