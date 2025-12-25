@@ -181,6 +181,9 @@ pub struct AudioListener {
     device_name: String,
     /// Raw pointer to boxed buffer for FFI (must be manually freed on drop)
     buffer_ptr: *mut AudioBuffer,
+    /// Flag to indicate if the iOS listener has been destroyed (to prevent double-destroy)
+    #[cfg(target_os = "ios")]
+    destroyed: std::sync::atomic::AtomicBool,
 }
 
 impl AudioListener {
@@ -223,6 +226,8 @@ impl AudioListener {
                 listener_id,
                 device_name: audio_device.name.clone(),
                 buffer_ptr,
+                #[cfg(target_os = "ios")]
+                destroyed: std::sync::atomic::AtomicBool::new(false),
             };
             
             // Register the buffer callback with iOS (pass stable heap pointer)
@@ -300,18 +305,40 @@ impl AudioListener {
     pub fn get_samples_by_channel(&self) -> Vec<Vec<f32>> {
         self.buffer.get_samples_by_channel()
     }
+    
+    /// Get the listener ID (for direct cleanup)
+    #[cfg(target_os = "ios")]
+    pub fn listener_id(&self) -> u32 {
+        self.listener_id
+    }
+    
+    /// Mark as destroyed and destroy immediately (for fast cleanup)
+    #[cfg(target_os = "ios")]
+    pub fn destroy_now(&self) {
+        if !self.destroyed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            unsafe {
+                xos_audio_listener_set_callback(self.listener_id, None, std::ptr::null_mut());
+                xos_audio_listener_destroy(self.listener_id);
+            }
+        }
+    }
 }
 
 impl Drop for AudioListener {
     fn drop(&mut self) {
         #[cfg(target_os = "ios")]
         {
+            // Only destroy if not already destroyed
+            if !self.destroyed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                unsafe {
+                    // Clear callback before destroying
+                    xos_audio_listener_set_callback(self.listener_id, None, std::ptr::null_mut());
+                    xos_audio_listener_destroy(self.listener_id);
+                }
+            }
+            
+            // Always free the boxed buffer
             unsafe {
-                // Clear callback before destroying
-                xos_audio_listener_set_callback(self.listener_id, None, std::ptr::null_mut());
-                xos_audio_listener_destroy(self.listener_id);
-                
-                // Manually free the boxed buffer
                 if !self.buffer_ptr.is_null() {
                     let _ = Box::from_raw(self.buffer_ptr);
                     // Box will be dropped here, freeing the heap allocation

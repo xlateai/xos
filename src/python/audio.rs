@@ -203,10 +203,16 @@ fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         mics.remove(&listener_ptr);
     }
     
-    // Convert pointer back to Box and drop it
+    // Immediately destroy at iOS level
+    #[cfg(target_os = "ios")]
     unsafe {
-        let _listener = Box::from_raw(listener_ptr as *mut audio::AudioListener);
-        // _listener is automatically dropped here, which stops recording
+        let listener = &*(listener_ptr as *const audio::AudioListener);
+        listener.destroy_now(); // Instant destroy!
+    }
+    
+    // Then drop Rust-side object (won't double-destroy due to flag)
+    unsafe {
+        let _ = Box::from_raw(listener_ptr as *mut audio::AudioListener);
     }
     
     Ok(vm.ctx.none())
@@ -214,23 +220,7 @@ fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// Clean up ALL active microphones (called when stopping app or switching)
 fn cleanup_all_microphones(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let mic_ptrs: Vec<usize> = if let Ok(mut mics) = get_active_microphones().lock() {
-        let ptrs: Vec<usize> = mics.drain().collect();
-        ptrs
-    } else {
-        vec![]
-    };
-    
-    // Drop all microphones
-    for ptr in mic_ptrs {
-        if ptr != 0 {
-            unsafe {
-                let _listener = Box::from_raw(ptr as *mut audio::AudioListener);
-                // _listener is automatically dropped here, which stops recording
-            }
-        }
-    }
-    
+    cleanup_all_microphones_rust();
     Ok(vm.ctx.none())
 }
 
@@ -259,12 +249,24 @@ pub fn cleanup_all_microphones_rust() {
         vec![]
     };
     
-    // Drop all microphones
+    // Immediately destroy at iOS level (instant mic light off)
+    #[cfg(target_os = "ios")]
+    {
+        for &ptr in &mic_ptrs {
+            if ptr != 0 {
+                unsafe {
+                    let listener = &*(ptr as *const audio::AudioListener);
+                    listener.destroy_now(); // Instant destroy!
+                }
+            }
+        }
+    }
+    
+    // Then drop the Rust-side objects (iOS cleanup is already done, won't double-destroy)
     for ptr in mic_ptrs {
         if ptr != 0 {
             unsafe {
-                let _listener = Box::from_raw(ptr as *mut audio::AudioListener);
-                // _listener is automatically dropped here, which stops recording
+                let _ = Box::from_raw(ptr as *mut audio::AudioListener);
             }
         }
     }
