@@ -276,9 +276,10 @@ impl CoderApp {
             buffer.clear();
         }
         
-        // Clear any previous viewport app before execution
+        // Clear any previous viewport app before execution and clean up microphones
         self.viewport_app = None;
         self.viewport_app_setup_done = false;
+        crate::python::audio::cleanup_all_microphones_rust();
         
         // Detect if this is a viewport app (contains xos.Application)
         let is_viewport_app = code.contains("xos.Application") || code.contains("class") && code.contains("Application");
@@ -942,6 +943,14 @@ builtins.print = __custom_print__
 
 }
 
+impl Drop for CoderApp {
+    fn drop(&mut self) {
+        // Clean up all microphones directly when CoderApp is dropped
+        // This ensures microphones are stopped when switching apps
+        crate::python::audio::cleanup_all_microphones_rust();
+    }
+}
+
 impl Application for CoderApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         // Setup all text apps
@@ -1597,6 +1606,8 @@ impl Application for CoderApp {
                     println!("  - Stopping viewport app");
                     self.viewport_app = None;
                     self.viewport_app_setup_done = false;
+                    // Clean up all microphones immediately
+                    crate::python::audio::cleanup_all_microphones_rust();
                     self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
                 }
                 

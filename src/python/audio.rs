@@ -1,5 +1,15 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs, PyObjectRef};
 use crate::audio;
+use std::sync::Mutex;
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+// Global registry to track all active microphone pointers
+static ACTIVE_MICROPHONES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+
+fn get_active_microphones() -> &'static Mutex<HashSet<usize>> {
+    ACTIVE_MICROPHONES.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
 /// xos.audio.get_input_devices() - Get all input (microphone) devices
 fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -72,7 +82,12 @@ fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Store the listener in a Box and get a raw pointer
     let listener_ptr = Box::into_raw(Box::new(listener)) as usize;
     
-    // Create a Python class with batched_iterator method
+    // Register this microphone in the global registry
+    if let Ok(mut mics) = get_active_microphones().lock() {
+        mics.insert(listener_ptr);
+    }
+    
+    // Create a Python class with batched_iterator method and cleanup
     let code = format!(r#"
 class Microphone:
     def __init__(self, listener_ptr):
@@ -106,6 +121,13 @@ class Microphone:
             batch = xos.audio._microphone_get_batch(self._listener_ptr, batch_size)
             if batch:
                 yield batch
+    
+    def __del__(self):
+        """Clean up the microphone when the object is destroyed."""
+        if self._listener_ptr != 0:
+            import xos
+            xos.audio._microphone_cleanup(self._listener_ptr)
+            self._listener_ptr = 0
 
 _mic_instance = Microphone({})
 "#, listener_ptr);
@@ -168,6 +190,50 @@ fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(dict.into())
 }
 
+/// Internal function to clean up a microphone (drop the AudioListener)
+fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let listener_ptr: usize = args.bind(vm)?;
+    
+    if listener_ptr == 0 {
+        return Ok(vm.ctx.none());
+    }
+    
+    // Remove from registry
+    if let Ok(mut mics) = get_active_microphones().lock() {
+        mics.remove(&listener_ptr);
+    }
+    
+    // Convert pointer back to Box and drop it
+    unsafe {
+        let _listener = Box::from_raw(listener_ptr as *mut audio::AudioListener);
+        // _listener is automatically dropped here, which stops recording
+    }
+    
+    Ok(vm.ctx.none())
+}
+
+/// Clean up ALL active microphones (called when stopping app or switching)
+fn cleanup_all_microphones(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let mic_ptrs: Vec<usize> = if let Ok(mut mics) = get_active_microphones().lock() {
+        let ptrs: Vec<usize> = mics.drain().collect();
+        ptrs
+    } else {
+        vec![]
+    };
+    
+    // Drop all microphones
+    for ptr in mic_ptrs {
+        if ptr != 0 {
+            unsafe {
+                let _listener = Box::from_raw(ptr as *mut audio::AudioListener);
+                // _listener is automatically dropped here, which stops recording
+            }
+        }
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 /// Create the audio module
 pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.audio", vm.ctx.new_dict(), None);
@@ -175,10 +241,32 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Public API
     module.set_attr("get_input_devices", vm.new_function("get_input_devices", get_input_devices), vm).unwrap();
     module.set_attr("Microphone", vm.new_function("Microphone", microphone_new), vm).unwrap();
+    module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", cleanup_all_microphones), vm).unwrap();
     
-    // Internal function used by Microphone.batched_iterator()
+    // Internal functions
     module.set_attr("_microphone_get_batch", vm.new_function("_microphone_get_batch", microphone_get_batch), vm).unwrap();
+    module.set_attr("_microphone_cleanup", vm.new_function("_microphone_cleanup", microphone_cleanup), vm).unwrap();
     
     module
+}
+
+/// Rust-side function to cleanup all microphones (called from CoderApp Drop)
+pub fn cleanup_all_microphones_rust() {
+    let mic_ptrs: Vec<usize> = if let Ok(mut mics) = get_active_microphones().lock() {
+        let ptrs: Vec<usize> = mics.drain().collect();
+        ptrs
+    } else {
+        vec![]
+    };
+    
+    // Drop all microphones
+    for ptr in mic_ptrs {
+        if ptr != 0 {
+            unsafe {
+                let _listener = Box::from_raw(ptr as *mut audio::AudioListener);
+                // _listener is automatically dropped here, which stops recording
+            }
+        }
+    }
 }
 
