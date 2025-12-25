@@ -27,10 +27,22 @@ fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// xos.audio.Microphone(device_id=0, buffer_duration=1.0) - Create microphone instance
 fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    // Parse arguments
-    let (device_id, buffer_duration): (Option<usize>, Option<f64>) = args.bind(vm)?;
-    let device_id = device_id.unwrap_or(0);
-    let buffer_duration = buffer_duration.unwrap_or(1.0) as f32;
+    // Parse arguments - handle both positional and keyword args
+    let device_id = if !args.args.is_empty() {
+        args.args[0].clone().try_into_value::<usize>(vm)?
+    } else if let Some(device_id_arg) = args.kwargs.get("device_id") {
+        device_id_arg.clone().try_into_value::<usize>(vm)?
+    } else {
+        0
+    };
+    
+    let buffer_duration = if args.args.len() > 1 {
+        args.args[1].clone().try_into_value::<f64>(vm)? as f32
+    } else if let Some(duration_arg) = args.kwargs.get("buffer_duration") {
+        duration_arg.clone().try_into_value::<f64>(vm)? as f32
+    } else {
+        1.0
+    };
     
     // Get all input devices
     let all_devices = audio::devices();
