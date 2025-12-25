@@ -3,8 +3,8 @@ import xos
 # =========================
 # Configuration
 # =========================
-FFT_SIZE = 128                      # FFT size
-NUM_FREQUENCY_BINS = 64             # Number of horizontal pixels (one per frequency bin)
+FFT_SIZE = 256                      # FFT size (must be power of 2)
+NUM_FREQUENCY_BINS = 128            # Number of frequency bins to display
 MAGNITUDE_SCALE = 1.0               # Scale for audio magnitudes
 
 
@@ -19,7 +19,7 @@ class MicrophoneWaterfall(xos.Application):
         
         # Waterfall history: list of FFT results, newest at index 0
         self.waterfall_history = []
-        self.max_history = 1000  # Keep up to 1000 rows
+        self.max_history = None  # Will be calculated based on screen size
         
         # Normalization
         self.min_val = 0.0
@@ -49,7 +49,7 @@ class MicrophoneWaterfall(xos.Application):
             buffer_duration=0.05
         )
         
-        print("🎤📊 Microphone Waterfall - Frequency scrolling down")
+        print("🎤📊 Microphone Waterfall - Square pixels")
         print(f"FFT_SIZE={FFT_SIZE}, NUM_FREQUENCY_BINS={NUM_FREQUENCY_BINS}")
     
     def apply_window(self, samples):
@@ -105,6 +105,18 @@ class MicrophoneWaterfall(xos.Application):
         width = self.get_width()
         height = self.get_height()
         
+        # Calculate pixel size for square pixels
+        # NUM_FREQUENCY_BINS pixels stretched across width
+        pixel_size = width / NUM_FREQUENCY_BINS
+        
+        # Calculate how many rows fit on screen (square pixels!)
+        num_rows_on_screen = int(height / pixel_size)
+        
+        # Set max history if not set yet
+        if self.max_history is None:
+            self.max_history = num_rows_on_screen
+            print(f"📐 Screen: {width}x{height}, Pixel size: {pixel_size:.1f}, Max rows: {num_rows_on_screen}")
+        
         self.tick_count += 1
         
         # Fill black
@@ -135,7 +147,7 @@ class MicrophoneWaterfall(xos.Application):
                     # Add to history at the beginning (newest)
                     self.waterfall_history.insert(0, magnitudes)
                     
-                    # Trim history
+                    # Trim history to max rows
                     if len(self.waterfall_history) > self.max_history:
                         self.waterfall_history.pop()
                     
@@ -144,60 +156,45 @@ class MicrophoneWaterfall(xos.Application):
                     if max_mag > self.max_val:
                         self.max_val = max_mag * 1.1
                     
-                    if self.fft_count % 10 == 0:
-                        print(f"📊 FFT #{self.fft_count}: Max={max_mag:.4f}, History={len(self.waterfall_history)} rows")
+                    if self.fft_count % 20 == 0:
+                        print(f"📊 FFT #{self.fft_count}: Max={max_mag:.4f}, History={len(self.waterfall_history)}/{self.max_history} rows")
         
         # Render waterfall
-        self.render_waterfall(width, height)
-        
-        # Draw small status indicator
-        xos.rasterizer.rect_filled(self.frame, 5, 5, 15, 15, (0, 255, 0, 255))
+        self.render_waterfall(width, height, pixel_size)
     
-    def render_waterfall(self, width, height):
+    def render_waterfall(self, width, height, pixel_size):
         """
-        Render waterfall:
-        - X axis (left to right): frequency bins (low to high)
-        - Y axis (top to bottom): time (newest at top, oldest at bottom)
+        Render waterfall with SQUARE pixels:
+        - X axis (left to right): frequency bins (NUM_FREQUENCY_BINS across)
+        - Y axis (top to bottom): time (newest at top)
+        - Each "pixel" is a square of size pixel_size x pixel_size
         """
         if not self.waterfall_history:
             return
         
-        # Each frequency bin gets a portion of the width
-        bin_width = width / NUM_FREQUENCY_BINS
-        
-        # Each row is one pixel tall (or more if we have fewer rows than height)
-        num_rows = min(len(self.waterfall_history), height)
-        row_height = height / num_rows if num_rows > 0 else 1
-        
         # Draw each row (time slice)
+        num_rows = min(len(self.waterfall_history), int(height / pixel_size))
+        
         for row_idx in range(num_rows):
             if row_idx >= len(self.waterfall_history):
                 break
             
             magnitudes = self.waterfall_history[row_idx]
-            y = row_idx * row_height
+            y = int(row_idx * pixel_size)
+            y_next = int((row_idx + 1) * pixel_size)
             
             # Draw each frequency bin across this row
             for bin_idx in range(NUM_FREQUENCY_BINS):
                 mag = magnitudes[bin_idx]
                 color = self.magnitude_to_color(mag)
                 
-                x = bin_idx * bin_width
+                x = int(bin_idx * pixel_size)
+                x_next = int((bin_idx + 1) * pixel_size)
                 
-                x1 = int(x)
-                y1 = int(y)
-                x2 = int(x + bin_width + 0.5)
-                y2 = int(y + row_height + 0.5)
-                
-                # Ensure valid rectangle
-                if x2 <= x1:
-                    x2 = x1 + 1
-                if y2 <= y1:
-                    y2 = y1 + 1
-                
+                # Draw square pixel
                 xos.rasterizer.rect_filled(
                     self.frame,
-                    x1, y1, x2, y2,
+                    x, y, x_next, y_next,
                     color
                 )
 
