@@ -8,6 +8,7 @@ pub mod sensors;
 pub mod audio;
 pub mod system;
 pub mod dialoguer;
+pub mod math;
 pub mod ops;
 pub mod dtypes;
 

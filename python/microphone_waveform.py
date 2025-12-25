@@ -85,8 +85,7 @@ class MicrophoneWaveform(xos.Application):
             # Loud - logarithmic decay to compress the top end
             # This makes the scale: 0-1 maps to 0-1.55, but 10 maps to ~2.8
             # So we can see quiet sounds while loud sounds don't dominate
-            import math
-            amplified = 0.2 + 1.35 + max(0.0, math.log(boosted - 1.0)) * 0.4
+            amplified = 0.2 + 1.35 + max(0.0, xos.math.log(boosted - 1.0)) * 0.4
         
         return -amplified if value < 0.0 else amplified
 

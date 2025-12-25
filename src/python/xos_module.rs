@@ -78,6 +78,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let dialoguer_module = crate::python::dialoguer::make_dialoguer_module(vm);
     module.set_attr("dialoguer", dialoguer_module, vm).unwrap();
     
+    // Add the math submodule
+    let math_module = crate::python::math::make_math_module(vm);
+    module.set_attr("math", math_module, vm).unwrap();
+    
     // Add the ops submodule
     let ops_module = crate::python::ops::make_ops_module(vm);
     module.set_attr("ops", ops_module, vm).unwrap();
