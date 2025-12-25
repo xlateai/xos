@@ -70,6 +70,14 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let audio_module = crate::python::audio::make_audio_module(vm);
     module.set_attr("audio", audio_module, vm).unwrap();
     
+    // Add the system submodule
+    let system_module = crate::python::system::make_system_module(vm);
+    module.set_attr("system", system_module, vm).unwrap();
+    
+    // Add the dialoguer submodule
+    let dialoguer_module = crate::python::dialoguer::make_dialoguer_module(vm);
+    module.set_attr("dialoguer", dialoguer_module, vm).unwrap();
+    
     // Add the ops submodule
     let ops_module = crate::python::ops::make_ops_module(vm);
     module.set_attr("ops", ops_module, vm).unwrap();

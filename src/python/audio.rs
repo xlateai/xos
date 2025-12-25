@@ -78,6 +78,19 @@ class Microphone:
     def __init__(self, listener_ptr):
         self._listener_ptr = listener_ptr
     
+    def get_batch(self, batch_size=1024):
+        """
+        Get a batch of audio samples.
+        
+        Args:
+            batch_size: Number of samples to get (default: 1024)
+            
+        Returns:
+            list: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+        """
+        import xos
+        return xos.audio._microphone_get_batch(self._listener_ptr, batch_size)
+    
     def batched_iterator(self, batch_size=1024):
         """
         Yields batches of audio samples.
