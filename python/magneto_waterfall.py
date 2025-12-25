@@ -4,8 +4,8 @@ import xos
 # Configuration
 # =========================
 FFT_SIZE = 128                      # FFT size
-NUM_FREQUENCY_BINS = 64             # Number of vertical pixels (one per frequency bin)
-MAGNITUDE_SCALE = 0.01              # Scale for audio magnitudes
+NUM_FREQUENCY_BINS = 64             # Number of horizontal pixels (one per frequency bin)
+MAGNITUDE_SCALE = 1.0               # Scale for audio magnitudes
 
 
 class MicrophoneWaterfall(xos.Application):
@@ -17,12 +17,13 @@ class MicrophoneWaterfall(xos.Application):
         self.sample_buffer = [0.0] * FFT_SIZE
         self.sample_index = 0
         
-        # Current FFT magnitudes (one per frequency bin)
-        self.current_magnitudes = [0.0] * NUM_FREQUENCY_BINS
+        # Waterfall history: list of FFT results, newest at index 0
+        self.waterfall_history = []
+        self.max_history = 1000  # Keep up to 1000 rows
         
         # Normalization
         self.min_val = 0.0
-        self.max_val = 1.0
+        self.max_val = 0.1
         
         # Debug
         self.fft_count = 0
@@ -48,7 +49,7 @@ class MicrophoneWaterfall(xos.Application):
             buffer_duration=0.05
         )
         
-        print("🎤📊 Microphone Waterfall - Simple single column test")
+        print("🎤📊 Microphone Waterfall - Frequency scrolling down")
         print(f"FFT_SIZE={FFT_SIZE}, NUM_FREQUENCY_BINS={NUM_FREQUENCY_BINS}")
     
     def apply_window(self, samples):
@@ -127,59 +128,81 @@ class MicrophoneWaterfall(xos.Application):
                     self.sample_index = 0
                     self.fft_count += 1
                     
-                    if self.fft_count % 10 == 0:
-                        print(f"📊 Computing FFT #{self.fft_count}...")
-                    
                     # Compute FFT
                     windowed = self.apply_window(self.sample_buffer)
-                    self.current_magnitudes = self.compute_fft_magnitude(windowed)
+                    magnitudes = self.compute_fft_magnitude(windowed)
+                    
+                    # Add to history at the beginning (newest)
+                    self.waterfall_history.insert(0, magnitudes)
+                    
+                    # Trim history
+                    if len(self.waterfall_history) > self.max_history:
+                        self.waterfall_history.pop()
                     
                     # Update max for normalization
-                    max_mag = max(self.current_magnitudes)
+                    max_mag = max(magnitudes)
                     if max_mag > self.max_val:
-                        self.max_val = max_mag * 1.1  # Add 10% headroom
+                        self.max_val = max_mag * 1.1
                     
                     if self.fft_count % 10 == 0:
-                        avg_mag = sum(self.current_magnitudes) / len(self.current_magnitudes)
-                        print(f"   Avg magnitude: {avg_mag:.6f}, Max: {max_mag:.6f}, Norm max: {self.max_val:.6f}")
+                        print(f"📊 FFT #{self.fft_count}: Max={max_mag:.4f}, History={len(self.waterfall_history)} rows")
         
-        # Draw ONE vertical column at x=100 with frequency bins
-        x = 100
-        bin_height = height / NUM_FREQUENCY_BINS
+        # Render waterfall
+        self.render_waterfall(width, height)
         
-        for bin_idx in range(NUM_FREQUENCY_BINS):
-            mag = self.current_magnitudes[bin_idx]
-            color = self.magnitude_to_color(mag)
+        # Draw small status indicator
+        xos.rasterizer.rect_filled(self.frame, 5, 5, 15, 15, (0, 255, 0, 255))
+    
+    def render_waterfall(self, width, height):
+        """
+        Render waterfall:
+        - X axis (left to right): frequency bins (low to high)
+        - Y axis (top to bottom): time (newest at top, oldest at bottom)
+        """
+        if not self.waterfall_history:
+            return
+        
+        # Each frequency bin gets a portion of the width
+        bin_width = width / NUM_FREQUENCY_BINS
+        
+        # Each row is one pixel tall (or more if we have fewer rows than height)
+        num_rows = min(len(self.waterfall_history), height)
+        row_height = height / num_rows if num_rows > 0 else 1
+        
+        # Draw each row (time slice)
+        for row_idx in range(num_rows):
+            if row_idx >= len(self.waterfall_history):
+                break
             
-            # Y position: flip so low freq at bottom, high at top
-            y = height - (bin_idx + 1) * bin_height
+            magnitudes = self.waterfall_history[row_idx]
+            y = row_idx * row_height
             
-            y1 = int(y)
-            y2 = int(y + bin_height + 0.5)
-            if y2 <= y1:
-                y2 = y1 + 1
-            
-            # Draw a 10-pixel wide column
-            xos.rasterizer.rect_filled(
-                self.frame,
-                x, y1, x + 10, y2,
-                color
-            )
-        
-        # Debug every 120 ticks
-        if self.tick_count % 120 == 0:
-            print(f"🔄 Tick {self.tick_count}: {self.fft_count} FFTs completed")
-        
-        # Draw test markers
-        # Red square in top-left
-        xos.rasterizer.rect_filled(self.frame, 10, 10, 30, 30, (255, 0, 0, 255))
-        # Green square in bottom-left  
-        xos.rasterizer.rect_filled(self.frame, 10, height - 30, 30, height - 10, (0, 255, 0, 255))
-        # White line where the frequency column is
-        xos.rasterizer.rect_filled(self.frame, x - 2, 0, x - 1, height, (255, 255, 255, 255))
+            # Draw each frequency bin across this row
+            for bin_idx in range(NUM_FREQUENCY_BINS):
+                mag = magnitudes[bin_idx]
+                color = self.magnitude_to_color(mag)
+                
+                x = bin_idx * bin_width
+                
+                x1 = int(x)
+                y1 = int(y)
+                x2 = int(x + bin_width + 0.5)
+                y2 = int(y + row_height + 0.5)
+                
+                # Ensure valid rectangle
+                if x2 <= x1:
+                    x2 = x1 + 1
+                if y2 <= y1:
+                    y2 = y1 + 1
+                
+                xos.rasterizer.rect_filled(
+                    self.frame,
+                    x1, y1, x2, y2,
+                    color
+                )
 
 
 if __name__ == "__main__":
-    print("🎤📊 Microphone Waterfall - Simple Column Test")
+    print("🎤📊 Microphone Waterfall")
     app = MicrophoneWaterfall()
     app.run()
