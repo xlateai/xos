@@ -26,12 +26,8 @@ fn get_mouse(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(dict.into())
 }
 
-/// xos.print() - print to xos console
-fn xos_print(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let msg: String = args.bind(vm)?;
-    println!("[xos] {}", msg);
-    Ok(vm.ctx.none())
-}
+/// xos.print() - alias to builtin print (no longer needed, kept for compatibility)
+/// We'll set this to builtins.print in make_module instead
 
 /// xos.sleep() - sleep for a number of seconds
 /// NOTE: This blocks the main thread, so it's not recommended for use in the coder app
@@ -51,7 +47,12 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("hello", vm.new_function("hello", hello), vm).unwrap();
     module.set_attr("get_frame_buffer", vm.new_function("get_frame_buffer", get_frame_buffer), vm).unwrap();
     module.set_attr("get_mouse", vm.new_function("get_mouse", get_mouse), vm).unwrap();
-    module.set_attr("print", vm.new_function("print", xos_print), vm).unwrap();
+    
+    // Make xos.print an alias to the builtin print function
+    if let Ok(builtin_print) = vm.builtins.get_attr("print", vm) {
+        module.set_attr("print", builtin_print, vm).unwrap();
+    }
+    
     module.set_attr("sleep", vm.new_function("sleep", xos_sleep), vm).unwrap();
     
     // Add the random submodule
