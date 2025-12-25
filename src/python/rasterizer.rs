@@ -620,6 +620,88 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.rect_filled() - draw a filled rectangle
+/// 
+/// Usage: xos.rasterizer.rect_filled(frame, x1, y1, x2, y2, color)
+/// - frame: frame object (ignored, we use the global context)
+/// - x1, y1: top-left corner coordinates
+/// - x2, y2: bottom-right corner coordinates  
+/// - color: (r, g, b, a) tuple
+fn rect_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 6 {
+        return Err(vm.new_type_error(format!(
+            "rect_filled() takes exactly 6 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    let _frame_dict = &args_vec[0]; // Ignored, we use global context
+    let x1: i32 = args_vec[1].clone().try_into_value(vm)?;
+    let y1: i32 = args_vec[2].clone().try_into_value(vm)?;
+    let x2: i32 = args_vec[3].clone().try_into_value(vm)?;
+    let y2: i32 = args_vec[4].clone().try_into_value(vm)?;
+    let color_tuple = &args_vec[5];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. rect_filled must be called during tick().".to_string())
+    })?;
+    
+    // Parse color tuple (r, g, b, a)
+    let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_vec = color_obj.as_slice();
+    if color_vec.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+    let a: i32 = color_vec[3].clone().try_into_value(vm)?;
+    let color = (r as u8, g as u8, b as u8, a as u8);
+    
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Clamp coordinates to screen bounds
+    let x1_clamped = x1.max(0).min(width as i32);
+    let y1_clamped = y1.max(0).min(height as i32);
+    let x2_clamped = x2.max(0).min(width as i32);
+    let y2_clamped = y2.max(0).min(height as i32);
+    
+    // Ensure x1 < x2 and y1 < y2
+    let (x_start, x_end) = if x1_clamped < x2_clamped {
+        (x1_clamped, x2_clamped)
+    } else {
+        (x2_clamped, x1_clamped)
+    };
+    let (y_start, y_end) = if y1_clamped < y2_clamped {
+        (y1_clamped, y2_clamped)
+    } else {
+        (y2_clamped, y1_clamped)
+    };
+    
+    // Draw filled rectangle
+    for y in y_start..y_end {
+        for x in x_start..x_end {
+            let idx = (y as usize * width + x as usize) * 4;
+            if idx + 3 < buffer.len() {
+                buffer[idx + 0] = color.0;
+                buffer[idx + 1] = color.1;
+                buffer[idx + 2] = color.2;
+                buffer[idx + 3] = color.3;
+            }
+        }
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
@@ -627,6 +709,7 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("lines_batched", vm.new_function("lines_batched", lines_batched), vm).unwrap();
     module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();
     module.set_attr("fill", vm.new_function("fill", fill), vm).unwrap();
+    module.set_attr("rect_filled", vm.new_function("rect_filled", rect_filled), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module
 }

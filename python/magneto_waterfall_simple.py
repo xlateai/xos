@@ -3,52 +3,37 @@ import xos
 # =========================
 # Configuration
 # =========================
-FFT_SIZE = 128                      # FFT size
+FFT_SIZE = 128                      # FFT size (gives 64 frequency bins)
 NUM_FREQUENCY_BINS = 64             # Number of vertical pixels (one per frequency bin)
-MAGNITUDE_SCALE = 0.01              # Scale for audio magnitudes
+MAGNITUDE_SCALE = 100.0             # Scale up FFT magnitudes
 
 
-class MicrophoneWaterfall(xos.Application):
+class MagnetometerWaterfall(xos.Application):
     def __init__(self):
         super().__init__()
-        self.microphone = None
+        self.magnetometer = None
         
         # Sample buffer for FFT
         self.sample_buffer = [0.0] * FFT_SIZE
         self.sample_index = 0
+        
+        # Baseline for DC removal
+        self.baseline = None
         
         # Current FFT magnitudes (one per frequency bin)
         self.current_magnitudes = [0.0] * NUM_FREQUENCY_BINS
         
         # Normalization
         self.min_val = 0.0
-        self.max_val = 1.0
+        self.max_val = 10.0
         
         # Debug
         self.fft_count = 0
         self.tick_count = 0
         
     def setup(self):
-        devices = xos.audio.get_input_devices()
-        if not devices:
-            raise RuntimeError("No audio input devices available")
-
-        system_type = xos.system.get_system_type()
-        
-        if system_type == "IOS":
-            device_id = 0
-        else:
-            device_names = [dev['name'] for dev in devices]
-            device_id = xos.dialoguer.select(
-                "Select microphone", device_names, default=0
-            )
-        
-        self.microphone = xos.audio.Microphone(
-            device_id=device_id,
-            buffer_duration=0.05
-        )
-        
-        print("🎤📊 Microphone Waterfall - Simple single column test")
+        self.magnetometer = xos.sensors.magnetometer()
+        print("🧲📊 Magnetometer Waterfall - Simple single column test")
         print(f"FFT_SIZE={FFT_SIZE}, NUM_FREQUENCY_BINS={NUM_FREQUENCY_BINS}")
     
     def apply_window(self, samples):
@@ -73,8 +58,8 @@ class MicrophoneWaterfall(xos.Application):
                 magnitudes.append(magnitude * MAGNITUDE_SCALE)
             
             return magnitudes
-        except Exception as e:
-            print(f"⚠️  FFT failed: {e}")
+        except:
+            print("⚠️  FFT failed")
             return [0.0] * NUM_FREQUENCY_BINS
     
     def magnitude_to_color(self, magnitude):
@@ -98,9 +83,6 @@ class MicrophoneWaterfall(xos.Application):
             return (255, 255, int(t * 255), 255)
     
     def tick(self):
-        if self.microphone is None:
-            return
-            
         width = self.get_width()
         height = self.get_height()
         
@@ -109,39 +91,41 @@ class MicrophoneWaterfall(xos.Application):
         # Fill black
         xos.rasterizer.fill(self.frame, (0, 0, 0, 255))
         
-        # Get audio samples
-        batch = self.microphone.get_batch(256)
-        if not batch or not batch['_data']:
+        # Read magnetometer
+        mx, my, mz = self.magnetometer.read()
+        mag = xos.math.sqrt(mx * mx + my * my + mz * mz)
+        
+        # Initialize baseline
+        if self.baseline is None:
+            self.baseline = mag
+            print(f"📊 Baseline: {mag:.6f}")
             return
         
-        audio_samples = batch['_data']
+        # DC removal
+        self.baseline += (mag - self.baseline) * 0.01
+        signal = mag - self.baseline
         
-        # Fill our FFT buffer from audio samples
-        for sample in audio_samples:
-            if self.sample_index < FFT_SIZE:
-                self.sample_buffer[self.sample_index] = sample
-                self.sample_index += 1
-                
-                # When buffer full, compute FFT
-                if self.sample_index >= FFT_SIZE:
-                    self.sample_index = 0
-                    self.fft_count += 1
-                    
-                    if self.fft_count % 10 == 0:
-                        print(f"📊 Computing FFT #{self.fft_count}...")
-                    
-                    # Compute FFT
-                    windowed = self.apply_window(self.sample_buffer)
-                    self.current_magnitudes = self.compute_fft_magnitude(windowed)
-                    
-                    # Update max for normalization
-                    max_mag = max(self.current_magnitudes)
-                    if max_mag > self.max_val:
-                        self.max_val = max_mag * 1.1  # Add 10% headroom
-                    
-                    if self.fft_count % 10 == 0:
-                        avg_mag = sum(self.current_magnitudes) / len(self.current_magnitudes)
-                        print(f"   Avg magnitude: {avg_mag:.6f}, Max: {max_mag:.6f}, Norm max: {self.max_val:.6f}")
+        # Add to buffer
+        self.sample_buffer[self.sample_index] = signal
+        self.sample_index += 1
+        
+        # When buffer full, compute FFT
+        if self.sample_index >= FFT_SIZE:
+            self.sample_index = 0
+            self.fft_count += 1
+            
+            print(f"📊 Computing FFT #{self.fft_count}...")
+            
+            # Compute FFT
+            windowed = self.apply_window(self.sample_buffer)
+            self.current_magnitudes = self.compute_fft_magnitude(windowed)
+            
+            # Update max for normalization
+            max_mag = max(self.current_magnitudes)
+            if max_mag > self.max_val:
+                self.max_val = max_mag
+            
+            print(f"   Max magnitude: {max_mag:.4f}, norm_max: {self.max_val:.4f}")
         
         # Draw ONE vertical column at x=100 with frequency bins
         x = 100
@@ -166,9 +150,9 @@ class MicrophoneWaterfall(xos.Application):
                 color
             )
         
-        # Debug every 120 ticks
-        if self.tick_count % 120 == 0:
-            print(f"🔄 Tick {self.tick_count}: {self.fft_count} FFTs completed")
+        # Debug every 60 ticks
+        if self.tick_count % 60 == 0:
+            print(f"🔄 Tick {self.tick_count}: {self.fft_count} FFTs, samples={self.sample_index}/{FFT_SIZE}")
         
         # Draw test markers
         # Red square in top-left
@@ -180,6 +164,7 @@ class MicrophoneWaterfall(xos.Application):
 
 
 if __name__ == "__main__":
-    print("🎤📊 Microphone Waterfall - Simple Column Test")
-    app = MicrophoneWaterfall()
+    print("🧲📊 Magnetometer Waterfall - Simple Column Test")
+    app = MagnetometerWaterfall()
     app.run()
+

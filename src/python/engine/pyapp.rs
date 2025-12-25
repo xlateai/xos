@@ -1,5 +1,46 @@
-use rustpython_vm::{Interpreter, PyObjectRef, AsObject};
+use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
 use crate::engine::{Application, EngineState};
+
+/// Format a Python exception with traceback info
+fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
+    let mut output = String::new();
+    
+    // Try to show traceback info if available
+    if let Some(traceback) = py_exc.traceback() {
+        output.push_str("Traceback (most recent call last):\n");
+        
+        // Use the debug format which should show file/line info
+        let tb_str = format!("{:?}", traceback);
+        if !tb_str.is_empty() && tb_str.len() < 500 {
+            // Try to extract useful info from the debug string
+            for line in tb_str.lines() {
+                if line.contains("File") || line.contains("line") {
+                    output.push_str("  ");
+                    output.push_str(line.trim());
+                    output.push('\n');
+                }
+            }
+        }
+    }
+    
+    // Get exception class name
+    let class_name = py_exc.class().name().to_string();
+    
+    // Try to get the exception message
+    let msg = vm.call_method(py_exc.as_object(), "__str__", ())
+        .ok()
+        .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
+        .unwrap_or_default();
+    
+    // Add exception info
+    if !msg.is_empty() {
+        output.push_str(&format!("{}: {}", class_name, msg));
+    } else {
+        output.push_str(&class_name);
+    }
+    
+    output
+}
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
 class _ArrayResult:
@@ -203,17 +244,8 @@ impl Application for PyApp {
                 match vm.call_method(app_instance, "setup", ()) {
                     Ok(_) => Ok(()),
                     Err(e) => {
-                        let class_name = e.class().name().to_string();
-                        let msg = vm.call_method(e.as_object(), "__str__", ())
-                            .ok()
-                            .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                            .unwrap_or_default();
-                        
-                        if msg.is_empty() {
-                            Err(format!("Python setup error: {}", class_name))
-                        } else {
-                            Err(format!("Python setup error: {}: {}", class_name, msg))
-                        }
+                        let error_msg = format_python_exception(vm, &e);
+                        Err(format!("Python setup error:\n{}", error_msg))
                     }
                 }
             })
@@ -245,17 +277,8 @@ impl Application for PyApp {
                     
                     // Call tick
                     if let Err(e) = vm.call_method(app_instance, "tick", ()) {
-                        let class_name = e.class().name().to_string();
-                        let msg = vm.call_method(e.as_object(), "__str__", ())
-                            .ok()
-                            .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                            .unwrap_or_default();
-                        
-                        if !msg.is_empty() {
-                            eprintln!("Python tick error: {}: {}", class_name, msg);
-                        } else {
-                            eprintln!("Python tick error: {}", class_name);
-                        }
+                        let error_msg = format_python_exception(vm, &e);
+                        eprintln!("Python tick error:\n{}", error_msg);
                     }
                 }
             });
