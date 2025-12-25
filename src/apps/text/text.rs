@@ -847,6 +847,7 @@ impl Application for TextApp {
             self.touch_started_on_keyboard = true;
             
             // Check if user pressed Shift or SymbolToggle (for temp trackpad activation on drag)
+            // This covers: Shift (standard mode), #+= (symbols1 mode), and 123 (symbols2 mode)
             let held_key = state.keyboard.onscreen.get_held_key_type();
             if let Some(key_type) = held_key {
                 match key_type {

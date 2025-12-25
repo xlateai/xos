@@ -277,6 +277,7 @@ impl OnScreenKeyboard {
     /// Call this from the text app when mouse moves after pressing a key
     pub fn check_temp_trackpad_activation(&mut self, initial_x: f32, initial_y: f32, current_x: f32, current_y: f32) -> bool {
         // Check if Shift or SymbolToggle is being held
+        // This covers: Shift (standard mode), #+= (symbols1 mode), and 123 (symbols2 mode)
         if let Some(held_key) = self.held_key_type {
             match held_key {
                 KeyType::Shift | KeyType::SymbolToggle => {
