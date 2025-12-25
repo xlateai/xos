@@ -44,9 +44,6 @@ class MicrophoneWaterfall(xos.Application):
             device_id=device_id,
             buffer_duration=0.05
         )
-        
-        print("🎤📊 Microphone Waterfall - Square pixels")
-        print(f"FFT_SIZE={FFT_SIZE}, NUM_FREQUENCY_BINS={NUM_FREQUENCY_BINS}")
     
     def apply_window(self, samples):
         """Apply Hamming window"""
@@ -107,17 +104,17 @@ class MicrophoneWaterfall(xos.Application):
         width = self.get_width()
         height = self.get_height()
         
-        # Calculate pixel size for square pixels
-        # NUM_FREQUENCY_BINS pixels stretched across width
-        pixel_size = width / NUM_FREQUENCY_BINS
+        # Calculate pixel sizes to fill entire screen
+        # Horizontal: NUM_FREQUENCY_BINS bins fill full width
+        pixel_width = width / NUM_FREQUENCY_BINS
         
-        # Calculate how many rows fit on screen (square pixels!)
-        num_rows_on_screen = int(height / pixel_size)
+        # Vertical: determine how many rows fit, then stretch to fill height
+        num_rows_on_screen = int(height / pixel_width)
+        pixel_height = height / num_rows_on_screen if num_rows_on_screen > 0 else pixel_width
         
         # Set max history if not set yet
         if self.max_history is None:
             self.max_history = num_rows_on_screen
-            print(f"📐 Screen: {width}x{height}, Pixel size: {pixel_size:.1f}, Max rows: {num_rows_on_screen}")
         
         self.tick_count += 1
         
@@ -159,25 +156,22 @@ class MicrophoneWaterfall(xos.Application):
                     # Trim history to max rows
                     if len(self.waterfall_history) > self.max_history:
                         self.waterfall_history.pop()
-                    
-                    if self.fft_count % 20 == 0:
-                        print(f"📊 FFT #{self.fft_count}: Min={row_min:.4f}, Max={row_max:.4f}, History={len(self.waterfall_history)}/{self.max_history} rows")
         
         # Render waterfall
-        self.render_waterfall(width, height, pixel_size)
+        self.render_waterfall(width, height, pixel_width, pixel_height, num_rows_on_screen)
     
-    def render_waterfall(self, width, height, pixel_size):
+    def render_waterfall(self, width, height, pixel_width, pixel_height, max_rows):
         """
         Render waterfall - 100% VECTORIZED (NO Python loops):
         - Pass structured data directly to Rust
         - Rust handles all iteration and pixel filling
+        - Fills entire screen perfectly (100% width and height)
         """
         if not self.waterfall_history:
             return
         
-        # Calculate dimensions
-        num_rows = min(len(self.waterfall_history), int(height / pixel_size))
-        pixel_size_int = int(pixel_size)
+        # Use all available rows up to max
+        num_rows = min(len(self.waterfall_history), max_rows)
         
         # Pass row data + dimensions to Rust kernel
         # Rust will handle ALL iteration internally
@@ -185,7 +179,8 @@ class MicrophoneWaterfall(xos.Application):
             self.frame,
             self.waterfall_history[:num_rows],  # List of color rows
             NUM_FREQUENCY_BINS,
-            pixel_size_int,
+            int(pixel_width),
+            int(pixel_height),
             num_rows
         )
 

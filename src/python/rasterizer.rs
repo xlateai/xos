@@ -622,10 +622,10 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// xos.rasterizer.rects_filled() - ultra-fast vectorized rectangle drawing
 /// 
-/// Usage (waterfall mode): xos.rasterizer.rects_filled(frame, color_rows, num_bins, pixel_size, num_rows)
+/// Usage (waterfall mode): xos.rasterizer.rects_filled(frame, color_rows, num_bins, pixel_width, pixel_height, num_rows)
 /// Usage (single rect): xos.rasterizer.rects_filled(frame, x1, y1, x2, y2, color)
 /// 
-/// Waterfall mode: draws a grid of square pixels from color rows
+/// Waterfall mode: draws a grid of pixels from color rows (fills entire screen)
 /// Single rect mode: draws one rectangle (numpy-style compatibility)
 fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -643,12 +643,14 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
     // Check mode based on argument count
-    if args_vec.len() == 5 {
-        // WATERFALL MODE: (frame, color_rows, num_bins, pixel_size, num_rows)
+    if args_vec.len() == 6 && args_vec[1].downcast_ref::<rustpython_vm::builtins::PyList>().is_some() {
+        // WATERFALL MODE: (frame, color_rows, num_bins, pixel_width, pixel_height, num_rows)
+        // Note: pixel_width and pixel_height are passed but not used - we calculate exact boundaries
         let color_rows_list = &args_vec[1];
         let num_bins: i32 = args_vec[2].clone().try_into_value(vm)?;
-        let pixel_size: i32 = args_vec[3].clone().try_into_value(vm)?;
-        let num_rows: i32 = args_vec[4].clone().try_into_value(vm)?;
+        let _pixel_width: i32 = args_vec[3].clone().try_into_value(vm)?;
+        let _pixel_height: i32 = args_vec[4].clone().try_into_value(vm)?;
+        let num_rows: i32 = args_vec[5].clone().try_into_value(vm)?;
         
         // Parse color rows
         let rows = color_rows_list.downcast_ref::<rustpython_vm::builtins::PyList>()
@@ -656,13 +658,15 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let rows_vec = rows.borrow_vec();
         
         // Draw each row (vectorized in Rust)
+        // Calculate exact boundaries to fill entire screen with no gaps
         for row_idx in 0..num_rows.min(rows_vec.len() as i32) {
             let color_row = rows_vec[row_idx as usize].downcast_ref::<rustpython_vm::builtins::PyList>()
                 .ok_or_else(|| vm.new_type_error("each row must be a list".to_string()))?;
             let colors_vec = color_row.borrow_vec();
             
-            let y_start = (row_idx * pixel_size) as usize;
-            let y_end = ((row_idx + 1) * pixel_size) as usize;
+            // Calculate exact row boundaries: last row extends to height
+            let y_start = (row_idx as usize * height) / num_rows as usize;
+            let y_end = ((row_idx + 1) as usize * height) / num_rows as usize;
             
             // Draw each bin in this row
             for bin_idx in 0..num_bins.min(colors_vec.len() as i32) {
@@ -678,8 +682,9 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 let b: i32 = color_slice[2].clone().try_into_value(vm)?;
                 let a: i32 = color_slice[3].clone().try_into_value(vm)?;
                 
-                let x_start = (bin_idx * pixel_size) as usize;
-                let x_end = ((bin_idx + 1) * pixel_size) as usize;
+                // Calculate exact bin boundaries: last bin extends to width
+                let x_start = (bin_idx as usize * width) / num_bins as usize;
+                let x_end = ((bin_idx + 1) as usize * width) / num_bins as usize;
                 
                 // Fill rectangle (optimized: fill row by row)
                 for y in y_start..y_end.min(height) {
@@ -738,7 +743,7 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     } else {
         return Err(vm.new_type_error(format!(
-            "rects_filled() takes 5 (waterfall) or 6 (single rect) arguments, got {}",
+            "rects_filled() takes 6 arguments (waterfall: frame, color_rows, num_bins, pixel_width, pixel_height, num_rows) or (single rect: frame, x1, y1, x2, y2, color), got {}",
             args_vec.len()
         )));
     }
