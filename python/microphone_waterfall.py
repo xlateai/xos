@@ -74,28 +74,31 @@ class MicrophoneWaterfall(xos.Application):
             print(f"⚠️  FFT failed: {e}")
             return [0.0] * NUM_FREQUENCY_BINS
     
-    def magnitude_to_color(self, magnitude, min_val, max_val):
-        """Convert magnitude to color using per-row normalization"""
-        # Normalize based on this row's min/max
+    def magnitudes_to_colors(self, magnitudes, min_val, max_val):
+        """Vectorized: Convert all magnitudes to colors at once"""
+        # Normalize all magnitudes at once
         if max_val - min_val < 1e-9:
-            norm = 0.5  # Default to mid-range if no variation
+            norms = [0.5] * len(magnitudes)
         else:
-            norm = (magnitude - min_val) / (max_val - min_val)
-            norm = max(0.0, min(1.0, norm))
+            norms = [(max(0.0, min(1.0, (m - min_val) / (max_val - min_val)))) for m in magnitudes]
         
-        # Hot colormap: black → blue → cyan → yellow → white
-        if norm < 0.25:
-            t = norm / 0.25
-            return (0, 0, int(t * 255), 255)
-        elif norm < 0.5:
-            t = (norm - 0.25) / 0.25
-            return (0, int(t * 255), 255, 255)
-        elif norm < 0.75:
-            t = (norm - 0.5) / 0.25
-            return (int(t * 255), 255, int(255 * (1.0 - t)), 255)
-        else:
-            t = (norm - 0.75) / 0.25
-            return (255, 255, int(t * 255), 255)
+        # Vectorized hot colormap computation
+        colors = []
+        for norm in norms:
+            if norm < 0.25:
+                t = norm / 0.25
+                colors.append((0, 0, int(t * 255), 255))
+            elif norm < 0.5:
+                t = (norm - 0.25) / 0.25
+                colors.append((0, int(t * 255), 255, 255))
+            elif norm < 0.75:
+                t = (norm - 0.5) / 0.25
+                colors.append((int(t * 255), 255, int(255 * (1.0 - t)), 255))
+            else:
+                t = (norm - 0.75) / 0.25
+                colors.append((255, 255, int(t * 255), 255))
+        
+        return colors
     
     def tick(self):
         if self.microphone is None:
@@ -147,11 +150,8 @@ class MicrophoneWaterfall(xos.Application):
                     row_min = min(magnitudes)
                     row_max = max(magnitudes)
                     
-                    # Pre-compute colors for this row using row-specific normalization
-                    color_row = []
-                    for mag in magnitudes:
-                        color = self.magnitude_to_color(mag, row_min, row_max)
-                        color_row.append(color)
+                    # Vectorized: compute all colors at once
+                    color_row = self.magnitudes_to_colors(magnitudes, row_min, row_max)
                     
                     # Add color row to history at the beginning (newest)
                     self.waterfall_history.insert(0, color_row)
@@ -168,40 +168,26 @@ class MicrophoneWaterfall(xos.Application):
     
     def render_waterfall(self, width, height, pixel_size):
         """
-        Render waterfall with SQUARE pixels:
-        - X axis (left to right): frequency bins (NUM_FREQUENCY_BINS across)
-        - Y axis (top to bottom): time (newest at top)
-        - Each "pixel" is a square of size pixel_size x pixel_size
-        - Colors are pre-computed and frozen when the FFT is calculated
+        Render waterfall - 100% VECTORIZED (NO Python loops):
+        - Pass structured data directly to Rust
+        - Rust handles all iteration and pixel filling
         """
         if not self.waterfall_history:
             return
         
-        # Draw each row (time slice)
+        # Calculate dimensions
         num_rows = min(len(self.waterfall_history), int(height / pixel_size))
+        pixel_size_int = int(pixel_size)
         
-        for row_idx in range(num_rows):
-            if row_idx >= len(self.waterfall_history):
-                break
-            
-            # Get pre-computed color row (colors never change!)
-            color_row = self.waterfall_history[row_idx]
-            y = int(row_idx * pixel_size)
-            y_next = int((row_idx + 1) * pixel_size)
-            
-            # Draw each frequency bin across this row
-            for bin_idx in range(NUM_FREQUENCY_BINS):
-                color = color_row[bin_idx]
-                
-                x = int(bin_idx * pixel_size)
-                x_next = int((bin_idx + 1) * pixel_size)
-                
-                # Draw square pixel
-                xos.rasterizer.rect_filled(
-                    self.frame,
-                    x, y, x_next, y_next,
-                    color
-                )
+        # Pass row data + dimensions to Rust kernel
+        # Rust will handle ALL iteration internally
+        xos.rasterizer.rects_filled(
+            self.frame,
+            self.waterfall_history[:num_rows],  # List of color rows
+            NUM_FREQUENCY_BINS,
+            pixel_size_int,
+            num_rows
+        )
 
 
 if __name__ == "__main__":

@@ -620,83 +620,127 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-/// xos.rasterizer.rect_filled() - draw a filled rectangle
+/// xos.rasterizer.rects_filled() - ultra-fast vectorized rectangle drawing
 /// 
-/// Usage: xos.rasterizer.rect_filled(frame, x1, y1, x2, y2, color)
-/// - frame: frame object (ignored, we use the global context)
-/// - x1, y1: top-left corner coordinates
-/// - x2, y2: bottom-right corner coordinates  
-/// - color: (r, g, b, a) tuple
-fn rect_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+/// Usage (waterfall mode): xos.rasterizer.rects_filled(frame, color_rows, num_bins, pixel_size, num_rows)
+/// Usage (single rect): xos.rasterizer.rects_filled(frame, x1, y1, x2, y2, color)
+/// 
+/// Waterfall mode: draws a grid of square pixels from color rows
+/// Single rect mode: draws one rectangle (numpy-style compatibility)
+fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
-    if args_vec.len() != 6 {
-        return Err(vm.new_type_error(format!(
-            "rect_filled() takes exactly 6 arguments ({} given)",
-            args_vec.len()
-        )));
-    }
     
-    let _frame_dict = &args_vec[0]; // Ignored, we use global context
-    let x1: i32 = args_vec[1].clone().try_into_value(vm)?;
-    let y1: i32 = args_vec[2].clone().try_into_value(vm)?;
-    let x2: i32 = args_vec[3].clone().try_into_value(vm)?;
-    let y2: i32 = args_vec[4].clone().try_into_value(vm)?;
-    let color_tuple = &args_vec[5];
-    
-    // Get the frame buffer from global context
+    // Get frame buffer
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
-        vm.new_runtime_error("No frame buffer context set. rect_filled must be called during tick().".to_string())
+        vm.new_runtime_error("No frame buffer context set".to_string())
     })?;
-    
-    // Parse color tuple (r, g, b, a)
-    let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
-        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
-    let color_vec = color_obj.as_slice();
-    if color_vec.len() != 4 {
-        return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
-    }
-    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
-    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
-    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
-    let a: i32 = color_vec[3].clone().try_into_value(vm)?;
-    let color = (r as u8, g as u8, b as u8, a as u8);
     
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
-    // Clamp coordinates to screen bounds
-    let x1_clamped = x1.max(0).min(width as i32);
-    let y1_clamped = y1.max(0).min(height as i32);
-    let x2_clamped = x2.max(0).min(width as i32);
-    let y2_clamped = y2.max(0).min(height as i32);
-    
-    // Ensure x1 < x2 and y1 < y2
-    let (x_start, x_end) = if x1_clamped < x2_clamped {
-        (x1_clamped, x2_clamped)
-    } else {
-        (x2_clamped, x1_clamped)
-    };
-    let (y_start, y_end) = if y1_clamped < y2_clamped {
-        (y1_clamped, y2_clamped)
-    } else {
-        (y2_clamped, y1_clamped)
-    };
-    
-    // Draw filled rectangle
-    for y in y_start..y_end {
-        for x in x_start..x_end {
-            let idx = (y as usize * width + x as usize) * 4;
-            if idx + 3 < buffer.len() {
-                buffer[idx + 0] = color.0;
-                buffer[idx + 1] = color.1;
-                buffer[idx + 2] = color.2;
-                buffer[idx + 3] = color.3;
+    // Check mode based on argument count
+    if args_vec.len() == 5 {
+        // WATERFALL MODE: (frame, color_rows, num_bins, pixel_size, num_rows)
+        let color_rows_list = &args_vec[1];
+        let num_bins: i32 = args_vec[2].clone().try_into_value(vm)?;
+        let pixel_size: i32 = args_vec[3].clone().try_into_value(vm)?;
+        let num_rows: i32 = args_vec[4].clone().try_into_value(vm)?;
+        
+        // Parse color rows
+        let rows = color_rows_list.downcast_ref::<rustpython_vm::builtins::PyList>()
+            .ok_or_else(|| vm.new_type_error("color_rows must be a list".to_string()))?;
+        let rows_vec = rows.borrow_vec();
+        
+        // Draw each row (vectorized in Rust)
+        for row_idx in 0..num_rows.min(rows_vec.len() as i32) {
+            let color_row = rows_vec[row_idx as usize].downcast_ref::<rustpython_vm::builtins::PyList>()
+                .ok_or_else(|| vm.new_type_error("each row must be a list".to_string()))?;
+            let colors_vec = color_row.borrow_vec();
+            
+            let y_start = (row_idx * pixel_size) as usize;
+            let y_end = ((row_idx + 1) * pixel_size) as usize;
+            
+            // Draw each bin in this row
+            for bin_idx in 0..num_bins.min(colors_vec.len() as i32) {
+                // Parse color
+                let color_tuple = colors_vec[bin_idx as usize].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                    .ok_or_else(|| vm.new_type_error("color must be tuple".to_string()))?;
+                let color_slice = color_tuple.as_slice();
+                if color_slice.len() != 4 {
+                    continue;
+                }
+                let r: i32 = color_slice[0].clone().try_into_value(vm)?;
+                let g: i32 = color_slice[1].clone().try_into_value(vm)?;
+                let b: i32 = color_slice[2].clone().try_into_value(vm)?;
+                let a: i32 = color_slice[3].clone().try_into_value(vm)?;
+                
+                let x_start = (bin_idx * pixel_size) as usize;
+                let x_end = ((bin_idx + 1) * pixel_size) as usize;
+                
+                // Fill rectangle (optimized: fill row by row)
+                for y in y_start..y_end.min(height) {
+                    let row_start = (y * width + x_start) * 4;
+                    let row_end = (y * width + x_end.min(width)) * 4;
+                    
+                    // Fill this row of the rectangle
+                    let mut idx = row_start;
+                    while idx < row_end && idx + 3 < buffer.len() {
+                        buffer[idx] = r as u8;
+                        buffer[idx + 1] = g as u8;
+                        buffer[idx + 2] = b as u8;
+                        buffer[idx + 3] = a as u8;
+                        idx += 4;
+                    }
+                }
             }
         }
+    } else if args_vec.len() == 6 {
+        // SINGLE RECT MODE: (frame, x1, y1, x2, y2, color)
+        let x1: i32 = args_vec[1].clone().try_into_value(vm)?;
+        let y1: i32 = args_vec[2].clone().try_into_value(vm)?;
+        let x2: i32 = args_vec[3].clone().try_into_value(vm)?;
+        let y2: i32 = args_vec[4].clone().try_into_value(vm)?;
+        let color_tuple = &args_vec[5];
+        
+        // Parse color
+        let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+        let color_vec = color_obj.as_slice();
+        if color_vec.len() != 4 {
+            return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+        }
+        let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+        let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+        let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+        let a: i32 = color_vec[3].clone().try_into_value(vm)?;
+        
+        // Clamp and draw
+        let x_start = x1.max(0).min(width as i32) as usize;
+        let x_end = x2.max(0).min(width as i32) as usize;
+        let y_start = y1.max(0).min(height as i32) as usize;
+        let y_end = y2.max(0).min(height as i32) as usize;
+        
+        for y in y_start..y_end {
+            let row_start = (y * width + x_start) * 4;
+            let row_end = (y * width + x_end) * 4;
+            let mut idx = row_start;
+            while idx < row_end && idx + 3 < buffer.len() {
+                buffer[idx] = r as u8;
+                buffer[idx + 1] = g as u8;
+                buffer[idx + 2] = b as u8;
+                buffer[idx + 3] = a as u8;
+                idx += 4;
+            }
+        }
+    } else {
+        return Err(vm.new_type_error(format!(
+            "rects_filled() takes 5 (waterfall) or 6 (single rect) arguments, got {}",
+            args_vec.len()
+        )));
     }
     
     Ok(vm.ctx.none())
@@ -709,7 +753,7 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("lines_batched", vm.new_function("lines_batched", lines_batched), vm).unwrap();
     module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();
     module.set_attr("fill", vm.new_function("fill", fill), vm).unwrap();
-    module.set_attr("rect_filled", vm.new_function("rect_filled", rect_filled), vm).unwrap();
+    module.set_attr("rects_filled", vm.new_function("rects_filled", rects_filled), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module
 }
