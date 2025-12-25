@@ -1242,24 +1242,44 @@ impl TextApp {
     }
     
     fn find_nearest_char_index(&self, text_x: f32, text_y: f32) -> usize {
-        // Check if tap is on an empty line
+        // First, find which line the tap is on
+        let mut tapped_line_idx: Option<usize> = None;
         for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
             let line_y = line.baseline_y;
             
             // Check if tap is within this line's vertical bounds
             if text_y >= line_y - self.text_rasterizer.ascent && text_y <= line_y + self.text_rasterizer.descent {
-                // Check if this line is empty (no characters in this line)
-                let has_chars = self.text_rasterizer.characters.iter()
-                    .any(|c| c.line_index == line_idx);
+                tapped_line_idx = Some(line_idx);
+                break;
+            }
+        }
+        
+        // If we found a line, check if we should place cursor at end of line
+        if let Some(line_idx) = tapped_line_idx {
+            let line = &self.text_rasterizer.lines[line_idx];
+            
+            // Find characters on this line
+            let chars_on_line: Vec<_> = self.text_rasterizer.characters.iter()
+                .filter(|c| c.line_index == line_idx)
+                .collect();
+            
+            if chars_on_line.is_empty() {
+                // Empty line - place cursor at start of line
+                return line.start_index;
+            }
+            
+            // Find the rightmost character on this line
+            if let Some(last_char) = chars_on_line.last() {
+                let line_end_x = last_char.x + last_char.metrics.advance_width;
                 
-                if !has_chars {
-                    // Empty line - place cursor at start of line
-                    return line.start_index;
+                // If tap is to the right of the last character, place cursor at end of line
+                if text_x >= line_end_x {
+                    return line.end_index;
                 }
             }
         }
         
-        // If not on empty line, find nearest character
+        // Otherwise, find nearest character
         let mut nearest_char_index = self.text_rasterizer.text.chars().count();
         let mut min_distance_sq = f32::MAX;
         
