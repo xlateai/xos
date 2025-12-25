@@ -472,6 +472,49 @@ impl Application for TextApp {
             }
             
             if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                // Continuous auto-scroll when laser is near edges (while trackpad is active)
+                if self.trackpad_active {
+                    let visible_height = content_bottom - content_top;
+                    let edge_threshold = visible_height * 0.01; // 1% margin from edge
+                    
+                    // Distance from top edge
+                    let dist_from_top = laser_y - content_top;
+                    // Distance from bottom edge  
+                    let dist_from_bottom = content_bottom - laser_y;
+                    
+                    let base_scroll_speed = 15.0; // 50% faster than old 10.0
+                    
+                    let mut did_scroll = false;
+                    if dist_from_top >= 0.0 && dist_from_top <= edge_threshold {
+                        // Near top edge - scroll up
+                        // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
+                        let progress = 1.0 - (dist_from_top / edge_threshold); // 0 at threshold, 1 at edge
+                        let scroll_speed = base_scroll_speed * progress;
+                        self.scroll_y = (self.scroll_y - scroll_speed).max(0.0);
+                        did_scroll = true;
+                    } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
+                        // Near bottom edge - scroll down
+                        // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
+                        let progress = 1.0 - (dist_from_bottom / edge_threshold); // 0 at threshold, 1 at edge
+                        let scroll_speed = base_scroll_speed * progress;
+                        self.scroll_y += scroll_speed;
+                        did_scroll = true;
+                    }
+                    
+                    // Update cursor position if we scrolled
+                    if did_scroll {
+                        let text_x = laser_x;
+                        let text_y = laser_y - content_top + self.scroll_y;
+                        let char_index = self.find_nearest_char_index(text_x, text_y);
+                        
+                        // If selecting, update selection end; otherwise just move cursor
+                        if self.trackpad_selecting {
+                            self.selection_end = Some(char_index);
+                        }
+                        self.cursor_position = char_index;
+                    }
+                }
+                
                 let dot_radius = 6.0; // 1.5x larger (was 4.0)
                 let dot_x_i = laser_x.round() as i32;
                 let dot_y_i = laser_y.round() as i32;
@@ -681,18 +724,6 @@ impl Application for TextApp {
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
-                    
-                    // Auto-scroll when laser is near edges
-                    let edge_margin = 50.0; // pixels from edge to start scrolling
-                    let scroll_speed = 10.0; // pixels per frame
-                    
-                    if new_laser_y < content_top + edge_margin {
-                        // Near top edge - scroll up
-                        self.scroll_y = (self.scroll_y - scroll_speed).max(0.0);
-                    } else if new_laser_y > keyboard_top - edge_margin {
-                        // Near bottom edge - scroll down
-                        self.scroll_y += scroll_speed;
-                    }
                     
                     // Update cursor position based on laser
                     let safe_region = &state.frame.safe_region_boundaries;
