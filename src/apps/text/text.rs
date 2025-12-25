@@ -61,6 +61,9 @@ pub struct TextApp {
     trackpad_last_tap_time: Option<Instant>,
     trackpad_selecting: bool,
     trackpad_moved: bool, // Track if mouse moved during tap (to distinguish tap from drag)
+    // Temp trackpad activation tracking (for Shift/SymbolToggle drag)
+    temp_trackpad_initial_x: Option<f32>,
+    temp_trackpad_initial_y: Option<f32>,
     // Trackpad laser pointer
     trackpad_laser_x: Option<f32>, // Screen coordinates
     trackpad_laser_y: Option<f32>, // Screen coordinates
@@ -132,6 +135,8 @@ impl TextApp {
             trackpad_last_tap_time: None,
             trackpad_selecting: false,
             trackpad_moved: false,
+            temp_trackpad_initial_x: None,
+            temp_trackpad_initial_y: None,
             trackpad_laser_x: None,
             trackpad_laser_y: None,
             trackpad_last_mouse_x: None,
@@ -461,15 +466,13 @@ impl Application for TextApp {
         
         // Draw trackpad laser pointer if in trackpad mode AND keyboard is visible
         if is_trackpad_mode && is_keyboard_shown {
-            // Initialize laser if not already set
+            // Initialize laser if not already set (at current cursor position)
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
-                // Center of available content area (using already extracted values)
-                self.trackpad_laser_x = Some(width / 2.0);
-                self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
+                self.initialize_laser_at_cursor(content_top);
             }
             
             if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
-                let dot_radius = 4.0;
+                let dot_radius = 6.0; // 1.5x larger (was 4.0)
                 let dot_x_i = laser_x.round() as i32;
                 let dot_y_i = laser_y.round() as i32;
                 
@@ -624,18 +627,32 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
+        // Check if temp trackpad mode should be activated (Shift/SymbolToggle drag)
+        if let (Some(initial_x), Some(initial_y)) = (self.temp_trackpad_initial_x, self.temp_trackpad_initial_y) {
+            if state.keyboard.onscreen.check_temp_trackpad_activation(initial_x, initial_y, state.mouse.x, state.mouse.y) {
+                // Temp trackpad mode was activated - initialize laser at cursor position
+                let safe_region = &state.frame.safe_region_boundaries;
+                let content_top = safe_region.y1 * height;
+                self.initialize_laser_at_cursor(content_top);
+                
+                // Clear initial position tracking
+                self.temp_trackpad_initial_x = None;
+                self.temp_trackpad_initial_y = None;
+                
+                // Mark as active and set last mouse position
+                self.trackpad_active = true;
+                self.trackpad_last_mouse_x = Some(state.mouse.x);
+                self.trackpad_last_mouse_y = Some(state.mouse.y);
+            }
+        }
+        
         // Check if we're in trackpad mode AND actively using it
         if state.keyboard.onscreen.is_trackpad_mode() {
-            // Initialize laser if not set (center of content area)
+            // Initialize laser if not set (at current cursor position)
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 let safe_region = &state.frame.safe_region_boundaries;
                 let content_top = safe_region.y1 * height;
-                let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-                let content_bottom = keyboard_top_y * height;
-                
-                // Center of available content area
-                self.trackpad_laser_x = Some(width / 2.0);
-                self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
+                self.initialize_laser_at_cursor(content_top);
             }
             
             // If mouse is in trackpad area and active (dragging), move the laser
@@ -664,6 +681,18 @@ impl Application for TextApp {
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
+                    
+                    // Auto-scroll when laser is near edges
+                    let edge_margin = 50.0; // pixels from edge to start scrolling
+                    let scroll_speed = 10.0; // pixels per frame
+                    
+                    if new_laser_y < content_top + edge_margin {
+                        // Near top edge - scroll up
+                        self.scroll_y = (self.scroll_y - scroll_speed).max(0.0);
+                    } else if new_laser_y > keyboard_top - edge_margin {
+                        // Near bottom edge - scroll down
+                        self.scroll_y += scroll_speed;
+                    }
                     
                     // Update cursor position based on laser
                     let safe_region = &state.frame.safe_region_boundaries;
@@ -816,6 +845,19 @@ impl Application for TextApp {
         if state.keyboard.onscreen.on_mouse_down(state.mouse.x, state.mouse.y, shape[1] as f32, height) {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
+            
+            // Check if user pressed Shift or SymbolToggle (for temp trackpad activation on drag)
+            let held_key = state.keyboard.onscreen.get_held_key_type();
+            if let Some(key_type) = held_key {
+                match key_type {
+                    KeyType::Shift | KeyType::SymbolToggle => {
+                        // Record initial position for temp trackpad activation check
+                        self.temp_trackpad_initial_x = Some(state.mouse.x);
+                        self.temp_trackpad_initial_y = Some(state.mouse.y);
+                    }
+                    _ => {}
+                }
+            }
             return;
         }
         
@@ -828,17 +870,11 @@ impl Application for TextApp {
             if state.mouse.y >= keyboard_region_top {
                 self.trackpad_active = true;
                 
-                // Initialize laser position and last mouse position
+                // Initialize laser position at current cursor position
                 if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                     let safe_region = &state.frame.safe_region_boundaries;
                     let content_top = safe_region.y1 * height;
-                    let shape = state.frame.array.shape();
-                    let width = shape[1] as f32;
-                    let content_bottom = keyboard_region_top;
-                    
-                    // Center of available content area
-                    self.trackpad_laser_x = Some(width / 2.0);
-                    self.trackpad_laser_y = Some((content_top + content_bottom) / 2.0);
+                    self.initialize_laser_at_cursor(content_top);
                 }
                 
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
@@ -994,6 +1030,10 @@ impl Application for TextApp {
         self.trackpad_moved = false;
         self.trackpad_last_mouse_x = None;
         self.trackpad_last_mouse_y = None;
+        
+        // Clear temp trackpad initial position tracking
+        self.temp_trackpad_initial_x = None;
+        self.temp_trackpad_initial_y = None;
     }
     
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
@@ -1011,6 +1051,15 @@ impl Application for TextApp {
 }
 
 impl TextApp {
+    /// Initialize trackpad laser at current cursor position
+    fn initialize_laser_at_cursor(&mut self, content_top: f32) {
+        let (cursor_x, cursor_baseline_y) = self.get_cursor_screen_position();
+        // Convert text coordinates to screen coordinates
+        let screen_y = cursor_baseline_y - self.scroll_y + content_top;
+        self.trackpad_laser_x = Some(cursor_x);
+        self.trackpad_laser_y = Some(screen_y);
+    }
+    
     /// Auto-scroll to keep cursor visible on screen
     fn ensure_cursor_visible(&mut self, content_height: f32) {
         let (_, cursor_baseline_y) = self.get_cursor_screen_position();

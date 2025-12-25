@@ -77,6 +77,8 @@ pub struct OnScreenKeyboard {
     pending_chars: Vec<char>,
     // Trackpad mode
     trackpad_mode: bool,
+    // Temporary trackpad mode (activated by holding Shift/SymbolToggle and dragging)
+    temp_trackpad_mode: bool,
 }
 
 impl std::fmt::Debug for OnScreenKeyboard {
@@ -113,6 +115,7 @@ impl OnScreenKeyboard {
             shift_press_time: None,
             pending_chars: Vec::new(),
             trackpad_mode: false,
+            temp_trackpad_mode: false,
         };
 
         keyboard.layout_keys();
@@ -227,6 +230,8 @@ impl OnScreenKeyboard {
     /// Handle mouse up event
     pub fn on_mouse_up(&mut self) {
         self.release_keys();
+        // Clear temporary trackpad mode
+        self.temp_trackpad_mode = false;
     }
 
     /// Handle mouse down event - returns true if the keyboard handled the event
@@ -247,7 +252,7 @@ impl OnScreenKeyboard {
         }
 
         // In trackpad mode, check if click is in trackpad area (below action row)
-        if self.trackpad_mode && !self.keys.is_empty() {
+        if (self.trackpad_mode || self.temp_trackpad_mode) && !self.keys.is_empty() {
             // Calculate action row bottom
             let keyboard_height = keyboard_bottom - keyboard_top;
             let first_key = &self.keys[0];
@@ -267,6 +272,27 @@ impl OnScreenKeyboard {
 
         true // Event was handled by keyboard
     }
+    
+    /// Check if mouse movement should activate temporary trackpad mode
+    /// Call this from the text app when mouse moves after pressing a key
+    pub fn check_temp_trackpad_activation(&mut self, initial_x: f32, initial_y: f32, current_x: f32, current_y: f32) -> bool {
+        // Check if Shift or SymbolToggle is being held
+        if let Some(held_key) = self.held_key_type {
+            match held_key {
+                KeyType::Shift | KeyType::SymbolToggle => {
+                    // Check if mouse moved significantly (more than 10 pixels)
+                    let dx = (current_x - initial_x).abs();
+                    let dy = (current_y - initial_y).abs();
+                    if dx > 10.0 || dy > 10.0 {
+                        self.temp_trackpad_mode = true;
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
 
     pub fn is_minimized(&self) -> bool {
         self.minimized
@@ -278,7 +304,7 @@ impl OnScreenKeyboard {
     
     pub fn is_trackpad_mode(&self) -> bool {
         // Trackpad mode is only active when keyboard is shown
-        self.trackpad_mode && !self.minimized
+        (self.trackpad_mode || self.temp_trackpad_mode) && !self.minimized
     }
 
     pub fn check_key_type_at_position(&self, mx: f32, my: f32, w: f32, h: f32) -> Option<KeyType> {
