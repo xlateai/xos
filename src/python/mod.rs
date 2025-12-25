@@ -5,6 +5,7 @@ pub mod engine;
 pub mod rasterizer;
 pub mod arrays;
 pub mod sensors;
+pub mod audio;
 pub mod ops;
 pub mod dtypes;
 

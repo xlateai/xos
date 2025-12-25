@@ -66,6 +66,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let sensors_module = crate::python::sensors::make_sensors_module(vm);
     module.set_attr("sensors", sensors_module, vm).unwrap();
     
+    // Add the audio submodule
+    let audio_module = crate::python::audio::make_audio_module(vm);
+    module.set_attr("audio", audio_module, vm).unwrap();
+    
     // Add the ops submodule
     let ops_module = crate::python::ops::make_ops_module(vm);
     module.set_attr("ops", ops_module, vm).unwrap();
