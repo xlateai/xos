@@ -133,20 +133,39 @@ fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let all_samples = listener.get_samples_by_channel();
     
     if all_samples.is_empty() {
-        // No channels available
-        return Ok(vm.ctx.new_list(vec![]).into());
+        // Return empty array
+        let dict = vm.ctx.new_dict();
+        dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
+        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+        return Ok(dict.into());
     }
     
     // Use the first channel (mono)
     let samples = &all_samples[0];
     
-    // Take up to batch_size samples
+    // Take up to batch_size samples and convert to Python list
     let batch: Vec<PyObjectRef> = samples.iter()
         .take(batch_size)
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
     
-    Ok(vm.ctx.new_list(batch).into())
+    let py_list = vm.ctx.new_list(batch);
+    
+    // Create xos.Array dict
+    let dict = vm.ctx.new_dict();
+    dict.set_item("_data", py_list.into(), vm)?;
+    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len().min(batch_size) as i32).into()]).into(), vm)?;
+    dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    
+    // Wrap in _ArrayWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    
+    Ok(dict.into())
 }
 
 /// Create the audio module

@@ -6,8 +6,6 @@ BASELINE_LENGTH = 0.012
 MAX_EXTRA_LENGTH = 0.678
 LINE_THICKNESS = 0.003
 AMPLIFICATION_FACTOR = 50.0
-PROPAGATION_TIME_SECS = 1.0
-TARGET_FPS = 60.0
 
 
 class MicrophoneWaveform(xos.Application):
@@ -19,7 +17,6 @@ class MicrophoneWaveform(xos.Application):
         self.sample_buffer = [0.0] * NUM_LINES
         self.color_buffer = [(128, 128, 128, 255)] * NUM_LINES
         self.buffer_index = 0
-        self.lines_to_add = 0.0
 
     def setup(self):
         # Print available input devices
@@ -81,83 +78,53 @@ class MicrophoneWaveform(xos.Application):
         # Clear background
         xos.rasterizer.fill(self.frame, (8, 10, 15, 255))
         
-        # Calculate how many lines to add per frame for smooth animation
-        lines_per_frame = NUM_LINES / (PROPAGATION_TIME_SECS * TARGET_FPS)
-        self.lines_to_add += lines_per_frame
-        
-        # Only process whole lines (round down)
-        lines_to_process = int(self.lines_to_add)
-        self.lines_to_add -= lines_to_process
-        
-        # Clamp to max 20 lines per frame to prevent lag spikes
-        lines_to_process = min(lines_to_process, 20)
-        
-        if lines_to_process == 0:
-            self._render(width, height)
+        # Get one batch per tick
+        batch = self.microphone.get_batch(512)
+        if not batch or len(batch['_data']) == 0:
             return
         
-        # Process the requested number of lines this frame
-        for _ in range(lines_to_process):
-            # Get batch of samples (one batch = one line)
-            batch = self.microphone.get_batch(512)
-            if not batch:
-                break
-            
-            # Calculate RMS amplitude
-            sum_squares = sum(s * s for s in batch)
-            rms = (sum_squares / len(batch)) ** 0.5
-            
-            # Amplify and normalize
-            amplified = self.amplify_nonlinear(rms)
-            normalized = max(0.0, min(1.0, amplified))
-            
-            # Store in circular buffer
-            self.sample_buffer[self.buffer_index] = normalized
-            
-            # Compute color based on amplitude
-            amp = normalized
-            
-            if amp < 0.15:
-                brightness = int(180 + amp / 0.15 * 75)
-                color = (brightness, brightness, brightness, 255)
-            elif amp < 0.4:
-                t = (amp - 0.15) / 0.25
-                r = int(255 - t * 155)
-                g = 255
-                b = 255
-                color = (r, g, b, 255)
-            elif amp < 0.65:
-                t = (amp - 0.4) / 0.25
-                r = int(100 - t * 100)
-                g = 255
-                b = int(255 - t * 155)
-                color = (r, g, b, 255)
-            elif amp < 0.85:
-                t = (amp - 0.65) / 0.2
-                r = int(t * 255)
-                g = 255
-                b = 0
-                color = (r, g, b, 255)
-            else:
-                t = (amp - 0.85) / 0.15
-                r = 255
-                g = int(255 - t * 100)
-                b = 0
-                color = (r, g, b, 255)
-            
-            self.color_buffer[self.buffer_index] = color
-            self.buffer_index = (self.buffer_index + 1) % NUM_LINES
+        # Compute RMS (eventually this should be a kernel)
+        samples = batch['_data']
+        sum_squares = sum(s * s for s in samples)
+        rms = (sum_squares / len(samples)) ** 0.5
         
-        # Render
+        # Amplify and normalize
+        amplified = self.amplify_nonlinear(rms)
+        normalized = max(0.0, min(1.0, amplified))
+        
+        # Store in circular buffer
+        self.sample_buffer[self.buffer_index] = normalized
+        self.color_buffer[self.buffer_index] = self._compute_color(normalized)
+        self.buffer_index = (self.buffer_index + 1) % NUM_LINES
+        
+        # Render everything vectorized
         self._render(width, height)
     
+    def _compute_color(self, amp):
+        """Compute color from amplitude - eventually a vectorized kernel"""
+        if amp < 0.15:
+            brightness = int(180 + amp / 0.15 * 75)
+            return (brightness, brightness, brightness, 255)
+        elif amp < 0.4:
+            t = (amp - 0.15) / 0.25
+            return (int(255 - t * 155), 255, 255, 255)
+        elif amp < 0.65:
+            t = (amp - 0.4) / 0.25
+            return (int(100 - t * 100), 255, int(255 - t * 155), 255)
+        elif amp < 0.85:
+            t = (amp - 0.65) / 0.2
+            return (int(t * 255), 255, 0, 255)
+        else:
+            t = (amp - 0.85) / 0.15
+            return (255, int(255 - t * 100), 0, 255)
+    
     def _render(self, width, height):
-        """Render flowing horizontal lines - vectorized"""
+        """Render - fully vectorized, no loops in Rust"""
         center_x = width * 0.5
         spacing = height / NUM_LINES
         thickness_px = LINE_THICKNESS * height
         
-        # Pre-allocate arrays for vectorized rendering
+        # Build vectorized arrays (eventually these should be xos.Array operations)
         start_points = []
         end_points = []
         thicknesses = []
@@ -170,22 +137,13 @@ class MicrophoneWaveform(xos.Application):
             half_len = (BASELINE_LENGTH + amp * MAX_EXTRA_LENGTH) * width * 0.5
             y = height - (line_idx * spacing)
             
-            x0 = center_x - half_len
-            x1 = center_x + half_len
-            
-            start_points.append((x0, y))
-            end_points.append((x1, y))
+            start_points.append((center_x - half_len, y))
+            end_points.append((center_x + half_len, y))
             thicknesses.append(thickness_px)
             colors.append(self.color_buffer[buf_idx])
         
-        # Single vectorized call for all lines
-        xos.rasterizer.lines_batched(
-            self.frame,
-            start_points,
-            end_points,
-            thicknesses,
-            colors
-        )
+        # Single vectorized Rust call
+        xos.rasterizer.lines_batched(self.frame, start_points, end_points, thicknesses, colors)
 
 
 if __name__ == "__main__":
