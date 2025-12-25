@@ -1,174 +1,222 @@
 import xos
 
+# =========================
 # Configuration
+# =========================
 NUM_LINES = 256
-BUFFER_SIZE = 256
-NORM_WINDOW = 32
+BASELINE_LENGTH = 0.012
+MAX_EXTRA_LENGTH = 0.678
+LINE_THICKNESS = 0.003
 
-BASELINE_LENGTH = 0.04
-MAX_EXTRA_LENGTH = 0.45
-LINE_THICKNESS = 0.0012
+ADVANCE_PER_TICK = 8
+AMPLIFICATION_FACTOR = 10.0
 
-EPSILON = 1e-6  # threshold for "non-zero" magnetometer
+# MagnetoBalls-style color buffer
+COLOR_BUFFER_SIZE = 128
+PERCENTILE = 0.95
+
+# Envelope tuning
+BASELINE_ALPHA = 0.002
+ATTACK = 0.35
+DECAY = 0.08
+
+# Phase texture
+PHASE_STEP = 0.15
+PHASE_DEPTH = 0.07
+
+# 🔑 Adaptive normalization tuning
+ENV_MAX_RISE = 0.02     # how fast max grows
+ENV_MAX_FALL = 0.001    # how fast max shrinks
+ENV_MIN_RISE = 0.001
+ENV_MIN_FALL = 0.01
 
 
-class MagnetoHorizontalWaveform(xos.Application):
+class MagnetometerWaveform(xos.Application):
     def __init__(self):
         super().__init__()
         self.magnetometer = None
 
-        # Raw ring (for normalization window)
-        self.mag_raw = [0.0] * BUFFER_SIZE
-        self.x_raw = [0.0] * BUFFER_SIZE
-        self.y_raw = [0.0] * BUFFER_SIZE
-        self.z_raw = [0.0] * BUFFER_SIZE
-
-        # Committed (write-once)
-        self.mag_norm = [0.0] * BUFFER_SIZE
-        self.colors = [(128, 128, 128, 255)] * BUFFER_SIZE
-
+        # Waveform buffers
+        self.sample_buffer = [0.0] * NUM_LINES
+        self.color_buffer = [(128, 128, 128, 255)] * NUM_LINES
         self.buffer_index = 0
-        self.sample_count = 0
 
-        self.seeded = False
-        self.waiting_for_signal = True  # 👈 KEY ADDITION
+        # MagnetoBalls RGB buffers
+        self.mag_x = [0.0] * COLOR_BUFFER_SIZE
+        self.mag_y = [0.0] * COLOR_BUFFER_SIZE
+        self.mag_z = [0.0] * COLOR_BUFFER_SIZE
+        self.color_index = 0
+
+        # Envelope + phase
+        self.baseline = None
+        self.envelope = 0.0
+        self.phase = 0.0
+
+        # Adaptive normalization state
+        self.env_min = None
+        self.env_max = None
 
     def setup(self):
         self.magnetometer = xos.sensors.magnetometer()
-        xos.print("Magneto Horizontal Waveform — waiting for first valid signal")
+        xos.print("🧲⚡ Magnetometer Waveform — adaptive normalized")
 
-    def _compute_window_minmax(self, window_n):
-        newest = (self.buffer_index - 1) % BUFFER_SIZE
+    # --------------------------------------------------
+    # Percentile helper
+    # --------------------------------------------------
+    def percentile(self, data, p):
+        s = sorted(data)
+        idx = int(len(s) * p)
+        return s[min(idx, len(s) - 1)]
 
-        min_mag = max_mag = self.mag_raw[newest]
-        min_x = max_x = self.x_raw[newest]
-        min_y = max_y = self.y_raw[newest]
-        min_z = max_z = self.z_raw[newest]
+    # --------------------------------------------------
+    # MagnetoBalls RGB (95%)
+    # --------------------------------------------------
+    def compute_color(self, mx, my, mz):
+        i = self.color_index
+        self.mag_x[i] = mx
+        self.mag_y[i] = my
+        self.mag_z[i] = mz
+        self.color_index = (i + 1) % COLOR_BUFFER_SIZE
 
-        idx = newest
-        for _ in range(window_n - 1):
-            idx = (idx - 1) % BUFFER_SIZE
+        min_x, max_x = min(self.mag_x), self.percentile(self.mag_x, PERCENTILE)
+        min_y, max_y = min(self.mag_y), self.percentile(self.mag_y, PERCENTILE)
+        min_z, max_z = min(self.mag_z), self.percentile(self.mag_z, PERCENTILE)
 
-            v = self.mag_raw[idx]
-            if v < min_mag: min_mag = v
-            if v > max_mag: max_mag = v
+        def norm(v, vmin, vmax):
+            if vmax - vmin < 1e-3:
+                return 0.5
+            return max(0.0, min(1.0, (v - vmin) / (vmax - vmin)))
 
-            v = self.x_raw[idx]
-            if v < min_x: min_x = v
-            if v > max_x: max_x = v
+        return (
+            int(norm(mx, min_x, max_x) * 255),
+            int(norm(my, min_y, max_y) * 255),
+            int(norm(mz, min_z, max_z) * 255),
+            255
+        )
 
-            v = self.y_raw[idx]
-            if v < min_y: min_y = v
-            if v > max_y: max_y = v
+    # --------------------------------------------------
+    # Mic-style nonlinear amplification
+    # --------------------------------------------------
+    def amplify(self, value):
+        v = value * AMPLIFICATION_FACTOR
+        if v < 0.05:
+            return v * 2.0
+        elif v < 0.3:
+            return 0.1 + (v - 0.05) * 1.6
+        else:
+            return 0.4 + xos.math.log(v + 1.0) * 0.35
 
-            v = self.z_raw[idx]
-            if v < min_z: min_z = v
-            if v > max_z: max_z = v
-
-        return (min_mag, max_mag, min_x, max_x, min_y, max_y, min_z, max_z)
-
+    # --------------------------------------------------
+    # Main tick
+    # --------------------------------------------------
     def tick(self):
-        mx, my, mz = self.magnetometer.read()
-        mag_sq = mx * mx + my * my + mz * mz
-
-        # --------------------------------------------------
-        # WAIT until first non-zero magnetometer reading
-        # --------------------------------------------------
-        if self.waiting_for_signal:
-            if mag_sq < EPSILON:
-                return  # do nothing yet
-            else:
-                self.waiting_for_signal = False
-                xos.print("Magnetometer active — starting waveform")
-
-        magnitude = mag_sq ** 0.5
-
-        # --------------------------------------------------
-        # Seed buffers ONCE with first valid sample
-        # --------------------------------------------------
-        if not self.seeded:
-            for k in range(BUFFER_SIZE):
-                self.mag_raw[k] = magnitude
-                self.x_raw[k] = mx
-                self.y_raw[k] = my
-                self.z_raw[k] = mz
-                self.mag_norm[k] = 0.0
-                self.colors[k] = (128, 128, 128, 255)
-
-            self.seeded = True
-            self.sample_count = 1
-            self.buffer_index = 0
-
-        # --------------------------------------------------
-        # Write raw sample
-        # --------------------------------------------------
-        i = self.buffer_index
-        self.mag_raw[i] = magnitude
-        self.x_raw[i] = mx
-        self.y_raw[i] = my
-        self.z_raw[i] = mz
-
-        self.buffer_index = (i + 1) % BUFFER_SIZE
-        if self.sample_count < BUFFER_SIZE:
-            self.sample_count += 1
-
-        # --------------------------------------------------
-        # Normalize using true rolling window
-        # --------------------------------------------------
-        window_n = min(self.sample_count, NORM_WINDOW)
-
-        (min_mag, max_mag,
-         min_x, max_x,
-         min_y, max_y,
-         min_z, max_z) = self._compute_window_minmax(window_n)
-
-        def normalize(v, vmin, vmax, default):
-            rng = vmax - vmin
-            if rng < 1e-6:
-                return default
-            return (v - vmin) / rng
-
-        wrote_idx = (self.buffer_index - 1) % BUFFER_SIZE
-
-        self.mag_norm[wrote_idx] = normalize(magnitude, min_mag, max_mag, 0.0)
-
-        r = int(normalize(mx, min_x, max_x, 0.5) * 255)
-        g = int(normalize(my, min_y, max_y, 0.5) * 255)
-        b = int(normalize(mz, min_z, max_z, 0.5) * 255)
-        self.colors[wrote_idx] = (r, g, b, 255)
-
-        # --------------------------------------------------
-        # Render committed waveform
-        # --------------------------------------------------
         width = self.get_width()
         height = self.get_height()
 
+        xos.rasterizer.fill(self.frame, (8, 10, 15, 255))
+
+        mx, my, mz = self.magnetometer.read()
+        mag = xos.math.sqrt(mx * mx + my * my + mz * mz)
+
+        # Initialize baseline
+        if self.baseline is None:
+            self.baseline = mag
+            return
+
+        # DC removal
+        self.baseline += (mag - self.baseline) * BASELINE_ALPHA
+        delta = abs(mag - self.baseline)
+
+        # Envelope target
+        target = self.amplify(delta)
+        target = max(0.0, target)
+
+        # Envelope follower
+        if target > self.envelope:
+            self.envelope += (target - self.envelope) * ATTACK
+        else:
+            self.envelope += (target - self.envelope) * DECAY
+
+        # ----------------------------------------------
+        # 🔑 Adaptive normalization
+        # ----------------------------------------------
+        if self.env_min is None:
+            self.env_min = self.envelope
+            self.env_max = self.envelope
+
+        # Track max
+        if self.envelope > self.env_max:
+            self.env_max += (self.envelope - self.env_max) * ENV_MAX_RISE
+        else:
+            self.env_max += (self.envelope - self.env_max) * ENV_MAX_FALL
+
+        # Track min
+        if self.envelope < self.env_min:
+            self.env_min += (self.envelope - self.env_min) * ENV_MIN_FALL
+        else:
+            self.env_min += (self.envelope - self.env_min) * ENV_MIN_RISE
+
+        # Normalize envelope
+        rng = self.env_max - self.env_min
+        if rng < 1e-6:
+            norm_env = 0.0
+        else:
+            norm_env = (self.envelope - self.env_min) / rng
+            norm_env = max(0.0, min(1.0, norm_env))
+
+        color = self.compute_color(mx, my, mz)
+
+        # ----------------------------------------------
+        # Fast advance with phase texture
+        # ----------------------------------------------
+        phase = self.phase
+        for _ in range(ADVANCE_PER_TICK):
+            mod = 1.0 + PHASE_DEPTH * xos.math.sin(phase)
+            amp = norm_env * mod
+            amp = max(0.0, min(1.0, amp))
+
+            self.sample_buffer[self.buffer_index] = amp
+            self.color_buffer[self.buffer_index] = color
+            self.buffer_index = (self.buffer_index + 1) % NUM_LINES
+
+            phase += PHASE_STEP
+
+        self.phase = phase
+
+        self.render(width, height)
+
+    # --------------------------------------------------
+    # Renderer
+    # --------------------------------------------------
+    def render(self, width, height):
         center_x = width * 0.5
         spacing = height / NUM_LINES
         thickness_px = LINE_THICKNESS * height
 
-        for line_idx in range(NUM_LINES):
-            buf_idx = (self.buffer_index + line_idx) % BUFFER_SIZE
+        starts, ends, thicknesses, colors = [], [], [], []
 
-            half_len = (
-                (BASELINE_LENGTH + self.mag_norm[buf_idx] * MAX_EXTRA_LENGTH)
-                * width * 0.5
-            )
+        for i in range(NUM_LINES):
+            idx = (self.buffer_index + i) % NUM_LINES
+            amp = self.sample_buffer[idx]
 
-            y = height - line_idx * spacing
-            x0 = center_x - half_len
-            x1 = center_x + half_len
+            half_len = (BASELINE_LENGTH + amp * MAX_EXTRA_LENGTH) * width * 0.5
+            y = height - i * spacing
 
-            xos.rasterizer.lines(
-                self.frame,
-                [(x0, y)],
-                [(x1, y)],
-                [thickness_px],
-                self.colors[buf_idx]
-            )
+            starts.append((center_x - half_len, y))
+            ends.append((center_x + half_len, y))
+            thicknesses.append(thickness_px)
+            colors.append(self.color_buffer[idx])
+
+        xos.rasterizer.lines_batched(
+            self.frame,
+            starts,
+            ends,
+            thicknesses,
+            colors
+        )
 
 
 if __name__ == "__main__":
-    xos.print("Magnetometer Horizontal Waveform — gated start")
-    game = MagnetoHorizontalWaveform()
-    game.run()
+    xos.print("🧲⚡ Magnetometer Waveform — self-normalizing")
+    app = MagnetometerWaveform()
+    app.run()
