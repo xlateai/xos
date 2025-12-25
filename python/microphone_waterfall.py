@@ -17,7 +17,7 @@ class MicrophoneWaterfall(xos.Application):
         self.sample_buffer = [0.0] * FFT_SIZE
         self.sample_index = 0
         
-        # Waterfall history: list of FFT results, newest at index 0
+        # Waterfall history: list of color rows (pre-computed), newest at index 0
         self.waterfall_history = []
         self.max_history = None  # Will be calculated based on screen size
         
@@ -144,17 +144,23 @@ class MicrophoneWaterfall(xos.Application):
                     windowed = self.apply_window(self.sample_buffer)
                     magnitudes = self.compute_fft_magnitude(windowed)
                     
-                    # Add to history at the beginning (newest)
-                    self.waterfall_history.insert(0, magnitudes)
+                    # Update max for normalization BEFORE computing colors
+                    max_mag = max(magnitudes)
+                    if max_mag > self.max_val:
+                        self.max_val = max_mag * 1.1
+                    
+                    # Pre-compute colors for this row (so they don't change later)
+                    color_row = []
+                    for mag in magnitudes:
+                        color = self.magnitude_to_color(mag)
+                        color_row.append(color)
+                    
+                    # Add color row to history at the beginning (newest)
+                    self.waterfall_history.insert(0, color_row)
                     
                     # Trim history to max rows
                     if len(self.waterfall_history) > self.max_history:
                         self.waterfall_history.pop()
-                    
-                    # Update max for normalization
-                    max_mag = max(magnitudes)
-                    if max_mag > self.max_val:
-                        self.max_val = max_mag * 1.1
                     
                     if self.fft_count % 20 == 0:
                         print(f"📊 FFT #{self.fft_count}: Max={max_mag:.4f}, History={len(self.waterfall_history)}/{self.max_history} rows")
@@ -168,6 +174,7 @@ class MicrophoneWaterfall(xos.Application):
         - X axis (left to right): frequency bins (NUM_FREQUENCY_BINS across)
         - Y axis (top to bottom): time (newest at top)
         - Each "pixel" is a square of size pixel_size x pixel_size
+        - Colors are pre-computed and frozen when the FFT is calculated
         """
         if not self.waterfall_history:
             return
@@ -179,14 +186,14 @@ class MicrophoneWaterfall(xos.Application):
             if row_idx >= len(self.waterfall_history):
                 break
             
-            magnitudes = self.waterfall_history[row_idx]
+            # Get pre-computed color row (colors never change!)
+            color_row = self.waterfall_history[row_idx]
             y = int(row_idx * pixel_size)
             y_next = int((row_idx + 1) * pixel_size)
             
             # Draw each frequency bin across this row
             for bin_idx in range(NUM_FREQUENCY_BINS):
-                mag = magnitudes[bin_idx]
-                color = self.magnitude_to_color(mag)
+                color = color_row[bin_idx]
                 
                 x = int(bin_idx * pixel_size)
                 x_next = int((bin_idx + 1) * pixel_size)
