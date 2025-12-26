@@ -183,19 +183,39 @@ impl AudioListener {
             Err(_) => return Err("Could not get device name".to_string()),
         };
         
-        // Get default config for the device
-        let dic;
-        if audio_device.is_input {
-            dic = device.default_input_config();
+        // Get default config for the device, with fallback to supported configs
+        let default_config = if audio_device.is_input {
+            match device.default_input_config() {
+                Ok(config) => config,
+                Err(_) => {
+                    // Fallback: try to get any supported input config
+                    println!("[xos] Device '{}' doesn't support default_input_config(), trying supported configs...", device_name);
+                    let mut supported_configs = device.supported_input_configs()
+                        .map_err(|e| format!("Failed to get supported input configs: {}", e))?;
+                    
+                    // Pick the first supported config
+                    supported_configs.next()
+                        .ok_or_else(|| "No supported input configs found".to_string())?
+                        .with_max_sample_rate()
+                }
+            }
         } else if audio_device.is_output {
-            dic = device.default_output_config();
+            match device.default_output_config() {
+                Ok(config) => config,
+                Err(_) => {
+                    // Fallback: try to get any supported output config
+                    println!("[xos] Device '{}' doesn't support default_output_config(), trying supported configs...", device_name);
+                    let mut supported_configs = device.supported_output_configs()
+                        .map_err(|e| format!("Failed to get supported output configs: {}", e))?;
+                    
+                    // Pick the first supported config
+                    supported_configs.next()
+                        .ok_or_else(|| "No supported output configs found".to_string())?
+                        .with_max_sample_rate()
+                }
+            }
         } else {
             return Err("Device is neither input nor output".to_string());
-        }
-
-        let default_config = match dic {
-            Ok(config) => config,
-            Err(e) => return Err(format!("Failed to get default input config: {}", e)),
         };
 
         // Calculate buffer capacity based on duration
@@ -285,10 +305,8 @@ impl AudioListener {
             Err(e) => return Err(format!("Failed to create audio stream: {}", e)),
         };
         
-        // Start the stream
-        if let Err(e) = stream.play() {
-            return Err(format!("Failed to start audio stream: {}", e));
-        }
+        // DON'T start the stream automatically - let it stay paused until record() is called
+        // This ensures the mic light stays OFF by default
         
         Ok(Self {
             buffer,
@@ -312,8 +330,9 @@ impl AudioListener {
         self.stream.pause().map_err(|e| format!("Failed to pause stream: {}", e))
     }
     
-    /// Resume the audio stream
+    /// Resume/start the audio stream
     pub fn record(&self) -> Result<(), String> {
+        // Play the stream (safe to call multiple times)
         self.stream.play().map_err(|e| format!("Failed to resume stream: {}", e))
     }
     

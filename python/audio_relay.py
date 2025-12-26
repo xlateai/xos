@@ -96,9 +96,8 @@ class AudioRelay(xos.Application):
                 device_id=self.mic_device_id,
                 buffer_duration=BUFFER_DURATION
             )
-            # CRITICAL: Pause IMMEDIATELY after creation to keep mic light OFF
-            self.microphone.pause()
-            xos.print("✅ Microphone created (paused)")
+            # Microphone starts paused by default (mic light OFF)
+            xos.print("✅ Microphone created (paused by default)")
         except Exception as e:
             xos.print(f"❌ Failed to create microphone: {e}")
             return

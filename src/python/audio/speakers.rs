@@ -92,31 +92,6 @@ pub struct AudioPlayer {
 
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 impl AudioPlayer {
-    pub fn new(device_id: u32, sample_rate: u32, channels: u16) -> Result<Self, String> {
-        // Get all output devices
-        let all_devices = audio::devices();
-        let output_devices: Vec<_> = all_devices
-            .into_iter()
-            .filter(|d| d.is_output)
-            .collect();
-        
-        if output_devices.is_empty() {
-            return Err("No audio output devices found".to_string());
-        }
-        
-        let device_idx = device_id as usize;
-        if device_idx >= output_devices.len() {
-            return Err(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, output_devices.len()));
-        }
-        
-        let device = &output_devices[device_idx];
-        
-        // Create the native audio player
-        let inner = audio::AudioPlayer::new(device, sample_rate, channels)?;
-        
-        Ok(Self { inner })
-    }
-    
     pub fn play_samples(&self, samples: &[f32]) -> Result<(), String> {
         self.inner.play_samples(samples)
     }
@@ -223,8 +198,8 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         1
     };
     
-        // Get the device to use - convert AudioDevice to device_id (u32)
-        let actual_device_id: u32 = if let Some(device_id) = device_id_opt {
+        // Get the device to use and create AudioPlayer
+        let player = if let Some(device_id) = device_id_opt {
             // Specific device requested
             let all_devices = audio::devices();
             let output_devices: Vec<_> = all_devices
@@ -242,12 +217,18 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             
             #[cfg(target_os = "ios")]
             {
-                output_devices[device_id].device_id
+                let actual_device_id = output_devices[device_id].device_id;
+                AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
             }
             
             #[cfg(not(target_os = "ios"))]
             {
-                device_id as u32
+                // On native, create directly with the device
+                let device = &output_devices[device_id];
+                let inner = audio::AudioPlayer::new(device, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
+                AudioPlayer { inner }
             }
         } else {
             // Use default output device
@@ -256,32 +237,18 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             
             #[cfg(target_os = "ios")]
             {
-                default_device.device_id
+                AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
             }
             
             #[cfg(not(target_os = "ios"))]
             {
-                // On native, find the index of the default device in the output list
-                let all_devices = audio::devices();
-                let output_devices: Vec<_> = all_devices
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, d)| d.is_output)
-                    .collect();
-                
-                // Find matching device by name (best we can do)
-                let default_idx = output_devices
-                    .iter()
-                    .position(|(_, d)| d.name == default_device.name)
-                    .unwrap_or(0);
-                
-                default_idx as u32
+                // On native, create directly with the default device
+                let inner = audio::AudioPlayer::new(&default_device, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
+                AudioPlayer { inner }
             }
         };
-        
-        // Create AudioPlayer using device_id
-        let player = AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
-            .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
     
     // Start playback
     player.start()

@@ -67,25 +67,18 @@ pub fn all() -> Vec<AudioDevice> {
         }
     }
     
-    // Get output devices
+    // Get output devices - DON'T merge with input devices!
+    // We need separate device handles for input vs output operations.
+    // A device like AirPods will appear twice: once for input, once for output.
     if let Ok(output_devices) = host.output_devices() {
         for device in output_devices {
             if let Ok(name) = device.name() {
-                // Check if this device is already in our list (as an input device)
-                let existing_idx = audio_devices.iter().position(|d| d.name == name);
-                
-                if let Some(idx) = existing_idx {
-                    // Update existing device to mark it as both input and output
-                    audio_devices[idx].is_output = true;
-                } else {
-                    // Add as a new output-only device
-                    audio_devices.push(AudioDevice {
-                        name,
-                        is_input: false,
-                        is_output: true,
-                        device_cpal: device,
-                    });
-                }
+                audio_devices.push(AudioDevice {
+                    name,
+                    is_input: false,
+                    is_output: true,
+                    device_cpal: device,
+                });
             }
         }
     }

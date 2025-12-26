@@ -155,14 +155,12 @@ impl Application for AudioRelay {
         let input_device = &input_device_owned;
         let output_device = &output_device_owned;
         
-        // Create audio listener
+        // Create audio listener (starts paused by default)
         let listener = AudioListener::new(input_device, BUFFER_DURATION)
             .map_err(|e| format!("Failed to create listener: {}", e))?;
-        
-        // CRITICAL: Pause IMMEDIATELY after creation to keep mic light OFF
-        listener.pause().ok();
-        
-        crate::print("✅ Listener created (paused)");
+
+        // Listener starts paused by default (mic light OFF)
+        crate::print("✅ Listener created (paused by default)");
         
         // Create audio player
         let player = AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS)

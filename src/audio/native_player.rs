@@ -122,15 +122,51 @@ impl AudioPlayer {
             Err(_) => return Err("Could not get device name".to_string()),
         };
         
-        // Get default output config for the device
+        // Try to get default output config, but if that fails (e.g., for some Bluetooth devices),
+        // try to find a supported config instead
         let default_config = match device.default_output_config() {
             Ok(config) => config,
-            Err(e) => return Err(format!("Failed to get default output config: {}", e)),
+            Err(e) => {
+                // Fallback: try to get any supported output config
+                println!("[xos] Device '{}' doesn't support default_output_config(): {}", device_name, e);
+                println!("[xos] Trying supported_output_configs()...");
+                
+                match device.supported_output_configs() {
+                    Ok(mut configs) => {
+                        let config = configs.next()
+                            .ok_or_else(|| "No supported output configs found".to_string())?
+                            .with_max_sample_rate();
+                        println!("[xos] Using config: {} Hz, {} channels", config.sample_rate().0, config.channels());
+                        config
+                    }
+                    Err(e) => {
+                        println!("[xos] supported_output_configs() also failed: {}", e);
+                        println!("[xos] Trying supported_input_configs() as last resort...");
+                        
+                        // Last resort: some devices report as input even when they're output
+                        let mut configs = device.supported_input_configs()
+                            .map_err(|e| format!("Device supports neither input nor output configs: {}", e))?;
+                        
+                        let config = configs.next()
+                            .ok_or_else(|| "No supported configs found at all".to_string())?
+                            .with_max_sample_rate();
+                        println!("[xos] Using input config as output: {} Hz, {} channels", config.sample_rate().0, config.channels());
+                        config
+                    }
+                }
+            }
         };
 
-        // Use provided sample rate and channels, or fall back to device defaults
+        // Use provided sample rate and channels, but fall back to device defaults if needed
+        // AirPods and many Bluetooth devices only support stereo (2 channels)
         let actual_sample_rate = sample_rate;
-        let actual_channels = channels;
+        let actual_channels = if channels == 1 && default_config.channels() >= 2 {
+            // Device prefers stereo but we requested mono - use stereo to ensure compatibility
+            println!("[xos] Device '{}' prefers stereo, upgrading from mono to stereo for compatibility", device_name);
+            2
+        } else {
+            channels
+        };
         
         // Create playback buffer
         let buffer = PlaybackBuffer::new(actual_sample_rate, actual_channels);
@@ -268,7 +304,19 @@ impl AudioPlayer {
     
     /// Queue samples for playback
     pub fn play_samples(&self, samples: &[f32]) -> Result<(), String> {
-        self.buffer.queue_samples(samples);
+        // If device is stereo but we have mono input, duplicate samples to both channels
+        if self.buffer.channels() == 2 && samples.len() > 0 {
+            // Check if samples are already interleaved stereo or mono
+            // Assume mono input, convert to stereo by duplicating each sample
+            let mut stereo_samples = Vec::with_capacity(samples.len() * 2);
+            for &sample in samples {
+                stereo_samples.push(sample); // Left channel
+                stereo_samples.push(sample); // Right channel
+            }
+            self.buffer.queue_samples(&stereo_samples);
+        } else {
+            self.buffer.queue_samples(samples);
+        }
         Ok(())
     }
     
