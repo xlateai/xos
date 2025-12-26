@@ -356,9 +356,17 @@ pub fn speaker_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Ok(vm.ctx.none());
     }
     
-    // Remove from registry
-    if let Ok(mut speakers) = get_active_speakers().lock() {
-        speakers.remove(&player_ptr);
+    // Check if this pointer is still in the registry
+    // If it's not, it was already cleaned up by cleanup_all_audio() - don't double-free!
+    let was_in_registry = if let Ok(mut speakers) = get_active_speakers().lock() {
+        speakers.remove(&player_ptr)
+    } else {
+        false
+    };
+    
+    if !was_in_registry {
+        // Already cleaned up by cleanup_all_audio() - skip to avoid double-free
+        return Ok(vm.ctx.none());
     }
     
     // Drop Rust-side object

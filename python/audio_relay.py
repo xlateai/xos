@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Audio Relay - Headless Real-time Audio Passthrough
+Audio Relay - Interactive Real-time Audio Passthrough with Toggle Button
 
-Captures audio from the microphone and immediately plays it back through speakers.
-This is a headless script (no viewport) that demonstrates real-time audio I/O.
-Press Ctrl+C to stop.
+Captures audio from the microphone and plays it back through speakers.
+Click the centered square button to toggle audio relay on/off.
 """
 
 import xos
-import time
 
 # Configuration
 SAMPLE_RATE = 44100  # 44.1 kHz
@@ -17,181 +15,200 @@ BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
-def main():
-    """Main audio relay loop"""
-    xos.print("=" * 60)
-    xos.print("🎤 → 🔊  Audio Relay - Real-time Passthrough")
-    xos.print("=" * 60)
-    xos.print("")
-    
-    # Get system type for device selection
-    system_type = xos.system.get_system_type()
-    
-    # === Setup Microphone ===
-    xos.print("🎤 Setting up microphone...")
-    input_devices = xos.audio.get_input_devices()
-    
-    if not input_devices:
-        xos.print("❌ No microphone devices found!")
-        return
-    
-    if system_type == "IOS":
-        mic_device_id = 0
-        xos.print(f"   Using: {input_devices[0]['name']}")
-    else:
-        xos.print("\nAvailable microphones:")
-        for i, dev in enumerate(input_devices):
-            xos.print(f"  {i}: {dev['name']}")
-        
-        mic_device_id = xos.dialoguer.select(
-            "Select microphone",
-            [dev['name'] for dev in input_devices],
-            default=0
-        )
-        xos.print(f"   Selected: {input_devices[mic_device_id]['name']}")
-    
-    # === Setup Speaker ===
-    xos.print("\n🔊 Setting up speaker...")
-    output_devices = xos.audio.get_output_devices()
-    
-    if not output_devices:
-        xos.print("❌ No speaker devices found!")
-        return
-    
-    if system_type == "IOS":
-        speaker_device_id = 0
-        xos.print(f"   Using: Built-in Speaker")
-    else:
-        xos.print("\nAvailable speakers:")
-        for i, dev in enumerate(output_devices):
-            xos.print(f"  {i}: {dev['name']}")
-        
-        speaker_device_id = xos.dialoguer.select(
-            "Select speaker",
-            [dev['name'] for dev in output_devices],
-            default=0
-        )
-        xos.print(f"   Selected: {output_devices[speaker_device_id]['name']}")
-    
-    # === Initialize Audio Devices ===
-    xos.print("\n⚙️  Initializing audio devices...")
-    
-    try:
-        microphone = xos.audio.Microphone(
-            device_id=mic_device_id,
-            buffer_duration=BUFFER_DURATION
-        )
-        xos.print("   ✅ Microphone ready")
-    except Exception as e:
-        xos.print(f"   ❌ Failed to initialize microphone: {e}")
-        return
-    
-    try:
-        speaker = xos.audio.Speaker(
-            device_id=speaker_device_id,
-            sample_rate=SAMPLE_RATE,
-            channels=CHANNELS
-        )
-        xos.print("   ✅ Speaker ready")
-    except Exception as e:
-        xos.print(f"   ❌ Failed to initialize speaker: {e}")
-        return
-    
-    # === Start Relay ===
-    xos.print("\n" + "=" * 60)
-    xos.print("🎙️  LIVE - Audio relay active!")
-    xos.print("   Speak into the microphone to hear yourself through speakers")
-    xos.print("   Press Ctrl+C to stop")
-    xos.print("=" * 60)
-    xos.print("")
-    
-    # Statistics
-    total_samples = 0
-    start_time = time.time()
-    batch_count = 0
-    last_status_time = start_time
-    
-    # Debug: Check initial speaker buffer
-    xos.print("🔍 Initial speaker buffer size:", speaker.samples_buffer.shape[0] if hasattr(speaker.samples_buffer, 'shape') else 0)
-    
-    try:
-        # No sleep - process as fast as possible for lowest latency
-        while True:
-            # Get audio samples from microphone - use large batch size to get ALL samples
-            audio_batch = microphone.get_batch(BATCH_SIZE)
+# Toggle button configuration
+BUTTON_SIZE = 60.0
+BUTTON_BORDER_WIDTH = 3.0
 
-            # this can be helpful actually as it will display the
-            # stats for the array samples distribution nicely.
-            # print(audio_batch)
-            
-            if audio_batch and audio_batch['_data']:
-                samples = audio_batch['_data']
-                sample_count = len(samples)
-                
-                # Only relay if we got samples
-                if sample_count > 0:
-                    # Debug: Log first few batches
-                    if batch_count < 3:
-                        xos.print(f"🔍 Batch {batch_count}: Got {sample_count} samples from mic")
-                    
-                    # Amplify samples for louder output
-                    amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
-                    
-                    # Immediately relay to speaker
-                    speaker.play_sample_batch(amplified_samples)
-                    
-                    # Update statistics
-                    total_samples += sample_count
-                    batch_count += 1
-            else:
-                # No samples available - sleep for 1ms to avoid burning CPU
-                time.sleep(0.001)
-                
-                # Print status every 2 seconds
-                current_time = time.time()
-                if current_time - last_status_time >= 2.0:
-                    elapsed = current_time - start_time
-                    samples_per_sec = total_samples / elapsed if elapsed > 0 else 0
-                    
-                    # Get speaker buffer status
-                    try:
-                        buffer_size = speaker.samples_buffer.shape[0]
-                    except:
-                        buffer_size = 0
-                    
-                    xos.print(f"📊 Status: {batch_count} batches, "
-                             f"{total_samples:,} samples relayed, "
-                             f"{samples_per_sec:,.0f} samples/sec, "
-                             f"buffer: {buffer_size}")
-                    
-                    last_status_time = current_time
-    
-    except KeyboardInterrupt:
-        xos.print("\n")
-        xos.print("=" * 60)
-        xos.print("🛑 Audio relay stopped by user")
+
+class AudioRelay(xos.Application):
+    def __init__(self):
+        super().__init__()
+        self.microphone = None
+        self.speaker = None
+        self.initialized = False
+        self.last_buffer_size = 0
+        self.enabled = False  # Audio processing on/off
         
-        # Final statistics
-        elapsed = time.time() - start_time
-        xos.print(f"\n📈 Session Statistics:")
-        xos.print(f"   Duration: {elapsed:.1f} seconds")
-        xos.print(f"   Total batches: {batch_count:,}")
-        xos.print(f"   Total samples: {total_samples:,}")
-        xos.print(f"   Average rate: {total_samples/elapsed:,.0f} samples/sec")
-        xos.print(f"   Expected rate: {SAMPLE_RATE:,} samples/sec")
-        xos.print("=" * 60)
+    def setup(self):
+        """Initialize audio devices"""
+        xos.print("🎤 AudioRelay - Initializing...")
+        
+        # Get system type for device selection
+        system_type = xos.system.get_system_type()
+        
+        # Get audio devices
+        input_devices = xos.audio.get_input_devices()
+        output_devices = xos.audio.get_output_devices()
+        
+        if not input_devices:
+            xos.print("❌ No input devices found")
+            return
+        
+        if not output_devices:
+            xos.print("❌ No output devices found")
+            return
+        
+        # Select input device
+        if system_type == "IOS":
+            mic_device_id = 0
+        else:
+            xos.print("\nAvailable microphones:")
+            for i, dev in enumerate(input_devices):
+                xos.print(f"  {i}: {dev['name']}")
+            
+            mic_device_id = xos.dialoguer.select(
+                "Select input device (microphone)",
+                [dev['name'] for dev in input_devices],
+                default=0
+            )
+        
+        xos.print(f"📍 Input: {input_devices[mic_device_id]['name']}")
+        
+        # Select output device
+        if system_type == "IOS":
+            speaker_device_id = 0
+        else:
+            xos.print("\nAvailable speakers:")
+            for i, dev in enumerate(output_devices):
+                xos.print(f"  {i}: {dev['name']}")
+            
+            speaker_device_id = xos.dialoguer.select(
+                "Select output device (speakers)",
+                [dev['name'] for dev in output_devices],
+                default=0
+            )
+        
+        xos.print(f"🔊 Output: {output_devices[speaker_device_id]['name']}")
+        
+        # Create audio devices
+        try:
+            self.microphone = xos.audio.Microphone(
+                device_id=mic_device_id,
+                buffer_duration=BUFFER_DURATION
+            )
+            xos.print("✅ Microphone created")
+            
+            # Pause microphone immediately (mic light OFF by default)
+            # Note: The Python bridge starts recording by default, so we need to clean up and recreate
+            # For now, the mic will stay on until we toggle it off
+            
+        except Exception as e:
+            xos.print(f"❌ Failed to create microphone: {e}")
+            return
+        
+        try:
+            self.speaker = xos.audio.Speaker(
+                device_id=speaker_device_id,
+                sample_rate=SAMPLE_RATE,
+                channels=CHANNELS
+            )
+            xos.print("✅ Speaker created")
+        except Exception as e:
+            xos.print(f"❌ Failed to create speaker: {e}")
+            return
+        
+        self.initialized = True
+        xos.print("✅ Devices ready! Click the centered square to start audio relay.")
     
-    except Exception as e:
-        xos.print(f"\n❌ Error in audio relay: {e}")
-        import traceback
-        traceback.print_exc()
+    def tick(self):
+        """Update and render one frame"""
+        # Clear background (pitch black)
+        xos.rasterizer.clear()
+        
+        # Draw toggle button
+        self.draw_button()
+        
+        # Relay audio if initialized AND enabled
+        if self.initialized and self.enabled:
+            if self.microphone and self.speaker:
+                # Get samples from microphone
+                audio_batch = self.microphone.get_batch(BATCH_SIZE)
+                
+                if audio_batch and audio_batch['_data']:
+                    samples = audio_batch['_data']
+                    
+                    if len(samples) > 0:
+                        # Amplify samples for louder output
+                        amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
+                        
+                        # Queue amplified samples for playback
+                        try:
+                            self.speaker.play_sample_batch(amplified_samples)
+                        except Exception as e:
+                            xos.print(f"⚠️  Playback error: {e}")
+                        
+                        # Log buffer size occasionally
+                        buffer_size = self.speaker.samples_buffer.shape[0] if hasattr(self.speaker.samples_buffer, 'shape') else 0
+                        if buffer_size != self.last_buffer_size and buffer_size % 1000 == 0:
+                            xos.print(f"📊 Buffer: {buffer_size} samples")
+                            self.last_buffer_size = buffer_size
     
-    finally:
-        xos.print("\n🔌 Cleaning up audio devices...")
-        xos.audio.cleanup_all_microphones()
-        xos.audio.cleanup_all_speakers()
-        xos.print("✨ Done!")
+    def draw_button(self):
+        """Draw the toggle button in the center of the screen"""
+        width = self.get_width()
+        height = self.get_height()
+        
+        # Center the button at 0.5, 0.5
+        button_x = int((width - BUTTON_SIZE) / 2.0)
+        button_y = int((height - BUTTON_SIZE) / 2.0)
+        
+        # Determine color based on enabled state
+        if self.enabled:
+            color = (0, 255, 0, 255)  # Green when enabled
+        else:
+            color = (100, 100, 100, 255)  # Gray when disabled
+        
+        # Draw button using rasterizer
+        # If enabled, draw filled rectangle; if disabled, draw border only
+        if self.enabled:
+            # Draw filled square
+            xos.rasterizer.rects_filled(
+                self.frame,
+                button_x,
+                button_y,
+                button_x + int(BUTTON_SIZE),
+                button_y + int(BUTTON_SIZE),
+                color
+            )
+        else:
+            # Draw border (4 rectangles: top, bottom, left, right)
+            border = int(BUTTON_BORDER_WIDTH)
+            
+            # Top border
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y, button_x + int(BUTTON_SIZE), button_y + border, color)
+            # Bottom border
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y + int(BUTTON_SIZE) - border, button_x + int(BUTTON_SIZE), button_y + int(BUTTON_SIZE), color)
+            # Left border
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y + border, button_x + border, button_y + int(BUTTON_SIZE) - border, color)
+            # Right border
+            xos.rasterizer.rects_filled(self.frame, button_x + int(BUTTON_SIZE) - border, button_y + border, button_x + int(BUTTON_SIZE), button_y + int(BUTTON_SIZE) - border, color)
+    
+    def on_mouse_down(self, x, y):
+        """Handle mouse down event"""
+        if not self.initialized:
+            return
+        
+        # Get button center position
+        width = self.get_width()
+        height = self.get_height()
+        button_x = (width - BUTTON_SIZE) / 2.0
+        button_y = (height - BUTTON_SIZE) / 2.0
+        
+        # Check if click is inside button
+        if (x >= button_x and x <= button_x + BUTTON_SIZE and
+            y >= button_y and y <= button_y + BUTTON_SIZE):
+            # Toggle enabled state
+            self.enabled = not self.enabled
+            
+            if self.enabled:
+                xos.print("🟢 Audio relay ENABLED")
+            else:
+                xos.print("⬜ Audio relay DISABLED")
+
 
 if __name__ == "__main__":
-    main()
-
+    xos.print("🎤 → 🔊  Audio Relay")
+    xos.print("Click the centered square button to toggle audio on/off")
+    
+    app = AudioRelay()
+    app.run()

@@ -1,7 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::audio::{devices, AudioListener, AudioPlayer};
 
-const BACKGROUND_COLOR: (u8, u8, u8) = (20, 20, 20); // Dark background
+const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black background
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 1;
 const BUFFER_DURATION: f32 = 0.1; // 100ms buffer to prevent overflow between frames (at 60fps = 16.67ms/frame)
