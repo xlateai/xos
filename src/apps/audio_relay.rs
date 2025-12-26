@@ -9,7 +9,6 @@ const GAIN: f32 = 3.0; // Amplify audio (3x volume boost)
 
 // Toggle button configuration
 const BUTTON_SIZE: f32 = 60.0;
-const BUTTON_PADDING: f32 = 20.0;
 const BUTTON_BORDER_WIDTH: f32 = 3.0;
 
 pub struct AudioRelay {
@@ -18,8 +17,9 @@ pub struct AudioRelay {
     initialized: bool,
     last_buffer_size: usize,
     enabled: bool, // Audio processing on/off
-    button_x: f32,
-    button_y: f32,
+    // Store device references for recreation
+    input_device_index: usize,
+    output_device_index: usize,
 }
 
 impl AudioRelay {
@@ -30,8 +30,8 @@ impl AudioRelay {
             initialized: false,
             last_buffer_size: 0,
             enabled: false, // Start disabled (button off)
-            button_x: BUTTON_PADDING,
-            button_y: BUTTON_PADDING,
+            input_device_index: 0,
+            output_device_index: 0,
         }
     }
 }
@@ -60,69 +60,53 @@ impl Application for AudioRelay {
         
         // Select input device
         #[cfg(not(target_os = "ios"))]
-        let input_device = {
+        let input_idx = {
             use dialoguer::Select;
             
             let device_names: Vec<String> = input_devices.iter()
                 .map(|d| d.name.clone())
                 .collect();
             
-            let selection = Select::new()
+            Select::new()
                 .with_prompt("Select input device (microphone)")
                 .items(&device_names)
                 .default(0)
                 .interact()
-                .map_err(|e| format!("Failed to select input device: {}", e))?;
-            
-            input_devices[selection]
+                .map_err(|e| format!("Failed to select input device: {}", e))?
         };
         
         #[cfg(target_os = "ios")]
-        let input_device = input_devices[0];
+        let input_idx = 0;
         
-        crate::print(&format!("📍 Input: {}", input_device.name));
+        self.input_device_index = input_idx;
+        crate::print(&format!("📍 Input: {}", input_devices[input_idx].name));
         
         // Select output device
         #[cfg(not(target_os = "ios"))]
-        let output_device = {
+        let output_idx = {
             use dialoguer::Select;
             
             let device_names: Vec<String> = output_devices.iter()
                 .map(|d| d.name.clone())
                 .collect();
             
-            let selection = Select::new()
+            Select::new()
                 .with_prompt("Select output device (speakers)")
                 .items(&device_names)
                 .default(0)
                 .interact()
-                .map_err(|e| format!("Failed to select output device: {}", e))?;
-            
-            output_devices[selection]
+                .map_err(|e| format!("Failed to select output device: {}", e))?
         };
         
         #[cfg(target_os = "ios")]
-        let output_device = output_devices[0];
+        let output_idx = 0;
         
-        crate::print(&format!("🔊 Output: {}", output_device.name));
+        self.output_device_index = output_idx;
+        crate::print(&format!("🔊 Output: {}", output_devices[output_idx].name));
         
-        // Create audio listener
-        let listener = AudioListener::new(input_device, BUFFER_DURATION)
-            .map_err(|e| format!("Failed to create listener: {}", e))?;
-        
-        crate::print("✅ Listener created");
-        
-        // Create audio player
-        let player = AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS)
-            .map_err(|e| format!("Failed to create player: {}", e))?;
-        
-        crate::print("✅ Player created");
-        
-        self.listener = Some(listener);
-        self.player = Some(player);
         self.initialized = true;
         
-        crate::print("🎙️  Devices initialized! Click the square to start audio relay.");
+        crate::print("✅ Devices selected! Click the centered square to start audio relay.");
         
         Ok(())
     }
@@ -178,19 +162,36 @@ impl Application for AudioRelay {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        if !self.initialized {
+            return;
+        }
+        
+        // Get button center position
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let button_x = (width - BUTTON_SIZE) / 2.0;
+        let button_y = (height - BUTTON_SIZE) / 2.0;
+        
         // Check if click is inside button
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
-        if mouse_x >= self.button_x && mouse_x <= self.button_x + BUTTON_SIZE
-            && mouse_y >= self.button_y && mouse_y <= self.button_y + BUTTON_SIZE {
+        if mouse_x >= button_x && mouse_x <= button_x + BUTTON_SIZE
+            && mouse_y >= button_y && mouse_y <= button_y + BUTTON_SIZE {
             // Toggle enabled state
             self.enabled = !self.enabled;
             
             if self.enabled {
-                crate::print("🟢 Audio relay ENABLED");
+                // Create audio devices
+                self.create_audio_devices();
+                crate::print("🟢 Audio relay ENABLED - Mic light ON");
             } else {
-                crate::print("⬜ Audio relay DISABLED");
+                // Destroy audio devices immediately - this turns off mic light!
+                crate::print("⬜ Audio relay DISABLED - Destroying audio devices...");
+                self.player = None; // Drop player first
+                self.listener = None; // Drop listener - mic light turns OFF
+                crate::print("   ✅ Audio devices destroyed - Mic light OFF");
             }
         }
     }
@@ -205,16 +206,61 @@ impl Application for AudioRelay {
 }
 
 impl AudioRelay {
+    fn create_audio_devices(&mut self) {
+        let all_devices = devices();
+        
+        let input_devices: Vec<_> = all_devices.iter()
+            .filter(|d| d.is_input)
+            .collect();
+        let output_devices: Vec<_> = all_devices.iter()
+            .filter(|d| d.is_output)
+            .collect();
+        
+        if self.input_device_index >= input_devices.len() || self.output_device_index >= output_devices.len() {
+            crate::print("⚠️  Device indices out of range!");
+            return;
+        }
+        
+        let input_device = input_devices[self.input_device_index];
+        let output_device = output_devices[self.output_device_index];
+        
+        // Create audio listener
+        match AudioListener::new(input_device, BUFFER_DURATION) {
+            Ok(listener) => {
+                self.listener = Some(listener);
+                crate::print("   ✅ Microphone activated");
+            }
+            Err(e) => {
+                crate::print(&format!("   ❌ Failed to create listener: {}", e));
+            }
+        }
+        
+        // Create audio player
+        match AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS) {
+            Ok(player) => {
+                self.player = Some(player);
+                crate::print("   ✅ Speaker activated");
+            }
+            Err(e) => {
+                crate::print(&format!("   ❌ Failed to create player: {}", e));
+            }
+        }
+    }
+    
     fn draw_button(&self, state: &mut EngineState) {
         // Get dimensions before borrowing buffer mutably
         let shape = state.frame.shape();
         let height = shape[0];
         let width = shape[1];
         
+        // Center the button at 0.5, 0.5
+        let button_x = ((width as f32 - BUTTON_SIZE) / 2.0) as usize;
+        let button_y = ((height as f32 - BUTTON_SIZE) / 2.0) as usize;
+        
         let buffer = state.frame_buffer_mut();
         
-        let x_start = self.button_x as usize;
-        let y_start = self.button_y as usize;
+        let x_start = button_x;
+        let y_start = button_y;
         let size = BUTTON_SIZE as usize;
         let border = BUTTON_BORDER_WIDTH as usize;
         
