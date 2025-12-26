@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs, PyObjectRef};
+use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs, PyObjectRef};
 use crate::audio;
 use std::sync::Mutex;
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ fn get_active_microphones() -> &'static Mutex<HashSet<usize>> {
 }
 
 /// xos.audio.get_input_devices() - Get all input (microphone) devices
-fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let all_devices = audio::devices();
     
     // Filter to only input devices
@@ -36,7 +36,7 @@ fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// xos.audio.Microphone(device_id=0, buffer_duration=1.0) - Create microphone instance
-fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Parse arguments - handle both positional and keyword args
     let device_id = if !args.args.is_empty() {
         args.args[0].clone().try_into_value::<usize>(vm)?
@@ -141,7 +141,7 @@ _mic_instance = Microphone({})
 }
 
 /// Internal function to get a batch of samples from the microphone
-fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (listener_ptr, batch_size): (usize, usize) = args.bind(vm)?;
     
     if listener_ptr == 0 {
@@ -191,7 +191,7 @@ fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Internal function to clean up a microphone (drop the AudioListener)
-fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
     
     if listener_ptr == 0 {
@@ -219,25 +219,9 @@ fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Clean up ALL active microphones (called when stopping app or switching)
-fn cleanup_all_microphones(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn cleanup_all_microphones(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     cleanup_all_microphones_rust();
     Ok(vm.ctx.none())
-}
-
-/// Create the audio module
-pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
-    let module = vm.new_module("xos.audio", vm.ctx.new_dict(), None);
-    
-    // Public API
-    module.set_attr("get_input_devices", vm.new_function("get_input_devices", get_input_devices), vm).unwrap();
-    module.set_attr("Microphone", vm.new_function("Microphone", microphone_new), vm).unwrap();
-    module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", cleanup_all_microphones), vm).unwrap();
-    
-    // Internal functions
-    module.set_attr("_microphone_get_batch", vm.new_function("_microphone_get_batch", microphone_get_batch), vm).unwrap();
-    module.set_attr("_microphone_cleanup", vm.new_function("_microphone_cleanup", microphone_cleanup), vm).unwrap();
-    
-    module
 }
 
 /// Rust-side function to cleanup all microphones (called from CoderApp Drop)

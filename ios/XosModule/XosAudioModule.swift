@@ -279,19 +279,24 @@ final class AudioListener {
 
 @_cdecl("xos_audio_get_device_count")
 func xos_audio_get_device_count() -> UInt32 {
-    // For now, we only support the built-in microphone
-    return 1
+    // We support both built-in microphone (input) and speaker (output)
+    return 2
 }
 
 @_cdecl("xos_audio_get_device_name")
 func xos_audio_get_device_name(_ deviceId: UInt32) -> UnsafePointer<CChar>? {
-    // For now, we only support the built-in microphone
+    let name: String
     if deviceId == 0 {
-        let name = "Built-in Microphone"
-        if let mutablePtr = strdup(name) {
-            // Convert mutable pointer to immutable pointer
-            return UnsafePointer<CChar>(mutablePtr) // Caller must free with xos_audio_free_string
-        }
+        name = "Built-in Microphone"
+    } else if deviceId == 1 {
+        name = "Built-in Speaker"
+    } else {
+        return nil
+    }
+    
+    if let mutablePtr = strdup(name) {
+        // Convert mutable pointer to immutable pointer
+        return UnsafePointer<CChar>(mutablePtr) // Caller must free with xos_audio_free_string
     }
     return nil
 }
@@ -307,7 +312,10 @@ func xos_audio_device_is_input(_ deviceId: UInt32) -> Int32 {
 
 @_cdecl("xos_audio_device_is_output")
 func xos_audio_device_is_output(_ deviceId: UInt32) -> Int32 {
-    // For now, we don't support output
+    // Device ID 1 is the built-in speaker (output)
+    if deviceId == 1 {
+        return 1
+    }
     return 0
 }
 
@@ -383,5 +391,272 @@ func xos_audio_listener_pause(_ listenerId: UInt32) -> Int32 {
 @_cdecl("xos_audio_listener_destroy")
 func xos_audio_listener_destroy(_ listenerId: UInt32) {
     AudioListenerManager.shared.destroyListener(listenerId)
+}
+
+// MARK: - Audio Player (Speaker Output)
+
+// Audio player manager
+final class AudioPlayerManager {
+    static let shared = AudioPlayerManager()
+    
+    private var players: [UInt32: AudioPlayer] = [:]
+    private var nextPlayerId: UInt32 = 0
+    private let lock = NSLock()
+    
+    private init() {}
+    
+    func createPlayer(deviceId: UInt32, sampleRate: Double, channels: UInt32) -> UInt32? {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        let playerId = nextPlayerId
+        nextPlayerId += 1
+        
+        do {
+            print("[AudioPlayerManager] Creating player ID=\(playerId), deviceId=\(deviceId), sampleRate=\(sampleRate), channels=\(channels)")
+            let player = try AudioPlayer(
+                deviceId: deviceId,
+                playerId: playerId,
+                sampleRate: sampleRate,
+                channels: channels
+            )
+            players[playerId] = player
+            print("[AudioPlayerManager] Successfully created player ID=\(playerId)")
+            return playerId
+        } catch {
+            print("[AudioPlayerManager] Failed to create player ID=\(playerId): \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    func getPlayer(_ id: UInt32) -> AudioPlayer? {
+        lock.lock()
+        defer { lock.unlock() }
+        return players[id]
+    }
+    
+    func destroyPlayer(_ id: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        players.removeValue(forKey: id)
+    }
+}
+
+// Audio player implementation for speaker output
+final class AudioPlayer {
+    private let playerId: UInt32
+    private var engine: AVAudioEngine
+    private var playerNode: AVAudioPlayerNode
+    private let sampleRate: Double
+    private let channels: UInt32
+    private let format: AVAudioFormat
+    private var queuedSampleCount: Int = 0
+    private let lock = NSLock()
+    
+    init(deviceId: UInt32, playerId: UInt32, sampleRate: Double, channels: UInt32) throws {
+        self.playerId = playerId
+        self.sampleRate = sampleRate
+        self.channels = channels
+        
+        // Create audio engine and player node
+        self.engine = AVAudioEngine()
+        self.playerNode = AVAudioPlayerNode()
+        
+        print("[AudioPlayer] Created AVAudioEngine and AVAudioPlayerNode for player ID=\(playerId)")
+        
+        // Configure audio session for playback
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playback, mode: .default, options: [])
+        try audioSession.setActive(true)
+        print("[AudioPlayer] Audio session configured for playback")
+        
+        // Create audio format
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channels),
+            interleaved: false
+        ) else {
+            throw NSError(
+                domain: "AudioPlayer",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create audio format"]
+            )
+        }
+        self.format = format
+        
+        // Attach player node to engine
+        engine.attach(playerNode)
+        
+        // Connect player node to output
+        engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        
+        // Start the engine
+        try engine.start()
+        print("[AudioPlayer] Engine started successfully")
+    }
+    
+    func queueSamples(_ samples: UnsafePointer<Float>, count: Int) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard count > 0 else { return }
+        
+        // Create PCM buffer
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)) else {
+            throw NSError(
+                domain: "AudioPlayer",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create PCM buffer"]
+            )
+        }
+        
+        buffer.frameLength = AVAudioFrameCount(count)
+        
+        // Copy samples to buffer (non-interleaved format)
+        guard let channelData = buffer.floatChannelData else {
+            throw NSError(
+                domain: "AudioPlayer",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to get channel data"]
+            )
+        }
+        
+        // For mono, just copy directly
+        if channels == 1 {
+            channelData[0].update(from: samples, count: count)
+        } else {
+            // For multi-channel, samples are interleaved, so we need to de-interleave
+            for frame in 0..<count / Int(channels) {
+                for channel in 0..<Int(channels) {
+                    channelData[channel][frame] = samples[frame * Int(channels) + channel]
+                }
+            }
+        }
+        
+        // Schedule buffer for playback
+        playerNode.scheduleBuffer(buffer, completionHandler: nil)
+        queuedSampleCount += count
+        
+        // Start playing if not already playing
+        if !playerNode.isPlaying {
+            playerNode.play()
+            print("[AudioPlayer] Started playback")
+        }
+    }
+    
+    func getBufferSize() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return queuedSampleCount
+    }
+    
+    func start() throws {
+        if !playerNode.isPlaying {
+            playerNode.play()
+            print("[AudioPlayer] Player started")
+        }
+    }
+    
+    func stop() {
+        if playerNode.isPlaying {
+            playerNode.stop()
+            print("[AudioPlayer] Player stopped")
+        }
+    }
+    
+    deinit {
+        print("[AudioPlayer] Deinitializing player ID=\(playerId)")
+        
+        // Stop player
+        playerNode.stop()
+        
+        // Stop engine
+        if engine.isRunning {
+            engine.stop()
+        }
+        
+        // Detach node
+        engine.detach(playerNode)
+        
+        print("[AudioPlayer] Cleanup complete for player ID=\(playerId)")
+    }
+}
+
+// C-compatible FFI functions for audio player
+
+@_cdecl("xos_audio_player_init")
+func xos_audio_player_init(
+    _ deviceId: UInt32,
+    _ sampleRate: Double,
+    _ channels: UInt32
+) -> UInt32 {
+    guard let playerId = AudioPlayerManager.shared.createPlayer(
+        deviceId: deviceId,
+        sampleRate: sampleRate,
+        channels: channels
+    ) else {
+        print("[xos_audio_player_init] Failed to create player")
+        return UInt32.max
+    }
+    print("[xos_audio_player_init] Successfully created player with ID: \(playerId)")
+    return playerId
+}
+
+@_cdecl("xos_audio_player_queue_samples")
+func xos_audio_player_queue_samples(
+    _ playerId: UInt32,
+    _ samples: UnsafePointer<Float>,
+    _ count: Int
+) -> Int32 {
+    guard let player = AudioPlayerManager.shared.getPlayer(playerId) else {
+        return 1
+    }
+    
+    do {
+        try player.queueSamples(samples, count: count)
+        return 0
+    } catch {
+        print("[xos_audio_player_queue_samples] Error: \(error.localizedDescription)")
+        return 1
+    }
+}
+
+@_cdecl("xos_audio_player_get_buffer_size")
+func xos_audio_player_get_buffer_size(_ playerId: UInt32) -> UInt32 {
+    guard let player = AudioPlayerManager.shared.getPlayer(playerId) else {
+        return 0
+    }
+    return UInt32(player.getBufferSize())
+}
+
+@_cdecl("xos_audio_player_start")
+func xos_audio_player_start(_ playerId: UInt32) -> Int32 {
+    guard let player = AudioPlayerManager.shared.getPlayer(playerId) else {
+        return 1
+    }
+    
+    do {
+        try player.start()
+        return 0
+    } catch {
+        print("[xos_audio_player_start] Error: \(error.localizedDescription)")
+        return 1
+    }
+}
+
+@_cdecl("xos_audio_player_stop")
+func xos_audio_player_stop(_ playerId: UInt32) -> Int32 {
+    guard let player = AudioPlayerManager.shared.getPlayer(playerId) else {
+        return 1
+    }
+    
+    player.stop()
+    return 0
+}
+
+@_cdecl("xos_audio_player_destroy")
+func xos_audio_player_destroy(_ playerId: UInt32) {
+    AudioPlayerManager.shared.destroyPlayer(playerId)
 }
 
