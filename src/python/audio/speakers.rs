@@ -370,6 +370,12 @@ pub fn speaker_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Clean up ALL active speakers (called when stopping app or switching)
+pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    cleanup_all_speakers_rust();
+    Ok(vm.ctx.none())
+}
+
+/// Rust-side function to cleanup all speakers (called from CoderApp Drop or cleanup_all_audio)
 pub fn cleanup_all_speakers_rust() {
     let speaker_ptrs: Vec<usize> = if let Ok(mut speakers) = get_active_speakers().lock() {
         let ptrs: Vec<usize> = speakers.drain().collect();

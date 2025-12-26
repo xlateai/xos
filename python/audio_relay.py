@@ -187,6 +187,7 @@ def main():
     finally:
         xos.print("\n🔌 Cleaning up audio devices...")
         xos.audio.cleanup_all_microphones()
+        xos.audio.cleanup_all_speakers()
         xos.print("✨ Done!")
 
 if __name__ == "__main__":

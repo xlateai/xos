@@ -16,6 +16,8 @@ mod native_listener;
 // --- Audio player (output/speaker) implementations ---
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 mod native_player;
+#[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+mod ios_player;
 
 // --- Public re-exports ---
 #[cfg(target_arch = "wasm32")]
@@ -35,3 +37,5 @@ pub use native_listener::AudioListener;
 // Audio player re-exports
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 pub use native_player::AudioPlayer;
+#[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+pub use ios_player::AudioPlayer;

@@ -23,6 +23,7 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // --- Speaker API ---
     module.set_attr("get_output_devices", vm.new_function("get_output_devices", speakers::get_output_devices), vm).unwrap();
     module.set_attr("Speaker", vm.new_function("Speaker", speakers::speaker_new), vm).unwrap();
+    module.set_attr("cleanup_all_speakers", vm.new_function("cleanup_all_speakers", speakers::cleanup_all_speakers), vm).unwrap();
     
     // Internal speaker functions
     module.set_attr("_speaker_play_batch", vm.new_function("_speaker_play_batch", speakers::speaker_play_batch), vm).unwrap();

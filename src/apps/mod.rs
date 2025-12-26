@@ -67,4 +67,5 @@ define_apps! {
     Coder => coder::CoderApp,
     Leds => leds::Leds,
     IosSensors => ios_sensors::IosSensorsApp,
+    AudioRelay => audio_relay::AudioRelay,
 }
