@@ -104,33 +104,11 @@ impl Application for AudioRelay {
         self.output_device_index = output_idx;
         crate::print(&format!("🔊 Output: {}", output_devices[output_idx].name));
         
-        // Create audio devices immediately (keep them alive, just pause/resume)
-        let input_device = input_devices[input_idx];
-        let output_device = output_devices[output_idx];
-        
-        // Create audio listener
-        let listener = AudioListener::new(input_device, BUFFER_DURATION)
-            .map_err(|e| format!("Failed to create listener: {}", e))?;
-        
-        crate::print("✅ Listener created");
-        
-        // Create audio player
-        let player = AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS)
-            .map_err(|e| format!("Failed to create player: {}", e))?;
-        
-        crate::print("✅ Player created");
-        
-        self.listener = Some(listener);
-        self.player = Some(player);
-        
-        // CRITICAL: Pause listener AFTER storing it to ensure mic light is OFF by default
-        if let Some(ref listener) = self.listener {
-            listener.pause().ok();
-        }
-        
+        // Don't create audio devices yet - will be created on first toggle
+        // This keeps mic light OFF by default and makes startup instant
         self.initialized = true;
         
-        crate::print("✅ Devices ready! Click the centered square to start audio relay.");
+        crate::print("✅ Setup complete! Click the centered square to start audio relay.");
         
         Ok(())
     }
@@ -208,13 +186,58 @@ impl Application for AudioRelay {
             self.enabled = !self.enabled;
             
             if self.enabled {
-                // Resume audio processing - INSTANT!
-                if let Some(ref listener) = self.listener {
-                    listener.record().ok(); // Resume recording - mic light ON
+                // Create audio devices if they don't exist yet
+                if self.listener.is_none() || self.player.is_none() {
+                    crate::print("⚙️  Creating audio devices...");
+                    
+                    // Get devices again
+                    let all_devices = devices();
+                    let input_devices: Vec<_> = all_devices.iter().filter(|d| d.is_input).collect();
+                    let output_devices: Vec<_> = all_devices.iter().filter(|d| d.is_output).collect();
+                    
+                    if self.input_device_index < input_devices.len() && self.output_device_index < output_devices.len() {
+                        let input_device = input_devices[self.input_device_index];
+                        let output_device = output_devices[self.output_device_index];
+                        
+                        // Create listener
+                        match AudioListener::new(input_device, BUFFER_DURATION) {
+                            Ok(listener) => {
+                                self.listener = Some(listener);
+                                crate::print("✅ Microphone created");
+                            }
+                            Err(e) => {
+                                crate::print(&format!("❌ Failed to create microphone: {}", e));
+                                self.enabled = false;
+                                return;
+                            }
+                        }
+                        
+                        // Create player
+                        match AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS) {
+                            Ok(player) => {
+                                if let Err(e) = player.start() {
+                                    crate::print(&format!("⚠️  Failed to start player: {}", e));
+                                }
+                                self.player = Some(player);
+                                crate::print("✅ Speaker created");
+                            }
+                            Err(e) => {
+                                crate::print(&format!("❌ Failed to create speaker: {}", e));
+                                self.enabled = false;
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    // Devices already exist, just resume
+                    if let Some(ref listener) = self.listener {
+                        listener.record().ok();
+                    }
+                    if let Some(ref player) = self.player {
+                        player.start().ok();
+                    }
                 }
-                if let Some(ref player) = self.player {
-                    player.start().ok(); // Ensure player is started
-                }
+                
                 crate::print("🟢 Audio relay ENABLED - Mic light ON");
             } else {
                 // Pause audio processing - INSTANT!

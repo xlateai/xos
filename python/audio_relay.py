@@ -82,34 +82,9 @@ class AudioRelay(xos.Application):
         
         xos.print(f"🔊 Output: {output_devices[self.speaker_device_id]['name']}")
         
-        # Create audio devices (keep them alive, just pause/resume)
-        try:
-            self.microphone = xos.audio.Microphone(
-                device_id=self.mic_device_id,
-                buffer_duration=BUFFER_DURATION
-            )
-            xos.print("✅ Microphone created")
-            
-            # Pause microphone immediately (mic light OFF by default)
-            self.microphone.pause()
-            xos.print("   Microphone paused (mic light OFF)")
-            
-        except Exception as e:
-            xos.print(f"❌ Failed to create microphone: {e}")
-            return
-        
-        try:
-            self.speaker = xos.audio.Speaker(
-                device_id=self.speaker_device_id,
-                sample_rate=SAMPLE_RATE,
-                channels=CHANNELS
-            )
-            xos.print("✅ Speaker created")
-        except Exception as e:
-            xos.print(f"❌ Failed to create speaker: {e}")
-            return
-        
-        xos.print("✅ Devices ready! Click the centered square to start audio relay.")
+        # Don't create audio devices yet - will be created on first toggle
+        # This keeps mic light OFF by default and makes startup instant
+        xos.print("✅ Setup complete! Click the centered square to start audio relay.")
     
     def tick(self):
         """Update and render one frame"""
@@ -188,9 +163,6 @@ class AudioRelay(xos.Application):
     
     def on_mouse_down(self, x, y):
         """Handle mouse down event"""
-        if not self.speaker:  # Check if setup was successful
-            return
-        
         # Get button center position
         width = self.get_width()
         height = self.get_height()
@@ -205,14 +177,42 @@ class AudioRelay(xos.Application):
             self.enabled = not self.enabled
             
             if self.enabled:
-                # Resume microphone - INSTANT mic light ON
-                if self.microphone:
+                # Create audio devices if they don't exist yet
+                if not self.microphone or not self.speaker:
+                    xos.print("⚙️  Creating audio devices...")
+                    
+                    try:
+                        self.microphone = xos.audio.Microphone(
+                            device_id=self.mic_device_id,
+                            buffer_duration=BUFFER_DURATION
+                        )
+                        xos.print("✅ Microphone created")
+                    except Exception as e:
+                        xos.print(f"❌ Failed to create microphone: {e}")
+                        self.enabled = False
+                        return
+                    
+                    try:
+                        self.speaker = xos.audio.Speaker(
+                            device_id=self.speaker_device_id,
+                            sample_rate=SAMPLE_RATE,
+                            channels=CHANNELS
+                        )
+                        xos.print("✅ Speaker created")
+                    except Exception as e:
+                        xos.print(f"❌ Failed to create speaker: {e}")
+                        self.enabled = False
+                        return
+                else:
+                    # Devices already exist, just resume
                     try:
                         self.microphone.record()
-                        xos.print("🟢 Audio relay ENABLED - Mic light ON")
                     except Exception as e:
                         xos.print(f"❌ Failed to resume microphone: {e}")
                         self.enabled = False
+                        return
+                
+                xos.print("🟢 Audio relay ENABLED - Mic light ON")
             else:
                 # Pause microphone - INSTANT mic light OFF
                 if self.microphone:
