@@ -11,7 +11,7 @@ fn get_active_speakers() -> &'static Mutex<HashSet<usize>> {
     ACTIVE_SPEAKERS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// iOS-specific audio player structure (forward declaration for now)
+// --- iOS AudioPlayer (uses Swift FFI) ---
 #[cfg(target_os = "ios")]
 pub struct AudioPlayer {
     player_id: u32,
@@ -84,18 +84,69 @@ impl Drop for AudioPlayer {
     }
 }
 
-// Non-iOS stub
-#[cfg(not(target_os = "ios"))]
+// --- Native AudioPlayer (uses cpal via audio crate) ---
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+pub struct AudioPlayer {
+    inner: audio::AudioPlayer,
+}
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+impl AudioPlayer {
+    pub fn new(device_id: u32, sample_rate: u32, channels: u16) -> Result<Self, String> {
+        // Get all output devices
+        let all_devices = audio::devices();
+        let output_devices: Vec<_> = all_devices
+            .into_iter()
+            .filter(|d| d.is_output)
+            .collect();
+        
+        if output_devices.is_empty() {
+            return Err("No audio output devices found".to_string());
+        }
+        
+        let device_idx = device_id as usize;
+        if device_idx >= output_devices.len() {
+            return Err(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, output_devices.len()));
+        }
+        
+        let device = &output_devices[device_idx];
+        
+        // Create the native audio player
+        let inner = audio::AudioPlayer::new(device, sample_rate, channels)?;
+        
+        Ok(Self { inner })
+    }
+    
+    pub fn play_samples(&self, samples: &[f32]) -> Result<(), String> {
+        self.inner.play_samples(samples)
+    }
+    
+    pub fn get_buffer_size(&self) -> usize {
+        self.inner.get_buffer_size()
+    }
+    
+    pub fn start(&self) -> Result<(), String> {
+        self.inner.start()
+    }
+    
+    #[allow(dead_code)]
+    pub fn stop(&self) -> Result<(), String> {
+        self.inner.stop()
+    }
+}
+
+// --- WASM stub (not implemented yet) ---
+#[cfg(target_arch = "wasm32")]
 pub struct AudioPlayer;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 impl AudioPlayer {
     pub fn new(_device_id: u32, _sample_rate: u32, _channels: u16) -> Result<Self, String> {
-        Err("Audio player only available on iOS".to_string())
+        Err("Audio player not yet available on WASM".to_string())
     }
     
     pub fn play_samples(&self, _samples: &[f32]) -> Result<(), String> {
-        Err("Audio player only available on iOS".to_string())
+        Err("Audio player not yet available on WASM".to_string())
     }
     
     pub fn get_buffer_size(&self) -> usize {
@@ -103,11 +154,12 @@ impl AudioPlayer {
     }
     
     pub fn start(&self) -> Result<(), String> {
-        Err("Audio player only available on iOS".to_string())
+        Err("Audio player not yet available on WASM".to_string())
     }
     
+    #[allow(dead_code)]
     pub fn stop(&self) -> Result<(), String> {
-        Err("Audio player only available on iOS".to_string())
+        Err("Audio player not yet available on WASM".to_string())
     }
 }
 
@@ -162,32 +214,16 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         1
     };
     
-    // Get all output devices
-    let all_devices = audio::devices();
-    let output_devices: Vec<_> = all_devices
-        .into_iter()
-        .filter(|d| d.is_output)
-        .collect();
-    
     // Determine the actual device ID to use
-    let actual_device_id = if output_devices.is_empty() {
-        // On iOS, if no output devices reported, use device_id 1 (built-in speaker)
-        // Device 0 is microphone, device 1 is speaker
-        #[cfg(target_os = "ios")]
-        { 1 }
-        #[cfg(not(target_os = "ios"))]
-        { 0 }
-    } else if device_id >= output_devices.len() {
-        return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, output_devices.len())));
-    } else {
-        // Get the device_id from the AudioDevice struct
-        #[cfg(target_os = "ios")]
-        { output_devices[device_id].device_id }
-        #[cfg(not(target_os = "ios"))]
-        { device_id as u32 }
-    };
+    // On iOS: device 0 = microphone, device 1 = speaker
+    // On native: device_id indexes into the filtered output devices list
+    #[cfg(target_os = "ios")]
+    let actual_device_id = if device_id == 0 { 1 } else { device_id as u32 };
     
-    // Create AudioPlayer
+    #[cfg(not(target_os = "ios"))]
+    let actual_device_id = device_id as u32;
+    
+    // Create AudioPlayer (device validation happens inside)
     let player = AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
         .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
     
@@ -354,14 +390,26 @@ pub fn cleanup_all_speakers_rust() {
 
 /// Helper function to extract f32 samples from a Python array-like object
 fn extract_samples_from_array(obj: PyObjectRef, vm: &VirtualMachine) -> Result<Vec<f32>, rustpython_vm::builtins::PyBaseExceptionRef> {
+    // Helper to convert a Python object to f32 (handles both int and float)
+    fn to_f32(item: PyObjectRef, vm: &VirtualMachine) -> Result<f32, rustpython_vm::builtins::PyBaseExceptionRef> {
+        // Try as float first
+        if let Ok(value) = item.clone().try_into_value::<f64>(vm) {
+            return Ok(value as f32);
+        }
+        // Try as int
+        if let Ok(value) = item.clone().try_into_value::<i64>(vm) {
+            return Ok(value as f32);
+        }
+        Err(vm.new_type_error(format!("Expected numeric type, got {:?}", item.class().name())))
+    }
+    
     // Try to get _data attribute (xos.Array format)
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
         // It's an xos.Array, extract the _data list
         if let Ok(list) = data_attr.downcast::<rustpython_vm::builtins::PyList>() {
             let mut samples = Vec::new();
             for item in list.borrow_vec().iter() {
-                let value: f64 = item.clone().try_into_value(vm)?;
-                samples.push(value as f32);
+                samples.push(to_f32(item.clone(), vm)?);
             }
             return Ok(samples);
         }
@@ -371,8 +419,7 @@ fn extract_samples_from_array(obj: PyObjectRef, vm: &VirtualMachine) -> Result<V
     if let Ok(list) = obj.downcast::<rustpython_vm::builtins::PyList>() {
         let mut samples = Vec::new();
         for item in list.borrow_vec().iter() {
-            let value: f64 = item.clone().try_into_value(vm)?;
-            samples.push(value as f32);
+            samples.push(to_f32(item.clone(), vm)?);
         }
         return Ok(samples);
     }

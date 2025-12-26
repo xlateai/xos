@@ -12,6 +12,7 @@ class StaticWithAudio(xos.Application):
         super().__init__()
         self.speaker = None
         self.image_generated = False
+        self.tick_count = 0
     
     def setup(self):
         """Initialize the application"""
@@ -50,6 +51,10 @@ class StaticWithAudio(xos.Application):
     def tick(self):
         """Generate and display random image, stream random audio"""
         
+        self.tick_count += 1
+        if self.tick_count % 60 == 0:
+            xos.print(f"Tick #{self.tick_count} - Audio streaming...")
+        
         # Generate random visual static (once)
         if not self.image_generated:
             width = self.get_width()
@@ -61,41 +66,40 @@ class StaticWithAudio(xos.Application):
             xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
             
             xos.print("Random image displayed!")
+            xos.print("Starting continuous audio stream...")
             self.image_generated = True
         
         # Stream random audio continuously
         if self.speaker is not None:
-            # Check current buffer size
             try:
+                # Check current buffer size
                 current_buffer = self.speaker.samples_buffer
                 current_buffer_size = current_buffer.shape[0] if hasattr(current_buffer, 'shape') else 0
-            except:
-                current_buffer_size = 0
-            
-            # Calculate how many samples to add
-            # We want to keep the buffer full but not exceed MAX_SAMPLES_BUFFER_SIZE
-            samples_to_add = max(
-                MAX_SAMPLES_BUFFER_SIZE - current_buffer_size,
-                TARGET_BATCH_SIZE
-            )
-            
-            # Clamp to reasonable bounds
-            samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
-            
-            # Generate random audio samples (white noise)
-            # Using xos.random.uniform to generate samples in range [-1.0, 1.0]
-            audio_samples = xos.random.uniform(
-                AUDIO_MIN, 
-                AUDIO_MAX, 
-                shape=(samples_to_add,),
-                dtype='float32'
-            )
-            
-            # Play the samples
-            try:
+                
+                # Calculate how many samples to add
+                # We want to keep the buffer full but not exceed MAX_SAMPLES_BUFFER_SIZE
+                samples_to_add = max(
+                    MAX_SAMPLES_BUFFER_SIZE - current_buffer_size,
+                    TARGET_BATCH_SIZE
+                )
+                
+                # Clamp to reasonable bounds
+                samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
+                
+                # Generate random audio samples (white noise)
+                # Build a simple list of random floats (more compatible approach)
+                audio_samples = []
+                for _ in range(samples_to_add):
+                    sample = xos.random.uniform(AUDIO_MIN, AUDIO_MAX)
+                    audio_samples.append(sample)
+                
+                # Play the samples
                 self.speaker.play_sample_batch(audio_samples)
+                
             except Exception as e:
-                xos.print(f"Error playing audio: {e}")
+                xos.print(f"Error in audio streaming: {e}")
+                import traceback
+                traceback.print_exc()
 
 
 # Demo code to show how it would be used
