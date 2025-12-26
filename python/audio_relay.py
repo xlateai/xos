@@ -12,9 +12,10 @@ import time
 
 # Configuration
 SAMPLE_RATE = 44100  # 44.1 kHz
-BUFFER_DURATION = 0.05  # 50ms microphone buffer
-BATCH_SIZE = 512  # Samples per batch for low latency
+BUFFER_DURATION = 0.1  # 100ms microphone buffer to prevent overflow
+BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
 CHANNELS = 1  # Mono audio
+GAIN = 3.0  # Amplify audio (3x volume boost)
 
 def main():
     """Main audio relay loop"""
@@ -114,14 +115,9 @@ def main():
     xos.print("🔍 Initial speaker buffer size:", speaker.samples_buffer.shape[0] if hasattr(speaker.samples_buffer, 'shape') else 0)
     
     try:
-        # Target sleep time between batches to maintain correct sample rate
-        # At 44,100 Hz and 512 samples per batch: 512 / 44100 = 0.0116 seconds per batch
-        sleep_per_batch = BATCH_SIZE / SAMPLE_RATE
-        
+        # No sleep - process as fast as possible for lowest latency
         while True:
-            batch_start = time.time()
-            
-            # Get audio samples from microphone
+            # Get audio samples from microphone - use large batch size to get ALL samples
             audio_batch = microphone.get_batch(BATCH_SIZE)
 
             # this can be helpful actually as it will display the
@@ -132,18 +128,24 @@ def main():
                 samples = audio_batch['_data']
                 sample_count = len(samples)
                 
-                # Only relay if we got a reasonable number of samples
+                # Only relay if we got samples
                 if sample_count > 0:
                     # Debug: Log first few batches
                     if batch_count < 3:
                         xos.print(f"🔍 Batch {batch_count}: Got {sample_count} samples from mic")
                     
+                    # Amplify samples for louder output
+                    amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
+                    
                     # Immediately relay to speaker
-                    speaker.play_sample_batch(samples)
+                    speaker.play_sample_batch(amplified_samples)
                     
                     # Update statistics
                     total_samples += sample_count
                     batch_count += 1
+            else:
+                # No samples available - sleep for 1ms to avoid burning CPU
+                time.sleep(0.001)
                 
                 # Print status every 2 seconds
                 current_time = time.time()

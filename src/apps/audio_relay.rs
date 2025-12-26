@@ -4,7 +4,8 @@ use crate::audio::{devices, AudioListener, AudioPlayer};
 const BACKGROUND_COLOR: (u8, u8, u8) = (20, 20, 20); // Dark background
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 1;
-const BUFFER_DURATION: f32 = 0.05; // 50ms
+const BUFFER_DURATION: f32 = 0.1; // 100ms buffer to prevent overflow between frames (at 60fps = 16.67ms/frame)
+const GAIN: f32 = 3.0; // Amplify audio (3x volume boost)
 
 pub struct AudioRelay {
     listener: Option<AudioListener>,
@@ -86,8 +87,13 @@ impl Application for AudioRelay {
                     // For mono, just use first channel
                     let samples = &channels[0];
                     
-                    // Queue samples for playback
-                    if let Err(e) = player.play_samples(samples) {
+                    // Amplify samples for louder output
+                    let amplified: Vec<f32> = samples.iter()
+                        .map(|&s| (s * GAIN).clamp(-1.0, 1.0)) // Apply gain and clamp to prevent distortion
+                        .collect();
+                    
+                    // Queue amplified samples for playback
+                    if let Err(e) = player.play_samples(&amplified) {
                         crate::print(&format!("⚠️  Playback error: {}", e));
                     }
                     

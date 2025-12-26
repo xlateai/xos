@@ -37,6 +37,15 @@ func xos_engine_cleanup()
 @_silgen_name("xos_set_log_callback")
 func xos_set_log_callback(_ callback: @convention(c) (UnsafePointer<CChar>?) -> Void)
 
+@_silgen_name("xos_list_applications_count")
+func xos_list_applications_count() -> Int
+
+@_silgen_name("xos_list_applications_get_name")
+func xos_list_applications_get_name(_ index: Int) -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("xos_list_applications_free_name")
+func xos_list_applications_free_name(_ ptr: UnsafeMutablePointer<CChar>?)
+
 /// Swift wrapper for initializing the engine
 public func xosEngineInit(appName: String, width: UInt32, height: UInt32) throws {
     let appNameCString = appName.cString(using: .utf8)
@@ -60,6 +69,22 @@ public func xosEngineInit(appName: String, width: UInt32, height: UInt32) throws
 @discardableResult
 public func xosEngineTick() -> Bool {
     return xos_engine_tick() == 0
+}
+
+/// Swift wrapper for listing all available applications
+public func xosListApplications() -> [String] {
+    let count = xos_list_applications_count()
+    var apps: [String] = []
+    
+    for i in 0..<count {
+        if let namePtr = xos_list_applications_get_name(i) {
+            let appName = String(cString: namePtr)
+            apps.append(appName)
+            xos_list_applications_free_name(namePtr)
+        }
+    }
+    
+    return apps
 }
 
 /// Swift wrapper for getting frame buffer

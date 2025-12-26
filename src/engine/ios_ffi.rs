@@ -524,3 +524,41 @@ pub extern "C" fn xos_magnetometer_cleanup() {
 // Clipboard functions are implemented in Swift (XosClipboardModule.swift)
 // and imported directly by xos/src/clipboard.rs
 
+// ===== Application List FFI =====
+
+/// Get the number of available applications
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_list_applications_count() -> usize {
+    apps::list_apps().len()
+}
+
+/// Get the name of an application by index
+/// Returns a pointer to a C string that must be freed with xos_list_applications_free_name
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_list_applications_get_name(index: usize) -> *mut c_char {
+    let apps = apps::list_apps();
+    
+    if index >= apps.len() {
+        return ptr::null_mut();
+    }
+    
+    let app_name = apps[index];
+    match CString::new(app_name) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Free a string returned by xos_list_applications_get_name
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_list_applications_free_name(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = CString::from_raw(ptr);
+        }
+    }
+}
+

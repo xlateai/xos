@@ -44,6 +44,15 @@ macro_rules! define_apps {
                 _ => None,
             }
         }
+
+        /// Get a list of all available app names
+        pub fn list_apps() -> Vec<&'static str> {
+            vec![
+                $(
+                    stringify!($file),
+                )*
+            ]
+        }
     };
 }
 
