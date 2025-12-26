@@ -1628,6 +1628,9 @@ impl Application for CoderApp {
                     // Drop the thread handle - let it finish in background
                     self.python_thread_handle = None;
                     
+                    // Clean up all audio resources immediately (CRITICAL FIX!)
+                    crate::python::audio::cleanup_all_audio();
+                    
                     // Update terminal with final message
                     if let Ok(mut buffer) = self.python_output_buffer.lock() {
                         buffer.push_str("\n[xos] Script stopped by user\n");

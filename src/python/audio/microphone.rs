@@ -174,6 +174,10 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let py_list = vm.ctx.new_list(batch);
     
+    // CRITICAL: Clear the listener buffer after reading to avoid re-queueing
+    // the same samples on the next call! (just like the Rust audio_relay.rs app does)
+    listener.buffer().clear();
+    
     // Create xos.Array dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
