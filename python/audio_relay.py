@@ -9,7 +9,6 @@ Click the centered square button to toggle audio relay on/off.
 import xos
 
 # Configuration
-SAMPLE_RATE = 44100  # 44.1 kHz
 BUFFER_DURATION = 0.1  # 100ms microphone buffer to prevent overflow
 BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
 CHANNELS = 1  # Mono audio
@@ -102,13 +101,18 @@ class AudioRelay(xos.Application):
             xos.print(f"❌ Failed to create microphone: {e}")
             return
         
+        # Get the microphone's actual sample rate and use it for the speaker
+        # This prevents pitch/speed issues (e.g., AirPods mic at 16kHz)
+        mic_sample_rate = self.microphone.get_sample_rate()
+        xos.print(f"🎤 Microphone sample rate: {mic_sample_rate} Hz")
+        
         try:
             self.speaker = xos.audio.Speaker(
                 device_id=self.speaker_device_id,
-                sample_rate=SAMPLE_RATE,
+                sample_rate=mic_sample_rate,  # Match mic sample rate!
                 channels=CHANNELS
             )
-            xos.print("✅ Speaker created")
+            xos.print(f"✅ Speaker created ({mic_sample_rate} Hz)")
         except Exception as e:
             xos.print(f"❌ Failed to create speaker: {e}")
             return

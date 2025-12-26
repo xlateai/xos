@@ -138,6 +138,16 @@ class Microphone:
         import xos
         return xos.audio._microphone_record(self._listener_ptr)
     
+    def get_sample_rate(self):
+        """
+        Get the microphone's actual sample rate.
+        
+        Returns:
+            int: Sample rate in Hz (e.g., 16000, 44100, 48000)
+        """
+        import xos
+        return xos.audio._microphone_get_sample_rate(self._listener_ptr)
+    
     def batched_iterator(self, batch_size=1024):
         """
         Yields batches of audio samples.
@@ -206,6 +216,23 @@ pub fn microphone_record(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map_err(|e| vm.new_runtime_error(format!("Failed to resume microphone: {}", e)))?;
     
     Ok(vm.ctx.none())
+}
+
+/// Internal function to get the microphone's sample rate
+pub fn microphone_get_sample_rate(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let listener_ptr: usize = args.bind(vm)?;
+    
+    if listener_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
+    }
+    
+    // Convert pointer back to reference
+    let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
+    
+    // Get the sample rate
+    let sample_rate = listener.buffer().sample_rate();
+    
+    Ok(vm.ctx.new_int(sample_rate).into())
 }
 
 /// Internal function to get a batch of samples from the microphone

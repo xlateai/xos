@@ -2,8 +2,7 @@ use crate::engine::{Application, EngineState};
 use crate::audio::{devices, default_input, default_output, AudioListener, AudioPlayer};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black background
-const SAMPLE_RATE: u32 = 44100;
-const CHANNELS: u16 = 1;
+const CHANNELS: u16 = 1; // Mono input (will be converted to stereo if needed)
 const BUFFER_DURATION: f32 = 0.1; // 100ms buffer to prevent overflow between frames (at 60fps = 16.67ms/frame)
 const GAIN: f32 = 3.0; // Amplify audio (3x volume boost)
 
@@ -162,11 +161,16 @@ impl Application for AudioRelay {
         // Listener starts paused by default (mic light OFF)
         crate::print("✅ Listener created (paused by default)");
         
-        // Create audio player
-        let player = AudioPlayer::new(output_device, SAMPLE_RATE, CHANNELS)
+        // Get the microphone's actual sample rate and use it for the speaker
+        // This prevents pitch/speed issues (e.g., AirPods mic at 16kHz)
+        let mic_sample_rate = listener.buffer().sample_rate();
+        crate::print(&format!("🎤 Microphone sample rate: {} Hz", mic_sample_rate));
+        
+        // Create audio player using the microphone's sample rate
+        let player = AudioPlayer::new(output_device, mic_sample_rate, CHANNELS)
             .map_err(|e| format!("Failed to create player: {}", e))?;
         
-        crate::print("✅ Player created");
+        crate::print(&format!("✅ Player created ({} Hz)", mic_sample_rate));
         
         self.listener = Some(listener);
         self.player = Some(player);
