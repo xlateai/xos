@@ -2,6 +2,7 @@ use std::fmt;
 
 /// Represents an audio device with its details (iOS version)
 /// Note: On iOS, we only support the built-in microphone for now
+#[derive(Clone)]
 pub struct AudioDevice {
     pub name: String,
     pub is_input: bool,
@@ -21,8 +22,23 @@ impl fmt::Display for AudioDevice {
     }
 }
 
+/// Get the default input device (iOS version)
+#[cfg(target_os = "ios")]
+pub fn default_input() -> Option<AudioDevice> {
+    // On iOS, device_id 0 is typically the default input
+    let devices = all();
+    devices.into_iter().find(|d| d.is_input)
+}
+
+/// Get the default output device (iOS version)
+#[cfg(target_os = "ios")]
+pub fn default_output() -> Option<AudioDevice> {
+    // On iOS, find the first output device (could be built-in or AirPods)
+    let devices = all();
+    devices.into_iter().find(|d| d.is_output)
+}
+
 /// Get all available audio devices from the system (iOS version)
-/// For now, we only return the built-in microphone
 #[cfg(target_os = "ios")]
 pub fn all() -> Vec<AudioDevice> {
     // Call Swift to get device count
@@ -69,6 +85,16 @@ pub fn all() -> Vec<AudioDevice> {
 #[cfg(not(target_os = "ios"))]
 pub fn all() -> Vec<AudioDevice> {
     Vec::new()
+}
+
+#[cfg(not(target_os = "ios"))]
+pub fn default_input() -> Option<AudioDevice> {
+    None
+}
+
+#[cfg(not(target_os = "ios"))]
+pub fn default_output() -> Option<AudioDevice> {
+    None
 }
 
 /// Print information about all available audio devices

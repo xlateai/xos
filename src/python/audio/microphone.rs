@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs, PyObjectRef};
+use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs, PyObjectRef, AsObject};
 use crate::audio;
 use std::sync::Mutex;
 use std::collections::HashSet;
@@ -35,15 +35,24 @@ pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(list.into())
 }
 
-/// xos.audio.Microphone(device_id=0, buffer_duration=1.0) - Create microphone instance
+/// xos.audio.Microphone(device_id=None, buffer_duration=1.0) - Create microphone instance
 pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Parse arguments - handle both positional and keyword args
-    let device_id = if !args.args.is_empty() {
-        args.args[0].clone().try_into_value::<usize>(vm)?
+    // device_id can be None (use default), or a specific device index
+    let device_id_opt: Option<usize> = if !args.args.is_empty() {
+        if args.args[0].is(&vm.ctx.none) {
+            None
+        } else {
+            Some(args.args[0].clone().try_into_value::<usize>(vm)?)
+        }
     } else if let Some(device_id_arg) = args.kwargs.get("device_id") {
-        device_id_arg.clone().try_into_value::<usize>(vm)?
+        if device_id_arg.is(&vm.ctx.none) {
+            None
+        } else {
+            Some(device_id_arg.clone().try_into_value::<usize>(vm)?)
+        }
     } else {
-        0
+        None // Default to None (use system default)
     };
     
     let buffer_duration = if args.args.len() > 1 {
@@ -54,22 +63,31 @@ pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         1.0
     };
     
-    // Get all input devices
-    let all_devices = audio::devices();
-    let input_devices: Vec<_> = all_devices
-        .into_iter()
-        .filter(|d| d.is_input)
-        .collect();
+    // Get the device to use
+    let device = if let Some(device_id) = device_id_opt {
+        // Specific device requested
+        let all_devices = audio::devices();
+        let input_devices: Vec<_> = all_devices
+            .into_iter()
+            .filter(|d| d.is_input)
+            .collect();
+        
+        if input_devices.is_empty() {
+            return Err(vm.new_runtime_error("No audio input devices (microphones) found".to_string()));
+        }
+        
+        if device_id >= input_devices.len() {
+            return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, input_devices.len())));
+        }
+        
+        input_devices[device_id].clone()
+    } else {
+        // Use default input device
+        audio::default_input()
+            .ok_or_else(|| vm.new_runtime_error("No default input device found".to_string()))?
+    };
     
-    if input_devices.is_empty() {
-        return Err(vm.new_runtime_error("No audio input devices (microphones) found".to_string()));
-    }
-    
-    if device_id >= input_devices.len() {
-        return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, input_devices.len())));
-    }
-    
-    let device = &input_devices[device_id];
+    let device = &device;
     
     // Create AudioListener
     let listener = audio::AudioListener::new(device, buffer_duration)

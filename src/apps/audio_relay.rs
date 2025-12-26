@@ -1,5 +1,5 @@
 use crate::engine::{Application, EngineState};
-use crate::audio::{devices, AudioListener, AudioPlayer};
+use crate::audio::{devices, default_input, default_output, AudioListener, AudioPlayer};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black background
 const SAMPLE_RATE: u32 = 44100;
@@ -20,6 +20,8 @@ pub struct AudioRelay {
     // Store device references for recreation
     input_device_index: usize,
     output_device_index: usize,
+    use_default_input: bool,
+    use_default_output: bool,
 }
 
 impl AudioRelay {
@@ -32,6 +34,8 @@ impl AudioRelay {
             enabled: false, // Start disabled (button off)
             input_device_index: 0,
             output_device_index: 0,
+            use_default_input: true,  // Default to auto-switching
+            use_default_output: true, // Default to auto-switching
         }
     }
 }
@@ -60,53 +64,96 @@ impl Application for AudioRelay {
         
         // Select input device
         #[cfg(not(target_os = "ios"))]
-        let input_idx = {
+        let (input_idx, use_default_input) = {
             use dialoguer::Select;
             
-            let device_names: Vec<String> = input_devices.iter()
-                .map(|d| d.name.clone())
-                .collect();
+            let mut device_names: Vec<String> = vec!["Default (auto-switching)".to_string()];
+            device_names.extend(input_devices.iter().map(|d| d.name.clone()));
             
-            Select::new()
+            let selection = Select::new()
                 .with_prompt("Select input device (microphone)")
                 .items(&device_names)
                 .default(0)
                 .interact()
-                .map_err(|e| format!("Failed to select input device: {}", e))?
+                .map_err(|e| format!("Failed to select input device: {}", e))?;
+            
+            if selection == 0 {
+                (0, true)  // Use default
+            } else {
+                (selection - 1, false)  // Use specific device
+            }
         };
         
         #[cfg(target_os = "ios")]
-        let input_idx = 0;
+        let (input_idx, use_default_input) = (0, true);  // Always use default on iOS
         
         self.input_device_index = input_idx;
-        crate::print(&format!("📍 Input: {}", input_devices[input_idx].name));
+        self.use_default_input = use_default_input;
+        
+        #[cfg(not(target_os = "ios"))]
+        if use_default_input {
+            crate::print("📍 Input: Default (auto-switching)");
+        } else {
+            crate::print(&format!("📍 Input: {}", input_devices[input_idx].name));
+        }
+        
+        #[cfg(target_os = "ios")]
+        crate::print("📍 Input: Default (auto-switching)");
         
         // Select output device
         #[cfg(not(target_os = "ios"))]
-        let output_idx = {
+        let (output_idx, use_default_output) = {
             use dialoguer::Select;
             
-            let device_names: Vec<String> = output_devices.iter()
-                .map(|d| d.name.clone())
-                .collect();
+            let mut device_names: Vec<String> = vec!["Default (auto-switching)".to_string()];
+            device_names.extend(output_devices.iter().map(|d| d.name.clone()));
             
-            Select::new()
+            let selection = Select::new()
                 .with_prompt("Select output device (speakers)")
                 .items(&device_names)
                 .default(0)
                 .interact()
-                .map_err(|e| format!("Failed to select output device: {}", e))?
+                .map_err(|e| format!("Failed to select output device: {}", e))?;
+            
+            if selection == 0 {
+                (0, true)  // Use default
+            } else {
+                (selection - 1, false)  // Use specific device
+            }
         };
         
         #[cfg(target_os = "ios")]
-        let output_idx = 0;
+        let (output_idx, use_default_output) = (0, true);  // Always use default on iOS
         
         self.output_device_index = output_idx;
-        crate::print(&format!("🔊 Output: {}", output_devices[output_idx].name));
+        self.use_default_output = use_default_output;
+        
+        #[cfg(not(target_os = "ios"))]
+        if use_default_output {
+            crate::print("🔊 Output: Default (auto-switching)");
+        } else {
+            crate::print(&format!("🔊 Output: {}", output_devices[output_idx].name));
+        }
+        
+        #[cfg(target_os = "ios")]
+        crate::print("🔊 Output: Default (auto-switching)");
         
         // Create audio devices during setup for instant first toggle
-        let input_device = input_devices[input_idx];
-        let output_device = output_devices[output_idx];
+        // Use default devices or specific devices based on selection
+        let input_device_owned = if self.use_default_input {
+            default_input().ok_or_else(|| "No default input device found".to_string())?
+        } else {
+            (*input_devices[self.input_device_index]).clone()
+        };
+        
+        let output_device_owned = if self.use_default_output {
+            default_output().ok_or_else(|| "No default output device found".to_string())?
+        } else {
+            (*output_devices[self.output_device_index]).clone()
+        };
+        
+        let input_device = &input_device_owned;
+        let output_device = &output_device_owned;
         
         // Create audio listener
         let listener = AudioListener::new(input_device, BUFFER_DURATION)

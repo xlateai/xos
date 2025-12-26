@@ -27,9 +27,9 @@ class AudioRelay(xos.Application):
         self.speaker = None
         self.last_buffer_size = 0
         self.enabled = False  # Audio processing on/off
-        # Store device IDs for quick recreation
-        self.mic_device_id = 0
-        self.speaker_device_id = 0
+        # Store device IDs (None = default device with auto-switching)
+        self.mic_device_id = None
+        self.speaker_device_id = None
         
     def setup(self):
         """Initialize audio devices"""
@@ -52,35 +52,43 @@ class AudioRelay(xos.Application):
         
         # Select input device
         if system_type == "IOS":
-            self.mic_device_id = 0
+            self.mic_device_id = None  # Use default on iOS
+            xos.print(f"📍 Input: Default (auto-switching)")
         else:
             xos.print("\nAvailable microphones:")
+            xos.print("  0: Default (auto-switching)")
             for i, dev in enumerate(input_devices):
-                xos.print(f"  {i}: {dev['name']}")
+                xos.print(f"  {i+1}: {dev['name']}")
             
-            self.mic_device_id = xos.dialoguer.select(
+            selection = xos.dialoguer.select(
                 "Select input device (microphone)",
-                [dev['name'] for dev in input_devices],
+                ["Default (auto-switching)"] + [dev['name'] for dev in input_devices],
                 default=0
             )
-        
-        xos.print(f"📍 Input: {input_devices[self.mic_device_id]['name']}")
+            
+            self.mic_device_id = None if selection == 0 else selection - 1
+            device_name = "Default (auto-switching)" if selection == 0 else input_devices[selection - 1]['name']
+            xos.print(f"📍 Input: {device_name}")
         
         # Select output device
         if system_type == "IOS":
-            self.speaker_device_id = 0
+            self.speaker_device_id = None  # Use default on iOS
+            xos.print(f"🔊 Output: Default (auto-switching)")
         else:
             xos.print("\nAvailable speakers:")
+            xos.print("  0: Default (auto-switching)")
             for i, dev in enumerate(output_devices):
-                xos.print(f"  {i}: {dev['name']}")
+                xos.print(f"  {i+1}: {dev['name']}")
             
-            self.speaker_device_id = xos.dialoguer.select(
+            selection = xos.dialoguer.select(
                 "Select output device (speakers)",
-                [dev['name'] for dev in output_devices],
+                ["Default (auto-switching)"] + [dev['name'] for dev in output_devices],
                 default=0
             )
-        
-        xos.print(f"🔊 Output: {output_devices[self.speaker_device_id]['name']}")
+            
+            self.speaker_device_id = None if selection == 0 else selection - 1
+            device_name = "Default (auto-switching)" if selection == 0 else output_devices[selection - 1]['name']
+            xos.print(f"🔊 Output: {device_name}")
         
         # Create audio devices during setup for instant first toggle
         try:

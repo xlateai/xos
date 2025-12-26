@@ -23,9 +23,9 @@ mod ios_player;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_device::{all as devices, print_all as print_devices};
 #[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
-pub use ios_device::{all as devices, print_all as print_devices};
+pub use ios_device::{all as devices, default_input, default_output, print_all as print_devices};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-pub use native_device::{all as devices, print_all as print_devices};
+pub use native_device::{all as devices, default_input, default_output, print_all as print_devices};
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_listener::AudioListener;

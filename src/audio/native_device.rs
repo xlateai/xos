@@ -2,6 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use std::fmt;
 
 /// Represents an audio device with its details
+#[derive(Clone)]
 pub struct AudioDevice {
     pub name: String,
     pub is_input: bool,
@@ -19,6 +20,32 @@ impl fmt::Display for AudioDevice {
         };
         write!(f, "{} ({})", self.name, device_type)
     }
+}
+
+/// Get the default input device
+pub fn default_input() -> Option<AudioDevice> {
+    let host = cpal::default_host();
+    let device = host.default_input_device()?;
+    let name = device.name().ok()?;
+    Some(AudioDevice {
+        name,
+        is_input: true,
+        is_output: false,
+        device_cpal: device,
+    })
+}
+
+/// Get the default output device
+pub fn default_output() -> Option<AudioDevice> {
+    let host = cpal::default_host();
+    let device = host.default_output_device()?;
+    let name = device.name().ok()?;
+    Some(AudioDevice {
+        name,
+        is_input: false,
+        is_output: true,
+        device_cpal: device,
+    })
 }
 
 /// Get all available audio devices from the system
