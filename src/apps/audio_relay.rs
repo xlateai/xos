@@ -91,6 +91,10 @@ impl Application for AudioRelay {
                         crate::print(&format!("⚠️  Playback error: {}", e));
                     }
                     
+                    // CRITICAL: Clear the listener buffer after reading to avoid re-queueing
+                    // the same samples on the next frame!
+                    listener.buffer().clear();
+                    
                     // Log buffer size occasionally
                     let buffer_size = player.get_buffer_size();
                     if buffer_size != self.last_buffer_size && buffer_size % 1000 == 0 {
