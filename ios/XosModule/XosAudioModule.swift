@@ -464,11 +464,20 @@ final class AudioPlayer {
         
         print("[AudioPlayer] Created AVAudioEngine and AVAudioPlayerNode for player ID=\(playerId)")
         
-        // Configure audio session for playback
+        // Configure audio session for BOTH recording and playback (critical for relay!)
         let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playback, mode: .default, options: [])
-        try audioSession.setActive(true)
-        print("[AudioPlayer] Audio session configured for playback")
+        do {
+            // Use playAndRecord category to allow simultaneous mic input and speaker output
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try audioSession.setActive(true)
+            print("[AudioPlayer] Audio session configured for playback (with recording support)")
+        } catch {
+            print("[AudioPlayer] Warning: Could not configure audio session: \(error)")
+            // Try fallback to just playback
+            try audioSession.setCategory(.playback, mode: .default, options: [])
+            try audioSession.setActive(true)
+            print("[AudioPlayer] Audio session configured for playback only")
+        }
         
         // Create audio format
         guard let format = AVAudioFormat(
