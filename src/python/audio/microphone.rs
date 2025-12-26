@@ -87,7 +87,7 @@ pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         mics.insert(listener_ptr);
     }
     
-    // Create a Python class with batched_iterator method and cleanup
+    // Create a Python class with pause/record methods for instant control
     let code = format!(r#"
 class Microphone:
     def __init__(self, listener_ptr):
@@ -105,6 +105,20 @@ class Microphone:
         """
         import xos
         return xos.audio._microphone_get_batch(self._listener_ptr, batch_size)
+    
+    def pause(self):
+        """
+        Pause microphone recording (mic light OFF instantly).
+        """
+        import xos
+        return xos.audio._microphone_pause(self._listener_ptr)
+    
+    def record(self):
+        """
+        Resume microphone recording (mic light ON instantly).
+        """
+        import xos
+        return xos.audio._microphone_record(self._listener_ptr)
     
     def batched_iterator(self, batch_size=1024):
         """
@@ -138,6 +152,42 @@ _mic_instance = Microphone({})
     // Get the instance from the scope
     let instance = scope.globals.get_item("_mic_instance", vm)?;
     Ok(instance)
+}
+
+/// Internal function to pause microphone recording (mic light OFF)
+pub fn microphone_pause(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let listener_ptr: usize = args.bind(vm)?;
+    
+    if listener_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
+    }
+    
+    // Convert pointer back to reference
+    let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
+    
+    // Pause recording (mic light OFF)
+    listener.pause()
+        .map_err(|e| vm.new_runtime_error(format!("Failed to pause microphone: {}", e)))?;
+    
+    Ok(vm.ctx.none())
+}
+
+/// Internal function to resume microphone recording (mic light ON)
+pub fn microphone_record(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let listener_ptr: usize = args.bind(vm)?;
+    
+    if listener_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
+    }
+    
+    // Convert pointer back to reference
+    let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
+    
+    // Resume recording (mic light ON)
+    listener.record()
+        .map_err(|e| vm.new_runtime_error(format!("Failed to resume microphone: {}", e)))?;
+    
+    Ok(vm.ctx.none())
 }
 
 /// Internal function to get a batch of samples from the microphone

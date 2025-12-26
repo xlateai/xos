@@ -15,8 +15,8 @@ BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
-# Toggle button configuration
-BUTTON_SIZE = 60.0
+# Toggle button configuration (will be calculated based on screen size)
+BUTTON_SIZE_RATIO = 0.12  # 12% of smaller screen dimension
 BUTTON_BORDER_WIDTH = 3.0
 
 
@@ -25,9 +25,11 @@ class AudioRelay(xos.Application):
         super().__init__()
         self.microphone = None
         self.speaker = None
-        self.initialized = False
         self.last_buffer_size = 0
         self.enabled = False  # Audio processing on/off
+        # Store device IDs for quick recreation
+        self.mic_device_id = 0
+        self.speaker_device_id = 0
         
     def setup(self):
         """Initialize audio devices"""
@@ -50,47 +52,47 @@ class AudioRelay(xos.Application):
         
         # Select input device
         if system_type == "IOS":
-            mic_device_id = 0
+            self.mic_device_id = 0
         else:
             xos.print("\nAvailable microphones:")
             for i, dev in enumerate(input_devices):
                 xos.print(f"  {i}: {dev['name']}")
             
-            mic_device_id = xos.dialoguer.select(
+            self.mic_device_id = xos.dialoguer.select(
                 "Select input device (microphone)",
                 [dev['name'] for dev in input_devices],
                 default=0
             )
         
-        xos.print(f"📍 Input: {input_devices[mic_device_id]['name']}")
+        xos.print(f"📍 Input: {input_devices[self.mic_device_id]['name']}")
         
         # Select output device
         if system_type == "IOS":
-            speaker_device_id = 0
+            self.speaker_device_id = 0
         else:
             xos.print("\nAvailable speakers:")
             for i, dev in enumerate(output_devices):
                 xos.print(f"  {i}: {dev['name']}")
             
-            speaker_device_id = xos.dialoguer.select(
+            self.speaker_device_id = xos.dialoguer.select(
                 "Select output device (speakers)",
                 [dev['name'] for dev in output_devices],
                 default=0
             )
         
-        xos.print(f"🔊 Output: {output_devices[speaker_device_id]['name']}")
+        xos.print(f"🔊 Output: {output_devices[self.speaker_device_id]['name']}")
         
-        # Create audio devices
+        # Create audio devices (keep them alive, just pause/resume)
         try:
             self.microphone = xos.audio.Microphone(
-                device_id=mic_device_id,
+                device_id=self.mic_device_id,
                 buffer_duration=BUFFER_DURATION
             )
             xos.print("✅ Microphone created")
             
             # Pause microphone immediately (mic light OFF by default)
-            # Note: The Python bridge starts recording by default, so we need to clean up and recreate
-            # For now, the mic will stay on until we toggle it off
+            self.microphone.pause()
+            xos.print("   Microphone paused (mic light OFF)")
             
         except Exception as e:
             xos.print(f"❌ Failed to create microphone: {e}")
@@ -98,7 +100,7 @@ class AudioRelay(xos.Application):
         
         try:
             self.speaker = xos.audio.Speaker(
-                device_id=speaker_device_id,
+                device_id=self.speaker_device_id,
                 sample_rate=SAMPLE_RATE,
                 channels=CHANNELS
             )
@@ -107,7 +109,6 @@ class AudioRelay(xos.Application):
             xos.print(f"❌ Failed to create speaker: {e}")
             return
         
-        self.initialized = True
         xos.print("✅ Devices ready! Click the centered square to start audio relay.")
     
     def tick(self):
@@ -118,39 +119,41 @@ class AudioRelay(xos.Application):
         # Draw toggle button
         self.draw_button()
         
-        # Relay audio if initialized AND enabled
-        if self.initialized and self.enabled:
-            if self.microphone and self.speaker:
-                # Get samples from microphone
-                audio_batch = self.microphone.get_batch(BATCH_SIZE)
+        # Relay audio if enabled AND microphone exists
+        if self.enabled and self.microphone and self.speaker:
+            # Get samples from microphone
+            audio_batch = self.microphone.get_batch(BATCH_SIZE)
+            
+            if audio_batch and audio_batch['_data']:
+                samples = audio_batch['_data']
                 
-                if audio_batch and audio_batch['_data']:
-                    samples = audio_batch['_data']
+                if len(samples) > 0:
+                    # Amplify samples for louder output
+                    amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
                     
-                    if len(samples) > 0:
-                        # Amplify samples for louder output
-                        amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
-                        
-                        # Queue amplified samples for playback
-                        try:
-                            self.speaker.play_sample_batch(amplified_samples)
-                        except Exception as e:
-                            xos.print(f"⚠️  Playback error: {e}")
-                        
-                        # Log buffer size occasionally
-                        buffer_size = self.speaker.samples_buffer.shape[0] if hasattr(self.speaker.samples_buffer, 'shape') else 0
-                        if buffer_size != self.last_buffer_size and buffer_size % 1000 == 0:
-                            xos.print(f"📊 Buffer: {buffer_size} samples")
-                            self.last_buffer_size = buffer_size
+                    # Queue amplified samples for playback
+                    try:
+                        self.speaker.play_sample_batch(amplified_samples)
+                    except Exception as e:
+                        xos.print(f"⚠️  Playback error: {e}")
+                    
+                    # Log buffer size occasionally
+                    buffer_size = self.speaker.samples_buffer.shape[0] if hasattr(self.speaker.samples_buffer, 'shape') else 0
+                    if buffer_size != self.last_buffer_size and buffer_size % 1000 == 0:
+                        xos.print(f"📊 Buffer: {buffer_size} samples")
+                        self.last_buffer_size = buffer_size
     
     def draw_button(self):
         """Draw the toggle button in the center of the screen"""
         width = self.get_width()
         height = self.get_height()
         
+        # Calculate responsive button size (12% of smaller dimension)
+        button_size = int(min(width, height) * BUTTON_SIZE_RATIO)
+        
         # Center the button at 0.5, 0.5
-        button_x = int((width - BUTTON_SIZE) / 2.0)
-        button_y = int((height - BUTTON_SIZE) / 2.0)
+        button_x = int((width - button_size) / 2.0)
+        button_y = int((height - button_size) / 2.0)
         
         # Determine color based on enabled state
         if self.enabled:
@@ -166,8 +169,8 @@ class AudioRelay(xos.Application):
                 self.frame,
                 button_x,
                 button_y,
-                button_x + int(BUTTON_SIZE),
-                button_y + int(BUTTON_SIZE),
+                button_x + button_size,
+                button_y + button_size,
                 color
             )
         else:
@@ -175,35 +178,53 @@ class AudioRelay(xos.Application):
             border = int(BUTTON_BORDER_WIDTH)
             
             # Top border
-            xos.rasterizer.rects_filled(self.frame, button_x, button_y, button_x + int(BUTTON_SIZE), button_y + border, color)
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y, button_x + button_size, button_y + border, color)
             # Bottom border
-            xos.rasterizer.rects_filled(self.frame, button_x, button_y + int(BUTTON_SIZE) - border, button_x + int(BUTTON_SIZE), button_y + int(BUTTON_SIZE), color)
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y + button_size - border, button_x + button_size, button_y + button_size, color)
             # Left border
-            xos.rasterizer.rects_filled(self.frame, button_x, button_y + border, button_x + border, button_y + int(BUTTON_SIZE) - border, color)
+            xos.rasterizer.rects_filled(self.frame, button_x, button_y + border, button_x + border, button_y + button_size - border, color)
             # Right border
-            xos.rasterizer.rects_filled(self.frame, button_x + int(BUTTON_SIZE) - border, button_y + border, button_x + int(BUTTON_SIZE), button_y + int(BUTTON_SIZE) - border, color)
+            xos.rasterizer.rects_filled(self.frame, button_x + button_size - border, button_y + border, button_x + button_size, button_y + button_size - border, color)
     
     def on_mouse_down(self, x, y):
         """Handle mouse down event"""
-        if not self.initialized:
+        if not self.speaker:  # Check if setup was successful
             return
         
         # Get button center position
         width = self.get_width()
         height = self.get_height()
-        button_x = (width - BUTTON_SIZE) / 2.0
-        button_y = (height - BUTTON_SIZE) / 2.0
+        button_size = int(min(width, height) * BUTTON_SIZE_RATIO)
+        button_x = (width - button_size) / 2.0
+        button_y = (height - button_size) / 2.0
         
         # Check if click is inside button
-        if (x >= button_x and x <= button_x + BUTTON_SIZE and
-            y >= button_y and y <= button_y + BUTTON_SIZE):
+        if (x >= button_x and x <= button_x + button_size and
+            y >= button_y and y <= button_y + button_size):
             # Toggle enabled state
             self.enabled = not self.enabled
             
             if self.enabled:
-                xos.print("🟢 Audio relay ENABLED")
+                # Resume microphone - INSTANT mic light ON
+                if self.microphone:
+                    try:
+                        self.microphone.record()
+                        xos.print("🟢 Audio relay ENABLED - Mic light ON")
+                    except Exception as e:
+                        xos.print(f"❌ Failed to resume microphone: {e}")
+                        self.enabled = False
             else:
-                xos.print("⬜ Audio relay DISABLED")
+                # Pause microphone - INSTANT mic light OFF
+                if self.microphone:
+                    try:
+                        self.microphone.pause()
+                    except Exception as e:
+                        xos.print(f"❌ Failed to pause microphone: {e}")
+                
+                # Clear speaker buffer to stop any queued audio
+                # Note: Python bridge doesn't expose clear() yet, so audio will drain naturally
+                
+                xos.print("⬜ Audio relay DISABLED - Mic light OFF")
 
 
 if __name__ == "__main__":

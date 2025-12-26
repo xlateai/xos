@@ -8,7 +8,7 @@ const BUFFER_DURATION: f32 = 0.1; // 100ms buffer to prevent overflow between fr
 const GAIN: f32 = 3.0; // Amplify audio (3x volume boost)
 
 // Toggle button configuration
-const BUTTON_SIZE: f32 = 60.0;
+const BUTTON_SIZE_RATIO: f32 = 0.12; // 12% of smaller screen dimension
 const BUTTON_BORDER_WIDTH: f32 = 3.0;
 
 pub struct AudioRelay {
@@ -120,11 +120,14 @@ impl Application for AudioRelay {
         
         crate::print("✅ Player created");
         
-        // Pause listener immediately (mic light OFF)
-        listener.pause().ok();
-        
         self.listener = Some(listener);
         self.player = Some(player);
+        
+        // CRITICAL: Pause listener AFTER storing it to ensure mic light is OFF by default
+        if let Some(ref listener) = self.listener {
+            listener.pause().ok();
+        }
+        
         self.initialized = true;
         
         crate::print("✅ Devices ready! Click the centered square to start audio relay.");
@@ -189,17 +192,18 @@ impl Application for AudioRelay {
         
         // Get button center position
         let shape = state.frame.shape();
-        let width = shape[1] as f32;
-        let height = shape[0] as f32;
-        let button_x = (width - BUTTON_SIZE) / 2.0;
-        let button_y = (height - BUTTON_SIZE) / 2.0;
+        let width = shape[1];
+        let height = shape[0];
+        let button_size = (width.min(height) as f32 * BUTTON_SIZE_RATIO) as f32;
+        let button_x = (width as f32 - button_size) / 2.0;
+        let button_y = (height as f32 - button_size) / 2.0;
         
         // Check if click is inside button
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
-        if mouse_x >= button_x && mouse_x <= button_x + BUTTON_SIZE
-            && mouse_y >= button_y && mouse_y <= button_y + BUTTON_SIZE {
+        if mouse_x >= button_x && mouse_x <= button_x + button_size
+            && mouse_y >= button_y && mouse_y <= button_y + button_size {
             // Toggle enabled state
             self.enabled = !self.enabled;
             
@@ -241,15 +245,18 @@ impl AudioRelay {
         let height = shape[0];
         let width = shape[1];
         
+        // Calculate responsive button size (12% of smaller dimension)
+        let button_size = (width.min(height) as f32 * BUTTON_SIZE_RATIO) as usize;
+        
         // Center the button at 0.5, 0.5
-        let button_x = ((width as f32 - BUTTON_SIZE) / 2.0) as usize;
-        let button_y = ((height as f32 - BUTTON_SIZE) / 2.0) as usize;
+        let button_x = (width - button_size) / 2;
+        let button_y = (height - button_size) / 2;
         
         let buffer = state.frame_buffer_mut();
         
         let x_start = button_x;
         let y_start = button_y;
-        let size = BUTTON_SIZE as usize;
+        let size = button_size;
         let border = BUTTON_BORDER_WIDTH as usize;
         
         // Determine color based on enabled state
