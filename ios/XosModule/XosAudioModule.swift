@@ -24,10 +24,15 @@ final class SharedAudioEngine {
     func configureAudioSession() throws {
         let audioSession = AVAudioSession.sharedInstance()
         
-        // Set category for recording
-        try audioSession.setCategory(.record, mode: .measurement, options: [])
+        // Set category for playback AND recording with Bluetooth support
+        // This allows AirPods and other Bluetooth devices to work as microphones
+        try audioSession.setCategory(
+            .playAndRecord,
+            mode: .default,
+            options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+        )
         try audioSession.setActive(true)
-        print("[SharedAudioEngine] Audio session configured for recording")
+        print("[SharedAudioEngine] Audio session configured for playback + recording with Bluetooth")
     }
     
     func stopEngine() {
@@ -234,9 +239,9 @@ final class AudioListener {
             }
         }
         
-        // Start the engine
-        try engine.start()
-        print("[AudioListener] Engine started successfully")
+        // DON'T start the engine automatically - let it stay paused until start() is called
+        // This ensures the mic light stays OFF by default
+        print("[AudioListener] Engine created (paused by default)")
     }
     
     func setCallback(_ callback: @escaping AudioCallback, userData: UnsafeMutableRawPointer?) {
