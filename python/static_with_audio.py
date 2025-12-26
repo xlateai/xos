@@ -17,7 +17,7 @@ class StaticWithAudio(xos.Application):
     def setup(self):
         """Initialize the application"""
         xos.print("Static with Audio Generator initialized")
-        xos.print("Generating static random image and audio...")
+        xos.print("Preparing continuous static video and audio stream...")
         
         # Initialize speaker
         system_type = xos.system.get_system_type()
@@ -52,21 +52,17 @@ class StaticWithAudio(xos.Application):
         """Generate and display random image, stream random audio"""
         
         self.tick_count += 1
-        if self.tick_count % 60 == 0:
-            xos.print(f"Tick #{self.tick_count} - Audio streaming...")
         
-        # Generate random visual static (once)
+        # Get frame dimensions
+        width = self.get_width()
+        height = self.get_height()
+        
+        # Generate random visual static EVERY frame (like random_image.py)
+        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        
+        # Print status message only once
         if not self.image_generated:
-            width = self.get_width()
-            height = self.get_height()
-            
-            xos.print(f"Generating {width}x{height} random image...")
-            
-            # Generate random image data and update frame
-            xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
-            
-            xos.print("Random image displayed!")
-            xos.print("Starting continuous audio stream...")
+            xos.print(f"Streaming {width}x{height} random static + audio at {SAMPLE_RATE} Hz")
             self.image_generated = True
         
         # Stream random audio continuously
@@ -104,9 +100,9 @@ class StaticWithAudio(xos.Application):
 
 # Demo code to show how it would be used
 if __name__ == "__main__":
-    xos.print("Static with Audio Display")
-    xos.print("Displays random visual static and streams random audio (white noise)")
-    xos.print(f"Audio: {SAMPLE_RATE} Hz, continuous stream")
+    xos.print("🎬 Static with Audio - TV Static Simulator")
+    xos.print("Displays continuous random visual static with white noise audio")
+    xos.print(f"🔊 Audio: {SAMPLE_RATE} Hz stereo white noise stream")
     
     app = StaticWithAudio()
     app.run()
