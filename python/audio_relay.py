@@ -110,21 +110,40 @@ def main():
     batch_count = 0
     last_status_time = start_time
     
+    # Debug: Check initial speaker buffer
+    xos.print("🔍 Initial speaker buffer size:", speaker.samples_buffer.shape[0] if hasattr(speaker.samples_buffer, 'shape') else 0)
+    
     try:
+        # Target sleep time between batches to maintain correct sample rate
+        # At 44,100 Hz and 512 samples per batch: 512 / 44100 = 0.0116 seconds per batch
+        sleep_per_batch = BATCH_SIZE / SAMPLE_RATE
+        
         while True:
+            batch_start = time.time()
+            
             # Get audio samples from microphone
             audio_batch = microphone.get_batch(BATCH_SIZE)
+
+            # this can be helpful actually as it will display the
+            # stats for the array samples distribution nicely.
+            # print(audio_batch)
             
             if audio_batch and audio_batch['_data']:
                 samples = audio_batch['_data']
                 sample_count = len(samples)
                 
-                # Immediately relay to speaker
-                speaker.play_sample_batch(samples)
-                
-                # Update statistics
-                total_samples += sample_count
-                batch_count += 1
+                # Only relay if we got a reasonable number of samples
+                if sample_count > 0:
+                    # Debug: Log first few batches
+                    if batch_count < 3:
+                        xos.print(f"🔍 Batch {batch_count}: Got {sample_count} samples from mic")
+                    
+                    # Immediately relay to speaker
+                    speaker.play_sample_batch(samples)
+                    
+                    # Update statistics
+                    total_samples += sample_count
+                    batch_count += 1
                 
                 # Print status every 2 seconds
                 current_time = time.time()
@@ -144,9 +163,6 @@ def main():
                              f"buffer: {buffer_size}")
                     
                     last_status_time = current_time
-            
-            # Small sleep to prevent CPU spinning (optional, can be removed for minimal latency)
-            time.sleep(0.001)
     
     except KeyboardInterrupt:
         xos.print("\n")
