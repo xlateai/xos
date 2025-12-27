@@ -67,22 +67,24 @@ class MicrophoneWaveform(xos.Application):
         xos.rasterizer.fill(self.frame, (8, 10, 15, 255))
 
         batch = self.microphone.get_batch(256)
-        if not batch or not batch['_data']:
-            return
+        
+        # Only update buffer if we have new audio data
+        # But ALWAYS render (to avoid flashing on iOS)
+        if batch and batch['_data']:
+            samples = batch['_data']
+            rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
 
-        samples = batch['_data']
-        rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
+            amplified = self.amplify_nonlinear(rms)
+            normalized = max(0.0, min(1.0, amplified))
+            color = self._compute_color(normalized)
 
-        amplified = self.amplify_nonlinear(rms)
-        normalized = max(0.0, min(1.0, amplified))
-        color = self._compute_color(normalized)
+            # 🚀 ADVANCE MULTIPLE STEPS PER TICK
+            for _ in range(ADVANCE_PER_TICK):
+                self.sample_buffer[self.buffer_index] = normalized
+                self.color_buffer[self.buffer_index] = color
+                self.buffer_index = (self.buffer_index + 1) % NUM_LINES
 
-        # 🚀 ADVANCE MULTIPLE STEPS PER TICK
-        for _ in range(ADVANCE_PER_TICK):
-            self.sample_buffer[self.buffer_index] = normalized
-            self.color_buffer[self.buffer_index] = color
-            self.buffer_index = (self.buffer_index + 1) % NUM_LINES
-
+        # Always render the waveform (even if no new data this frame)
         self._render(width, height)
 
     def _compute_color(self, amp):
