@@ -4,12 +4,20 @@ use std::time::Instant;
 
 use crate::audio::ios_device::AudioDevice;
 
+/// Double-buffered audio storage for lock-free reads on iOS
+struct DoubleBuffer {
+    /// Write buffer (audio callback writes here)
+    write_buffer: Vec<VecDeque<f32>>,
+    /// Read buffer (get_samples reads from here)
+    read_buffer: Vec<VecDeque<f32>>,
+}
+
 /// Buffer to store audio samples, separated by channel (iOS version)
-/// Same API as native_listener::AudioBuffer
+/// Same API as native_listener::AudioBuffer but optimized for iOS
 #[derive(Clone)]
 pub struct AudioBuffer {
-    /// Raw audio samples stored per channel: Vec[channel_idx] -> samples for that channel
-    channel_samples: Arc<Mutex<Vec<VecDeque<f32>>>>,
+    /// Double-buffered storage to minimize lock contention
+    buffers: Arc<Mutex<DoubleBuffer>>,
     /// Maximum buffer capacity per channel
     capacity: usize,
     /// Sample rate of the audio
@@ -22,14 +30,19 @@ pub struct AudioBuffer {
 
 impl AudioBuffer {
     fn new(capacity: usize, sample_rate: u32, channels: u16) -> Self {
-        // Create a vector of empty VecDeques, one for each channel
-        let mut channel_buffers = Vec::with_capacity(channels as usize);
+        // Create double buffers - both write and read start empty
+        let mut write_buffer = Vec::with_capacity(channels as usize);
+        let mut read_buffer = Vec::with_capacity(channels as usize);
         for _ in 0..channels {
-            channel_buffers.push(VecDeque::with_capacity(capacity));
+            write_buffer.push(VecDeque::with_capacity(capacity));
+            read_buffer.push(VecDeque::with_capacity(capacity));
         }
         
         Self {
-            channel_samples: Arc::new(Mutex::new(channel_buffers)),
+            buffers: Arc::new(Mutex::new(DoubleBuffer {
+                write_buffer,
+                read_buffer,
+            })),
             capacity,
             sample_rate,
             channels,
@@ -38,14 +51,23 @@ impl AudioBuffer {
     }
 
     /// Add samples to the buffer (one sample per channel)
-    /// Called from iOS FFI callback
+    /// Called from iOS FFI callback - optimized to minimize lock time
     fn push_sample_batch_ffi(&self, samples: *const f32, count: usize) {
         if samples.is_null() || count == 0 {
             return;
         }
         
-        let mut channel_buffers = self.channel_samples.lock().unwrap();
-        let channels = channel_buffers.len();
+        // Quick lock to add samples to write buffer
+        let mut buffers = match self.buffers.try_lock() {
+            Ok(b) => b,
+            Err(_) => {
+                // If we can't get the lock immediately, skip this batch
+                // This prevents audio callback from blocking
+                return;
+            }
+        };
+        
+        let channels = buffers.write_buffer.len();
         
         if count % channels != 0 {
             // Incomplete batch
@@ -54,11 +76,11 @@ impl AudioBuffer {
         
         let sample_slice = unsafe { std::slice::from_raw_parts(samples, count) };
         
-        // Process samples in chunks of channels
+        // Process samples in chunks of channels - write to write_buffer
         for chunk in sample_slice.chunks(channels) {
             if chunk.len() == channels {
                 for (channel_idx, &sample) in chunk.iter().enumerate() {
-                    let buffer = &mut channel_buffers[channel_idx];
+                    let buffer = &mut buffers.write_buffer[channel_idx];
                     
                     // If buffer is at capacity, remove oldest sample
                     if buffer.len() >= self.capacity {
@@ -71,25 +93,64 @@ impl AudioBuffer {
             }
         }
         
+        // Lock is released here automatically (minimal hold time)
+        drop(buffers);
+        
         // Update last access time
         *self.last_access.lock().unwrap() = Instant::now();
     }
     
     /// Get a copy of all samples for each channel
+    /// Optimized: swaps buffers quickly to avoid blocking audio callback
     pub fn get_samples_by_channel(&self) -> Vec<Vec<f32>> {
-        let channel_buffers = self.channel_samples.lock().unwrap();
+        // Quick check: if write buffer is empty, return empty without swapping
+        {
+            let buffers = match self.buffers.try_lock() {
+                Ok(b) => b,
+                Err(_) => {
+                    // If we can't get lock, return empty (audio callback is busy)
+                    return vec![vec![]; self.channels as usize];
+                }
+            };
+            
+            // If write buffer is empty, no need to swap
+            if buffers.write_buffer.is_empty() || buffers.write_buffer[0].is_empty() {
+                return buffers.read_buffer.iter()
+                    .map(|buffer| buffer.iter().cloned().collect())
+                    .collect();
+            }
+        } // Release lock here
         
-        // Convert each channel's VecDeque to a Vec
-        channel_buffers.iter()
+        // Write buffer has data, do the swap
+        let mut buffers = self.buffers.lock().unwrap();
+        
+        // Swap write and read buffers using raw pointer access to avoid borrow checker issue
+        let write_ptr = &mut buffers.write_buffer as *mut Vec<VecDeque<f32>>;
+        let read_ptr = &mut buffers.read_buffer as *mut Vec<VecDeque<f32>>;
+        unsafe {
+            std::ptr::swap(write_ptr, read_ptr);
+        }
+        
+        // Clear the new write buffer (which was the old read buffer)
+        for buffer in buffers.write_buffer.iter_mut() {
+            buffer.clear();
+        }
+        
+        // Clone the read buffer (copy happens with lock held but should be quick)
+        let result: Vec<Vec<f32>> = buffers.read_buffer.iter()
             .map(|buffer| buffer.iter().cloned().collect())
-            .collect()
+            .collect();
+        
+        drop(buffers); // Explicitly release lock
+        
+        result
     }
     
     /// Get average value for each channel
     pub fn get_average_by_channel(&self) -> Vec<f32> {
-        let channel_buffers = self.channel_samples.lock().unwrap();
+        let buffers = self.buffers.lock().unwrap();
         
-        channel_buffers.iter()
+        buffers.read_buffer.iter()
             .map(|buffer| {
                 if buffer.is_empty() {
                     0.0
@@ -103,9 +164,9 @@ impl AudioBuffer {
     
     /// Get the RMS (root mean square) value for each channel
     pub fn get_rms_by_channel(&self) -> Vec<f32> {
-        let channel_buffers = self.channel_samples.lock().unwrap();
+        let buffers = self.buffers.lock().unwrap();
         
-        channel_buffers.iter()
+        buffers.read_buffer.iter()
             .map(|buffer| {
                 if buffer.is_empty() {
                     0.0
@@ -119,9 +180,9 @@ impl AudioBuffer {
     
     /// Get peak value (maximum absolute value) for each channel
     pub fn get_peak_by_channel(&self) -> Vec<f32> {
-        let channel_buffers = self.channel_samples.lock().unwrap();
+        let buffers = self.buffers.lock().unwrap();
         
-        channel_buffers.iter()
+        buffers.read_buffer.iter()
             .map(|buffer| {
                 buffer.iter().map(|s| s.abs()).fold(0.0, f32::max)
             })
@@ -130,8 +191,11 @@ impl AudioBuffer {
     
     /// Clear all samples from all channels
     pub fn clear(&self) {
-        let mut channel_buffers = self.channel_samples.lock().unwrap();
-        for buffer in channel_buffers.iter_mut() {
+        let mut buffers = self.buffers.lock().unwrap();
+        for buffer in buffers.write_buffer.iter_mut() {
+            buffer.clear();
+        }
+        for buffer in buffers.read_buffer.iter_mut() {
             buffer.clear();
         }
         *self.last_access.lock().unwrap() = Instant::now();
@@ -139,18 +203,18 @@ impl AudioBuffer {
     
     /// Get the number of samples in the first channel (assume all channels have same number)
     pub fn len(&self) -> usize {
-        let channel_buffers = self.channel_samples.lock().unwrap();
-        if channel_buffers.is_empty() {
+        let buffers = self.buffers.lock().unwrap();
+        if buffers.read_buffer.is_empty() {
             0
         } else {
-            channel_buffers[0].len()
+            buffers.read_buffer[0].len()
         }
     }
     
     /// Check if all channels are empty
     pub fn is_empty(&self) -> bool {
-        let channel_buffers = self.channel_samples.lock().unwrap();
-        channel_buffers.is_empty() || channel_buffers[0].is_empty()
+        let buffers = self.buffers.lock().unwrap();
+        buffers.read_buffer.is_empty() || buffers.read_buffer[0].is_empty()
     }
     
     /// Get the buffer duration in seconds

@@ -1,43 +1,97 @@
 import Foundation
 import AVFoundation
 
-// Shared audio engine manager for microphone
-final class SharedAudioEngine {
-    static let shared = SharedAudioEngine()
+// Shared audio session manager for both microphone and speakers
+final class SharedAudioSession {
+    static let shared = SharedAudioSession()
     
-    private var engine: AVAudioEngine?
+    private var isConfigured = false
+    private var hasPlayback = false
+    private var hasRecording = false
     private let lock = NSLock()
     
     private init() {}
     
-    func getOrCreateEngine() -> AVAudioEngine {
+    /// Configure audio session with the appropriate category
+    /// This should be called ONCE with the correct mode
+    func configureForRecording() throws {
         lock.lock()
         defer { lock.unlock() }
         
-        if engine == nil {
-            engine = AVAudioEngine()
-            print("[SharedAudioEngine] Created new AVAudioEngine")
-        }
-        return engine!
-    }
-    
-    func configureAudioSession() throws {
+        hasRecording = true
+        
         let audioSession = AVAudioSession.sharedInstance()
         
-        // Set category for recording
-        try audioSession.setCategory(.record, mode: .measurement, options: [])
+        // Check current category - if it's already playAndRecord, don't downgrade!
+        let currentCategory = audioSession.category
+        print("[SharedAudioSession] Current category: \(currentCategory)")
+        
+        // If already configured with playAndRecord, keep it (don't downgrade)
+        if currentCategory == .playAndRecord {
+            print("[SharedAudioSession] ✅ Already .playAndRecord, keeping it")
+            isConfigured = true
+            return
+        }
+        
+        // If already configured with .record and we don't need playback, skip
+        if currentCategory == .record && !hasPlayback && isConfigured {
+            print("[SharedAudioSession] Already configured for .record, skipping")
+            return
+        }
+        
+        // Choose category based on whether we need playback too
+        if hasPlayback {
+            // Need both recording and playback
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            print("[SharedAudioSession] ✅ Configured for RECORDING + PLAYBACK (.playAndRecord)")
+        } else {
+            // Recording only - but only set if not already in a compatible mode
+            if currentCategory != .record && currentCategory != .playAndRecord {
+                try audioSession.setCategory(.record, mode: .measurement, options: [])
+                print("[SharedAudioSession] ✅ Configured for RECORDING only (.record)")
+            } else {
+                print("[SharedAudioSession] ✅ Keeping existing category: \(currentCategory)")
+            }
+        }
+        
         try audioSession.setActive(true)
-        print("[SharedAudioEngine] Audio session configured for recording")
+        isConfigured = true
     }
     
-    func stopEngine() {
+    /// Configure audio session for playback
+    func configureForPlayback() throws {
         lock.lock()
         defer { lock.unlock() }
         
-        if let engine = engine, engine.isRunning {
-            engine.stop()
-            print("[SharedAudioEngine] Engine stopped")
+        hasPlayback = true
+        
+        let audioSession = AVAudioSession.sharedInstance()
+        
+        // If we already have recording, upgrade to playAndRecord
+        if hasRecording && isConfigured {
+            // Upgrade existing .record to .playAndRecord
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            print("[SharedAudioSession] ⬆️  UPGRADED to .playAndRecord (was .record)")
+            try audioSession.setActive(true)
+        } else if !isConfigured {
+            // First time setup - just playback
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            print("[SharedAudioSession] ✅ Configured for PLAYBACK (.playAndRecord)")
+            try audioSession.setActive(true)
+            isConfigured = true
+        } else {
+            print("[SharedAudioSession] Already configured for playback, skipping")
         }
+    }
+    
+    /// Reset configuration state (for testing/debugging)
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        isConfigured = false
+        hasPlayback = false
+        hasRecording = false
+        print("[SharedAudioSession] Reset configuration state")
     }
 }
 
@@ -175,8 +229,8 @@ final class AudioListener {
             print("[AudioListener] Permission already granted, proceeding...")
         }
         
-        // Configure audio session
-        try SharedAudioEngine.shared.configureAudioSession()
+        // Configure audio session (will upgrade to playAndRecord if needed)
+        try SharedAudioSession.shared.configureForRecording()
         
         // Setup audio engine
         let inputNode = engine.inputNode
@@ -464,20 +518,8 @@ final class AudioPlayer {
         
         print("[AudioPlayer] Created AVAudioEngine and AVAudioPlayerNode for player ID=\(playerId)")
         
-        // Configure audio session for BOTH recording and playback (critical for relay!)
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            // Use playAndRecord category to allow simultaneous mic input and speaker output
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
-            try audioSession.setActive(true)
-            print("[AudioPlayer] Audio session configured for playback (with recording support)")
-        } catch {
-            print("[AudioPlayer] Warning: Could not configure audio session: \(error)")
-            // Try fallback to just playback
-            try audioSession.setCategory(.playback, mode: .default, options: [])
-            try audioSession.setActive(true)
-            print("[AudioPlayer] Audio session configured for playback only")
-        }
+        // Configure audio session for playback (will upgrade to playAndRecord if recording exists)
+        try SharedAudioSession.shared.configureForPlayback()
         
         // Create audio format
         guard let format = AVAudioFormat(

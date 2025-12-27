@@ -68,9 +68,16 @@ class MicrophoneWaveform(xos.Application):
 
         batch = self.microphone.get_batch(256)
         if not batch or not batch['_data']:
+            # No new audio data - just render existing buffer without updating
+            self._render(width, height)
             return
 
         samples = batch['_data']
+        if len(samples) == 0:
+            # Empty batch - just render existing buffer
+            self._render(width, height)
+            return
+            
         rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
 
         amplified = self.amplify_nonlinear(rms)
