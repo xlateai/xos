@@ -113,16 +113,35 @@ class Microphone:
     
     def get_batch(self, batch_size=1024):
         """
-        Get a batch of audio samples.
+        Get a batch of audio samples WITHOUT removing them from the buffer.
+        
+        This is a 'peek' operation - samples remain in the buffer for visualization.
+        Use this for waveform displays where you want smooth continuous data.
         
         Args:
             batch_size: Number of samples to get (default: 1024)
             
         Returns:
-            list: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
         """
         import xos
         return xos.audio._microphone_get_batch(self._listener_ptr, batch_size)
+    
+    def read(self, batch_size=1024):
+        """
+        Read (drain) a batch of audio samples, removing them from the buffer.
+        
+        This is a 'consume' operation - samples are removed after reading.
+        Use this for audio relay where you don't want to repeat samples.
+        
+        Args:
+            batch_size: Number of samples to read (default: 1024)
+            
+        Returns:
+            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+        """
+        import xos
+        return xos.audio._microphone_read_batch(self._listener_ptr, batch_size)
     
     def pause(self):
         """
@@ -150,17 +169,17 @@ class Microphone:
     
     def batched_iterator(self, batch_size=1024):
         """
-        Yields batches of audio samples.
+        Yields batches of audio samples (consuming mode).
         
         Args:
             batch_size: Number of samples per batch (default: 1024)
             
         Yields:
-            list: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
         """
         import xos
         while True:
-            batch = xos.audio._microphone_get_batch(self._listener_ptr, batch_size)
+            batch = xos.audio._microphone_read_batch(self._listener_ptr, batch_size)
             if batch:
                 yield batch
     
@@ -235,7 +254,7 @@ pub fn microphone_get_sample_rate(args: FuncArgs, vm: &VirtualMachine) -> PyResu
     Ok(vm.ctx.new_int(sample_rate).into())
 }
 
-/// Internal function to get a batch of samples from the microphone
+/// Internal function to get a batch of samples from the microphone (peek mode - does NOT drain)
 pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (listener_ptr, batch_size): (usize, usize) = args.bind(vm)?;
     
@@ -246,7 +265,7 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
     
-    // Get samples from all channels
+    // Get samples from all channels (peek - does not drain)
     let all_samples = listener.get_samples_by_channel();
     
     if all_samples.is_empty() {
@@ -262,21 +281,70 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let samples = &all_samples[0];
     
     // Take up to batch_size samples and convert to Python list
+    let actual_size = samples.len().min(batch_size);
     let batch: Vec<PyObjectRef> = samples.iter()
-        .take(batch_size)
+        .take(actual_size)
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
     
     let py_list = vm.ctx.new_list(batch);
     
-    // NOTE: We do NOT clear the buffer here! The buffer is a rolling window accumulator.
-    // Clearing it would cause choppy rendering as frames would have no data between audio callbacks.
-    // The buffer automatically drops old samples when at capacity (FIFO).
+    // NOTE: We do NOT drain the buffer here! This is peek mode for visualization.
     
     // Create xos.Array dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
-    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len().min(batch_size) as i32).into()]).into(), vm)?;
+    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(actual_size as i32).into()]).into(), vm)?;
+    dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    
+    // Wrap in _ArrayWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    
+    Ok(dict.into())
+}
+
+/// Internal function to read (drain) a batch of samples from the microphone
+/// This REMOVES samples from the buffer - use for audio relay to prevent repeats
+pub fn microphone_read_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let (listener_ptr, batch_size): (usize, usize) = args.bind(vm)?;
+    
+    if listener_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
+    }
+    
+    // Convert pointer back to reference
+    let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
+    
+    // Drain samples from the buffer (FIFO consume operation)
+    let all_samples = listener.buffer().drain_samples(batch_size);
+    
+    if all_samples.is_empty() {
+        // Return empty array
+        let dict = vm.ctx.new_dict();
+        dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
+        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+        return Ok(dict.into());
+    }
+    
+    // Use the first channel (mono)
+    let samples = &all_samples[0];
+    
+    // Convert all drained samples to Python list
+    let batch: Vec<PyObjectRef> = samples.iter()
+        .map(|&s| vm.ctx.new_float(s as f64).into())
+        .collect();
+    
+    let py_list = vm.ctx.new_list(batch);
+    
+    // Create xos.Array dict
+    let dict = vm.ctx.new_dict();
+    dict.set_item("_data", py_list.into(), vm)?;
+    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _ArrayWrapper for nice display

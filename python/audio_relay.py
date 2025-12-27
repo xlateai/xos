@@ -129,8 +129,8 @@ class AudioRelay(xos.Application):
         
         # Relay audio if enabled AND microphone exists
         if self.enabled and self.microphone and self.speaker:
-            # Get samples from microphone
-            audio_batch = self.microphone.get_batch(BATCH_SIZE)
+            # Read (drain) samples from microphone - prevents repeats and delay
+            audio_batch = self.microphone.read(BATCH_SIZE)
             
             if audio_batch and audio_batch['_data']:
                 samples = audio_batch['_data']

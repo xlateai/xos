@@ -156,6 +156,25 @@ impl AudioBuffer {
             .collect()
     }
     
+    /// Drain (remove and return) up to `count` samples from each channel
+    /// 
+    /// This is a FIFO queue operation - removes oldest samples first.
+    /// Use this for audio relay where you want to consume samples without repeating them.
+    /// 
+    /// Returns a vector of channels, each containing up to `count` samples.
+    /// If fewer samples are available, returns what's available.
+    pub fn drain_samples(&self, count: usize) -> Vec<Vec<f32>> {
+        let mut channel_buffers = self.channel_samples.lock().unwrap();
+        
+        // Drain up to `count` samples from each channel
+        channel_buffers.iter_mut()
+            .map(|buffer| {
+                let drain_count = count.min(buffer.len());
+                buffer.drain(0..drain_count).collect()
+            })
+            .collect()
+    }
+    
     /// Get average value for each channel
     pub fn get_average_by_channel(&self) -> Vec<f32> {
         let channel_buffers = self.channel_samples.lock().unwrap();

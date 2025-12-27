@@ -117,8 +117,8 @@ def main():
     try:
         # No sleep - process as fast as possible for lowest latency
         while True:
-            # Get audio samples from microphone - use large batch size to get ALL samples
-            audio_batch = microphone.get_batch(BATCH_SIZE)
+            # Read (drain) audio samples from microphone - prevents repeats and delay
+            audio_batch = microphone.read(BATCH_SIZE)
 
             # this can be helpful actually as it will display the
             # stats for the array samples distribution nicely.
