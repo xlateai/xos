@@ -269,9 +269,9 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let py_list = vm.ctx.new_list(batch);
     
-    // CRITICAL: Clear the listener buffer after reading to avoid re-queueing
-    // the same samples on the next call! (just like the Rust audio_relay.rs app does)
-    listener.buffer().clear();
+    // NOTE: We do NOT clear the buffer here! The buffer is a rolling window accumulator.
+    // Clearing it would cause choppy rendering as frames would have no data between audio callbacks.
+    // The buffer automatically drops old samples when at capacity (FIFO).
     
     // Create xos.Array dict
     let dict = vm.ctx.new_dict();
