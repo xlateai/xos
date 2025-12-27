@@ -11,9 +11,9 @@ import xos
 import time
 
 # Configuration
-SAMPLE_RATE = 44100  # 44.1 kHz
-BUFFER_DURATION = 0.1  # 100ms microphone buffer to prevent overflow
-BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
+SAMPLE_RATE = 48000  # Match iOS hardware (will be auto-detected)
+BUFFER_DURATION = 0.05  # 50ms microphone buffer for lower latency
+BATCH_SIZE = 2048  # Smaller batch for lower latency (was 8192)
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
@@ -81,18 +81,21 @@ def main():
             device_id=mic_device_id,
             buffer_duration=BUFFER_DURATION
         )
-        xos.print("   ✅ Microphone ready")
+        # Get ACTUAL sample rate from hardware (critical for iOS!)
+        actual_sample_rate = microphone.get_sample_rate()
+        xos.print(f"   ✅ Microphone ready (actual rate: {actual_sample_rate} Hz)")
     except Exception as e:
         xos.print(f"   ❌ Failed to initialize microphone: {e}")
         return
     
     try:
+        # CRITICAL: Use microphone's actual sample rate for speakers!
         speaker = xos.audio.Speaker(
             device_id=speaker_device_id,
-            sample_rate=SAMPLE_RATE,
+            sample_rate=actual_sample_rate,
             channels=CHANNELS
         )
-        xos.print("   ✅ Speaker ready")
+        xos.print(f"   ✅ Speaker ready (matched rate: {actual_sample_rate} Hz)")
     except Exception as e:
         xos.print(f"   ❌ Failed to initialize speaker: {e}")
         return

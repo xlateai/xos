@@ -9,8 +9,8 @@ Click the centered square button to toggle audio relay on/off.
 import xos
 
 # Configuration
-BUFFER_DURATION = 0.1  # 100ms microphone buffer to prevent overflow
-BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
+BUFFER_DURATION = 0.05  # 50ms microphone buffer for lower latency
+BATCH_SIZE = 2048  # Smaller batch for lower latency (was 8192)
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 

@@ -507,14 +507,14 @@ mod ios {
                 return Err("Device is not an input device".to_string());
             }
             
-            // Initialize audio listener on iOS side
-            let sample_rate: f64 = 44100.0; // Default iOS sample rate
+            // Request a reasonable default, but iOS will use actual hardware rate
+            let requested_sample_rate: f64 = 48000.0;
             let channels: u32 = 1; // Mono for now
             
             let listener_id = unsafe {
                 xos_audio_listener_init(
                     audio_device.device_id,
-                    sample_rate,
+                    requested_sample_rate,
                     channels,
                     buffer_duration_secs as f64,
                 )
@@ -524,11 +524,15 @@ mod ios {
                 return Err("Failed to initialize audio listener".to_string());
             }
             
-            // Calculate buffer capacity
-            let capacity = (buffer_duration_secs * sample_rate as f32) as usize;
+            // CRITICAL: Get the ACTUAL sample rate that iOS is using
+            let actual_sample_rate = unsafe { xos_audio_listener_get_sample_rate(listener_id) };
+            println!("📍 iOS AudioListener: requested={} Hz, actual={} Hz", requested_sample_rate, actual_sample_rate);
+            
+            // Calculate buffer capacity based on ACTUAL sample rate
+            let capacity = (buffer_duration_secs * actual_sample_rate as f32) as usize;
             
             // Create buffer on heap for stable pointer across moves
-            let buffer = AudioBuffer::new(capacity, sample_rate as u32, channels as u16);
+            let buffer = AudioBuffer::new(capacity, actual_sample_rate as u32, channels as u16);
             let buffer_box = Box::new(buffer.clone());
             let buffer_ptr = Box::into_raw(buffer_box);
             
@@ -664,6 +668,8 @@ mod ios {
         fn xos_audio_listener_pause(listener_id: u32) -> std::os::raw::c_int;
         
         fn xos_audio_listener_destroy(listener_id: u32);
+        
+        fn xos_audio_listener_get_sample_rate(listener_id: u32) -> f64;
     }
 
     /// Get the default input device (iOS version)

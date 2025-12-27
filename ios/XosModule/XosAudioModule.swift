@@ -108,12 +108,13 @@ final class AudioListener {
     private var inputNode: AVAudioInputNode?
     private var callback: AudioCallback?
     private var callbackUserData: UnsafeMutableRawPointer?
-    private let sampleRate: Double
+    fileprivate(set) var sampleRate: Double  // Accessible for FFI getter
     private let channels: UInt32
     
     init(deviceId: UInt32, listenerId: UInt32, sampleRate: Double, channels: UInt32, bufferDuration: Double) throws {
         self.listenerId = listenerId
-        self.sampleRate = sampleRate
+        // Note: We'll use the ACTUAL hardware sample rate, not the requested one
+        self.sampleRate = sampleRate  // Store requested, but we'll override with actual
         self.channels = channels
         
         // Create a dedicated engine for this listener
@@ -187,12 +188,19 @@ final class AudioListener {
         let inputNode = engine.inputNode
         self.inputNode = inputNode
         
-        // Get the actual input format
+        // Get the actual input format - USE HARDWARE SAMPLE RATE!
         let inputFormat = inputNode.outputFormat(forBus: 0)
-        print("[AudioListener] inputNode format: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)")
+        let actualSampleRate = inputFormat.sampleRate
+        let actualChannels = inputFormat.channelCount
         
-        // Install tap on input node
-        let bufferSize: AVAudioFrameCount = 4096
+        // CRITICAL: Store the ACTUAL sample rate for Rust to use
+        self.sampleRate = actualSampleRate
+        
+        print("[AudioListener] ✨ Hardware format: sampleRate=\(actualSampleRate) Hz, channels=\(actualChannels)")
+        print("[AudioListener] 📍 Using ACTUAL hardware rate (was requested: \(sampleRate) Hz)")
+        
+        // Install tap with SMALLER buffer for lower latency
+        let bufferSize: AVAudioFrameCount = 512  // Reduced from 4096 for lower latency
         print("[AudioListener] Installing tap with bufferSize=\(bufferSize)")
         
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] (buffer, time) in
@@ -396,6 +404,14 @@ func xos_audio_listener_pause(_ listenerId: UInt32) -> Int32 {
 @_cdecl("xos_audio_listener_destroy")
 func xos_audio_listener_destroy(_ listenerId: UInt32) {
     AudioListenerManager.shared.destroyListener(listenerId)
+}
+
+@_cdecl("xos_audio_listener_get_sample_rate")
+func xos_audio_listener_get_sample_rate(_ listenerId: UInt32) -> Double {
+    guard let listener = AudioListenerManager.shared.getListener(listenerId) else {
+        return 48000.0  // Fallback to common iOS rate
+    }
+    return listener.sampleRate
 }
 
 // MARK: - Audio Player (Speaker Output)
