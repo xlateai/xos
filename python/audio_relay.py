@@ -128,21 +128,11 @@ class AudioRelay(xos.Application):
         
         # Relay audio if enabled AND microphone exists
         if self.enabled and self.microphone and self.speaker:
-            # Read and drain samples from microphone - returns xos.Array
+            # Get samples from microphone
             audio_batch = self.microphone.read()
             
-            if audio_batch:
-                # Pass xos.Array DIRECTLY to speaker with gain
-                try:
-                    self.speaker.play_samples(audio_batch, gain=GAIN)
-                except Exception as e:
-                    xos.print(f"⚠️  Playback error: {e}")
-                
-                # Log buffer size occasionally
-                buffer_size = self.speaker.samples_buffer.shape[0] if hasattr(self.speaker.samples_buffer, 'shape') else 0
-                if buffer_size != self.last_buffer_size and buffer_size % 1000 == 0:
-                    xos.print(f"📊 Buffer: {buffer_size} samples")
-                    self.last_buffer_size = buffer_size
+            # Pass xos.Array directly to speaker with gain
+            self.speaker.play_samples(audio_batch, gain=GAIN)
     
     def draw_button(self):
         """Draw the toggle button in the center of the screen"""

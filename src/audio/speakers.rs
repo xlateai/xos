@@ -526,12 +526,18 @@ mod ios {
 
     impl Drop for AudioPlayer {
         fn drop(&mut self) {
-            crate::print(&format!("[AudioPlayer] Destroying player ID={}", self.player_id));
+            crate::print(&format!("[AudioPlayer] Rust Drop: Cleaning up player ID={}", self.player_id));
             unsafe {
-                xos_audio_player_stop(self.player_id);
+                // First try to stop gracefully
+                let stop_result = xos_audio_player_stop(self.player_id);
+                if stop_result != 0 {
+                    crate::print(&format!("[AudioPlayer] Warning: Stop returned non-zero: {}", stop_result));
+                }
+                
+                // Then destroy the player
                 xos_audio_player_destroy(self.player_id);
             }
-            crate::print(&format!("[AudioPlayer] Player ID={} destroyed", self.player_id));
+            crate::print(&format!("[AudioPlayer] Rust Drop: Player ID={} cleaned up", self.player_id));
         }
     }
 
@@ -549,7 +555,7 @@ mod ios {
             count: usize,
         ) -> std::os::raw::c_int;
         
-        fn xos_audio_player_get_buffer_size(player_id: u32) -> usize;
+        fn xos_audio_player_get_buffer_size(player_id: u32) -> u32;
         
         fn xos_audio_player_start(player_id: u32) -> std::os::raw::c_int;
         

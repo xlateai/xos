@@ -300,7 +300,7 @@ func xos_audio_get_device_count() -> UInt32 {
 func xos_audio_get_device_name(_ deviceId: UInt32) -> UnsafePointer<CChar>? {
     let name: String
     if deviceId == 0 {
-        name = "Built-in Microphone"
+        name = "Default Audio Device (Microphone/Speaker)"
     } else if deviceId == 1 {
         name = "Built-in Speaker"
     } else {
@@ -325,8 +325,13 @@ func xos_audio_device_is_input(_ deviceId: UInt32) -> Int32 {
 
 @_cdecl("xos_audio_device_is_output")
 func xos_audio_device_is_output(_ deviceId: UInt32) -> Int32 {
-    // Device ID 1 is the built-in speaker (output)
+    // Both device ID 0 and 1 support output on iOS (microphone is also used for output in relay scenarios)
+    // Device ID 1 is explicitly the built-in speaker (output)
     if deviceId == 1 {
+        return 1
+    }
+    // Device ID 0 can also be output (AirPods, etc)
+    if deviceId == 0 {
         return 1
     }
     return 0
@@ -598,15 +603,17 @@ final class AudioPlayer {
     deinit {
         print("[AudioPlayer] Deinitializing player ID=\(playerId)")
         
-        // Stop player
-        playerNode.stop()
+        // Stop player node safely
+        if playerNode.isPlaying {
+            playerNode.stop()
+        }
         
-        // Stop engine
+        // Stop engine safely
         if engine.isRunning {
             engine.stop()
         }
         
-        // Detach node
+        // Detach node safely
         engine.detach(playerNode)
         
         print("[AudioPlayer] Cleanup complete for player ID=\(playerId)")
@@ -678,15 +685,19 @@ func xos_audio_player_start(_ playerId: UInt32) -> Int32 {
 @_cdecl("xos_audio_player_stop")
 func xos_audio_player_stop(_ playerId: UInt32) -> Int32 {
     guard let player = AudioPlayerManager.shared.getPlayer(playerId) else {
+        print("[xos_audio_player_stop] Player ID \(playerId) not found")
         return 1
     }
     
     player.stop()
+    print("[xos_audio_player_stop] Player ID \(playerId) stopped successfully")
     return 0
 }
 
 @_cdecl("xos_audio_player_destroy")
 func xos_audio_player_destroy(_ playerId: UInt32) {
+    print("[xos_audio_player_destroy] Destroying player ID \(playerId)")
     AudioPlayerManager.shared.destroyPlayer(playerId)
+    print("[xos_audio_player_destroy] Player ID \(playerId) destroyed successfully")
 }
 

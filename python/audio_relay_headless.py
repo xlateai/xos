@@ -111,50 +111,42 @@ def main():
     total_samples = 0
     start_time = time.time()
     batch_count = 0
-    last_status_time = start_time
+    # last_status_time = start_time
     
     # Debug: Check initial speaker buffer
     xos.print("🔍 Initial speaker buffer size:", speaker.samples_buffer.shape[0] if hasattr(speaker.samples_buffer, 'shape') else 0)
     
     try:
-        # No sleep - process as fast as possible for lowest latency
+        # Process as fast as possible
         while True:
-            # Read and drain audio samples from microphone - returns xos.Array
+            # Get audio from microphone
             audio_batch = microphone.read()
             
-            if audio_batch:
-                # Debug: Log first few batches
-                if batch_count < 3:
-                    xos.print(f"🔍 Batch {batch_count}: Got audio batch from mic")
-                
-                # Pass xos.Array DIRECTLY to speaker with gain
-                speaker.play_samples(audio_batch, gain=GAIN)
+                # Play to speaker with gain
+            speaker.play_samples(audio_batch, gain=GAIN)
                     
                     # Update statistics
-                    total_samples += sample_count
-                    batch_count += 1
-            else:
-                # No samples available - sleep for 1ms to avoid burning CPU
-                time.sleep(0.001)
+            # total_samples += sample_count
+            batch_count += 1
                 
-                # Print status every 2 seconds
-                current_time = time.time()
-                if current_time - last_status_time >= 2.0:
-                    elapsed = current_time - start_time
-                    samples_per_sec = total_samples / elapsed if elapsed > 0 else 0
-                    
-                    # Get speaker buffer status
-                    try:
-                        buffer_size = speaker.samples_buffer.shape[0]
-                    except:
-                        buffer_size = 0
-                    
-                    xos.print(f"📊 Status: {batch_count} batches, "
-                             f"{total_samples:,} samples relayed, "
-                             f"{samples_per_sec:,.0f} samples/sec, "
-                             f"buffer: {buffer_size}")
-                    
-                    last_status_time = current_time
+            # Print status every 2 seconds
+            # current_time = time.time()
+            # if current_time - last_status_time >= 2.0:
+            #     elapsed = current_time - start_time
+            #     samples_per_sec = total_samples / elapsed if elapsed > 0 else 0
+                
+            #     # Get speaker buffer status
+            #     try:
+            #         buffer_size = speaker.samples_buffer.shape[0]
+            #     except:
+            #         buffer_size = 0
+                
+            #     xos.print(f"📊 Status: {batch_count} batches, "
+            #                 f"{total_samples:,} samples relayed, "
+            #                 f"{samples_per_sec:,.0f} samples/sec, "
+            #                 f"buffer: {buffer_size}")
+                
+            #     last_status_time = current_time
     
     except KeyboardInterrupt:
         xos.print("\n")
