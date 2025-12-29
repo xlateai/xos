@@ -13,7 +13,6 @@ import time
 # Configuration
 SAMPLE_RATE = 48000  # Match iOS hardware (will be auto-detected)
 BUFFER_DURATION = 0.05  # 50ms microphone buffer for lower latency
-BATCH_SIZE = 2048  # Smaller batch for lower latency (was 8192)
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
@@ -120,28 +119,16 @@ def main():
     try:
         # No sleep - process as fast as possible for lowest latency
         while True:
-            # Read (drain) audio samples from microphone - prevents repeats and delay
-            audio_batch = microphone.read(BATCH_SIZE)
-
-            # this can be helpful actually as it will display the
-            # stats for the array samples distribution nicely.
-            # print(audio_batch)
+            # Read and drain audio samples from microphone - returns xos.Array
+            audio_batch = microphone.read()
             
-            if audio_batch and audio_batch['_data']:
-                samples = audio_batch['_data']
-                sample_count = len(samples)
+            if audio_batch:
+                # Debug: Log first few batches
+                if batch_count < 3:
+                    xos.print(f"🔍 Batch {batch_count}: Got audio batch from mic")
                 
-                # Only relay if we got samples
-                if sample_count > 0:
-                    # Debug: Log first few batches
-                    if batch_count < 3:
-                        xos.print(f"🔍 Batch {batch_count}: Got {sample_count} samples from mic")
-                    
-                    # Amplify samples for louder output
-                    amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
-                    
-                    # Immediately relay to speaker
-                    speaker.play_sample_batch(amplified_samples)
+                # Pass xos.Array DIRECTLY to speaker with gain
+                speaker.play_samples(audio_batch, gain=GAIN)
                     
                     # Update statistics
                     total_samples += sample_count
@@ -186,8 +173,6 @@ def main():
     
     except Exception as e:
         xos.print(f"\n❌ Error in audio relay: {e}")
-        import traceback
-        traceback.print_exc()
     
     finally:
         xos.print("\n🔌 Cleaning up audio devices...")

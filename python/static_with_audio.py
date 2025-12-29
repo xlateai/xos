@@ -90,12 +90,10 @@ class StaticWithAudio(xos.Application):
                     audio_samples.append(sample)
                 
                 # Play the samples
-                self.speaker.play_sample_batch(audio_samples)
+                self.speaker.play_samples(audio_samples)
                 
             except Exception as e:
                 xos.print(f"Error in audio streaming: {e}")
-                import traceback
-                traceback.print_exc()
 
 
 # Demo code to show how it would be used
