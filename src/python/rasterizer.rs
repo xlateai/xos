@@ -1,5 +1,7 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 use std::sync::Mutex;
+use crate::text::text_rasterization::TextRasterizer;
+use fontdue::Font;
 
 // Thread-safe wrapper for raw pointer
 pub(crate) struct FrameBufferPtr(pub(crate) *mut u8);
@@ -10,6 +12,9 @@ unsafe impl Sync for FrameBufferPtr {}
 pub(crate) static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
 pub(crate) static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
 pub(crate) static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
+
+// Global font for text rasterization (lazy loaded)
+static GLOBAL_FONT: Mutex<Option<Font>> = Mutex::new(None);
 
 /// Called by PyApp before tick to set the frame buffer pointer
 pub fn set_frame_buffer_context(buffer: &mut [u8], width: usize, height: usize) {
@@ -751,6 +756,118 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.text() - render text on the frame buffer
+/// 
+/// Usage: xos.rasterizer.text(text, x, y, font_size, color, max_width)
+/// - text: string to render
+/// - x: x position in pixels
+/// - y: y position in pixels (top of text)
+/// - font_size: font size in pixels
+/// - color: (r, g, b) or (r, g, b, a) tuple
+/// - max_width: optional maximum width for text wrapping (defaults to screen width)
+fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 5 || args_vec.len() > 6 {
+        return Err(vm.new_type_error(format!(
+            "text() takes 5 or 6 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    
+    // Extract arguments
+    let text_str: String = args_vec[0].clone().try_into_value(vm)?;
+    let x: f64 = args_vec[1].clone().try_into_value(vm)?;
+    let y: f64 = args_vec[2].clone().try_into_value(vm)?;
+    let font_size: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let color_tuple = &args_vec[4];
+    
+    // Get the frame buffer from global context
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. Rasterizer must be called during tick().".to_string())
+    })?;
+    
+    // Parse color tuple (r, g, b) or (r, g, b, a)
+    let color_obj = color_tuple.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_vec = color_obj.as_slice();
+    if color_vec.len() != 3 && color_vec.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b) or (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+    let a: i32 = if color_vec.len() == 4 {
+        color_vec[3].clone().try_into_value(vm)?
+    } else {
+        255
+    };
+    
+    // Get max_width (optional)
+    let max_width = if args_vec.len() == 6 {
+        let mw: f64 = args_vec[5].clone().try_into_value(vm)?;
+        mw as f32
+    } else {
+        width as f32
+    };
+    
+    // Load font if not already loaded
+    let mut font_lock = GLOBAL_FONT.lock().unwrap();
+    if font_lock.is_none() {
+        // Load default font (NotoSans-Medium)
+        let font_data = include_bytes!("../../assets/NotoSans-Medium.ttf");
+        match Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
+            Ok(font) => *font_lock = Some(font),
+            Err(e) => return Err(vm.new_runtime_error(format!("Failed to load font: {}", e))),
+        }
+    }
+    let font = font_lock.as_ref().unwrap();
+    
+    // Create text rasterizer
+    let mut rasterizer = TextRasterizer::new(font.clone(), font_size as f32);
+    rasterizer.set_text(text_str);
+    rasterizer.tick(max_width, height as f32);
+    
+    // Draw characters to buffer
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, width * height * 4) };
+    
+    for character in &rasterizer.characters {
+        let char_x = x as i32 + character.x as i32;
+        let char_y = y as i32 + character.y as i32;
+        
+        for bitmap_y in 0..character.metrics.height {
+            for bitmap_x in 0..character.metrics.width {
+                let alpha = character.bitmap[bitmap_y * character.metrics.width + bitmap_x];
+                
+                if alpha == 0 {
+                    continue;
+                }
+                
+                let px = char_x + bitmap_x as i32;
+                let py = char_y + bitmap_y as i32;
+                
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let idx = ((py as usize * width + px as usize) * 4) as usize;
+                    
+                    // Blend with existing pixel using alpha
+                    let alpha_f = (alpha as f32 / 255.0) * (a as f32 / 255.0);
+                    let inv_alpha = 1.0 - alpha_f;
+                    
+                    buffer[idx + 0] = ((r as f32 * alpha_f) + (buffer[idx + 0] as f32 * inv_alpha)) as u8;
+                    buffer[idx + 1] = ((g as f32 * alpha_f) + (buffer[idx + 1] as f32 * inv_alpha)) as u8;
+                    buffer[idx + 2] = ((b as f32 * alpha_f) + (buffer[idx + 2] as f32 * inv_alpha)) as u8;
+                    buffer[idx + 3] = 255; // Keep alpha at full
+                }
+            }
+        }
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
@@ -760,5 +877,6 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("fill", vm.new_function("fill", fill), vm).unwrap();
     module.set_attr("rects_filled", vm.new_function("rects_filled", rects_filled), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
+    module.set_attr("text", vm.new_function("text", text), vm).unwrap();
     module
 }
