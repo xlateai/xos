@@ -65,33 +65,9 @@ class StaticWithAudio(xos.Application):
         if not self.image_generated:
             xos.print(f"Streaming {width}x{height} random static + audio at {SAMPLE_RATE} Hz")
             self.image_generated = True
-        
-        # Stream random audio continuously
-        if self.speaker is not None:
-            try:
-                # Check current buffer size
-                current_buffer = self.speaker.samples_buffer
-                current_buffer_size = current_buffer.shape[0] if hasattr(current_buffer, 'shape') else 0
-                
-                # Calculate how many samples to add
-                # We want to keep the buffer full but not exceed MAX_SAMPLES_BUFFER_SIZE
-                samples_to_add = max(
-                    MAX_SAMPLES_BUFFER_SIZE - current_buffer_size,
-                    TARGET_BATCH_SIZE
-                )
-                
-                # Clamp to reasonable bounds
-                samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
-                
-                # Generate random audio samples (white noise) as xos.Array
-                audio_samples = xos.array((samples_to_add,), dtype=xos.float32)
-                xos.random.uniform_fill(audio_samples, AUDIO_MIN, AUDIO_MAX)
-                
-                # Play the samples
-                self.speaker.play_samples(audio_samples)
-                
-            except Exception as e:
-                xos.print(f"Error in audio streaming: {e}")
+
+        samples = xos.random.uniform(low=AUDIO_MIN, high=AUDIO_MAX, shape=(TARGET_BATCH_SIZE,))
+        self.speaker.play_samples(samples)
 
 
 # Demo code to show how it would be used
