@@ -84,7 +84,7 @@ class StaticWithAudio(xos.Application):
                 samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
                 
                 # Generate random audio samples (white noise) as xos.Array
-                audio_samples = xos.Array((samples_to_add,), dtype="float32")
+                audio_samples = xos.array((samples_to_add,), dtype=xos.float32)
                 xos.random.uniform_fill(audio_samples, AUDIO_MIN, AUDIO_MAX)
                 
                 # Play the samples
