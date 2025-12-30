@@ -278,12 +278,26 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     // Create a Python class for the Speaker
     let code = format!(r#"
+class SpeakerBuffer:
+    """Represents the speaker's internal audio buffer"""
+    def __init__(self, player_ptr):
+        self._player_ptr = player_ptr
+    
+    def size(self):
+        """Get the number of samples currently in the buffer"""
+        import xos
+        return xos.audio._speaker_get_buffer_size(self._player_ptr)
+    
+    def __repr__(self):
+        return f"SpeakerBuffer(size={{self.size()}} samples)"
+
 class Speaker:
     def __init__(self, player_ptr, device_name):
         self._player_ptr = player_ptr
         self._sample_rate = {}
         self._channels = {}
         self._name = device_name
+        self._buffer = SpeakerBuffer(player_ptr)
     
     def play_samples(self, samples, gain=1.0):
         """
@@ -296,6 +310,16 @@ class Speaker:
         """
         import xos
         return xos.audio._speaker_play_batch(self._player_ptr, samples, gain)
+    
+    @property
+    def buffer(self):
+        """
+        Get the speaker's buffer object.
+        
+        Returns:
+            SpeakerBuffer: Buffer object with size() method
+        """
+        return self._buffer
     
     @property
     def samples_buffer(self):
@@ -393,6 +417,23 @@ pub fn speaker_play_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         })?;
     
     Ok(vm.ctx.none())
+}
+
+/// Internal function to get the buffer size
+pub fn speaker_get_buffer_size(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let player_ptr: usize = args.bind(vm)?;
+    
+    if player_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid speaker pointer".to_string()));
+    }
+    
+    // Convert pointer back to reference
+    let player = unsafe { &*(player_ptr as *const AudioPlayer) };
+    
+    // Get buffer size
+    let buffer_size = player.get_buffer_size();
+    
+    Ok(vm.ctx.new_int(buffer_size as i32).into())
 }
 
 /// Internal function to get the current buffer state

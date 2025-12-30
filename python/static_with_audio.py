@@ -2,7 +2,8 @@ import xos
 
 # Configuration
 SAMPLE_RATE = 44100  # 44.1 kHz
-MAX_SAMPLES_BUFFER_SIZE = 100_000  # Maximum samples in buffer
+BUFFER_PAD_SECONDS = 1.0  # Maximum buffer size in seconds
+MAX_SAMPLES_BUFFER_SIZE = int(SAMPLE_RATE * BUFFER_PAD_SECONDS)  # Maximum samples in buffer (1 second)
 TARGET_BATCH_SIZE = 4096  # Target batch size for adding samples
 AUDIO_MIN = -1.0  # Minimum audio sample value
 AUDIO_MAX = 1.0   # Maximum audio sample value
@@ -64,11 +65,26 @@ class StaticWithAudio(xos.Application):
         # Print status message only once
         if not self.image_generated:
             xos.print(f"Streaming {width}x{height} random static + audio at {SAMPLE_RATE} Hz")
+            xos.print(f"Buffer pad: {BUFFER_PAD_SECONDS}s ({MAX_SAMPLES_BUFFER_SIZE} samples max)")
             self.image_generated = True
-
-        samples = xos.random.uniform(low=AUDIO_MIN, high=AUDIO_MAX, shape=(TARGET_BATCH_SIZE,))
-        self.speaker.play_samples(samples)
-        print(samples)
+        
+        # Check buffer size before adding more samples to prevent overflow
+        if self.speaker:
+            current_buffer_size = self.speaker.buffer.size()
+            
+            # Only add samples if we have room (buffer not full)
+            if current_buffer_size < MAX_SAMPLES_BUFFER_SIZE:
+                samples = xos.random.uniform(low=AUDIO_MIN, high=AUDIO_MAX, shape=(TARGET_BATCH_SIZE,))
+                self.speaker.play_samples(samples)
+                
+                # Print buffer status every 30 frames (~0.5 seconds at 60fps)
+                if self.tick_count % 30 == 0:
+                    buffer_percent = (current_buffer_size / MAX_SAMPLES_BUFFER_SIZE) * 100
+                    xos.print(f"Buffer: {current_buffer_size}/{MAX_SAMPLES_BUFFER_SIZE} samples ({buffer_percent:.1f}%)")
+            else:
+                # Buffer is full - skip adding samples this frame
+                if self.tick_count % 30 == 0:
+                    xos.print(f"⚠️  Buffer full ({current_buffer_size} samples) - waiting for playback to catch up")
 
 
 # Demo code to show how it would be used
