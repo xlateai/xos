@@ -209,22 +209,23 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let total_elements: usize = shape.iter().product();
     
     // Determine if we should generate floats or integers
-    // Default: float32 if dtype is specified, otherwise uint8 for image compatibility
+    // Default: float32 (for audio compatibility), unless dtype explicitly specifies uint8
     let use_float = if let Some(dtype_obj) = dtype_arg {
         // Check if dtype has a 'name' attribute
         if let Ok(name_attr) = dtype_obj.get_attr("name", vm) {
             if let Ok(s) = name_attr.str(vm) {
                 let name = s.to_string();
-                name.contains("float")
+                // Use float unless explicitly uint8 or int
+                !name.contains("uint") && !name.contains("int")
             } else {
-                false
+                true
             }
         } else {
-            false
+            true
         }
     } else {
-        // Default to uint8 for backward compatibility
-        false
+        // Default to float32 for audio and general use
+        true
     };
     
     if use_float {

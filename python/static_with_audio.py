@@ -68,6 +68,7 @@ class StaticWithAudio(xos.Application):
 
         samples = xos.random.uniform(low=AUDIO_MIN, high=AUDIO_MAX, shape=(TARGET_BATCH_SIZE,))
         self.speaker.play_samples(samples)
+        print(samples)
 
 
 # Demo code to show how it would be used
