@@ -1099,16 +1099,13 @@ impl Application for CoderApp {
                             
                             // Call setup
                             if let Err(e) = vm.call_method(app_instance, "setup", ()) {
-                                let class_name = e.class().name().to_string();
-                                let msg = vm.call_method(e.as_object(), "__str__", ())
-                                    .ok()
-                                    .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                                    .unwrap_or_default();
+                                let error_text = crate::python::runtime::format_python_exception(vm, &e);
                                 
-                                if msg.is_empty() {
-                                    eprintln!("Python setup error: {}", class_name);
-                                } else {
-                                    eprintln!("Python setup error: {}: {}", class_name, msg);
+                                // Write error to output buffer
+                                if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                                    buffer.push_str("\nPython setup error:\n");
+                                    buffer.push_str(&error_text);
+                                    buffer.push_str("\n");
                                 }
                                 return Err(());
                             }
@@ -1144,16 +1141,13 @@ impl Application for CoderApp {
                                 
                                 // Call tick
                                 if let Err(e) = vm.call_method(app_instance, "tick", ()) {
-                                    let class_name = e.class().name().to_string();
-                                    let msg = vm.call_method(e.as_object(), "__str__", ())
-                                        .ok()
-                                        .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                                        .unwrap_or_default();
+                                    let error_text = crate::python::runtime::format_python_exception(vm, &e);
                                     
-                                    if !msg.is_empty() {
-                                        eprintln!("Python tick error: {}: {}", class_name, msg);
-                                    } else {
-                                        eprintln!("Python tick error: {}", class_name);
+                                    // Write error to output buffer
+                                    if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                                        buffer.push_str("\nPython tick error:\n");
+                                        buffer.push_str(&error_text);
+                                        buffer.push_str("\n");
                                     }
                                 }
                             }
