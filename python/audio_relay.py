@@ -9,7 +9,7 @@ Click the centered square button to toggle audio relay on/off.
 import xos
 
 # Configuration
-BUFFER_DURATION = 0.05  # 50ms microphone buffer for lower latency
+BUFFER_DURATION = 0.1  # 100ms microphone buffer (prevents overflow at 60fps = 16.67ms/frame)
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
@@ -128,7 +128,7 @@ class AudioRelay(xos.Application):
         
         # Relay audio if enabled AND microphone exists
         if self.enabled and self.microphone and self.speaker:
-            # Get samples from microphone
+            # Get samples from microphone (auto-clears buffer after reading)
             audio_batch = self.microphone.read()
             
             # Pass xos.Array directly to speaker with gain
