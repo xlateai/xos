@@ -9,8 +9,7 @@ Click the centered square button to toggle audio relay on/off.
 import xos
 
 # Configuration
-BUFFER_DURATION = 0.1  # 100ms microphone buffer to prevent overflow
-BATCH_SIZE = 8192  # Large batch size to ensure we get ALL available samples
+BUFFER_DURATION = 0.05  # 50ms microphone buffer for lower latency
 CHANNELS = 1  # Mono audio
 GAIN = 3.0  # Amplify audio (3x volume boost)
 
@@ -130,26 +129,10 @@ class AudioRelay(xos.Application):
         # Relay audio if enabled AND microphone exists
         if self.enabled and self.microphone and self.speaker:
             # Get samples from microphone
-            audio_batch = self.microphone.get_batch(BATCH_SIZE)
+            audio_batch = self.microphone.read()
             
-            if audio_batch and audio_batch['_data']:
-                samples = audio_batch['_data']
-                
-                if len(samples) > 0:
-                    # Amplify samples for louder output
-                    amplified_samples = [min(1.0, max(-1.0, s * GAIN)) for s in samples]
-                    
-                    # Queue amplified samples for playback
-                    try:
-                        self.speaker.play_sample_batch(amplified_samples)
-                    except Exception as e:
-                        xos.print(f"⚠️  Playback error: {e}")
-                    
-                    # Log buffer size occasionally
-                    buffer_size = self.speaker.samples_buffer.shape[0] if hasattr(self.speaker.samples_buffer, 'shape') else 0
-                    if buffer_size != self.last_buffer_size and buffer_size % 1000 == 0:
-                        xos.print(f"📊 Buffer: {buffer_size} samples")
-                        self.last_buffer_size = buffer_size
+            # Pass xos.Array directly to speaker with gain
+            self.speaker.play_samples(audio_batch, gain=GAIN)
     
     def draw_button(self):
         """Draw the toggle button in the center of the screen"""

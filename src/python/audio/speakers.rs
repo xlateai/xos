@@ -199,7 +199,7 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
     
         // Get the device to use and create AudioPlayer
-        let player = if let Some(device_id) = device_id_opt {
+        let (player, device_name) = if let Some(device_id) = device_id_opt {
             // Specific device requested
             let all_devices = audio::devices();
             let output_devices: Vec<_> = all_devices
@@ -215,11 +215,18 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, output_devices.len())));
             }
             
+            let device_name = output_devices[device_id].name.clone();
+            
             #[cfg(target_os = "ios")]
             {
                 let actual_device_id = output_devices[device_id].device_id;
-                AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
-                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
+                crate::print(&format!("[xos.audio.Speaker] Creating speaker with device_id={}, sample_rate={}, channels={}", actual_device_id, sample_rate, channels));
+                let player = AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
+                    .map_err(|e| {
+                        crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
+                        vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
+                    })?;
+                (player, device_name)
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -228,17 +235,24 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 let device = &output_devices[device_id];
                 let inner = audio::AudioPlayer::new(device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
-                AudioPlayer { inner }
+                (AudioPlayer { inner }, device_name)
             }
         } else {
             // Use default output device
             let default_device = audio::default_output()
                 .ok_or_else(|| vm.new_runtime_error("No default output device found".to_string()))?;
             
+            let device_name = default_device.name.clone();
+            
             #[cfg(target_os = "ios")]
             {
-                AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
-                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
+                crate::print(&format!("[xos.audio.Speaker] Creating speaker with default device (device_id={}), sample_rate={}, channels={}", default_device.device_id, sample_rate, channels));
+                let player = AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
+                    .map_err(|e| {
+                        crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
+                        vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
+                    })?;
+                (player, device_name)
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -246,7 +260,7 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 // On native, create directly with the default device
                 let inner = audio::AudioPlayer::new(&default_device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
-                AudioPlayer { inner }
+                (AudioPlayer { inner }, device_name)
             }
         };
     
@@ -265,21 +279,23 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Create a Python class for the Speaker
     let code = format!(r#"
 class Speaker:
-    def __init__(self, player_ptr):
+    def __init__(self, player_ptr, device_name):
         self._player_ptr = player_ptr
         self._sample_rate = {}
         self._channels = {}
+        self._name = device_name
     
-    def play_sample_batch(self, samples):
+    def play_samples(self, samples, gain=1.0):
         """
         Queue audio samples for playback.
         
         Args:
             samples: xos.Array of audio samples (floats in range -1.0 to 1.0)
                      Shape: (time_steps,) for mono or (time_steps, channels) for multi-channel
+            gain: Amplification factor (default 1.0 = no change, 3.0 = 3x louder)
         """
         import xos
-        return xos.audio._speaker_play_batch(self._player_ptr, samples)
+        return xos.audio._speaker_play_batch(self._player_ptr, samples, gain)
     
     @property
     def samples_buffer(self):
@@ -302,6 +318,11 @@ class Speaker:
         """Get the number of channels."""
         return self._channels
     
+    @property
+    def name(self):
+        """Get the name of the speaker device."""
+        return self._name
+    
     def __del__(self):
         """Clean up the speaker when the object is destroyed."""
         if self._player_ptr != 0:
@@ -309,8 +330,8 @@ class Speaker:
             xos.audio._speaker_cleanup(self._player_ptr)
             self._player_ptr = 0
 
-_speaker_instance = Speaker({})
-"#, sample_rate, channels, player_ptr);
+_speaker_instance = Speaker({}, "{}")
+"#, sample_rate, channels, player_ptr, device_name.replace("\"", "\\\""));
     
     let scope = vm.new_scope_with_builtins();
     vm.run_code_string(scope.clone(), &code, "<speaker>".to_string())?;
@@ -322,7 +343,26 @@ _speaker_instance = Speaker({})
 
 /// Internal function to play a batch of samples through the speaker
 pub fn speaker_play_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let (player_ptr, samples_obj): (usize, PyObjectRef) = args.bind(vm)?;
+    // Parse arguments: (player_ptr, samples, gain=1.0)
+    let player_ptr: usize = if !args.args.is_empty() {
+        args.args[0].clone().try_into_value::<usize>(vm)?
+    } else {
+        return Err(vm.new_runtime_error("Missing player_ptr argument".to_string()));
+    };
+    
+    let samples_obj: PyObjectRef = if args.args.len() > 1 {
+        args.args[1].clone()
+    } else {
+        return Err(vm.new_runtime_error("Missing samples argument".to_string()));
+    };
+    
+    let gain: f32 = if args.args.len() > 2 {
+        args.args[2].clone().try_into_value::<f64>(vm)? as f32
+    } else if let Some(gain_arg) = args.kwargs.get("gain") {
+        gain_arg.clone().try_into_value::<f64>(vm)? as f32
+    } else {
+        1.0  // Default gain = 1.0 (no amplification)
+    };
     
     if player_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid speaker pointer".to_string()));
@@ -331,12 +371,26 @@ pub fn speaker_play_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Convert pointer back to reference
     let player = unsafe { &*(player_ptr as *const AudioPlayer) };
     
-    // Extract samples from the array-like object
-    let samples = extract_samples_from_array(samples_obj, vm)?;
+    // FAST PATH: Extract samples efficiently from xos.Array
+    let mut samples = extract_samples_from_array_fast(samples_obj, vm)?;
+    
+    if samples.is_empty() {
+        return Ok(vm.ctx.none());
+    }
+    
+    // Apply gain and clamp in Rust (FAST! No Python iteration!)
+    if gain != 1.0 {
+        for sample in samples.iter_mut() {
+            *sample = (*sample * gain).clamp(-1.0, 1.0);
+        }
+    }
     
     // Play the samples
     player.play_samples(&samples)
-        .map_err(|e| vm.new_runtime_error(format!("Failed to play samples: {}", e)))?;
+        .map_err(|e| {
+            crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to play {} samples: {}", samples.len(), e));
+            vm.new_runtime_error(format!("Failed to play samples: {}", e))
+        })?;
     
     Ok(vm.ctx.none())
 }
@@ -402,7 +456,9 @@ pub fn speaker_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// Clean up ALL active speakers (called when stopping app or switching)
 pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    crate::print("[xos.audio] Cleaning up all speakers...");
     cleanup_all_speakers_rust();
+    crate::print("[xos.audio] All speakers cleaned up");
     Ok(vm.ctx.none())
 }
 
@@ -410,6 +466,7 @@ pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn cleanup_all_speakers_rust() {
     let speaker_ptrs: Vec<usize> = if let Ok(mut speakers) = get_active_speakers().lock() {
         let ptrs: Vec<usize> = speakers.drain().collect();
+        crate::print(&format!("[xos.audio] Cleaning up {} speaker(s)", ptrs.len()));
         ptrs
     } else {
         vec![]
@@ -418,17 +475,19 @@ pub fn cleanup_all_speakers_rust() {
     // Drop the Rust-side objects
     for ptr in speaker_ptrs {
         if ptr != 0 {
+            crate::print(&format!("[xos.audio] Dropping speaker at ptr={:#x}", ptr));
             unsafe {
                 let _ = Box::from_raw(ptr as *mut AudioPlayer);
             }
         }
     }
+    crate::print("[xos.audio] Speaker cleanup complete");
 }
 
-/// Helper function to extract f32 samples from a Python array-like object
-fn extract_samples_from_array(obj: PyObjectRef, vm: &VirtualMachine) -> Result<Vec<f32>, rustpython_vm::builtins::PyBaseExceptionRef> {
+/// Extract f32 samples from xos.Array - NO fallbacks, crashes if wrong format
+fn extract_samples_from_array_fast(obj: PyObjectRef, vm: &VirtualMachine) -> Result<Vec<f32>, rustpython_vm::builtins::PyBaseExceptionRef> {
     // Helper to convert a Python object to f32 (handles both int and float)
-    fn to_f32(item: PyObjectRef, vm: &VirtualMachine) -> Result<f32, rustpython_vm::builtins::PyBaseExceptionRef> {
+    fn to_f32(item: &PyObjectRef, vm: &VirtualMachine) -> Result<f32, rustpython_vm::builtins::PyBaseExceptionRef> {
         // Try as float first
         if let Ok(value) = item.clone().try_into_value::<f64>(vm) {
             return Ok(value as f32);
@@ -440,28 +499,64 @@ fn extract_samples_from_array(obj: PyObjectRef, vm: &VirtualMachine) -> Result<V
         Err(vm.new_type_error(format!("Expected numeric type, got {:?}", item.class().name())))
     }
     
-    // Try to get _data attribute (xos.Array format)
+    // Try .get_attr("_data") first - handles _ArrayWrapper
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
-        // It's an xos.Array, extract the _data list
+        // Check if _data is a dict (wrapped case where wrapper stores the dict)
+        if let Ok(inner_dict) = data_attr.clone().downcast::<rustpython_vm::builtins::PyDict>() {
+            // It's a dict! Extract the list from it
+            if let Ok(data_list) = inner_dict.get_item("_data", vm) {
+                if let Ok(list) = data_list.downcast::<rustpython_vm::builtins::PyList>() {
+                    let borrowed = list.borrow_vec();
+                    let len = borrowed.len();
+                    let mut samples = Vec::with_capacity(len);
+                    
+                    for item in borrowed.iter() {
+                        samples.push(to_f32(item, vm)?);
+                    }
+                    return Ok(samples);
+                }
+            }
+        }
+        
+        // Or _data is already a list (direct unwrapped case)
+        let class_name = data_attr.class().name().to_string();
         if let Ok(list) = data_attr.downcast::<rustpython_vm::builtins::PyList>() {
-            let mut samples = Vec::new();
-            for item in list.borrow_vec().iter() {
-                samples.push(to_f32(item.clone(), vm)?);
+            let borrowed = list.borrow_vec();
+            let len = borrowed.len();
+            let mut samples = Vec::with_capacity(len);
+            
+            for item in borrowed.iter() {
+                samples.push(to_f32(item, vm)?);
             }
             return Ok(samples);
+        } else {
+            return Err(vm.new_type_error(format!("xos.Array._data must be a list, got {}", class_name)));
         }
     }
     
-    // Try as a direct list
-    if let Ok(list) = obj.downcast::<rustpython_vm::builtins::PyList>() {
-        let mut samples = Vec::new();
-        for item in list.borrow_vec().iter() {
-            samples.push(to_f32(item.clone(), vm)?);
+    // Try dict access - handles raw dict before wrapping
+    if let Ok(dict) = obj.clone().downcast::<rustpython_vm::builtins::PyDict>() {
+        if let Ok(data_obj) = dict.get_item("_data", vm) {
+            let class_name = data_obj.class().name().to_string();
+            if let Ok(list) = data_obj.downcast::<rustpython_vm::builtins::PyList>() {
+                let borrowed = list.borrow_vec();
+                let len = borrowed.len();
+                let mut samples = Vec::with_capacity(len);
+                
+                for item in borrowed.iter() {
+                    samples.push(to_f32(item, vm)?);
+                }
+                return Ok(samples);
+            } else {
+                return Err(vm.new_type_error(format!("xos.Array._data must be a list, got {}", class_name)));
+            }
+        } else {
+            return Err(vm.new_type_error("Dict missing '_data' key - not a valid xos.Array".to_string()));
         }
-        return Ok(samples);
     }
     
-    Err(vm.new_type_error("Expected array or list of samples".to_string()))
+    // NO FALLBACKS - crash if it's not an xos.Array
+    Err(vm.new_type_error(format!("Expected xos.Array, got {:?}. Audio functions ONLY accept xos.Array objects.", obj.clone().class().name())))
 }
 
 // FFI declarations for iOS audio player functions

@@ -18,6 +18,10 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     
     // Internal microphone functions
     module.set_attr("_microphone_get_batch", vm.new_function("_microphone_get_batch", microphone::microphone_get_batch), vm).unwrap();
+    module.set_attr("_microphone_get_all", vm.new_function("_microphone_get_all", microphone::microphone_get_all), vm).unwrap();
+    module.set_attr("_microphone_read_batch", vm.new_function("_microphone_read_batch", microphone::microphone_read_batch), vm).unwrap();
+    module.set_attr("_microphone_read_all", vm.new_function("_microphone_read_all", microphone::microphone_read_all), vm).unwrap();
+    module.set_attr("_microphone_clear", vm.new_function("_microphone_clear", microphone::microphone_clear), vm).unwrap();
     module.set_attr("_microphone_pause", vm.new_function("_microphone_pause", microphone::microphone_pause), vm).unwrap();
     module.set_attr("_microphone_record", vm.new_function("_microphone_record", microphone::microphone_record), vm).unwrap();
     module.set_attr("_microphone_get_sample_rate", vm.new_function("_microphone_get_sample_rate", microphone::microphone_get_sample_rate), vm).unwrap();

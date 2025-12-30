@@ -99,6 +99,9 @@ impl CoderApp {
     }
     
     pub fn new() -> Self {
+        // Enable coder logging to capture all Rust/Swift logs
+        super::logging::enable_coder_logging();
+        
         // Discover all Python files from the embedded directory
         let mut python_files = Vec::new();
         
@@ -294,61 +297,110 @@ impl CoderApp {
     }
     
     fn execute_viewport_app(&mut self, code: &str) {
-        let result = self.interpreter.enter(|vm| {
-            // Clear the previous app instance from builtins
+        // Clear output buffer before execution
+        {
+            let mut buffer = self.python_output_buffer.lock().unwrap();
+            buffer.clear();
+        }
+        
+        // Execute with print capture, but DON'T restore print (keep it active for setup/tick)
+        let (result, app_instance, new_scope) = self.interpreter.enter(|vm| {
+            // Clear previous app instance
             let _ = vm.builtins.as_object().to_owned().del_attr("__xos_app_instance__", vm);
             
-            // Get or create persistent scope
+            // Get or create scope
             let scope = if let Some(ref existing_scope) = self.persistent_scope {
                 existing_scope.clone()
             } else {
                 let new_scope = vm.new_scope_with_builtins();
                 let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
-                self.persistent_scope = Some(new_scope.clone());
                 new_scope
             };
+            
+            // Set up persistent print capture (DON'T restore it)
+            let buffer_clone = Arc::clone(&self.python_output_buffer);
+            let write_output_fn = vm.new_function(
+                "__write_output__",
+                move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
+                    if let Some(text_obj) = args.args.first() {
+                        if let Ok(text) = text_obj.str(_vm) {
+                            if let Ok(mut buffer) = buffer_clone.lock() {
+                                buffer.push_str(&text.to_string());
+                            }
+                        }
+                    }
+                    Ok(_vm.ctx.none())
+                },
+            );
+            scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
+            
+            // Override print permanently (for setup/tick calls)
+            let setup_code = r#"
+import builtins
+import xos
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __write_output__(output)
+
+builtins.print = __custom_print__
+xos.print = __custom_print__
+"#;
+            
+            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                eprintln!("Failed to set up print capture: {:?}", e);
+            }
             
             // Run the code
             let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
             
             // Handle errors
-            if let Err(py_exc) = exec_result {
-                let class_name = py_exc.class().name();
-                let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
-                    .ok()
-                    .and_then(|result| result.str(vm).ok())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                
-                let error_text = if !error_msg.is_empty() {
-                    format!("{}: {}", class_name, error_msg)
-                } else {
-                    format!("{}", class_name)
-                };
-                
-                return Err(error_text);
-            }
-            
-            // Check if an xos.Application was registered
-            if let Ok(Some(app_instance_obj)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                self.viewport_app = Some(app_instance_obj);
-                self.viewport_app_setup_done = false;
-                Ok("[xos] Application registered - rendering to viewport tab\n".to_string())
+            let result = if let Err(py_exc) = exec_result {
+                let error_text = crate::python::runtime::format_python_exception(vm, &py_exc);
+                Err(error_text)
             } else {
-                Ok("(no output)".to_string())
-            }
+                Ok(())
+            };
+            
+            // Check for app instance
+            let app_instance = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__")
+                .ok()
+                .flatten();
+            
+            (result, app_instance, scope)
         });
         
-        // Display result
+        // Update persistent scope
+        self.persistent_scope = Some(new_scope);
+        
+        // Get current output
+        let current_output = self.python_output_buffer.lock().unwrap().clone();
+        
+        // Handle result
         match result {
-            Ok(msg) => {
-                self.terminal_app.text_rasterizer.text = msg;
-                if self.active_tab == Tab::Code {
-                    self.active_tab = Tab::Viewport;
+            Ok(_) => {
+                if let Some(app_instance_obj) = app_instance {
+                    self.viewport_app = Some(app_instance_obj);
+                    self.viewport_app_setup_done = false;
+                    
+                    // Keep the output buffer active - it will be updated by setup/tick
+                    // Terminal will show accumulated output from the buffer
+                    if self.active_tab == Tab::Code {
+                        self.active_tab = Tab::Viewport;
+                    }
+                } else {
+                    self.terminal_app.text_rasterizer.text = if !current_output.is_empty() { current_output } else { "(no output)".to_string() };
                 }
             }
             Err(error) => {
-                self.terminal_app.text_rasterizer.text = error + "\n";
+                let mut error_display = current_output;
+                if !error_display.trim().is_empty() {
+                    error_display.push_str("\n");
+                }
+                error_display.push_str(&error);
+                error_display.push('\n');
+                
+                self.terminal_app.text_rasterizer.text = error_display;
                 if self.active_tab == Tab::Code {
                     self.active_tab = Tab::Terminal;
                 }
@@ -380,102 +432,40 @@ impl CoderApp {
                 vm.add_native_module("xos".to_owned(), Box::new(crate::python::xos_module::make_module));
             });
             
-            interpreter.enter(|vm| {
-                // Create a new scope for this execution
-                let scope = vm.new_scope_with_builtins();
-                let _ = scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
-            
-                // Create a native function that writes to the output buffer
-                let buffer_clone = Arc::clone(&output_buffer);
-                let generation_clone = Arc::clone(&generation_counter);
-                let write_output_fn = vm.new_function(
-                    "__write_output__",
-                    move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
-                        // Only write if this thread's generation is still current
-                        if let Ok(current_gen) = generation_clone.lock() {
-                            if *current_gen == current_generation {
-                                if let Some(text_obj) = args.args.first() {
-                                    if let Ok(text) = text_obj.str(_vm) {
-                                        if let Ok(mut buffer) = buffer_clone.lock() {
-                                            buffer.push_str(&text.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Ok(_vm.ctx.none())
-                    },
-                );
-                scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
-                
-                // Override print to write directly to buffer
-                let setup_code = r#"
-import builtins
-__original_print__ = builtins.print
-
-def __custom_print__(*args, sep=' ', end='\n', **kwargs):
-    output = sep.join(str(arg) for arg in args) + end
-    __write_output__(output)
-
-builtins.print = __custom_print__
-"#;
-                
-                if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
-                    eprintln!("Failed to set up print capture: {:?}", e);
-                }
-                
-                // Run the user's code
-                let exec_result = vm.run_code_string(scope.clone(), &code_str, "<coder>".to_string());
-                
-                // Restore original print
-                let restore_code = "builtins.print = __original_print__";
-                vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
-            
-                // Handle errors by writing to buffer (only if still current generation)
-                if let Err(py_exc) = exec_result {
-                    if let Ok(current_gen) = generation_counter.lock() {
-                        if *current_gen == current_generation {
-                            let class_name = py_exc.class().name();
-                            let error_msg = vm.call_method(py_exc.as_object(), "__str__", ())
-                                .ok()
-                                .and_then(|result| result.str(vm).ok())
-                                .map(|s| s.to_string())
-                                .unwrap_or_default();
-                            
-                            let error_text = if !error_msg.is_empty() {
-                                format!("\n{}: {}\n", class_name, error_msg)
-                            } else {
-                                format!("\n{}\n", class_name)
-                            };
-                            
-                            if let Ok(mut buffer) = output_buffer.lock() {
-                                buffer.push_str(&error_text);
-                            }
-                        }
-                    }
-                } else {
-                    // Check for viewport app (only if still current generation)
-                    if let Ok(current_gen) = generation_counter.lock() {
-                        if *current_gen == current_generation {
-                            if let Ok(Some(_)) = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__") {
-                                if let Ok(mut buffer) = output_buffer.lock() {
-                                    buffer.push_str("\n[xos] Application registered - switch to viewport tab\n");
-                                }
-                            } else {
-                                // Add "(no output)" if buffer is still empty
-                                if let Ok(buffer) = output_buffer.lock() {
-                                    if buffer.trim().is_empty() {
-                                        drop(buffer);
-                                        if let Ok(mut buffer) = output_buffer.lock() {
-                                            buffer.push_str("(no output)\n");
-                                        }
-                                    }
-                                }
-                            }
+            // Create print callback that checks generation
+            let buffer_for_callback = Arc::clone(&output_buffer);
+            let gen_for_callback = Arc::clone(&generation_counter);
+            let print_callback: crate::python::runtime::PrintCallback = Arc::new(move |text: &str| {
+                if let Ok(current_gen) = gen_for_callback.lock() {
+                    if *current_gen == current_generation {
+                        if let Ok(mut buffer) = buffer_for_callback.lock() {
+                            buffer.push_str(text);
                         }
                     }
                 }
             });
+            
+            // Execute using unified runtime
+            let (result, _, _, _) = crate::python::runtime::execute_python_code(
+                &interpreter,
+                &code_str,
+                "<coder>",
+                None,
+                Some(print_callback),
+            );
+            
+            // Handle errors (only if still current generation)
+            if let Err(error_msg) = result {
+                if let Ok(current_gen) = generation_counter.lock() {
+                    if *current_gen == current_generation {
+                        if let Ok(mut buffer) = output_buffer.lock() {
+                            buffer.push_str("\n");
+                            buffer.push_str(&error_msg);
+                            buffer.push_str("\n");
+                        }
+                    }
+                }
+            }
             
             // Mark thread as no longer running (only if still current generation)
             if let Ok(current_gen) = generation_counter.lock() {
@@ -948,6 +938,9 @@ impl Drop for CoderApp {
         // Clean up all audio resources (microphones and speakers) when CoderApp is dropped
         // This ensures audio devices are stopped when switching apps
         crate::python::audio::cleanup_all_audio();
+        
+        // Disable coder logging
+        super::logging::disable_coder_logging();
     }
 }
 
@@ -971,6 +964,18 @@ impl Application for CoderApp {
                 self.terminal_app.text_rasterizer.text = buffer.clone();
             }
         }
+        
+        // Disabled: Rust/Swift logs are too noisy and interfere with Python output
+        // Only show Python output in the terminal for now
+        // if super::logging::has_pending_logs() {
+        //     let logs = super::logging::read_pending_logs();
+        //     if !logs.is_empty() {
+        //         let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+        //         if !is_background_running {
+        //             self.terminal_app.text_rasterizer.text.push_str(&logs);
+        //         }
+        //     }
+        // }
         
         // Check if background thread is done and clean it up
         if let Some(handle) = &self.python_thread_handle {
@@ -1094,16 +1099,13 @@ impl Application for CoderApp {
                             
                             // Call setup
                             if let Err(e) = vm.call_method(app_instance, "setup", ()) {
-                                let class_name = e.class().name().to_string();
-                                let msg = vm.call_method(e.as_object(), "__str__", ())
-                                    .ok()
-                                    .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                                    .unwrap_or_default();
+                                let error_text = crate::python::runtime::format_python_exception(vm, &e);
                                 
-                                if msg.is_empty() {
-                                    eprintln!("Python setup error: {}", class_name);
-                                } else {
-                                    eprintln!("Python setup error: {}: {}", class_name, msg);
+                                // Write error to output buffer
+                                if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                                    buffer.push_str("\nPython setup error:\n");
+                                    buffer.push_str(&error_text);
+                                    buffer.push_str("\n");
                                 }
                                 return Err(());
                             }
@@ -1139,16 +1141,13 @@ impl Application for CoderApp {
                                 
                                 // Call tick
                                 if let Err(e) = vm.call_method(app_instance, "tick", ()) {
-                                    let class_name = e.class().name().to_string();
-                                    let msg = vm.call_method(e.as_object(), "__str__", ())
-                                        .ok()
-                                        .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
-                                        .unwrap_or_default();
+                                    let error_text = crate::python::runtime::format_python_exception(vm, &e);
                                     
-                                    if !msg.is_empty() {
-                                        eprintln!("Python tick error: {}: {}", class_name, msg);
-                                    } else {
-                                        eprintln!("Python tick error: {}", class_name);
+                                    // Write error to output buffer
+                                    if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                                        buffer.push_str("\nPython tick error:\n");
+                                        buffer.push_str(&error_text);
+                                        buffer.push_str("\n");
                                     }
                                 }
                             }
@@ -1516,7 +1515,7 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
-        println!("Mouse down at ({}, {})", mouse_x, mouse_y);
+        crate::print(&format!("Mouse down at ({}, {})", mouse_x, mouse_y));
         
         // Check if keyboard is shown - only handle keyboard accessories if keyboard is visible
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
@@ -1537,15 +1536,15 @@ impl Application for CoderApp {
         let tabs_top_y = tabs_bottom_y - tab_height as f32;
         let tab_top_y = tabs_top_y as i32;
         
-        println!("Button position - x: {}, y: {}, width: {}, height: {}", 
-                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height);
-        println!("Tab position - y: {}, height: {}", tab_top_y, tab_height);
+        crate::print(&format!("Button position - x: {}, y: {}, width: {}, height: {}", 
+                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height));
+        crate::print(&format!("Tab position - y: {}, height: {}", tab_top_y, tab_height));
         
         // Only handle clicks on keyboard accessories when keyboard is shown
         if keyboard_is_shown {
             // Check if click is on code.py tab
             if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
-                println!("Code tab clicked");
+                crate::print("Code tab clicked");
                 if self.active_tab == Tab::Code {
                     // Already on code tab - toggle file explorer
                     match self.code_view_mode {
@@ -1553,11 +1552,11 @@ impl Application for CoderApp {
                             // Save current file before switching to explorer
                             self.save_current_file();
                             self.code_view_mode = CodeViewMode::FileExplorer;
-                            println!("Switched to file explorer");
+                            crate::print("Switched to file explorer");
                         }
                         CodeViewMode::FileExplorer => {
                             self.code_view_mode = CodeViewMode::Editor;
-                            println!("Switched to editor");
+                            crate::print("Switched to editor");
                         }
                     }
                 } else {
@@ -1570,14 +1569,14 @@ impl Application for CoderApp {
             
             // Check if click is on terminal tab
             if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
-                println!("Terminal tab clicked");
+                crate::print("Terminal tab clicked");
                 self.active_tab = Tab::Terminal;
                 return;
             }
             
             // Check if click is on viewport tab
             if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
-                println!("Viewport tab clicked");
+                crate::print("Viewport tab clicked");
                 self.active_tab = Tab::Viewport;
                 return;
             }

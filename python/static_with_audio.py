@@ -23,8 +23,8 @@ class StaticWithAudio(xos.Application):
         system_type = xos.system.get_system_type()
         
         if system_type == "IOS":
-            # On iOS, use device 0 (built-in speaker)
-            device_id = 0
+            # On iOS, use default output device (built-in speaker)
+            device_id = None
         else:
             # On other platforms, let user select
             output_devices = xos.audio.get_output_devices()
@@ -43,7 +43,8 @@ class StaticWithAudio(xos.Application):
                 sample_rate=SAMPLE_RATE,
                 channels=1  # Mono audio
             )
-            xos.print(f"Speaker initialized at {SAMPLE_RATE} Hz")
+            xos.print(f"🔊 Speaker: {self.speaker.name}")
+            xos.print(f"   Sample rate: {SAMPLE_RATE} Hz")
         except Exception as e:
             xos.print(f"Failed to initialize speaker: {e}")
             self.speaker = None
@@ -64,38 +65,9 @@ class StaticWithAudio(xos.Application):
         if not self.image_generated:
             xos.print(f"Streaming {width}x{height} random static + audio at {SAMPLE_RATE} Hz")
             self.image_generated = True
-        
-        # Stream random audio continuously
-        if self.speaker is not None:
-            try:
-                # Check current buffer size
-                current_buffer = self.speaker.samples_buffer
-                current_buffer_size = current_buffer.shape[0] if hasattr(current_buffer, 'shape') else 0
-                
-                # Calculate how many samples to add
-                # We want to keep the buffer full but not exceed MAX_SAMPLES_BUFFER_SIZE
-                samples_to_add = max(
-                    MAX_SAMPLES_BUFFER_SIZE - current_buffer_size,
-                    TARGET_BATCH_SIZE
-                )
-                
-                # Clamp to reasonable bounds
-                samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
-                
-                # Generate random audio samples (white noise)
-                # Build a simple list of random floats (more compatible approach)
-                audio_samples = []
-                for _ in range(samples_to_add):
-                    sample = xos.random.uniform(AUDIO_MIN, AUDIO_MAX)
-                    audio_samples.append(sample)
-                
-                # Play the samples
-                self.speaker.play_sample_batch(audio_samples)
-                
-            except Exception as e:
-                xos.print(f"Error in audio streaming: {e}")
-                import traceback
-                traceback.print_exc()
+
+        samples = xos.random.uniform(low=AUDIO_MIN, high=AUDIO_MAX, shape=(TARGET_BATCH_SIZE,))
+        self.speaker.play_samples(samples)
 
 
 # Demo code to show how it would be used
