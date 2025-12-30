@@ -14,9 +14,9 @@ const BUTTON_SIZE_RATIO: f32 = 0.12; // 12% of smaller screen dimension
 const BUTTON_BORDER_WIDTH: f32 = 3.0;
 
 // Menu configuration
-const HOLD_DURATION: Duration = Duration::from_millis(1000); // 1 second hold
+const HOLD_DURATION: Duration = Duration::from_millis(250); // 0.25 second hold
 const MENU_PADDING: f32 = 20.0;
-const MENU_ITEM_HEIGHT: f32 = 40.0;
+const MENU_ITEM_HEIGHT: f32 = 50.0; // Slightly larger boxes
 const MENU_COLUMN_WIDTH_RATIO: f32 = 0.4; // 40% of screen width per column
 
 pub struct AudioRelay {
@@ -92,80 +92,13 @@ impl Application for AudioRelay {
         let input_devices: Vec<_> = self.input_devices.iter().collect();
         let output_devices: Vec<_> = self.output_devices.iter().collect();
         
-        // Select input device
-        #[cfg(not(target_os = "ios"))]
-        let (input_idx, use_default_input) = {
-            use dialoguer::Select;
-            
-            let mut device_names: Vec<String> = vec!["Default (auto-switching)".to_string()];
-            device_names.extend(input_devices.iter().map(|d| d.name.clone()));
-            
-            let selection = Select::new()
-                .with_prompt("Select input device (microphone)")
-                .items(&device_names)
-                .default(0)
-                .interact()
-                .map_err(|e| format!("Failed to select input device: {}", e))?;
-            
-            if selection == 0 {
-                (0, true)  // Use default
-            } else {
-                (selection - 1, false)  // Use specific device
-            }
-        };
+        // Always use default devices initially (can change via menu)
+        self.input_device_index = 0;
+        self.use_default_input = true;
+        self.output_device_index = 0;
+        self.use_default_output = true;
         
-        #[cfg(target_os = "ios")]
-        let (input_idx, use_default_input) = (0, true);  // Always use default on iOS
-        
-        self.input_device_index = input_idx;
-        self.use_default_input = use_default_input;
-        
-        #[cfg(not(target_os = "ios"))]
-        if use_default_input {
-            crate::print("📍 Input: Default (auto-switching)");
-        } else {
-            crate::print(&format!("📍 Input: {}", input_devices[input_idx].name));
-        }
-        
-        #[cfg(target_os = "ios")]
         crate::print("📍 Input: Default (auto-switching)");
-        
-        // Select output device
-        #[cfg(not(target_os = "ios"))]
-        let (output_idx, use_default_output) = {
-            use dialoguer::Select;
-            
-            let mut device_names: Vec<String> = vec!["Default (auto-switching)".to_string()];
-            device_names.extend(output_devices.iter().map(|d| d.name.clone()));
-            
-            let selection = Select::new()
-                .with_prompt("Select output device (speakers)")
-                .items(&device_names)
-                .default(0)
-                .interact()
-                .map_err(|e| format!("Failed to select output device: {}", e))?;
-            
-            if selection == 0 {
-                (0, true)  // Use default
-            } else {
-                (selection - 1, false)  // Use specific device
-            }
-        };
-        
-        #[cfg(target_os = "ios")]
-        let (output_idx, use_default_output) = (0, true);  // Always use default on iOS
-        
-        self.output_device_index = output_idx;
-        self.use_default_output = use_default_output;
-        
-        #[cfg(not(target_os = "ios"))]
-        if use_default_output {
-            crate::print("🔊 Output: Default (auto-switching)");
-        } else {
-            crate::print(&format!("🔊 Output: {}", output_devices[output_idx].name));
-        }
-        
-        #[cfg(target_os = "ios")]
         crate::print("🔊 Output: Default (auto-switching)");
         
         // Create audio devices during setup for instant first toggle
@@ -207,7 +140,9 @@ impl Application for AudioRelay {
         self.player = Some(player);
         self.initialized = true;
         
-        crate::print("✅ Devices ready! Click the centered square to start audio relay.");
+        crate::print("✅ Devices ready!");
+        crate::print("   - Quick tap: Toggle audio on/off");
+        crate::print("   - Hold 0.25s: Open device menu");
         
         Ok(())
     }
@@ -282,21 +217,9 @@ impl Application for AudioRelay {
         
         // If menu is showing, handle menu interactions or close it
         if self.show_menu {
-            // Check if click is inside menu area
-            let shape = state.frame.shape();
-            let width = shape[1];
-            let column_width = (width as f32 * MENU_COLUMN_WIDTH_RATIO) as usize;
-            let gap = 20;
-            let left_column_x = (width - column_width * 2 - gap) / 2;
-            let right_column_x = left_column_x + column_width + gap;
-            
-            let mouse_x = state.mouse.x as usize;
-            
-            // If click is inside menu area, handle it
-            if mouse_x >= left_column_x && mouse_x <= right_column_x + column_width {
-                self.handle_menu_click(state);
-            } else {
-                // Click outside menu - close it
+            // Try to handle menu click - if it returns false, click was outside any button
+            if !self.handle_menu_click(state) {
+                // Click outside any button - close menu
                 self.show_menu = false;
                 crate::print("📱 Menu closed");
             }
@@ -487,21 +410,22 @@ impl AudioRelay {
     ) {
         let item_height = MENU_ITEM_HEIGHT as usize;
         
-        // Draw title background
-        self.draw_rect(buffer, width, height, x, y, column_width, item_height, (60, 60, 60));
-        // Draw title text
-        self.draw_text(buffer, width, height, title, x + 10, y + 10, 20.0, (255, 255, 255));
+        // Draw title background (black)
+        self.draw_rect(buffer, width, height, x, y, column_width, item_height, (0, 0, 0));
+        // Draw title text (white)
+        self.draw_text(buffer, width, height, title, x + 10, y + 15, 20.0, (255, 255, 255));
         
         // Draw "Default" option
         let default_y = y + item_height + 5;
         let default_color = if use_default {
-            (0, 120, 255) // Blue for selected
+            (0, 255, 0) // Neon green for selected
         } else {
-            (80, 80, 80) // Gray for unselected
+            (0, 0, 0) // Black for unselected
         };
         self.draw_rect(buffer, width, height, x, default_y, column_width, item_height, default_color);
         // Draw "Default" text
-        self.draw_text(buffer, width, height, "Default", x + 10, default_y + 10, 16.0, (255, 255, 255));
+        let text_color = if use_default { (0, 0, 0) } else { (255, 255, 255) }; // Black on green, white on black
+        self.draw_text(buffer, width, height, "Default", x + 10, default_y + 15, 16.0, text_color);
         
         // Draw device options
         for (i, device) in devices.iter().enumerate() {
@@ -511,9 +435,9 @@ impl AudioRelay {
             }
             
             let item_color = if !use_default && i == selected_index {
-                (0, 120, 255) // Blue for selected
+                (0, 255, 0) // Neon green for selected
             } else {
-                (80, 80, 80) // Gray for unselected
+                (0, 0, 0) // Black for unselected
             };
             
             self.draw_rect(buffer, width, height, x, item_y, column_width, item_height, item_color);
@@ -524,7 +448,8 @@ impl AudioRelay {
             } else {
                 device.name.clone()
             };
-            self.draw_text(buffer, width, height, &device_name, x + 10, item_y + 10, 14.0, (255, 255, 255));
+            let text_color = if !use_default && i == selected_index { (0, 0, 0) } else { (255, 255, 255) };
+            self.draw_text(buffer, width, height, &device_name, x + 10, item_y + 15, 14.0, text_color);
         }
     }
     
@@ -667,7 +592,7 @@ impl AudioRelay {
         }
     }
     
-    fn handle_menu_click(&mut self, state: &mut EngineState) {
+    fn handle_menu_click(&mut self, state: &mut EngineState) -> bool {
         let shape = state.frame.shape();
         let _height = shape[0];
         let width = shape[1];
@@ -684,7 +609,7 @@ impl AudioRelay {
         
         // Check input column
         if mouse_x >= left_column_x && mouse_x < left_column_x + column_width {
-            self.handle_column_click(
+            return self.handle_column_click(
                 mouse_y,
                 menu_y,
                 item_height,
@@ -695,7 +620,7 @@ impl AudioRelay {
         
         // Check output column
         if mouse_x >= right_column_x && mouse_x < right_column_x + column_width {
-            self.handle_column_click(
+            return self.handle_column_click(
                 mouse_y,
                 menu_y,
                 item_height,
@@ -703,6 +628,9 @@ impl AudioRelay {
                 false, // is_output
             );
         }
+        
+        // Click was outside any column
+        false
     }
     
     fn handle_column_click(
@@ -712,7 +640,7 @@ impl AudioRelay {
         item_height: usize,
         devices: &[AudioDevice],
         is_input: bool,
-    ) {
+    ) -> bool {
         let default_y = menu_y + item_height + 5;
         
         // Check if clicked on "Default"
@@ -725,7 +653,7 @@ impl AudioRelay {
                 crate::print("🔄 Switched to default output device");
             }
             self.recreate_audio_devices();
-            return;
+            return true;
         }
         
         // Check device list
@@ -743,8 +671,12 @@ impl AudioRelay {
                     crate::print(&format!("🔄 Switched to output: {}", devices[device_index].name));
                 }
                 self.recreate_audio_devices();
+                return true;
             }
         }
+        
+        // Click was outside any button
+        false
     }
     
     fn recreate_audio_devices(&mut self) {

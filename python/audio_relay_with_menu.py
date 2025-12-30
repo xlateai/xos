@@ -20,9 +20,9 @@ BUTTON_SIZE_RATIO = 0.12  # 12% of smaller screen dimension
 BUTTON_BORDER_WIDTH = 3.0
 
 # Menu configuration
-HOLD_DURATION = 1.0  # 1 second hold to open menu
+HOLD_DURATION = 0.25  # 0.25 second hold to open menu
 MENU_PADDING = 20
-MENU_ITEM_HEIGHT = 40
+MENU_ITEM_HEIGHT = 50  # Slightly larger boxes
 MENU_COLUMN_WIDTH_RATIO = 0.4  # 40% of screen width per column
 
 
@@ -63,12 +63,16 @@ class AudioRelayWithMenu(xos.Application):
         xos.print(f"📱 Found {len(self.input_devices)} input devices")
         xos.print(f"🔊 Found {len(self.output_devices)} output devices")
         
+        # Always start with default devices (can change via menu)
+        self.selected_input_index = -1  # -1 means "Default"
+        self.selected_output_index = -1  # -1 means "Default"
+        
         # Create audio devices with default settings
         self.recreate_audio_devices()
         
         xos.print("✅ Devices ready!")
         xos.print("   - Quick tap: Toggle audio on/off")
-        xos.print("   - Hold 1s: Open device selection menu")
+        xos.print("   - Hold 0.25s: Open device menu")
     
     def recreate_audio_devices(self):
         """Recreate audio devices with current selection"""
@@ -200,21 +204,22 @@ class AudioRelayWithMenu(xos.Application):
         """Draw a device selection column"""
         item_height = MENU_ITEM_HEIGHT
         
-        # Draw title
+        # Draw title (black background)
         xos.rasterizer.rects_filled(
             self.frame, x, y, x + column_width, y + item_height,
-            (60, 60, 60, 255)
+            (0, 0, 0, 255)
         )
-        xos.rasterizer.text(title, float(x + 10), float(y + 10), 20.0, (255, 255, 255), float(column_width - 20))
+        xos.rasterizer.text(title, float(x + 10), float(y + 15), 20.0, (255, 255, 255), float(column_width - 20))
         
         # Draw "Default" option
         default_y = y + item_height + 5
-        default_color = (0, 120, 255, 255) if selected_index == -1 else (80, 80, 80, 255)
+        default_color = (0, 255, 0, 255) if selected_index == -1 else (0, 0, 0, 255)  # Neon green or black
         xos.rasterizer.rects_filled(
             self.frame, x, default_y, x + column_width, default_y + item_height,
             default_color
         )
-        xos.rasterizer.text("Default", float(x + 10), float(default_y + 10), 16.0, (255, 255, 255), float(column_width - 20))
+        text_color = (0, 0, 0) if selected_index == -1 else (255, 255, 255)  # Black on green, white on black
+        xos.rasterizer.text("Default", float(x + 10), float(default_y + 15), 16.0, text_color, float(column_width - 20))
         
         # Draw device options
         for i, device in enumerate(devices):
@@ -222,7 +227,7 @@ class AudioRelayWithMenu(xos.Application):
             if item_y + item_height >= self.get_height():
                 break
             
-            item_color = (0, 120, 255, 255) if i == selected_index else (80, 80, 80, 255)
+            item_color = (0, 255, 0, 255) if i == selected_index else (0, 0, 0, 255)  # Neon green or black
             xos.rasterizer.rects_filled(
                 self.frame, x, item_y, x + column_width, item_y + item_height,
                 item_color
@@ -233,25 +238,16 @@ class AudioRelayWithMenu(xos.Application):
             if len(device_name) > 30:
                 device_name = device_name[:27] + "..."
             
-            xos.rasterizer.text(device_name, float(x + 10), float(item_y + 10), 14.0, (255, 255, 255), float(column_width - 20))
+            text_color = (0, 0, 0) if i == selected_index else (255, 255, 255)
+            xos.rasterizer.text(device_name, float(x + 10), float(item_y + 15), 14.0, text_color, float(column_width - 20))
     
     def on_mouse_down(self, x, y):
         """Handle mouse down event"""
         # If menu is showing, handle menu interactions or close it
         if self.show_menu:
-            # Check if click is inside menu area
-            width = self.get_width()
-            column_width = int(width * MENU_COLUMN_WIDTH_RATIO)
-            gap = 20
-            left_column_x = int((width - column_width * 2 - gap) / 2)
-            right_column_x = left_column_x + column_width + gap
-            menu_width = column_width * 2 + gap
-            
-            # If click is inside menu area, handle it
-            if x >= left_column_x and x <= right_column_x + column_width:
-                self.handle_menu_click(x, y)
-            else:
-                # Click outside menu - close it
+            # Try to handle menu click - if it returns False, click was outside any button
+            if not self.handle_menu_click(x, y):
+                # Click outside any button - close menu
                 self.show_menu = False
                 xos.print("📱 Menu closed")
             return
@@ -304,7 +300,7 @@ class AudioRelayWithMenu(xos.Application):
                     xos.print("⬜ Audio relay DISABLED - Mic light OFF")
     
     def handle_menu_click(self, mouse_x, mouse_y):
-        """Handle clicks in the device selection menu"""
+        """Handle clicks in the device selection menu. Returns True if clicked on a button."""
         width = self.get_width()
         
         # Calculate menu dimensions
@@ -317,14 +313,17 @@ class AudioRelayWithMenu(xos.Application):
         
         # Check input column
         if mouse_x >= left_column_x and mouse_x < left_column_x + column_width:
-            self.handle_column_click(mouse_y, menu_y, item_height, self.input_devices, True)
+            return self.handle_column_click(mouse_y, menu_y, item_height, self.input_devices, True)
         
         # Check output column
         if mouse_x >= right_column_x and mouse_x < right_column_x + column_width:
-            self.handle_column_click(mouse_y, menu_y, item_height, self.output_devices, False)
+            return self.handle_column_click(mouse_y, menu_y, item_height, self.output_devices, False)
+        
+        # Click was outside any column
+        return False
     
     def handle_column_click(self, mouse_y, menu_y, item_height, devices, is_input):
-        """Handle click in a device column"""
+        """Handle click in a device column. Returns True if clicked on a button."""
         default_y = menu_y + item_height + 5
         
         # Check if clicked on "Default"
@@ -336,7 +335,7 @@ class AudioRelayWithMenu(xos.Application):
                 self.selected_output_index = -1
                 xos.print("🔄 Switched to default output device")
             self.recreate_audio_devices()
-            return
+            return True
         
         # Check device list
         first_device_y = default_y + item_height + 5
@@ -350,12 +349,16 @@ class AudioRelayWithMenu(xos.Application):
                     self.selected_output_index = device_index
                     xos.print(f"🔄 Switched to output: {devices[device_index]['name']}")
                 self.recreate_audio_devices()
+                return True
+        
+        # Click was outside any button
+        return False
 
 
 if __name__ == "__main__":
     xos.print("🎤 → 🔊  Audio Relay with Device Selection")
     xos.print("Quick tap: Toggle audio on/off")
-    xos.print("Hold 1s: Open device menu")
+    xos.print("Hold 0.25s: Open device menu")
     
     app = AudioRelayWithMenu()
     app.run()
