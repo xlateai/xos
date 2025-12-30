@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::text::TextApp;
-use crate::apps::coder::button::Button;
+use crate::ui::Button;
 use crate::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
 use include_dir::{include_dir, Dir};

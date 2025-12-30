@@ -12,5 +12,6 @@ pub mod math;
 pub mod ops;
 pub mod dtypes;
 pub mod data;
+pub mod ui;
 
 pub use runtime::{run_python_file, run_python_interactive, run_python_app};
