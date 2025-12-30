@@ -253,15 +253,26 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .collect();
         }
         
-        // Convert to Python list
-        let py_list: Vec<PyObjectRef> = random_data.iter()
-            .map(|&f| vm.ctx.new_float(f as f64).into())
-            .collect();
+        // Create a proper xos.Array backed by Rust memory
+        use crate::tensor::array::{Array, Device};
+        use crate::python::arrays::PyArray;
+        use crate::python::dtypes::DType;
         
-        Ok(vm.ctx.new_list(py_list).into())
+        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
+        let py_array = PyArray::new(rust_array);
+        let dict = py_array.to_py_dict(vm, DType::Float32)?;
+        
+        // Wrap in _ArrayWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+            if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+                return Ok(wrapped);
+            }
+        }
+        
+        Ok(dict.into())
     } else {
         // Generate random u8 values (0-255) for image data
-        let random_data: Vec<u8>;
+        let random_data: Vec<f32>;
         
         #[cfg(target_arch = "wasm32")]
         {
@@ -269,7 +280,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .map(|_| {
                     let random = js_sys::Math::random();
                     let value = low + random * (high - low);
-                    value.clamp(0.0, 255.0) as u8
+                    value.clamp(0.0, 255.0) as f32
                 })
                 .collect();
         }
@@ -281,17 +292,28 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             random_data = (0..total_elements)
                 .map(|_| {
                     let value: f64 = rng.random_range(low..high);
-                    value.clamp(0.0, 255.0) as u8
+                    value.clamp(0.0, 255.0) as f32
                 })
                 .collect();
         }
         
-        // Convert to Python list
-        let py_list: Vec<PyObjectRef> = random_data.iter()
-            .map(|&b| vm.ctx.new_int(b).into())
-            .collect();
+        // Create a proper xos.Array backed by Rust memory (stored as f32, displayed as u8)
+        use crate::tensor::array::{Array, Device};
+        use crate::python::arrays::PyArray;
+        use crate::python::dtypes::DType;
         
-        Ok(vm.ctx.new_list(py_list).into())
+        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
+        let py_array = PyArray::new(rust_array);
+        let dict = py_array.to_py_dict(vm, DType::UInt8)?;
+        
+        // Wrap in _ArrayWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+            if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+                return Ok(wrapped);
+            }
+        }
+        
+        Ok(dict.into())
     }
 }
 
