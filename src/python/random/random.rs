@@ -130,20 +130,31 @@ fn try_fill_random_metal(_buffer: &mut [u8], _low: f64, _high: f64) -> bool {
     false
 }
 
-/// xos.random.uniform(min, max, shape=None, dtype=None) - returns a random float or array
+/// xos.random.uniform(low=0.0, high=1.0, shape=None, dtype=None) - returns a random float or array
 /// 
-/// If shape is None (default), returns a single random float between min and max
+/// If shape is None (default), returns a single random float between low and high
 /// If shape is provided as a tuple, returns an array of random values
 /// dtype can be specified (default: inferred from context - float32 for kernels, uint8 for images)
 fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
-    if args_vec.len() < 2 {
-        return Err(vm.new_type_error("uniform() requires at least 2 arguments (min, max)".to_string()));
-    }
+    // Parse low parameter (default: 0.0)
+    let low: f64 = if !args_vec.is_empty() {
+        args_vec[0].clone().try_into_value(vm)?
+    } else if let Some(low_kwarg) = args.kwargs.get("low") {
+        low_kwarg.clone().try_into_value(vm)?
+    } else {
+        0.0
+    };
     
-    let min: f64 = args_vec[0].clone().try_into_value(vm)?;
-    let max: f64 = args_vec[1].clone().try_into_value(vm)?;
+    // Parse high parameter (default: 1.0)
+    let high: f64 = if args_vec.len() > 1 {
+        args_vec[1].clone().try_into_value(vm)?
+    } else if let Some(high_kwarg) = args.kwargs.get("high") {
+        high_kwarg.clone().try_into_value(vm)?
+    } else {
+        1.0
+    };
     
     // Check if shape argument was provided (as 3rd positional arg or as kwarg)
     let shape_arg = if args_vec.len() > 2 && !vm.is_none(&args_vec[2]) {
@@ -173,7 +184,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         #[cfg(target_arch = "wasm32")]
         {
             let random = js_sys::Math::random();
-            let value = min + random * (max - min);
+            let value = low + random * (high - low);
             return Ok(vm.ctx.new_float(value).into());
         }
         
@@ -181,7 +192,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         {
             use rand::Rng;
             let mut rng = rand::rng();
-            let value: f64 = rng.random_range(min..max);
+            let value: f64 = rng.random_range(low..high);
             return Ok(vm.ctx.new_float(value).into());
         }
     }
@@ -225,7 +236,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             random_data = (0..total_elements)
                 .map(|_| {
                     let random = js_sys::Math::random();
-                    (min + random * (max - min)) as f32
+                    (low + random * (high - low)) as f32
                 })
                 .collect();
         }
@@ -236,7 +247,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let mut rng = rand::rng();
             random_data = (0..total_elements)
                 .map(|_| {
-                    let value: f64 = rng.random_range(min..max);
+                    let value: f64 = rng.random_range(low..high);
                     value as f32
                 })
                 .collect();
@@ -257,7 +268,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             random_data = (0..total_elements)
                 .map(|_| {
                     let random = js_sys::Math::random();
-                    let value = min + random * (max - min);
+                    let value = low + random * (high - low);
                     value.clamp(0.0, 255.0) as u8
                 })
                 .collect();
@@ -269,7 +280,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let mut rng = rand::rng();
             random_data = (0..total_elements)
                 .map(|_| {
-                    let value: f64 = rng.random_range(min..max);
+                    let value: f64 = rng.random_range(low..high);
                     value.clamp(0.0, 255.0) as u8
                 })
                 .collect();
