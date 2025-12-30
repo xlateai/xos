@@ -6,7 +6,6 @@ xos enables applications to target multiple platforms with minimal code divergen
 
 Applications built with xos are standalone programs that run on any supported backend. Implemented in Rust, xos leverages a modern build system, strong safety guarantees, and predictable performance, while maintaining broad platform compatibility and low-level control where required. This makes xos well-suited for rapid prototyping, research tooling, and experimental systems that span UI, graphics, and numerical computation.
 
-
 ## Experimental Status
 The xos API is currently experimental and subject to change. In particular, the application engine interface is evolving to support headless execution, sub-frame embedding, and cross-application interoperability.
 
