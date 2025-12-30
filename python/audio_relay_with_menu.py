@@ -205,7 +205,7 @@ class AudioRelayWithMenu(xos.Application):
             self.frame, x, y, x + column_width, y + item_height,
             (60, 60, 60, 255)
         )
-        xos.rasterizer.text(title, x + 10, y + 10, 20, (255, 255, 255), column_width - 20)
+        xos.rasterizer.text(title, float(x + 10), float(y + 10), 20.0, (255, 255, 255), float(column_width - 20))
         
         # Draw "Default" option
         default_y = y + item_height + 5
@@ -214,7 +214,7 @@ class AudioRelayWithMenu(xos.Application):
             self.frame, x, default_y, x + column_width, default_y + item_height,
             default_color
         )
-        xos.rasterizer.text("Default", x + 10, default_y + 10, 16, (255, 255, 255), column_width - 20)
+        xos.rasterizer.text("Default", float(x + 10), float(default_y + 10), 16.0, (255, 255, 255), float(column_width - 20))
         
         # Draw device options
         for i, device in enumerate(devices):
@@ -233,16 +233,31 @@ class AudioRelayWithMenu(xos.Application):
             if len(device_name) > 30:
                 device_name = device_name[:27] + "..."
             
-            xos.rasterizer.text(device_name, x + 10, item_y + 10, 14, (255, 255, 255), column_width - 20)
+            xos.rasterizer.text(device_name, float(x + 10), float(item_y + 10), 14.0, (255, 255, 255), float(column_width - 20))
     
     def on_mouse_down(self, x, y):
         """Handle mouse down event"""
-        # Start hold timer
-        self.mouse_down_time = time.time()
-        
-        # Handle menu interactions if menu is shown
+        # If menu is showing, handle menu interactions or close it
         if self.show_menu:
-            self.handle_menu_click(x, y)
+            # Check if click is inside menu area
+            width = self.get_width()
+            column_width = int(width * MENU_COLUMN_WIDTH_RATIO)
+            gap = 20
+            left_column_x = int((width - column_width * 2 - gap) / 2)
+            right_column_x = left_column_x + column_width + gap
+            menu_width = column_width * 2 + gap
+            
+            # If click is inside menu area, handle it
+            if x >= left_column_x and x <= right_column_x + column_width:
+                self.handle_menu_click(x, y)
+            else:
+                # Click outside menu - close it
+                self.show_menu = False
+                xos.print("📱 Menu closed")
+            return
+        
+        # Start hold timer only if menu is not showing
+        self.mouse_down_time = time.time()
     
     def on_mouse_up(self, x, y):
         """Handle mouse up event"""
@@ -254,9 +269,8 @@ class AudioRelayWithMenu(xos.Application):
         # Clear hold timer
         self.mouse_down_time = None
         
-        # If menu is showing, just close it
+        # If menu is showing, don't close it on release - only close on next click outside
         if self.show_menu:
-            self.show_menu = False
             return
         
         # If it was a quick tap (not a hold), toggle audio

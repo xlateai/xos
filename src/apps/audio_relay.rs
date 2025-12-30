@@ -1,5 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::audio::{devices, default_input, default_output, AudioListener, AudioPlayer, AudioDevice};
+use crate::text::text_rasterization::TextRasterizer;
+use fontdue::Font;
 use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black background
@@ -34,10 +36,16 @@ pub struct AudioRelay {
     // Device lists (cached from setup)
     input_devices: Vec<AudioDevice>,
     output_devices: Vec<AudioDevice>,
+    // Font for text rendering
+    font: Option<Font>,
 }
 
 impl AudioRelay {
     pub fn new() -> Self {
+        // Load font
+        let font_data = include_bytes!("../../assets/NotoSans-Medium.ttf");
+        let font = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()).ok();
+        
         Self {
             listener: None,
             player: None,
@@ -52,6 +60,7 @@ impl AudioRelay {
             mouse_down_time: None,
             input_devices: Vec::new(),
             output_devices: Vec::new(),
+            font,
         }
     }
 }
@@ -271,14 +280,31 @@ impl Application for AudioRelay {
             return;
         }
         
-        // Start hold timer
-        self.mouse_down_time = Some(Instant::now());
-        
-        // Handle menu interactions if menu is shown
+        // If menu is showing, handle menu interactions or close it
         if self.show_menu {
-            self.handle_menu_click(state);
+            // Check if click is inside menu area
+            let shape = state.frame.shape();
+            let width = shape[1];
+            let column_width = (width as f32 * MENU_COLUMN_WIDTH_RATIO) as usize;
+            let gap = 20;
+            let left_column_x = (width - column_width * 2 - gap) / 2;
+            let right_column_x = left_column_x + column_width + gap;
+            
+            let mouse_x = state.mouse.x as usize;
+            
+            // If click is inside menu area, handle it
+            if mouse_x >= left_column_x && mouse_x <= right_column_x + column_width {
+                self.handle_menu_click(state);
+            } else {
+                // Click outside menu - close it
+                self.show_menu = false;
+                crate::print("📱 Menu closed");
+            }
             return;
         }
+        
+        // Start hold timer only if menu is not showing
+        self.mouse_down_time = Some(Instant::now());
     }
     
     fn on_mouse_up(&mut self, state: &mut EngineState) {
@@ -294,9 +320,8 @@ impl Application for AudioRelay {
         // Clear hold timer
         self.mouse_down_time = None;
         
-        // If menu is showing, just close it
+        // If menu is showing, don't close on release - menu stays open
         if self.show_menu {
-            self.show_menu = false;
             return;
         }
         
@@ -455,7 +480,7 @@ impl AudioRelay {
         x: usize,
         y: usize,
         column_width: usize,
-        _title: &str,
+        title: &str,
         devices: &[AudioDevice],
         selected_index: usize,
         use_default: bool,
@@ -464,6 +489,8 @@ impl AudioRelay {
         
         // Draw title background
         self.draw_rect(buffer, width, height, x, y, column_width, item_height, (60, 60, 60));
+        // Draw title text
+        self.draw_text(buffer, width, height, title, x + 10, y + 10, 20.0, (255, 255, 255));
         
         // Draw "Default" option
         let default_y = y + item_height + 5;
@@ -473,9 +500,11 @@ impl AudioRelay {
             (80, 80, 80) // Gray for unselected
         };
         self.draw_rect(buffer, width, height, x, default_y, column_width, item_height, default_color);
+        // Draw "Default" text
+        self.draw_text(buffer, width, height, "Default", x + 10, default_y + 10, 16.0, (255, 255, 255));
         
         // Draw device options
-        for (i, _device) in devices.iter().enumerate() {
+        for (i, device) in devices.iter().enumerate() {
             let item_y = default_y + item_height + 5 + i * (item_height + 5);
             if item_y + item_height >= height {
                 break;
@@ -488,6 +517,62 @@ impl AudioRelay {
             };
             
             self.draw_rect(buffer, width, height, x, item_y, column_width, item_height, item_color);
+            
+            // Draw device name text (truncate if too long)
+            let device_name = if device.name.len() > 30 {
+                format!("{}...", &device.name[..27])
+            } else {
+                device.name.clone()
+            };
+            self.draw_text(buffer, width, height, &device_name, x + 10, item_y + 10, 14.0, (255, 255, 255));
+        }
+    }
+    
+    fn draw_text(
+        &self,
+        buffer: &mut [u8],
+        width: usize,
+        height: usize,
+        text: &str,
+        x: usize,
+        y: usize,
+        font_size: f32,
+        color: (u8, u8, u8),
+    ) {
+        if let Some(ref font) = self.font {
+            let mut rasterizer = TextRasterizer::new(font.clone(), font_size);
+            rasterizer.set_text(text.to_string());
+            rasterizer.tick(width as f32, height as f32);
+            
+            for character in &rasterizer.characters {
+                let char_x = x as i32 + character.x as i32;
+                let char_y = y as i32 + character.y as i32;
+                
+                for bitmap_y in 0..character.metrics.height {
+                    for bitmap_x in 0..character.metrics.width {
+                        let alpha = character.bitmap[bitmap_y * character.metrics.width + bitmap_x];
+                        
+                        if alpha == 0 {
+                            continue;
+                        }
+                        
+                        let px = char_x + bitmap_x as i32;
+                        let py = char_y + bitmap_y as i32;
+                        
+                        if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                            let idx = ((py as usize * width + px as usize) * 4) as usize;
+                            
+                            // Blend with existing pixel using alpha
+                            let alpha_f = alpha as f32 / 255.0;
+                            let inv_alpha = 1.0 - alpha_f;
+                            
+                            buffer[idx + 0] = ((color.0 as f32 * alpha_f) + (buffer[idx + 0] as f32 * inv_alpha)) as u8;
+                            buffer[idx + 1] = ((color.1 as f32 * alpha_f) + (buffer[idx + 1] as f32 * inv_alpha)) as u8;
+                            buffer[idx + 2] = ((color.2 as f32 * alpha_f) + (buffer[idx + 2] as f32 * inv_alpha)) as u8;
+                        }
+                    }
+                }
+            }
         }
     }
     
