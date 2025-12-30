@@ -43,7 +43,8 @@ class StaticWithAudio(xos.Application):
                 sample_rate=SAMPLE_RATE,
                 channels=1  # Mono audio
             )
-            xos.print(f"Speaker initialized at {SAMPLE_RATE} Hz")
+            xos.print(f"🔊 Speaker: {self.speaker.name}")
+            xos.print(f"   Sample rate: {SAMPLE_RATE} Hz")
         except Exception as e:
             xos.print(f"Failed to initialize speaker: {e}")
             self.speaker = None

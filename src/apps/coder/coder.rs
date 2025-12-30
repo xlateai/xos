@@ -311,8 +311,45 @@ impl CoderApp {
                 new_scope
             };
             
+            // Set up print capture for viewport apps
+            let output_buffer = Arc::clone(&self.python_output_buffer);
+            let write_output_fn = vm.new_function(
+                "__write_output__",
+                move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
+                    if let Some(text_obj) = args.args.first() {
+                        if let Ok(text) = text_obj.str(_vm) {
+                            if let Ok(mut buffer) = output_buffer.lock() {
+                                buffer.push_str(&text.to_string());
+                            }
+                        }
+                    }
+                    Ok(_vm.ctx.none())
+                },
+            );
+            scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
+            
+            // Override print to capture output
+            let setup_code = r#"
+import builtins
+__original_print__ = builtins.print
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __write_output__(output)
+
+builtins.print = __custom_print__
+"#;
+            
+            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                eprintln!("Failed to set up print capture: {:?}", e);
+            }
+            
             // Run the code
             let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
+            
+            // Restore original print
+            let restore_code = "builtins.print = __original_print__";
+            vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
             
             // Handle errors
             if let Err(py_exc) = exec_result {
@@ -1535,7 +1572,7 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
-        println!("Mouse down at ({}, {})", mouse_x, mouse_y);
+        crate::print(&format!("Mouse down at ({}, {})", mouse_x, mouse_y));
         
         // Check if keyboard is shown - only handle keyboard accessories if keyboard is visible
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
@@ -1556,15 +1593,15 @@ impl Application for CoderApp {
         let tabs_top_y = tabs_bottom_y - tab_height as f32;
         let tab_top_y = tabs_top_y as i32;
         
-        println!("Button position - x: {}, y: {}, width: {}, height: {}", 
-                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height);
-        println!("Tab position - y: {}, height: {}", tab_top_y, tab_height);
+        crate::print(&format!("Button position - x: {}, y: {}, width: {}, height: {}", 
+                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height));
+        crate::print(&format!("Tab position - y: {}, height: {}", tab_top_y, tab_height));
         
         // Only handle clicks on keyboard accessories when keyboard is shown
         if keyboard_is_shown {
             // Check if click is on code.py tab
             if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
-                println!("Code tab clicked");
+                crate::print("Code tab clicked");
                 if self.active_tab == Tab::Code {
                     // Already on code tab - toggle file explorer
                     match self.code_view_mode {
@@ -1572,11 +1609,11 @@ impl Application for CoderApp {
                             // Save current file before switching to explorer
                             self.save_current_file();
                             self.code_view_mode = CodeViewMode::FileExplorer;
-                            println!("Switched to file explorer");
+                            crate::print("Switched to file explorer");
                         }
                         CodeViewMode::FileExplorer => {
                             self.code_view_mode = CodeViewMode::Editor;
-                            println!("Switched to editor");
+                            crate::print("Switched to editor");
                         }
                     }
                 } else {
@@ -1589,14 +1626,14 @@ impl Application for CoderApp {
             
             // Check if click is on terminal tab
             if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
-                println!("Terminal tab clicked");
+                crate::print("Terminal tab clicked");
                 self.active_tab = Tab::Terminal;
                 return;
             }
             
             // Check if click is on viewport tab
             if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
-                println!("Viewport tab clicked");
+                crate::print("Viewport tab clicked");
                 self.active_tab = Tab::Viewport;
                 return;
             }

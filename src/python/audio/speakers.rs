@@ -199,7 +199,7 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
     
         // Get the device to use and create AudioPlayer
-        let player = if let Some(device_id) = device_id_opt {
+        let (player, device_name) = if let Some(device_id) = device_id_opt {
             // Specific device requested
             let all_devices = audio::devices();
             let output_devices: Vec<_> = all_devices
@@ -215,15 +215,18 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, output_devices.len())));
             }
             
+            let device_name = output_devices[device_id].name.clone();
+            
             #[cfg(target_os = "ios")]
             {
                 let actual_device_id = output_devices[device_id].device_id;
                 crate::print(&format!("[xos.audio.Speaker] Creating speaker with device_id={}, sample_rate={}, channels={}", actual_device_id, sample_rate, channels));
-                AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
+                let player = AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
                     .map_err(|e| {
                         crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
                         vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
-                    })?
+                    })?;
+                (player, device_name)
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -232,21 +235,24 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 let device = &output_devices[device_id];
                 let inner = audio::AudioPlayer::new(device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
-                AudioPlayer { inner }
+                (AudioPlayer { inner }, device_name)
             }
         } else {
             // Use default output device
             let default_device = audio::default_output()
                 .ok_or_else(|| vm.new_runtime_error("No default output device found".to_string()))?;
             
+            let device_name = default_device.name.clone();
+            
             #[cfg(target_os = "ios")]
             {
                 crate::print(&format!("[xos.audio.Speaker] Creating speaker with default device (device_id={}), sample_rate={}, channels={}", default_device.device_id, sample_rate, channels));
-                AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
+                let player = AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
                     .map_err(|e| {
                         crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
                         vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
-                    })?
+                    })?;
+                (player, device_name)
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -254,7 +260,7 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 // On native, create directly with the default device
                 let inner = audio::AudioPlayer::new(&default_device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
-                AudioPlayer { inner }
+                (AudioPlayer { inner }, device_name)
             }
         };
     
@@ -273,10 +279,11 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Create a Python class for the Speaker
     let code = format!(r#"
 class Speaker:
-    def __init__(self, player_ptr):
+    def __init__(self, player_ptr, device_name):
         self._player_ptr = player_ptr
         self._sample_rate = {}
         self._channels = {}
+        self._name = device_name
     
     def play_samples(self, samples, gain=1.0):
         """
@@ -311,6 +318,11 @@ class Speaker:
         """Get the number of channels."""
         return self._channels
     
+    @property
+    def name(self):
+        """Get the name of the speaker device."""
+        return self._name
+    
     def __del__(self):
         """Clean up the speaker when the object is destroyed."""
         if self._player_ptr != 0:
@@ -318,8 +330,8 @@ class Speaker:
             xos.audio._speaker_cleanup(self._player_ptr)
             self._player_ptr = 0
 
-_speaker_instance = Speaker({})
-"#, sample_rate, channels, player_ptr);
+_speaker_instance = Speaker({}, "{}")
+"#, sample_rate, channels, player_ptr, device_name.replace("\"", "\\\""));
     
     let scope = vm.new_scope_with_builtins();
     vm.run_code_string(scope.clone(), &code, "<speaker>".to_string())?;
