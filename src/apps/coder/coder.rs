@@ -297,24 +297,84 @@ impl CoderApp {
     }
     
     fn execute_viewport_app(&mut self, code: &str) {
-        // Use unified runtime
-        let (result, output, app_instance, new_scope) = crate::python::runtime::execute_python_code(
-            &self.interpreter,
-            code,
-            "<coder>",
-            self.persistent_scope.clone(),
-            None,
-        );
-        
-        // Update persistent scope
-        self.persistent_scope = new_scope;
-        
-        // Update output buffer
+        // Clear output buffer before execution
         {
             let mut buffer = self.python_output_buffer.lock().unwrap();
             buffer.clear();
-            buffer.push_str(&output);
         }
+        
+        // Execute with print capture, but DON'T restore print (keep it active for setup/tick)
+        let (result, app_instance, new_scope) = self.interpreter.enter(|vm| {
+            // Clear previous app instance
+            let _ = vm.builtins.as_object().to_owned().del_attr("__xos_app_instance__", vm);
+            
+            // Get or create scope
+            let scope = if let Some(ref existing_scope) = self.persistent_scope {
+                existing_scope.clone()
+            } else {
+                let new_scope = vm.new_scope_with_builtins();
+                let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+                new_scope
+            };
+            
+            // Set up persistent print capture (DON'T restore it)
+            let buffer_clone = Arc::clone(&self.python_output_buffer);
+            let write_output_fn = vm.new_function(
+                "__write_output__",
+                move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
+                    if let Some(text_obj) = args.args.first() {
+                        if let Ok(text) = text_obj.str(_vm) {
+                            if let Ok(mut buffer) = buffer_clone.lock() {
+                                buffer.push_str(&text.to_string());
+                            }
+                        }
+                    }
+                    Ok(_vm.ctx.none())
+                },
+            );
+            scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
+            
+            // Override print permanently (for setup/tick calls)
+            let setup_code = r#"
+import builtins
+import xos
+
+def __custom_print__(*args, sep=' ', end='\n', **kwargs):
+    output = sep.join(str(arg) for arg in args) + end
+    __write_output__(output)
+
+builtins.print = __custom_print__
+xos.print = __custom_print__
+"#;
+            
+            if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+                eprintln!("Failed to set up print capture: {:?}", e);
+            }
+            
+            // Run the code
+            let exec_result = vm.run_code_string(scope.clone(), code, "<coder>".to_string());
+            
+            // Handle errors
+            let result = if let Err(py_exc) = exec_result {
+                let error_text = crate::python::runtime::format_python_exception(vm, &py_exc);
+                Err(error_text)
+            } else {
+                Ok(())
+            };
+            
+            // Check for app instance
+            let app_instance = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__")
+                .ok()
+                .flatten();
+            
+            (result, app_instance, scope)
+        });
+        
+        // Update persistent scope
+        self.persistent_scope = Some(new_scope);
+        
+        // Get current output
+        let current_output = self.python_output_buffer.lock().unwrap().clone();
         
         // Handle result
         match result {
@@ -322,16 +382,25 @@ impl CoderApp {
                 if let Some(app_instance_obj) = app_instance {
                     self.viewport_app = Some(app_instance_obj);
                     self.viewport_app_setup_done = false;
-                    self.terminal_app.text_rasterizer.text = "[xos] Application registered - rendering to viewport tab\n".to_string();
+                    
+                    // Keep the output buffer active - it will be updated by setup/tick
+                    // Terminal will show accumulated output from the buffer
                     if self.active_tab == Tab::Code {
                         self.active_tab = Tab::Viewport;
                     }
                 } else {
-                    self.terminal_app.text_rasterizer.text = output;
+                    self.terminal_app.text_rasterizer.text = if !current_output.is_empty() { current_output } else { "(no output)".to_string() };
                 }
             }
             Err(error) => {
-                self.terminal_app.text_rasterizer.text = error + "\n";
+                let mut error_display = current_output;
+                if !error_display.trim().is_empty() {
+                    error_display.push_str("\n");
+                }
+                error_display.push_str(&error);
+                error_display.push('\n');
+                
+                self.terminal_app.text_rasterizer.text = error_display;
                 if self.active_tab == Tab::Code {
                     self.active_tab = Tab::Terminal;
                 }
@@ -896,18 +965,17 @@ impl Application for CoderApp {
             }
         }
         
-        // Append any pending Rust/Swift logs to the terminal
-        if super::logging::has_pending_logs() {
-            let logs = super::logging::read_pending_logs();
-            if !logs.is_empty() {
-                // Only append if we're not currently running a background script
-                // (to avoid mixing Rust logs with Python output)
-                let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
-                if !is_background_running {
-                    self.terminal_app.text_rasterizer.text.push_str(&logs);
-                }
-            }
-        }
+        // Disabled: Rust/Swift logs are too noisy and interfere with Python output
+        // Only show Python output in the terminal for now
+        // if super::logging::has_pending_logs() {
+        //     let logs = super::logging::read_pending_logs();
+        //     if !logs.is_empty() {
+        //         let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+        //         if !is_background_running {
+        //             self.terminal_app.text_rasterizer.text.push_str(&logs);
+        //         }
+        //     }
+        // }
         
         // Check if background thread is done and clean it up
         if let Some(handle) = &self.python_thread_handle {

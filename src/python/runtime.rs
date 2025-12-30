@@ -114,6 +114,7 @@ pub fn execute_python_code(
         // Override print to capture output
         let setup_code = r#"
 import builtins
+import xos
 __original_print__ = builtins.print
 
 def __custom_print__(*args, sep=' ', end='\n', **kwargs):
@@ -121,6 +122,7 @@ def __custom_print__(*args, sep=' ', end='\n', **kwargs):
     __write_output__(output)
 
 builtins.print = __custom_print__
+xos.print = __custom_print__
 "#;
         
         if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
@@ -131,7 +133,10 @@ builtins.print = __custom_print__
         let exec_result = vm.run_code_string(scope.clone(), code, filename.to_string());
         
         // Restore original print
-        let restore_code = "builtins.print = __original_print__";
+        let restore_code = r#"
+builtins.print = __original_print__
+xos.print = __original_print__
+"#;
         vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
         
         // Handle errors
