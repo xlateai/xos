@@ -23,8 +23,8 @@ class StaticWithAudio(xos.Application):
         system_type = xos.system.get_system_type()
         
         if system_type == "IOS":
-            # On iOS, use device 0 (built-in speaker)
-            device_id = 0
+            # On iOS, use default output device (built-in speaker)
+            device_id = None
         else:
             # On other platforms, let user select
             output_devices = xos.audio.get_output_devices()
@@ -82,12 +82,9 @@ class StaticWithAudio(xos.Application):
                 # Clamp to reasonable bounds
                 samples_to_add = max(TARGET_BATCH_SIZE, min(samples_to_add, MAX_SAMPLES_BUFFER_SIZE))
                 
-                # Generate random audio samples (white noise)
-                # Build a simple list of random floats (more compatible approach)
-                audio_samples = []
-                for _ in range(samples_to_add):
-                    sample = xos.random.uniform(AUDIO_MIN, AUDIO_MAX)
-                    audio_samples.append(sample)
+                # Generate random audio samples (white noise) as xos.Array
+                audio_samples = xos.Array((samples_to_add,), dtype="float32")
+                xos.random.uniform_fill(audio_samples, AUDIO_MIN, AUDIO_MAX)
                 
                 # Play the samples
                 self.speaker.play_samples(audio_samples)

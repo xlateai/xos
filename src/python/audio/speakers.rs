@@ -218,8 +218,12 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             #[cfg(target_os = "ios")]
             {
                 let actual_device_id = output_devices[device_id].device_id;
+                crate::print(&format!("[xos.audio.Speaker] Creating speaker with device_id={}, sample_rate={}, channels={}", actual_device_id, sample_rate, channels));
                 AudioPlayer::new(actual_device_id, sample_rate as u32, channels as u16)
-                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
+                    .map_err(|e| {
+                        crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
+                        vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
+                    })?
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -237,8 +241,12 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             
             #[cfg(target_os = "ios")]
             {
+                crate::print(&format!("[xos.audio.Speaker] Creating speaker with default device (device_id={}), sample_rate={}, channels={}", default_device.device_id, sample_rate, channels));
                 AudioPlayer::new(default_device.device_id, sample_rate as u32, channels as u16)
-                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?
+                    .map_err(|e| {
+                        crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to initialize speaker: {}", e));
+                        vm.new_runtime_error(format!("Failed to initialize speaker: {}", e))
+                    })?
             }
             
             #[cfg(not(target_os = "ios"))]
@@ -367,7 +375,10 @@ pub fn speaker_play_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     // Play the samples
     player.play_samples(&samples)
-        .map_err(|e| vm.new_runtime_error(format!("Failed to play samples: {}", e)))?;
+        .map_err(|e| {
+            crate::print(&format!("[xos.audio.Speaker] ERROR: Failed to play {} samples: {}", samples.len(), e));
+            vm.new_runtime_error(format!("Failed to play samples: {}", e))
+        })?;
     
     Ok(vm.ctx.none())
 }
@@ -433,7 +444,9 @@ pub fn speaker_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// Clean up ALL active speakers (called when stopping app or switching)
 pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    crate::print("[xos.audio] Cleaning up all speakers...");
     cleanup_all_speakers_rust();
+    crate::print("[xos.audio] All speakers cleaned up");
     Ok(vm.ctx.none())
 }
 
@@ -441,6 +454,7 @@ pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn cleanup_all_speakers_rust() {
     let speaker_ptrs: Vec<usize> = if let Ok(mut speakers) = get_active_speakers().lock() {
         let ptrs: Vec<usize> = speakers.drain().collect();
+        crate::print(&format!("[xos.audio] Cleaning up {} speaker(s)", ptrs.len()));
         ptrs
     } else {
         vec![]
@@ -449,11 +463,13 @@ pub fn cleanup_all_speakers_rust() {
     // Drop the Rust-side objects
     for ptr in speaker_ptrs {
         if ptr != 0 {
+            crate::print(&format!("[xos.audio] Dropping speaker at ptr={:#x}", ptr));
             unsafe {
                 let _ = Box::from_raw(ptr as *mut AudioPlayer);
             }
         }
     }
+    crate::print("[xos.audio] Speaker cleanup complete");
 }
 
 /// Extract f32 samples from xos.Array - NO fallbacks, crashes if wrong format

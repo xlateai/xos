@@ -99,6 +99,9 @@ impl CoderApp {
     }
     
     pub fn new() -> Self {
+        // Enable coder logging to capture all Rust/Swift logs
+        super::logging::enable_coder_logging();
+        
         // Discover all Python files from the embedded directory
         let mut python_files = Vec::new();
         
@@ -948,6 +951,9 @@ impl Drop for CoderApp {
         // Clean up all audio resources (microphones and speakers) when CoderApp is dropped
         // This ensures audio devices are stopped when switching apps
         crate::python::audio::cleanup_all_audio();
+        
+        // Disable coder logging
+        super::logging::disable_coder_logging();
     }
 }
 
@@ -969,6 +975,19 @@ impl Application for CoderApp {
         if let Ok(buffer) = self.python_output_buffer.try_lock() {
             if !buffer.is_empty() {
                 self.terminal_app.text_rasterizer.text = buffer.clone();
+            }
+        }
+        
+        // Append any pending Rust/Swift logs to the terminal
+        if super::logging::has_pending_logs() {
+            let logs = super::logging::read_pending_logs();
+            if !logs.is_empty() {
+                // Only append if we're not currently running a background script
+                // (to avoid mixing Rust logs with Python output)
+                let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+                if !is_background_running {
+                    self.terminal_app.text_rasterizer.text.push_str(&logs);
+                }
             }
         }
         

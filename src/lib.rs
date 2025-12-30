@@ -207,7 +207,11 @@ pub fn version() -> &'static str {
 
 /// Print a message (works on all platforms)
 /// On iOS, forwards to Swift's console; otherwise uses standard println!
+/// Also logs to the coder terminal if enabled
 pub fn print(message: &str) {
+    // Log to coder terminal first (if enabled)
+    crate::apps::coder::logging::log_to_coder(message);
+    
     #[cfg(target_os = "ios")]
     {
         crate::engine::ios_ffi::log_to_ios(message);
