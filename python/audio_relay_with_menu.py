@@ -163,18 +163,45 @@ class AudioRelayWithMenu(xos.Application):
         button_x = int((width - button_size) / 2.0)
         button_y = int((height - button_size) / 2.0)
         
-        # Use the new xos.ui.button API
-        color = (0, 255, 0) if self.enabled else (100, 100, 100)
-        hover_color = (0, 200, 0) if self.enabled else (120, 120, 120)
-        
-        xos.ui.button(
-            button_x, button_y, button_size, button_size,
-            "Toggle",  # Text (not rendered yet)
-            False,  # is_hovered
-            color,  # bg_color
-            hover_color,  # hover_color
-            (255, 255, 255)  # text_color
-        )
+        if self.enabled:
+            # Draw filled green square when enabled
+            xos.rasterizer.rects_filled(
+                self.frame,
+                button_x,
+                button_y,
+                button_x + button_size,
+                button_y + button_size,
+                (0, 255, 0, 255)
+            )
+        else:
+            # Draw only border when disabled (4 rectangles: top, bottom, left, right)
+            border = int(BUTTON_BORDER_WIDTH)
+            color = (100, 100, 100, 255)
+            
+            # Top border
+            xos.rasterizer.rects_filled(
+                self.frame, button_x, button_y, 
+                button_x + button_size, button_y + border, 
+                color
+            )
+            # Bottom border
+            xos.rasterizer.rects_filled(
+                self.frame, button_x, button_y + button_size - border, 
+                button_x + button_size, button_y + button_size, 
+                color
+            )
+            # Left border
+            xos.rasterizer.rects_filled(
+                self.frame, button_x, button_y + border, 
+                button_x + border, button_y + button_size - border, 
+                color
+            )
+            # Right border
+            xos.rasterizer.rects_filled(
+                self.frame, button_x + button_size - border, button_y + border, 
+                button_x + button_size, button_y + button_size - border, 
+                color
+            )
     
     def draw_menu(self):
         """Draw the device selection menu"""
