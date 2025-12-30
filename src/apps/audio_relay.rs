@@ -226,8 +226,22 @@ impl Application for AudioRelay {
             return;
         }
         
-        // Start hold timer only if menu is not showing
-        self.mouse_down_time = Some(Instant::now());
+        // Check if mouse is over the center button
+        let shape = state.frame.shape();
+        let width = shape[1];
+        let height = shape[0];
+        let button_size = (width.min(height) as f32 * BUTTON_SIZE_RATIO) as f32;
+        let button_x = (width as f32 - button_size) / 2.0;
+        let button_y = (height as f32 - button_size) / 2.0;
+        
+        let mouse_x = state.mouse.x;
+        let mouse_y = state.mouse.y;
+        
+        // Only start hold timer if clicking on the button
+        if mouse_x >= button_x && mouse_x <= button_x + button_size
+            && mouse_y >= button_y && mouse_y <= button_y + button_size {
+            self.mouse_down_time = Some(Instant::now());
+        }
     }
     
     fn on_mouse_up(&mut self, state: &mut EngineState) {

@@ -252,8 +252,17 @@ class AudioRelayWithMenu(xos.Application):
                 xos.print("📱 Menu closed")
             return
         
-        # Start hold timer only if menu is not showing
-        self.mouse_down_time = time.time()
+        # Check if mouse is over the center button
+        width = self.get_width()
+        height = self.get_height()
+        button_size = int(min(width, height) * BUTTON_SIZE_RATIO)
+        button_x = (width - button_size) / 2.0
+        button_y = (height - button_size) / 2.0
+        
+        # Only start hold timer if clicking on the button
+        if (x >= button_x and x <= button_x + button_size and
+            y >= button_y and y <= button_y + button_size):
+            self.mouse_down_time = time.time()
     
     def on_mouse_up(self, x, y):
         """Handle mouse up event"""
