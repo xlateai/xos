@@ -147,9 +147,13 @@ class Microphone:
         import xos
         if batch_size is None:
             # Read ALL available samples (like Rust code)
-            return xos.audio._microphone_read_all(self._listener_ptr)
+            samples = xos.audio._microphone_read_all(self._listener_ptr)
         else:
-            return xos.audio._microphone_read_batch(self._listener_ptr, batch_size)
+            samples = xos.audio._microphone_read_batch(self._listener_ptr, batch_size)
+        
+        # Auto-clear after reading to prevent re-processing
+        xos.audio._microphone_clear(self._listener_ptr)
+        return samples
     
     def clear(self):
         """

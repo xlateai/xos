@@ -102,6 +102,16 @@ class _ArrayWrapper:
     def dtype(self):
         return self._data.get('dtype', 'unknown')
     
+    def size(self):
+        """Return the total number of elements (product of all dimensions)"""
+        shape = self.shape
+        if not shape:
+            return 0
+        size = 1
+        for dim in shape:
+            size *= dim
+        return size
+    
     def __str__(self):
         # For regular arrays (not frame arrays), compute statistics
         if '_data' in self._data:

@@ -130,20 +130,31 @@ fn try_fill_random_metal(_buffer: &mut [u8], _low: f64, _high: f64) -> bool {
     false
 }
 
-/// xos.random.uniform(min, max, shape=None, dtype=None) - returns a random float or array
+/// xos.random.uniform(low=0.0, high=1.0, shape=None, dtype=None) - returns a random float or array
 /// 
-/// If shape is None (default), returns a single random float between min and max
+/// If shape is None (default), returns a single random float between low and high
 /// If shape is provided as a tuple, returns an array of random values
 /// dtype can be specified (default: inferred from context - float32 for kernels, uint8 for images)
 fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
-    if args_vec.len() < 2 {
-        return Err(vm.new_type_error("uniform() requires at least 2 arguments (min, max)".to_string()));
-    }
+    // Parse low parameter (default: 0.0)
+    let low: f64 = if !args_vec.is_empty() {
+        args_vec[0].clone().try_into_value(vm)?
+    } else if let Some(low_kwarg) = args.kwargs.get("low") {
+        low_kwarg.clone().try_into_value(vm)?
+    } else {
+        0.0
+    };
     
-    let min: f64 = args_vec[0].clone().try_into_value(vm)?;
-    let max: f64 = args_vec[1].clone().try_into_value(vm)?;
+    // Parse high parameter (default: 1.0)
+    let high: f64 = if args_vec.len() > 1 {
+        args_vec[1].clone().try_into_value(vm)?
+    } else if let Some(high_kwarg) = args.kwargs.get("high") {
+        high_kwarg.clone().try_into_value(vm)?
+    } else {
+        1.0
+    };
     
     // Check if shape argument was provided (as 3rd positional arg or as kwarg)
     let shape_arg = if args_vec.len() > 2 && !vm.is_none(&args_vec[2]) {
@@ -173,7 +184,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         #[cfg(target_arch = "wasm32")]
         {
             let random = js_sys::Math::random();
-            let value = min + random * (max - min);
+            let value = low + random * (high - low);
             return Ok(vm.ctx.new_float(value).into());
         }
         
@@ -181,7 +192,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         {
             use rand::Rng;
             let mut rng = rand::rng();
-            let value: f64 = rng.random_range(min..max);
+            let value: f64 = rng.random_range(low..high);
             return Ok(vm.ctx.new_float(value).into());
         }
     }
@@ -198,22 +209,23 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let total_elements: usize = shape.iter().product();
     
     // Determine if we should generate floats or integers
-    // Default: float32 if dtype is specified, otherwise uint8 for image compatibility
+    // Default: float32 (for audio compatibility), unless dtype explicitly specifies uint8
     let use_float = if let Some(dtype_obj) = dtype_arg {
         // Check if dtype has a 'name' attribute
         if let Ok(name_attr) = dtype_obj.get_attr("name", vm) {
             if let Ok(s) = name_attr.str(vm) {
                 let name = s.to_string();
-                name.contains("float")
+                // Use float unless explicitly uint8 or int
+                !name.contains("uint") && !name.contains("int")
             } else {
-                false
+                true
             }
         } else {
-            false
+            true
         }
     } else {
-        // Default to uint8 for backward compatibility
-        false
+        // Default to float32 for audio and general use
+        true
     };
     
     if use_float {
@@ -225,7 +237,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             random_data = (0..total_elements)
                 .map(|_| {
                     let random = js_sys::Math::random();
-                    (min + random * (max - min)) as f32
+                    (low + random * (high - low)) as f32
                 })
                 .collect();
         }
@@ -236,29 +248,40 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let mut rng = rand::rng();
             random_data = (0..total_elements)
                 .map(|_| {
-                    let value: f64 = rng.random_range(min..max);
+                    let value: f64 = rng.random_range(low..high);
                     value as f32
                 })
                 .collect();
         }
         
-        // Convert to Python list
-        let py_list: Vec<PyObjectRef> = random_data.iter()
-            .map(|&f| vm.ctx.new_float(f as f64).into())
-            .collect();
+        // Create a proper xos.Array backed by Rust memory
+        use crate::tensor::array::{Array, Device};
+        use crate::python::arrays::PyArray;
+        use crate::python::dtypes::DType;
         
-        Ok(vm.ctx.new_list(py_list).into())
+        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
+        let py_array = PyArray::new(rust_array);
+        let dict = py_array.to_py_dict(vm, DType::Float32)?;
+        
+        // Wrap in _ArrayWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+            if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+                return Ok(wrapped);
+            }
+        }
+        
+        Ok(dict.into())
     } else {
         // Generate random u8 values (0-255) for image data
-        let random_data: Vec<u8>;
+        let random_data: Vec<f32>;
         
         #[cfg(target_arch = "wasm32")]
         {
             random_data = (0..total_elements)
                 .map(|_| {
                     let random = js_sys::Math::random();
-                    let value = min + random * (max - min);
-                    value.clamp(0.0, 255.0) as u8
+                    let value = low + random * (high - low);
+                    value.clamp(0.0, 255.0) as f32
                 })
                 .collect();
         }
@@ -269,18 +292,29 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let mut rng = rand::rng();
             random_data = (0..total_elements)
                 .map(|_| {
-                    let value: f64 = rng.random_range(min..max);
-                    value.clamp(0.0, 255.0) as u8
+                    let value: f64 = rng.random_range(low..high);
+                    value.clamp(0.0, 255.0) as f32
                 })
                 .collect();
         }
         
-        // Convert to Python list
-        let py_list: Vec<PyObjectRef> = random_data.iter()
-            .map(|&b| vm.ctx.new_int(b).into())
-            .collect();
+        // Create a proper xos.Array backed by Rust memory (stored as f32, displayed as u8)
+        use crate::tensor::array::{Array, Device};
+        use crate::python::arrays::PyArray;
+        use crate::python::dtypes::DType;
         
-        Ok(vm.ctx.new_list(py_list).into())
+        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
+        let py_array = PyArray::new(rust_array);
+        let dict = py_array.to_py_dict(vm, DType::UInt8)?;
+        
+        // Wrap in _ArrayWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+            if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+                return Ok(wrapped);
+            }
+        }
+        
+        Ok(dict.into())
     }
 }
 
