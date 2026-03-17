@@ -65,7 +65,7 @@ impl PyTensor {
 fn create_tensor_from_data(
     flat_data: Vec<f32>,
     shape: Vec<usize>,
-    dtype: DType,
+    _dtype: DType,
 ) -> PyTensor {
     // Store as vec - Burn tensor would require reshape which needs const D
     // For now keep it simple: we use Vec<f32> as backing, Burn can be added for ops

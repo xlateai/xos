@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs, PyObjectRef};
+use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::OnceLock;

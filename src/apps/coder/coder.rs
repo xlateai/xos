@@ -31,6 +31,13 @@ enum CodeViewMode {
     FileExplorer,
 }
 
+/// File explorer row: either a folder header or a file
+#[derive(Debug, Clone)]
+enum ExplorerItem {
+    Folder(String),
+    File(usize),
+}
+
 pub struct CoderApp {
     pub code_app: TextApp,
     pub terminal_app: TextApp,
@@ -55,6 +62,7 @@ pub struct CoderApp {
     // File explorer
     code_view_mode: CodeViewMode,
     python_files: Vec<PythonFile>,
+    explorer_items: Vec<ExplorerItem>,
     current_file_index: usize,
     file_list_scroll_y: f32,
     file_list_rasterizers: Vec<TextRasterizer>,
@@ -142,8 +150,22 @@ impl CoderApp {
         
         collect_py_files(&PYTHON_DIR, "", &mut python_files);
         
-        // Sort by name for consistent ordering
+        // Sort by name for consistent ordering (groups files by folder)
         python_files.sort_by(|a, b| a.name.cmp(&b.name));
+        
+        // Build explorer items with folder headers when folder changes
+        let mut explorer_items = Vec::new();
+        let mut last_folder = None;
+        for (i, file) in python_files.iter().enumerate() {
+            let folder = file.name.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+            if last_folder.as_ref() != Some(&folder) {
+                if !folder.is_empty() {
+                    explorer_items.push(ExplorerItem::Folder(folder.clone()));
+                }
+                last_folder = Some(folder);
+            }
+            explorer_items.push(ExplorerItem::File(i));
+        }
         
         // Ensure we have at least one file
         if python_files.is_empty() {
@@ -219,13 +241,20 @@ impl CoderApp {
         let mut clear_button_label = TextRasterizer::new(font.clone(), 30.0);
         clear_button_label.set_text("×".to_string()); // Multiplication sign
 
-        // Create text rasterizers for each file in the file explorer
-        // Larger font size for better touch targets on mobile (30% bigger on iOS)
+        // Create text rasterizers for each explorer item (folder headers + files)
         let file_list_font_size = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
+        let folder_font_size = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
         let mut file_list_rasterizers = Vec::new();
-        for file in &python_files {
-            let mut rasterizer = TextRasterizer::new(font.clone(), file_list_font_size);
-            rasterizer.set_text(file.name.clone());
+        for item in &explorer_items {
+            let mut rasterizer = TextRasterizer::new(font.clone(), match item {
+                ExplorerItem::Folder(_) => folder_font_size,
+                ExplorerItem::File(_) => file_list_font_size,
+            });
+            let text = match item {
+                ExplorerItem::Folder(name) => format!("  {}/", name),
+                ExplorerItem::File(i) => python_files[*i].name.clone(),
+            };
+            rasterizer.set_text(text);
             file_list_rasterizers.push(rasterizer);
         }
 
@@ -250,6 +279,7 @@ impl CoderApp {
             viewport_last_tap_y: 0.0,
             code_view_mode: CodeViewMode::Editor,
             python_files,
+            explorer_items,
             current_file_index: 0,
             file_list_scroll_y: 0.0,
             file_list_rasterizers,
@@ -696,7 +726,9 @@ builtins.print = __custom_print__
             let char_x = x as f32 + character.x + text_offset_x;
             let char_y = y as f32 + character.y + text_offset_y;
             
-            for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
+            let cw = character.width as usize;
+            if cw == 0 { continue; }
+            for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
                 for (bitmap_x, &alpha) in row.iter().enumerate() {
                     if alpha == 0 {
                         continue;
@@ -746,6 +778,23 @@ builtins.print = __custom_print__
         }
     }
     
+    /// Row height for file items
+    fn file_item_height() -> f32 {
+        if cfg!(target_os = "ios") { 117.0 } else { 60.0 }
+    }
+    
+    /// Row height for folder headers (smaller)
+    fn folder_item_height() -> f32 {
+        if cfg!(target_os = "ios") { 52.0 } else { 36.0 }
+    }
+    
+    fn explorer_item_height(item: &ExplorerItem) -> f32 {
+        match item {
+            ExplorerItem::Folder(_) => Self::folder_item_height(),
+            ExplorerItem::File(_) => Self::file_item_height(),
+        }
+    }
+    
     fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32, safe_region_top_y: f32) {
         // Draw pitch black background for file list
         let bg_color = (0, 0, 0);
@@ -765,23 +814,26 @@ builtins.print = __custom_print__
             }
         }
         
-        // Larger touch targets for iOS (30% bigger)
-        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
         let padding = if cfg!(target_os = "ios") { 26.0 } else { 10.0 };
         
-        for (i, rasterizer) in self.file_list_rasterizers.iter().enumerate() {
-            let y_offset = safe_region_top_y + i as f32 * item_height - self.file_list_scroll_y;
+        let mut y_offset = safe_region_top_y - self.file_list_scroll_y;
+        
+        for (_i, (item, rasterizer)) in self.explorer_items.iter().zip(self.file_list_rasterizers.iter()).enumerate() {
+            let item_height = CoderApp::explorer_item_height(item);
             
             // Skip if not visible (check against safe region boundaries)
             if y_offset + item_height < safe_region_top_y || y_offset > viewport_height {
+                y_offset += item_height;
                 continue;
             }
             
-            // Draw item background (highlight if current file)
-            let item_bg_color = if i == self.current_file_index {
-                (30, 30, 30) // Slightly lighter gray for active file
-            } else {
-                (15, 15, 15) // Slightly off-black for file items
+            let is_current = matches!(item, ExplorerItem::File(idx) if *idx == self.current_file_index);
+            
+            // Draw item background - folder headers get darker, files get highlight when selected
+            let item_bg_color = match item {
+                ExplorerItem::Folder(_) => (8, 8, 12), // Dark blue-tint for folder headers
+                ExplorerItem::File(_) if is_current => (30, 30, 30),
+                _ => (15, 15, 15),
             };
             
             for dy in 0..(item_height as i32) {
@@ -797,11 +849,11 @@ builtins.print = __custom_print__
                 }
             }
             
-            // Draw file name text using TextRasterizer
-            let text_color = if i == self.current_file_index {
-                (0, 255, 0) // Neon green for active file
-            } else {
-                (220, 220, 220) // Brighter text against pitch black
+            // Draw text using TextRasterizer
+            let text_color = match item {
+                ExplorerItem::Folder(_) => (140, 160, 200), // Muted blue for folder names
+                ExplorerItem::File(_) if is_current => (0, 255, 0),
+                _ => (220, 220, 220),
             };
             let text_y_offset = y_offset + (item_height - rasterizer.font_size) / 2.0;
             
@@ -809,7 +861,11 @@ builtins.print = __custom_print__
                 let char_x = padding + character.x;
                 let char_y = text_y_offset + character.y;
                 
-                for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
+                let width = character.width as usize;
+                if width == 0 {
+                    continue;
+                }
+                for (bitmap_y, row) in character.bitmap.chunks(width).enumerate() {
                     for (bitmap_x, &alpha) in row.iter().enumerate() {
                         if alpha == 0 {
                             continue;
@@ -842,6 +898,8 @@ builtins.print = __custom_print__
                     buffer[idx + 3] = 0xff;
                 }
             }
+            
+            y_offset += item_height;
         }
     }
 
@@ -1392,7 +1450,9 @@ impl Application for CoderApp {
                 let char_x = self.clear_button.x as f32 + character.x + text_offset_x;
                 let char_y = self.clear_button.y as f32 + character.y + text_offset_y;
                 
-                for (bitmap_y, row) in character.bitmap.chunks(character.width as usize).enumerate() {
+                let cw = character.width as usize;
+                if cw == 0 { continue; }
+                for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
                     for (bitmap_x, &alpha) in row.iter().enumerate() {
                         if alpha == 0 {
                             continue;
@@ -1422,9 +1482,10 @@ impl Application for CoderApp {
                 if self.code_view_mode == CodeViewMode::FileExplorer {
                     // Scroll the file list
                     self.file_list_scroll_y += dy;
-                    // Clamp to valid range (use platform-specific item height, 30% bigger on iOS)
-                    let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
-                    let max_scroll = (self.python_files.len() as f32 * item_height).max(0.0);
+                    let max_scroll = self.explorer_items.iter()
+                        .map(|i| CoderApp::explorer_item_height(i))
+                        .sum::<f32>()
+                        .max(0.0);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                 } else {
                     self.code_app.on_scroll(state, dx, dy)
@@ -1487,10 +1548,10 @@ impl Application for CoderApp {
                     if self.file_explorer_dragging {
                         let dy = state.mouse.y - self.file_explorer_last_mouse_y;
                         self.file_list_scroll_y -= dy;
-                        
-                        // Clamp to valid range
-                        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
-                        let max_scroll = (self.python_files.len() as f32 * item_height).max(0.0);
+                        let max_scroll = self.explorer_items.iter()
+                            .map(|i| CoderApp::explorer_item_height(i))
+                            .sum::<f32>()
+                            .max(0.0);
                         self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                         
                         self.file_explorer_last_mouse_y = state.mouse.y;
@@ -1743,12 +1804,9 @@ impl Application for CoderApp {
                     
                     // Only select file if user didn't drag
                     if !self.file_explorer_dragging && dx < drag_threshold && dy < drag_threshold {
-                        // Calculate which file was tapped
+                        // Calculate which item was tapped (variable row heights)
                         let shape = state.frame.array.shape();
                         let height = shape[0] as f32;
-                        let item_height = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
-                        
-                        // Get safe region and tabs position
                         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
                         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                         let keyboard_top_px = keyboard_top_y * height;
@@ -1757,12 +1815,19 @@ impl Application for CoderApp {
                         let tabs_bottom_y = keyboard_top_px - padding as f32;
                         let tabs_top_y = tabs_bottom_y - button_height as f32;
                         
-                        // Check if tap is within the file list area
                         if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
-                            let clicked_index = ((mouse_y - safe_region_top_y + self.file_list_scroll_y) / item_height) as usize;
-                            if clicked_index < self.python_files.len() {
-                                println!("Selected file: {}", self.python_files[clicked_index].name);
-                                self.load_file(clicked_index);
+                            let click_y_in_list = mouse_y - safe_region_top_y + self.file_list_scroll_y;
+                            let mut y = 0.0f32;
+                            for item in &self.explorer_items {
+                                let item_height = CoderApp::explorer_item_height(item);
+                                if click_y_in_list >= y && click_y_in_list < y + item_height {
+                                    if let ExplorerItem::File(file_index) = item {
+                                        println!("Selected file: {}", self.python_files[*file_index].name);
+                                        self.load_file(*file_index);
+                                    }
+                                    break;
+                                }
+                                y += item_height;
                             }
                         }
                     }
