@@ -4,6 +4,7 @@ use crate::ui::Button;
 use crate::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
 use include_dir::{include_dir, Dir};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -63,6 +64,7 @@ pub struct CoderApp {
     code_view_mode: CodeViewMode,
     python_files: Vec<PythonFile>,
     explorer_items: Vec<ExplorerItem>,
+    expanded_folders: HashSet<String>,
     current_file_index: usize,
     file_list_scroll_y: f32,
     file_list_rasterizers: Vec<TextRasterizer>,
@@ -245,13 +247,14 @@ impl CoderApp {
         let file_list_font_size = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let folder_font_size = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
         let mut file_list_rasterizers = Vec::new();
+        let expanded_folders = HashSet::new(); // All collapsed by default
         for item in &explorer_items {
             let mut rasterizer = TextRasterizer::new(font.clone(), match item {
                 ExplorerItem::Folder(_) => folder_font_size,
                 ExplorerItem::File(_) => file_list_font_size,
             });
             let text = match item {
-                ExplorerItem::Folder(name) => format!("  {}/", name),
+                ExplorerItem::Folder(name) => format!("  ▶  {}/", name), // ▶ = collapsed
                 ExplorerItem::File(i) => python_files[*i].name.clone(),
             };
             rasterizer.set_text(text);
@@ -280,6 +283,7 @@ impl CoderApp {
             code_view_mode: CodeViewMode::Editor,
             python_files,
             explorer_items,
+            expanded_folders,
             current_file_index: 0,
             file_list_scroll_y: 0.0,
             file_list_rasterizers,
@@ -795,6 +799,25 @@ builtins.print = __custom_print__
         }
     }
     
+    /// Folder for a file (empty string = root level)
+    fn folder_for_file(&self, file_idx: usize) -> String {
+        self.python_files
+            .get(file_idx)
+            .and_then(|f| f.name.rsplit_once('/').map(|(d, _)| d.to_string()))
+            .unwrap_or_default()
+    }
+    
+    /// True if item is visible (folders always visible; files only when their folder is expanded)
+    fn is_item_visible(&self, item: &ExplorerItem) -> bool {
+        match item {
+            ExplorerItem::Folder(_) => true,
+            ExplorerItem::File(i) => {
+                let folder = self.folder_for_file(*i);
+                folder.is_empty() || self.expanded_folders.contains(&folder)
+            }
+        }
+    }
+    
     fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32, safe_region_top_y: f32) {
         // Draw pitch black background for file list
         let bg_color = (0, 0, 0);
@@ -819,6 +842,9 @@ builtins.print = __custom_print__
         let mut y_offset = safe_region_top_y - self.file_list_scroll_y;
         
         for (_i, (item, rasterizer)) in self.explorer_items.iter().zip(self.file_list_rasterizers.iter()).enumerate() {
+            if !self.is_item_visible(item) {
+                continue; // Skip collapsed files
+            }
             let item_height = CoderApp::explorer_item_height(item);
             
             // Skip if not visible (check against safe region boundaries)
@@ -1483,6 +1509,7 @@ impl Application for CoderApp {
                     // Scroll the file list
                     self.file_list_scroll_y += dy;
                     let max_scroll = self.explorer_items.iter()
+                        .filter(|i| self.is_item_visible(i))
                         .map(|i| CoderApp::explorer_item_height(i))
                         .sum::<f32>()
                         .max(0.0);
@@ -1549,6 +1576,7 @@ impl Application for CoderApp {
                         let dy = state.mouse.y - self.file_explorer_last_mouse_y;
                         self.file_list_scroll_y -= dy;
                         let max_scroll = self.explorer_items.iter()
+                            .filter(|i| self.is_item_visible(i))
                             .map(|i| CoderApp::explorer_item_height(i))
                             .sum::<f32>()
                             .max(0.0);
@@ -1818,12 +1846,26 @@ impl Application for CoderApp {
                         if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
                             let click_y_in_list = mouse_y - safe_region_top_y + self.file_list_scroll_y;
                             let mut y = 0.0f32;
-                            for item in &self.explorer_items {
+                            for (idx, item) in self.explorer_items.iter().enumerate() {
+                                if !self.is_item_visible(item) {
+                                    continue;
+                                }
                                 let item_height = CoderApp::explorer_item_height(item);
                                 if click_y_in_list >= y && click_y_in_list < y + item_height {
-                                    if let ExplorerItem::File(file_index) = item {
-                                        println!("Selected file: {}", self.python_files[*file_index].name);
-                                        self.load_file(*file_index);
+                                    match item {
+                                        ExplorerItem::Folder(name) => {
+                                            if self.expanded_folders.contains(name) {
+                                                self.expanded_folders.remove(name);
+                                                self.file_list_rasterizers[idx].set_text(format!("  ▶  {}/", name));
+                                            } else {
+                                                self.expanded_folders.insert(name.clone());
+                                                self.file_list_rasterizers[idx].set_text(format!("  ▼  {}/", name));
+                                            }
+                                        }
+                                        ExplorerItem::File(file_index) => {
+                                            println!("Selected file: {}", self.python_files[*file_index].name);
+                                            self.load_file(*file_index);
+                                        }
                                     }
                                     break;
                                 }
