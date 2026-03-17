@@ -88,7 +88,7 @@ fn fft(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             .map(|item| item.clone().try_into_value::<f64>(vm))
             .collect::<Result<Vec<_>, _>>()?
     } else if let Some(dict) = args_vec[0].downcast_ref::<rustpython_vm::builtins::PyDict>() {
-        // Handle xos.array format
+        // Handle xos.tensor / xos.array format (dict with _data)
         if let Ok(data_obj) = dict.get_item("_data", vm) {
             if let Some(data_list) = data_obj.downcast_ref::<rustpython_vm::builtins::PyList>() {
                 let vec = data_list.borrow_vec();
@@ -96,10 +96,10 @@ fn fft(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     .map(|item| item.clone().try_into_value::<f64>(vm))
                     .collect::<Result<Vec<_>, _>>()?
             } else {
-                return Err(vm.new_type_error("Invalid array format".to_string()));
+                return Err(vm.new_type_error("Invalid tensor format".to_string()));
             }
         } else {
-            return Err(vm.new_type_error("Array missing _data field".to_string()));
+            return Err(vm.new_type_error("Tensor missing _data field".to_string()));
         }
     } else {
         return Err(vm.new_type_error("fft() requires a list or array".to_string()));

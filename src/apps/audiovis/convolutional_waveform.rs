@@ -1,5 +1,5 @@
 use crate::engine::EngineState;
-use crate::tensor::{Array, Device, ConvParams, depthwise_conv2d};
+use crate::tensor::{ConvParams, depthwise_conv2d};
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
@@ -16,10 +16,6 @@ const KERNEL_MAX: f32 = 1.0;
 const STEPS_PER_KERNEL: u32 = 1;
 
 
-// Device selection - easily swap between CPU and Metal for performance testing
-const DEVICE: Device = Device::default();
-// const DEVICE: Device = Device::Metal;
-// const DEVICE: Device = Device::Cpu;
 
 /// Convolutional waveform visualizer - uses audio to drive a convolutional filter
 pub struct ConvolutionalWaveform {
@@ -41,9 +37,6 @@ pub struct ConvolutionalWaveform {
 
 impl ConvolutionalWaveform {
     pub fn new() -> Self {
-        // Print the current device being used
-        crate::print(&format!("Current device: {:?}", DEVICE));
-        
         // Initialize random colored image mask (RGB channels)
         let mut image = Vec::with_capacity(IMAGE_WIDTH as usize * IMAGE_HEIGHT as usize * CHANNELS);
         
@@ -216,30 +209,19 @@ impl ConvolutionalWaveform {
 
         // Convert image from [H, W, C] to [C, H, W] (NCHW format: [batch, channels, height, width])
         let image_chw = self.image_to_chw(&self.image);
-        // Input format: [batch=1, channels=3, height, width]
-        // Create device-aware array on the selected device
-        let input = Array::new_on_device(image_chw, vec![CHANNELS, h as usize, w as usize], DEVICE);
-
-        // Convert kernel from [H, W, C] to [C, H, W] for depthwise convolution
-        // Depthwise kernel format: [channels, kernel_h, kernel_w]
         let kernel_chw = self.kernel_to_chw(&self.kernel);
-        let kernel = Array::new_on_device(kernel_chw, vec![CHANNELS, KERNEL_SIZE, KERNEL_SIZE], DEVICE);
 
         // Calculate same padding: (kernel_size - 1) / 2
-        // For 3x3 kernel with stride 1: (3 - 1) / 2 = 1
         let pad = (KERNEL_SIZE - 1) / 2;
         let pad_h = pad as u32;
         let pad_w = pad as u32;
-
-        // With same padding and stride=1, output size equals input size
         let out_h = h;
         let out_w = w;
 
-        // Set up convolution parameters
         let params = ConvParams {
             batch: 1,
             in_channels: CHANNELS as u32,
-            out_channels: CHANNELS as u32, // For depthwise, out_channels = in_channels
+            out_channels: CHANNELS as u32,
             in_h: h,
             in_w: w,
             kernel_h: KERNEL_SIZE as u32,
@@ -252,26 +234,13 @@ impl ConvolutionalWaveform {
             out_w,
         };
 
-        // Allocate output buffer: [batch, channels, out_h, out_w]
         let output_size = (params.batch * params.out_channels * params.out_h * params.out_w) as usize;
-        let output_data = vec![0.0f32; output_size];
-        let mut output = Array::new_on_device(output_data, vec![CHANNELS, out_h as usize, out_w as usize], DEVICE);
+        let mut output_slice = vec![0.0f32; output_size];
 
-        // Perform depthwise convolution - automatically routes to correct backend based on device
-        depthwise_conv2d(&input, &kernel, &mut output, params);
-        // conv2d(&input, &kernel, &mut output, params);
-
-        // Extract output data (device-aware arrays handle the data access)
-        // For Metal arrays, we need to transfer to CPU to read the data
-        let output_cpu = if output.device() == Device::Metal {
-            output.to_device(Device::Cpu)
-        } else {
-            output
-        };
-        let output_slice = output_cpu.data();
+        depthwise_conv2d(&image_chw, &kernel_chw, &mut output_slice, params);
         
         // Output is in [C, H, W] format (batch=1), convert back to [H, W, C]
-        let mut image_data = self.image_from_chw(output_slice, out_h as usize, out_w as usize);
+        let mut image_data = self.image_from_chw(&output_slice, out_h as usize, out_w as usize);
         
         // Clamp pixel values to ensure they never go below minimum threshold
         // This prevents the screen from going completely black

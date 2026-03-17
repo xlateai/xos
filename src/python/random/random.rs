@@ -254,14 +254,12 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .collect();
         }
         
-        // Create a proper xos.Array backed by Rust memory
-        use crate::tensor::array::{Array, Device};
-        use crate::python::arrays::PyArray;
+        // Create xos.tensor backed by Rust memory
+        use crate::python::tensors::PyTensor;
         use crate::python::dtypes::DType;
         
-        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
-        let py_array = PyArray::new(rust_array);
-        let dict = py_array.to_py_dict(vm, DType::Float32)?;
+        let py_tensor = PyTensor::new(random_data, shape.clone());
+        let dict = py_tensor.to_py_dict(vm, DType::Float32)?;
         
         // Wrap in _ArrayWrapper for nice display and compatibility
         if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
@@ -298,14 +296,12 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .collect();
         }
         
-        // Create a proper xos.Array backed by Rust memory (stored as f32, displayed as u8)
-        use crate::tensor::array::{Array, Device};
-        use crate::python::arrays::PyArray;
+        // Create xos.tensor backed by Rust memory (stored as f32, displayed as u8)
+        use crate::python::tensors::PyTensor;
         use crate::python::dtypes::DType;
         
-        let rust_array = Array::new_on_device(random_data, shape.clone(), Device::Cpu);
-        let py_array = PyArray::new(rust_array);
-        let dict = py_array.to_py_dict(vm, DType::UInt8)?;
+        let py_tensor = PyTensor::new(random_data, shape.clone());
+        let dict = py_tensor.to_py_dict(vm, DType::UInt8)?;
         
         // Wrap in _ArrayWrapper for nice display and compatibility
         if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {

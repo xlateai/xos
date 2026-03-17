@@ -46,9 +46,9 @@ class MagnetoBalls(xos.Application):
             vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
             initial_velocities.append([vx, vy])
         
-        self.positions = xos.array(initial_positions, (self.num_balls, 2))
-        self.radii = xos.array(initial_radii, (self.num_balls,))
-        self.velocities = xos.array(initial_velocities, (self.num_balls, 2))
+        self.positions = xos.tensor(initial_positions, (self.num_balls, 2))
+        self.radii = xos.tensor(initial_radii, (self.num_balls,))
+        self.velocities = xos.tensor(initial_velocities, (self.num_balls, 2))
         
         xos.print(f"+{self.num_balls} magneto balls spawned!")
     

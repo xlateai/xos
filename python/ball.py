@@ -26,8 +26,8 @@ class BallGame(xos.Application):
             initial_radii.append(BALL_RADIUS)
         
         # Create Rust-backed arrays
-        self.positions = xos.array(initial_positions, (self.num_balls, 2))
-        self.radii = xos.array(initial_radii, (self.num_balls,))
+        self.positions = xos.tensor(initial_positions, (self.num_balls, 2))
+        self.radii = xos.tensor(initial_radii, (self.num_balls,))
         
         # Velocities (vx, vy) for each ball
         initial_velocities = []
@@ -35,7 +35,7 @@ class BallGame(xos.Application):
             vx = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
             vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
             initial_velocities.append([vx, vy])
-        self.velocities = xos.array(initial_velocities, (self.num_balls, 2))
+        self.velocities = xos.tensor(initial_velocities, (self.num_balls, 2))
         
         xos.print("+512 balls (initial spawn)")
         

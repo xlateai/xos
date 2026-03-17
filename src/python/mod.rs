@@ -3,7 +3,7 @@ pub mod xos_module;
 pub mod random;
 pub mod engine;
 pub mod rasterizer;
-pub mod arrays;
+pub mod tensors;
 pub mod sensors;
 pub mod audio;
 pub mod system;
