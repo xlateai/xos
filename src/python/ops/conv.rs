@@ -1,5 +1,5 @@
 use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs};
-use crate::tensor::conv::{ConvBackend, ConvParams};
+use crate::tensor::conv::{conv2d, depthwise_conv2d};
 
 /// xos.ops.convolve(image, kernel, padding="same")
 /// Fast 2D convolution operation using tensor backend
@@ -115,31 +115,25 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     // Set up convolution parameters for "same" padding
-    // For "same" padding with stride=1, pad = (kernel_size - 1) / 2
     let pad = (kernel_size - 1) / 2;
-    let params = ConvParams {
-        batch: 1,
-        in_channels: 3,
-        out_channels: 3,
-        in_h: height as u32,
-        in_w: width as u32,
-        kernel_h: kernel_size as u32,
-        kernel_w: kernel_size as u32,
-        stride_h: 1,
-        stride_w: 1,
-        pad_h: pad as u32,
-        pad_w: pad as u32,
-        out_h: height as u32,
-        out_w: width as u32,
-    };
     
     // Allocate output buffer
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
-    // Call tensor backend (uses CPU backend)
-    // Note: We're working with CPU slices here, not Metal buffers
-    let backend: &dyn ConvBackend = &crate::tensor::conv::CpuBackend::new();
-    backend.conv2d(&input_nchw, &kernel_nchw, &mut output_nchw, params);
+    conv2d(
+        &input_nchw,
+        &kernel_nchw,
+        &mut output_nchw,
+        1,      // batch
+        3,      // in_channels
+        3,      // out_channels
+        height as usize,
+        width as usize,
+        kernel_size,
+        kernel_size,
+        [1, 1], // stride
+        [pad, pad], // padding
+    );
     
     // Convert back from NCHW to interleaved RGB
     let mut output_rgb = vec![0u8; buffer_len];
@@ -275,31 +269,24 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     }
     
-    // Set up depthwise convolution parameters
-    // For "same" padding with stride=1, pad = (kernel_size - 1) / 2
     let pad = (kernel_size - 1) / 2;
-    let params = ConvParams {
-        batch: 1,
-        in_channels: 3,
-        out_channels: 3,  // Same as input for depthwise
-        in_h: height as u32,
-        in_w: width as u32,
-        kernel_h: kernel_size as u32,
-        kernel_w: kernel_size as u32,
-        stride_h: 1,
-        stride_w: 1,
-        pad_h: pad as u32,
-        pad_w: pad as u32,
-        out_h: height as u32,
-        out_w: width as u32,
-    };
     
     // Allocate output buffer
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
-    // Call tensor backend
-    let backend: &dyn ConvBackend = &crate::tensor::conv::CpuBackend::new();
-    backend.depthwise_conv2d(&input_nchw, &kernel_depthwise, &mut output_nchw, params);
+    depthwise_conv2d(
+        &input_nchw,
+        &kernel_depthwise,
+        &mut output_nchw,
+        1,      // batch
+        3,      // channels
+        height as usize,
+        width as usize,
+        kernel_size,
+        kernel_size,
+        [1, 1], // stride
+        [pad, pad], // padding
+    );
     
     // Convert back from NCHW to interleaved RGBA
     let mut output_rgb = vec![0u8; buffer_len];

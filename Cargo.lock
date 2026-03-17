@@ -10278,6 +10278,7 @@ name = "xos"
 version = "0.1.23"
 dependencies = [
  "burn",
+ "burn-backend",
  "burn-ndarray",
  "clap",
  "console_error_panic_hook",

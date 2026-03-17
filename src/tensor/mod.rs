@@ -8,7 +8,7 @@ pub mod conv;
 pub use burn::tensor::backend::Backend;
 pub use burn::tensor::{ElementConversion, Int, Shape, Tensor, TensorData};
 pub use burn_ndarray::{NdArray, NdArrayDevice};
-pub use conv::{conv2d, depthwise_conv2d, ConvParams};
+pub use conv::{conv2d, depthwise_conv2d};
 
 /// Default backend and device for xos tensors
 pub type XosBackend = NdArray;

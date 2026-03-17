@@ -1,185 +1,94 @@
-//! CPU convolution backend - used by Python ops and convolutional_waveform
+//! Burn-backed convolution helpers for xos
+//!
+//! Wraps Burn's conv2d with NCHW layout (batch, channels, height, width).
 
-/// Convolution parameters (NCHW format)
-#[derive(Debug, Clone)]
-pub struct ConvParams {
-    pub batch: u32,
-    pub in_channels: u32,
-    pub out_channels: u32,
-    pub in_h: u32,
-    pub in_w: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub pad_h: u32,
-    pub pad_w: u32,
-    pub out_h: u32,
-    pub out_w: u32,
-}
+use burn::tensor::{Tensor, TensorData};
+use burn_backend::ops::ConvOptions;
 
-/// Trait for convolution backends
-pub trait ConvBackend {
-    fn conv2d(
-        &self,
-        input: &[f32],
-        kernel: &[f32],
-        output: &mut [f32],
-        params: ConvParams,
-    );
-    fn depthwise_conv2d(
-        &self,
-        input: &[f32],
-        kernel: &[f32],
-        output: &mut [f32],
-        params: ConvParams,
-    );
-}
+use super::{NdArrayDevice, XosBackend};
 
-/// CPU backend for convolution
-pub struct CpuBackend;
-
-impl CpuBackend {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl ConvBackend for CpuBackend {
-    fn conv2d(
-        &self,
-        input: &[f32],
-        kernel: &[f32],
-        output: &mut [f32],
-        params: ConvParams,
-    ) {
-        let b = params.batch as usize;
-        let ic = params.in_channels as usize;
-        let oc = params.out_channels as usize;
-        let ih = params.in_h as usize;
-        let iw = params.in_w as usize;
-        let kh = params.kernel_h as usize;
-        let kw = params.kernel_w as usize;
-        let sh = params.stride_h as usize;
-        let sw = params.stride_w as usize;
-        let ph = params.pad_h as i32;
-        let pw = params.pad_w as i32;
-        let oh = params.out_h as usize;
-        let ow = params.out_w as usize;
-
-        output.fill(0.0);
-
-        for b_idx in 0..b {
-            for oc_idx in 0..oc {
-                for oh_idx in 0..oh {
-                    for ow_idx in 0..ow {
-                        let mut sum = 0.0f32;
-                        for ic_idx in 0..ic {
-                            for kh_idx in 0..kh {
-                                for kw_idx in 0..kw {
-                                    let in_h = (oh_idx as i32 * sh as i32) + kh_idx as i32 - ph;
-                                    let in_w = (ow_idx as i32 * sw as i32) + kw_idx as i32 - pw;
-                                    if in_h >= 0
-                                        && in_h < ih as i32
-                                        && in_w >= 0
-                                        && in_w < iw as i32
-                                    {
-                                        let in_idx = ((b_idx * ic + ic_idx) * ih + in_h as usize)
-                                            * iw
-                                            + in_w as usize;
-                                        let k_idx =
-                                            ((oc_idx * ic + ic_idx) * kh + kh_idx) * kw + kw_idx;
-                                        sum += input[in_idx] * kernel[k_idx];
-                                    }
-                                }
-                            }
-                        }
-                        let out_idx =
-                            ((b_idx * oc + oc_idx) * oh + oh_idx) * ow + ow_idx;
-                        output[out_idx] = sum;
-                    }
-                }
-            }
-        }
-    }
-
-    fn depthwise_conv2d(
-        &self,
-        input: &[f32],
-        kernel: &[f32],
-        output: &mut [f32],
-        params: ConvParams,
-    ) {
-        let b = params.batch as usize;
-        let c = params.in_channels as usize;
-        let ih = params.in_h as usize;
-        let iw = params.in_w as usize;
-        let kh = params.kernel_h as usize;
-        let kw = params.kernel_w as usize;
-        let sh = params.stride_h as usize;
-        let sw = params.stride_w as usize;
-        let ph = params.pad_h as i32;
-        let pw = params.pad_w as i32;
-        let oh = params.out_h as usize;
-        let ow = params.out_w as usize;
-
-        output.fill(0.0);
-
-        for b_idx in 0..b {
-            for c_idx in 0..c {
-                for oh_idx in 0..oh {
-                    for ow_idx in 0..ow {
-                        let mut sum = 0.0f32;
-                        for kh_idx in 0..kh {
-                            for kw_idx in 0..kw {
-                                let in_h = (oh_idx as i32 * sh as i32) + kh_idx as i32 - ph;
-                                let in_w = (ow_idx as i32 * sw as i32) + kw_idx as i32 - pw;
-                                if in_h >= 0
-                                    && in_h < ih as i32
-                                    && in_w >= 0
-                                    && in_w < iw as i32
-                                {
-                                    let in_idx =
-                                        ((b_idx * c + c_idx) * ih + in_h as usize) * iw
-                                            + in_w as usize;
-                                    let k_idx = (c_idx * kh + kh_idx) * kw + kw_idx;
-                                    sum += input[in_idx] * kernel[k_idx];
-                                }
-                            }
-                        }
-                        let out_idx = ((b_idx * c + c_idx) * oh + oh_idx) * ow + ow_idx;
-                        output[out_idx] = sum;
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl Default for CpuBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-static CPU_BACKEND: CpuBackend = CpuBackend;
-
-/// Perform depthwise convolution on raw slices (NCHW format)
-pub fn depthwise_conv2d(
-    input: &[f32],
-    kernel: &[f32],
-    output: &mut [f32],
-    params: ConvParams,
-) {
-    CPU_BACKEND.depthwise_conv2d(input, kernel, output, params);
-}
-
-/// Perform standard convolution on raw slices (NCHW format)
+/// Perform 2D convolution using Burn
+/// - input: NCHW [batch, in_c, h, w]
+/// - kernel: [out_c, in_c, kh, kw]
+/// - padding: [pad_h, pad_w] for "same" use (k-1)/2
 pub fn conv2d(
     input: &[f32],
     kernel: &[f32],
     output: &mut [f32],
-    params: ConvParams,
+    batch: usize,
+    in_channels: usize,
+    out_channels: usize,
+    in_h: usize,
+    in_w: usize,
+    kernel_h: usize,
+    kernel_w: usize,
+    stride: [usize; 2],
+    padding: [usize; 2],
 ) {
-    CPU_BACKEND.conv2d(input, kernel, output, params);
+    let device = NdArrayDevice::default();
+
+    let x = Tensor::<XosBackend, 4>::from_data(
+        TensorData::new(input.to_vec(), [batch, in_channels, in_h, in_w]),
+        &device,
+    );
+
+    let weight = Tensor::<XosBackend, 4>::from_data(
+        TensorData::new(kernel.to_vec(), [out_channels, in_channels, kernel_h, kernel_w]),
+        &device,
+    );
+
+    let options = ConvOptions::new(
+        stride,
+        padding,
+        [1, 1], // dilation
+        1,      // groups
+    );
+
+    let out = burn::tensor::module::conv2d(x, weight, None, options);
+    let data = out.into_data();
+    let slice = data.as_slice::<f32>().expect("f32");
+    output.copy_from_slice(slice);
+}
+
+/// Perform 2D depthwise convolution using Burn (groups = in_channels)
+/// - input: NCHW [batch, in_c, h, w]
+/// - kernel: [in_c, 1, kh, kw] (each channel has its own KxK kernel)
+/// - output: [batch, in_c, out_h, out_w]
+pub fn depthwise_conv2d(
+    input: &[f32],
+    kernel: &[f32],
+    output: &mut [f32],
+    batch: usize,
+    channels: usize,
+    in_h: usize,
+    in_w: usize,
+    kernel_h: usize,
+    kernel_w: usize,
+    stride: [usize; 2],
+    padding: [usize; 2],
+) {
+    let device = NdArrayDevice::default();
+
+    let x = Tensor::<XosBackend, 4>::from_data(
+        TensorData::new(input.to_vec(), [batch, channels, in_h, in_w]),
+        &device,
+    );
+
+    // Burn expects weight [out_c, in_c/groups, kh, kw]; for depthwise groups=channels so in_c/groups=1
+    let weight = Tensor::<XosBackend, 4>::from_data(
+        TensorData::new(kernel.to_vec(), [channels, 1, kernel_h, kernel_w]),
+        &device,
+    );
+
+    let options = ConvOptions::new(
+        stride,
+        padding,
+        [1, 1],   // dilation
+        channels, // groups = channels for depthwise
+    );
+
+    let out = burn::tensor::module::conv2d(x, weight, None, options);
+    let data = out.into_data();
+    let slice = data.as_slice::<f32>().expect("f32");
+    output.copy_from_slice(slice);
 }

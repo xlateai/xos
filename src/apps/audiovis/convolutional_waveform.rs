@@ -1,5 +1,5 @@
 use crate::engine::EngineState;
-use crate::tensor::{ConvParams, depthwise_conv2d};
+use crate::tensor::depthwise_conv2d;
 
 const CHANNELS: usize = 3;
 const KERNEL_SIZE: usize = 3;
@@ -211,33 +211,26 @@ impl ConvolutionalWaveform {
         let image_chw = self.image_to_chw(&self.image);
         let kernel_chw = self.kernel_to_chw(&self.kernel);
 
-        // Calculate same padding: (kernel_size - 1) / 2
         let pad = (KERNEL_SIZE - 1) / 2;
-        let pad_h = pad as u32;
-        let pad_w = pad as u32;
-        let out_h = h;
-        let out_w = w;
+        let out_h = h as usize;
+        let out_w = w as usize;
 
-        let params = ConvParams {
-            batch: 1,
-            in_channels: CHANNELS as u32,
-            out_channels: CHANNELS as u32,
-            in_h: h,
-            in_w: w,
-            kernel_h: KERNEL_SIZE as u32,
-            kernel_w: KERNEL_SIZE as u32,
-            stride_h: 1,
-            stride_w: 1,
-            pad_h,
-            pad_w,
-            out_h,
-            out_w,
-        };
-
-        let output_size = (params.batch * params.out_channels * params.out_h * params.out_w) as usize;
+        let output_size = CHANNELS * out_h * out_w;
         let mut output_slice = vec![0.0f32; output_size];
 
-        depthwise_conv2d(&image_chw, &kernel_chw, &mut output_slice, params);
+        depthwise_conv2d(
+            &image_chw,
+            &kernel_chw,
+            &mut output_slice,
+            1,      // batch
+            CHANNELS,
+            out_h,
+            out_w,
+            KERNEL_SIZE,
+            KERNEL_SIZE,
+            [1, 1], // stride
+            [pad, pad], // padding
+        );
         
         // Output is in [C, H, W] format (batch=1), convert back to [H, W, C]
         let mut image_data = self.image_from_chw(&output_slice, out_h as usize, out_w as usize);
@@ -254,8 +247,8 @@ impl ConvolutionalWaveform {
         self.image = image_data;
         
         // Update dimensions (should be same with padding=1, but update to be safe)
-        self.height = out_h;
-        self.width = out_w;
+        self.height = out_h as u32;
+        self.width = out_w as u32;
     }
 
     /// Calculate new kernel from audio samples (returns the kernel, doesn't update self.kernel)
