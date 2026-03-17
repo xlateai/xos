@@ -2,19 +2,16 @@ import xos
 
 # Red ball color (normalized 0-1)
 BALL_COLOR = (255, 50, 50, 255)  # RGBA: Red
-LINE_COLOR = (10, 80, 80, 255)  # RGBA: Lighter red for lines
-BALL_RADIUS = 0.003  # Smaller balls (was 0.005)
-LINE_THICKNESS = 0.0008  # Thinner lines (was 0.002)
+BALL_RADIUS = 0.005
 SPEED_MULTIPLIER = 0.005  # Normalized speed
 
 
-class BallPairsGame(xos.Application):
+class BallGame(xos.Application):
     def __init__(self):
         super().__init__()
         self.positions = None  # Will be Rust-backed array
         self.radii = None  # Will be Rust-backed array
-        self.num_balls = 512  # Must be even for pairing
-        self.ball_pairs = []  # List of (index1, index2) tuples
+        self.num_balls = 512
     
     def setup(self):
         """Initialize the game"""
@@ -29,8 +26,8 @@ class BallPairsGame(xos.Application):
             initial_radii.append(BALL_RADIUS)
         
         # Create Rust-backed arrays
-        self.positions = xos.array(initial_positions, (self.num_balls, 2))
-        self.radii = xos.array(initial_radii, (self.num_balls,))
+        self.positions = xos.tensor(initial_positions, (self.num_balls, 2))
+        self.radii = xos.tensor(initial_radii, (self.num_balls,))
         
         # Velocities (vx, vy) for each ball
         initial_velocities = []
@@ -38,15 +35,9 @@ class BallPairsGame(xos.Application):
             vx = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
             vy = xos.random.uniform(-2.0, 2.0) * SPEED_MULTIPLIER
             initial_velocities.append([vx, vy])
-        self.velocities = xos.array(initial_velocities, (self.num_balls, 2))
+        self.velocities = xos.tensor(initial_velocities, (self.num_balls, 2))
         
-        # Create ball pairs (pair every two balls: 0-1, 2-3, 4-5, etc.)
-        self.ball_pairs = []
-        for i in range(0, self.num_balls, 2):
-            if i + 1 < self.num_balls:
-                self.ball_pairs.append((i, i + 1))
-        
-        xos.print("+512 balls in 256 pairs (initial spawn)")
+        xos.print("+512 balls (initial spawn)")
         
         # Print first 8 positions to verify array slicing
         # print("Initial positions[:8]:")
@@ -54,6 +45,9 @@ class BallPairsGame(xos.Application):
     
     def tick(self):
         """Update and render one frame"""
+        # Clear the frame (no longer auto-cleared)
+        xos.rasterizer.clear()
+        
         # TODO: Vectorized update in Rust
         # For now, update positions manually
         pos_data = self.positions["_data"]
@@ -86,24 +80,11 @@ class BallPairsGame(xos.Application):
             py = pos_data[i*2+1] * height
             pixel_positions.append((px, py))
         
-        # Use the wider dimension for consistent sizes across orientations
+        # Use the wider dimension for consistent ball size across orientations
         max_dimension = max(width, height)
+        radii_list = [BALL_RADIUS * max_dimension for _ in range(self.num_balls)]  # Convert normalized radius to pixels
         
-        # Draw lines first (so balls render on top)
-        line_start_points = []
-        line_end_points = []
-        line_thicknesses = []
-        
-        for ball1_idx, ball2_idx in self.ball_pairs:
-            line_start_points.append(pixel_positions[ball1_idx])
-            line_end_points.append(pixel_positions[ball2_idx])
-            line_thicknesses.append(LINE_THICKNESS * max_dimension)
-        
-        # Draw all lines
-        xos.rasterizer.lines(self.frame, line_start_points, line_end_points, line_thicknesses, LINE_COLOR)
-        
-        # Draw all balls on top of lines
-        radii_list = [BALL_RADIUS * max_dimension for _ in range(self.num_balls)]
+        # Use fast Rust rasterizer
         xos.rasterizer.circles(self.frame, pixel_positions, radii_list, BALL_COLOR)
     
     def on_mouse_down(self, x, y):
@@ -117,6 +98,6 @@ if __name__ == "__main__":
     xos.print("Red Ball Game - Python Edition")
     xos.print("Click to spawn red balls!")
     
-    game = BallPairsGame()
+    game = BallGame()
     game.run()
 

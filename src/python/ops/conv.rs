@@ -138,7 +138,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     // Call tensor backend (uses CPU backend)
     // Note: We're working with CPU slices here, not Metal buffers
-    let backend: &dyn ConvBackend = &crate::tensor::conv::cpu::CpuBackend::new();
+    let backend: &dyn ConvBackend = &crate::tensor::conv::CpuBackend::new();
     backend.conv2d(&input_nchw, &kernel_nchw, &mut output_nchw, params);
     
     // Convert back from NCHW to interleaved RGB
@@ -298,7 +298,7 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
     // Call tensor backend
-    let backend: &dyn ConvBackend = &crate::tensor::conv::cpu::CpuBackend::new();
+    let backend: &dyn ConvBackend = &crate::tensor::conv::CpuBackend::new();
     backend.depthwise_conv2d(&input_nchw, &kernel_depthwise, &mut output_nchw, params);
     
     // Convert back from NCHW to interleaved RGBA

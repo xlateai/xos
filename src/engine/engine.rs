@@ -1,4 +1,4 @@
-use crate::tensor::array::{Array, Device};
+use crate::tensor::FrameBuffer;
 
 /// Safe region bounding rectangle for UI elements
 /// 
@@ -64,8 +64,8 @@ impl SafeRegionBoundingRectangle {
 /// Frame state containing the pixel array and safe region information
 #[derive(Debug)]
 pub struct FrameState {
-    /// The pixel array with shape [height, width, 4] for RGBA pixels
-    pub array: Array<u8>,
+    /// The pixel buffer with shape [height, width, 4] for RGBA pixels
+    pub array: FrameBuffer,
     /// Safe region bounding rectangle for UI elements
     pub safe_region_boundaries: SafeRegionBoundingRectangle,
 }
@@ -73,18 +73,15 @@ pub struct FrameState {
 impl FrameState {
     /// Create a new FrameState with given dimensions and safe region
     pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
-        let shape = vec![height as usize, width as usize, 4];
-        let data = vec![0u8; (width * height * 4) as usize];
         Self {
-            array: Array::new_on_device(data, shape, Device::Cpu),
+            array: FrameBuffer::new(width, height),
             safe_region_boundaries: safe_region,
         }
     }
 
-    /// Get mutable access to the frame buffer (zero-copy for CPU arrays)
-    /// Panics if the array is on a non-CPU device
+    /// Get mutable access to the frame buffer (zero-copy for rasterizer)
     pub fn buffer_mut(&mut self) -> &mut [u8] {
-        self.array.data_mut()
+        self.array.buffer_mut()
     }
 
     /// Get the frame shape [height, width, 4]
@@ -94,15 +91,12 @@ impl FrameState {
 
     /// Resize the frame to new dimensions (preserves safe region, as it's normalized)
     pub fn resize(&mut self, width: u32, height: u32) {
-        let shape = vec![height as usize, width as usize, 4];
-        let data = vec![0u8; (width * height * 4) as usize];
-        self.array = Array::new_on_device(data, shape, Device::Cpu);
-        // Safe region is normalized, so it doesn't need to change
+        self.array.resize(width, height);
     }
 
     /// Clear the frame buffer to black (all zeros)
     pub fn clear(&mut self) {
-        self.buffer_mut().fill(0);
+        self.array.clear();
     }
 }
 
