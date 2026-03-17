@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::OnceLock;
@@ -132,26 +132,37 @@ fn try_fill_random_metal(_buffer: &mut [u8], _low: f64, _high: f64) -> bool {
 
 /// xos.random.uniform(low=0.0, high=1.0, shape=None, dtype=None) - returns a random float or array
 /// 
+/// Extract f64 from Python int or float
+fn parse_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(f);
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(i as f64);
+    }
+    Err(vm.new_type_error("Expected a number (int or float)".to_string()))
+}
+
 /// If shape is None (default), returns a single random float between low and high
 /// If shape is provided as a tuple, returns an array of random values
 /// dtype can be specified (default: inferred from context - float32 for kernels, uint8 for images)
 fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     
-    // Parse low parameter (default: 0.0)
+    // Parse low parameter (default: 0.0) - accept int or float
     let low: f64 = if !args_vec.is_empty() {
-        args_vec[0].clone().try_into_value(vm)?
+        parse_f64(&args_vec[0], vm)?
     } else if let Some(low_kwarg) = args.kwargs.get("low") {
-        low_kwarg.clone().try_into_value(vm)?
+        parse_f64(low_kwarg, vm)?
     } else {
         0.0
     };
     
-    // Parse high parameter (default: 1.0)
+    // Parse high parameter (default: 1.0) - accept int or float
     let high: f64 = if args_vec.len() > 1 {
-        args_vec[1].clone().try_into_value(vm)?
+        parse_f64(&args_vec[1], vm)?
     } else if let Some(high_kwarg) = args.kwargs.get("high") {
-        high_kwarg.clone().try_into_value(vm)?
+        parse_f64(high_kwarg, vm)?
     } else {
         1.0
     };
@@ -329,8 +340,8 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     
     let _array_dict = &args_vec[0]; // Array dict (not used, we access buffer directly)
-    let low: f64 = args_vec[1].clone().try_into_value(vm)?;
-    let high: f64 = args_vec[2].clone().try_into_value(vm)?;
+    let low: f64 = parse_f64(&args_vec[1], vm)?;
+    let high: f64 = parse_f64(&args_vec[2], vm)?;
     
     // Get the frame buffer from global context
     let buffer_guard = crate::python::rasterizer::CURRENT_FRAME_BUFFER.lock().unwrap();

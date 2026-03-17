@@ -61,6 +61,17 @@ impl PyTensor {
     }
 }
 
+/// Extract f64 from Python int or float (handles "expected float but got int" from strict conversion)
+fn py_number_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(f);
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(i as f64);
+    }
+    Err(vm.new_type_error("Expected a number (int or float)".to_string()))
+}
+
 /// Create Burn tensor from flat f32 data and shape, return as PyTensor
 fn create_tensor_from_data(
     flat_data: Vec<f32>,
@@ -102,7 +113,7 @@ fn tensor_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 flatten_list(item, flat, vm)?;
             }
         } else {
-            let val: f64 = obj.clone().try_into_value(vm)?;
+            let val = py_number_to_f64(obj, vm)?;
             flat.push(val as f32);
         }
         Ok(())
