@@ -1,4 +1,10 @@
+"""
+Depthwise convolution demo - one 3x3 kernel, applied to each RGB channel independently.
+
+Frame is u8, kernel is float; normalized internally for correct u8 output.
+"""
 import xos
+
 
 class DepthwiseConvolution(xos.Application):
     def __init__(self):
@@ -7,46 +13,36 @@ class DepthwiseConvolution(xos.Application):
         self.needs_init = True
     
     def setup(self):
-        """Initialize random 3x3 depthwise kernel"""
+        """Initialize random 3x3 depthwise kernel (once)"""
         xos.print("Depthwise Convolution Demo initialized")
-        
-        # Generate random 3x3 kernel (same kernel applied to each RGB channel)
         kernel_size = 3
         self.kernel = xos.random.uniform(-1.0, 1.0, shape=(kernel_size, kernel_size), dtype=xos.float32)
         xos.print(f"Generated random {kernel_size}x{kernel_size} depthwise kernel")
-        xos.print("Setup complete! Will generate initial image and start convolution...")
+        xos.print("Setup complete!")
     
     def reset_state(self):
-        """Reset state by generating new random image"""
+        """Generate fresh random image"""
         width = self.get_width()
         height = self.get_height()
         xos.print(f"Generating random {width}x{height} image...")
         xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
     
     def tick(self):
-        """Generate initial random image on first tick, then apply depthwise convolution"""
-        # First tick: generate initial random state
+        """First tick: init. Then: depthwise conv every frame."""
         if self.needs_init:
             self.reset_state()
             xos.print("Starting depthwise convolution...")
             self.needs_init = False
             return
         
-        # Every subsequent tick: apply depthwise convolution and update frame
         self.frame.array[:] = xos.ops.convolve_depthwise(self.frame.array, self.kernel)
     
     def on_screen_size_change(self, width, height):
-        """Handle screen resize by resetting state"""
         xos.print(f"Screen resized to {width}x{height}")
         self.reset_state()
 
 
-# Demo code
 if __name__ == "__main__":
     xos.print("Depthwise Convolution Demo")
-    xos.print("Applies random 3x3 depthwise convolution kernel at each frame")
-    xos.print("(Each color channel processed independently)")
-    
     app = DepthwiseConvolution()
     app.run()
-

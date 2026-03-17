@@ -82,6 +82,9 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let f: f64 = val.clone().try_into_value(vm)?;
         kernel.push(f as f32);
     }
+    // Normalize by L1 norm so output stays in ~[-255,255] for u8 input - prevents rapid blackout
+    let norm: f32 = kernel.iter().map(|&x| x.abs()).sum::<f32>().max(1e-6);
+    kernel.iter_mut().for_each(|x| *x /= norm);
     
     drop(kernel_vec);
     
@@ -160,13 +163,15 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     );
     
     // Convert back from NCHW to interleaved RGB
+    // Normalized kernel gives output ~[-255,255]; map to u8: (out+255)/2, then clamp
     let mut output_rgb = vec![0u8; buffer_len];
     for y in 0..height {
         for x in 0..width {
             let dst_idx = (y * width + x) * 4;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                output_rgb[dst_idx + c] = output_nchw[src_idx].clamp(0.0, 255.0) as u8;
+                let v = (output_nchw[src_idx] + 255.0) / 2.0;
+                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
             }
             output_rgb[dst_idx + 3] = 255; // Alpha
         }
@@ -236,6 +241,8 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let f: f64 = val.clone().try_into_value(vm)?;
         kernel.push(f as f32);
     }
+    let norm: f32 = kernel.iter().map(|&x| x.abs()).sum::<f32>().max(1e-6);
+    kernel.iter_mut().for_each(|x| *x /= norm);
     
     drop(kernel_vec);
     
@@ -305,20 +312,20 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         [pad, pad], // padding
     );
     
-    // Convert back from NCHW to interleaved RGBA
+    // Convert back: normalized output ~[-255,255] -> u8 via (out+255)/2
     let mut output_rgb = vec![0u8; buffer_len];
     for y in 0..height {
         for x in 0..width {
             let dst_idx = (y * width + x) * 4;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                output_rgb[dst_idx + c] = output_nchw[src_idx].clamp(0.0, 255.0) as u8;
+                let v = (output_nchw[src_idx] + 255.0) / 2.0;
+                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
             }
             output_rgb[dst_idx + 3] = 255; // Alpha
         }
     }
     
-    // Return output as Python list wrapped in _ArrayResult
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
         .map(|&b| vm.ctx.new_int(b).into())
         .collect();
