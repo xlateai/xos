@@ -1,5 +1,7 @@
 # xos
 
+You can watch a 30 minute primer on [what XOS is and it's future on YouTube here](https://www.youtube.com/watch?v=01APSubyLoQ).
+
 xos is a high-performance, cross-platform application framework for building interactive, compute-intensive software with a single, coherent architecture. It is designed to unify concepts from UI frameworks, game engines, tensor operator libraries, and experimental operating-system–like runtimes into a lightweight build system.
 
 xos enables applications to target multiple platforms with minimal code divergence, providing explicit and ergonomic mechanisms for device-specific specialization, backend selection, and responsive layout across screen sizes.
