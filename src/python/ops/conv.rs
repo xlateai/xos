@@ -200,6 +200,238 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(list_obj.into())
 }
 
+/// Extract shape [H, W, C] from array/tensor
+fn get_image_shape(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Option<(usize, usize, usize)>> {
+    let shape_obj = if let Some(dict) = obj.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+        dict.get_item("shape", vm).ok()
+    } else {
+        obj.get_attr("shape", vm).ok()
+    };
+    let shape_obj = match shape_obj {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let s: &[PyObjectRef] = match shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+        Some(t) => t.as_slice(),
+        None => return Ok(None),
+    };
+    if s.len() >= 3 {
+        let h: i64 = s[0].clone().try_into_value(vm).ok().ok_or_else(|| vm.new_type_error("shape H must be int".to_string()))?;
+        let w: i64 = s[1].clone().try_into_value(vm).ok().ok_or_else(|| vm.new_type_error("shape W must be int".to_string()))?;
+        let c: i64 = s[2].clone().try_into_value(vm).unwrap_or(3);
+        Ok(Some((h as usize, w as usize, c.max(1) as usize)))
+    } else if s.len() == 2 {
+        let h: i64 = s[0].clone().try_into_value(vm).ok().ok_or_else(|| vm.new_type_error("shape H must be int".to_string()))?;
+        let w: i64 = s[1].clone().try_into_value(vm).ok().ok_or_else(|| vm.new_type_error("shape W must be int".to_string()))?;
+        Ok(Some((h as usize, w as usize, 3)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// xos.ops.convolve_image(image, kernel) - convolve arbitrary image tensor, returns new image dict
+/// - image: tensor/array with _data and shape (H, W, 3). Values 0-255 (int or float).
+/// - kernel: 3x3x3. Returns dict with _data (flat u8 RGBA) and shape.
+pub fn convolve_image(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 2 {
+        return Err(vm.new_type_error("convolve_image() requires (image, kernel)".to_string()));
+    }
+    let image_arg = &args_vec[0];
+    let kernel_arg = &args_vec[1];
+
+    let (height, width, _channels) = get_image_shape(image_arg, vm)
+        .ok()
+        .flatten()
+        .ok_or_else(|| vm.new_type_error("image must have shape (H, W, 3)".to_string()))?;
+
+    let data_list = get_array_data_list(image_arg, vm)?
+        .and_then(|o| o.downcast::<rustpython_vm::builtins::PyList>().ok())
+        .ok_or_else(|| vm.new_type_error("image must have _data list".to_string()))?;
+    let data_vec = data_list.borrow_vec();
+
+    // Parse image to f32 (int or float 0-255)
+    let mut input_f32 = Vec::with_capacity(width * height * 3);
+    for item in data_vec.iter() {
+        let v: f64 = item.clone().try_into_value(vm).or_else(|_| item.clone().try_into_value::<i64>(vm).map(|x| x as f64))?;
+        input_f32.push(v.clamp(0.0, 255.0) as f32);
+    }
+    drop(data_vec);
+
+    // Kernel parsing (same as convolve)
+    let kernel_list = get_array_data_list(kernel_arg, vm)?
+        .and_then(|o| o.downcast::<rustpython_vm::builtins::PyList>().ok())
+        .ok_or_else(|| vm.new_type_error("kernel must be a list or array".to_string()))?;
+    let kernel_vec = kernel_list.borrow_vec();
+    let kernel_len = kernel_vec.len();
+    if kernel_len % 3 != 0 {
+        return Err(vm.new_value_error("kernel must be KxKx3".to_string()));
+    }
+    let kernel_size = (kernel_len / 3) as f32;
+    let kernel_size = kernel_size.sqrt() as usize;
+    let mut kernel: Vec<f32> = Vec::with_capacity(kernel_len);
+    for val in kernel_vec.iter() {
+        let f: f64 = val.clone().try_into_value(vm)?;
+        kernel.push(f as f32);
+    }
+    let norm: f32 = kernel.iter().map(|&x| x.abs()).sum::<f32>().max(1e-6);
+    kernel.iter_mut().for_each(|x| *x /= norm);
+    drop(kernel_vec);
+
+    // HWC -> NCHW
+    let mut input_nchw = vec![0.0f32; width * height * 3];
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                let src_idx = (y * width + x) * 3 + c;
+                let dst_idx = (c * height + y) * width + x;
+                input_nchw[dst_idx] = input_f32[src_idx];
+            }
+        }
+    }
+
+    let mut kernel_nchw = vec![0.0f32; 3 * 3 * kernel_size * kernel_size];
+    for out_c in 0..3 {
+        for in_c in 0..3 {
+            for ky in 0..kernel_size {
+                for kx in 0..kernel_size {
+                    let src_idx = (ky * kernel_size + kx) * 3 + in_c;
+                    let dst_idx = ((out_c * 3 + in_c) * kernel_size + ky) * kernel_size + kx;
+                    kernel_nchw[dst_idx] = kernel[src_idx];
+                }
+            }
+        }
+    }
+
+    let pad = (kernel_size - 1) / 2;
+    let mut output_nchw = vec![0.0f32; width * height * 3];
+    conv2d(
+        &input_nchw,
+        &kernel_nchw,
+        &mut output_nchw,
+        1, 3, 3, height, width, kernel_size, kernel_size, [1, 1], [pad, pad],
+    );
+
+    let mut output_rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                let src_idx = (c * height + y) * width + x;
+                let v = (output_nchw[src_idx] + 255.0) / 2.0;
+                output_rgba.push(v.clamp(0.0, 255.0) as u8);
+            }
+            output_rgba.push(255);
+        }
+    }
+
+    let dict = vm.ctx.new_dict();
+    let py_list: Vec<_> = output_rgba.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
+    dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+    dict.set_item("shape", vm.ctx.new_tuple(vec![
+        vm.ctx.new_int(height).into(),
+        vm.ctx.new_int(width).into(),
+        vm.ctx.new_int(4).into(),
+    ]).into(), vm)?;
+    Ok(dict.into())
+}
+
+/// xos.ops.convolve_depthwise_image(image, kernel) - same but depthwise
+pub fn convolve_depthwise_image(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 2 {
+        return Err(vm.new_type_error("convolve_depthwise_image() requires (image, kernel)".to_string()));
+    }
+    let image_arg = &args_vec[0];
+    let kernel_arg = &args_vec[1];
+
+    let (height, width, _) = get_image_shape(image_arg, vm)
+        .ok()
+        .flatten()
+        .ok_or_else(|| vm.new_type_error("image must have shape (H, W, 3)".to_string()))?;
+
+    let data_list = get_array_data_list(image_arg, vm)?
+        .and_then(|o| o.downcast::<rustpython_vm::builtins::PyList>().ok())
+        .ok_or_else(|| vm.new_type_error("image must have _data list".to_string()))?;
+    let data_vec = data_list.borrow_vec();
+    let mut input_f32 = Vec::with_capacity(width * height * 3);
+    for item in data_vec.iter() {
+        let v: f64 = item.clone().try_into_value(vm).or_else(|_| item.clone().try_into_value::<i64>(vm).map(|x| x as f64))?;
+        input_f32.push(v.clamp(0.0, 255.0) as f32);
+    }
+    drop(data_vec);
+
+    let kernel_list = get_array_data_list(kernel_arg, vm)?
+        .and_then(|o| o.downcast::<rustpython_vm::builtins::PyList>().ok())
+        .ok_or_else(|| vm.new_type_error("kernel must be a list or array".to_string()))?;
+    let kernel_vec = kernel_list.borrow_vec();
+    let kernel_len = kernel_vec.len();
+    let kernel_size = (kernel_len as f32).sqrt() as usize;
+    if kernel_size * kernel_size != kernel_len {
+        return Err(vm.new_value_error("kernel must be KxK".to_string()));
+    }
+    let mut kernel: Vec<f32> = Vec::with_capacity(kernel_len);
+    for val in kernel_vec.iter() {
+        let f: f64 = val.clone().try_into_value(vm)?;
+        kernel.push(f as f32);
+    }
+    let norm: f32 = kernel.iter().map(|&x| x.abs()).sum::<f32>().max(1e-6);
+    kernel.iter_mut().for_each(|x| *x /= norm);
+    drop(kernel_vec);
+
+    let mut input_nchw = vec![0.0f32; width * height * 3];
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                let src_idx = (y * width + x) * 3 + c;
+                let dst_idx = (c * height + y) * width + x;
+                input_nchw[dst_idx] = input_f32[src_idx];
+            }
+        }
+    }
+
+    let mut kernel_depthwise = vec![0.0f32; 3 * kernel_size * kernel_size];
+    for c in 0..3 {
+        for ky in 0..kernel_size {
+            for kx in 0..kernel_size {
+                let src_idx = ky * kernel_size + kx;
+                let dst_idx = (c * kernel_size + ky) * kernel_size + kx;
+                kernel_depthwise[dst_idx] = kernel[src_idx];
+            }
+        }
+    }
+
+    let pad = (kernel_size - 1) / 2;
+    let mut output_nchw = vec![0.0f32; width * height * 3];
+    depthwise_conv2d(
+        &input_nchw,
+        &kernel_depthwise,
+        &mut output_nchw,
+        1, 3, height, width, kernel_size, kernel_size, [1, 1], [pad, pad],
+    );
+
+    let mut output_rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                let src_idx = (c * height + y) * width + x;
+                let v = (output_nchw[src_idx] + 255.0) / 2.0;
+                output_rgba.push(v.clamp(0.0, 255.0) as u8);
+            }
+            output_rgba.push(255);
+        }
+    }
+
+    let dict = vm.ctx.new_dict();
+    let py_list: Vec<_> = output_rgba.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
+    dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+    dict.set_item("shape", vm.ctx.new_tuple(vec![
+        vm.ctx.new_int(height).into(),
+        vm.ctx.new_int(width).into(),
+        vm.ctx.new_int(4).into(),
+    ]).into(), vm)?;
+    Ok(dict.into())
+}
+
 /// xos.ops.convolve_depthwise(image, kernel, padding="same")
 /// Fast 2D depthwise convolution - each channel processed independently using tensor backend
 /// 
