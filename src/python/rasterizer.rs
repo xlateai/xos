@@ -491,6 +491,126 @@ fn draw_line_bresenham(
     }
 }
 
+/// xos.rasterizer.draw_image_centered(frame, image)
+/// 
+/// Clears the frame, then draws the image centered and scaled to fit the shorter screen edge.
+/// - frame: frame object (required for API consistency; frame buffer comes from global context)
+/// - image: tensor/dict with _data and shape (H, W, C) - e.g. from convolve_image()
+fn draw_image_centered(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "draw_image_centered() takes exactly 2 arguments (frame, image), got {}",
+            args_vec.len()
+        )));
+    }
+    
+    let _frame = &args_vec[0]; // Required for API consistency
+    let image_arg = &args_vec[1];
+    
+    // Extract shape (H, W) from image
+    let shape = if let Some(dict) = image_arg.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+        dict.get_item("shape", vm).ok()
+    } else {
+        image_arg.get_attr("shape", vm).ok()
+    };
+    let shape = shape.ok_or_else(|| vm.new_type_error("image must have shape".to_string()))?;
+    let slc: &[rustpython_vm::PyObjectRef] = shape.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .map(|t| t.as_slice())
+        .ok_or_else(|| vm.new_type_error("image shape must be a tuple (H, W, ...)".to_string()))?;
+    if slc.len() < 2 {
+        return Err(vm.new_type_error("image shape must have at least (H, W)".to_string()));
+    }
+    let img_h: usize = slc[0].clone().try_into_value::<i64>(vm)
+        .map_err(|_| vm.new_type_error("shape H must be int".to_string()))? as usize;
+    let img_w: usize = slc[1].clone().try_into_value::<i64>(vm)
+        .map_err(|_| vm.new_type_error("shape W must be int".to_string()))? as usize;
+    
+    // Extract _data list from image (dict["_data"] or obj._data or obj._data["_data"])
+    let data_obj = if let Some(dict) = image_arg.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+        dict.get_item("_data", vm).ok()
+    } else if let Ok(data_attr) = image_arg.get_attr("_data", vm) {
+        if let Some(inner) = data_attr.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+            inner.get_item("_data", vm).ok()
+        } else {
+            Some(data_attr)
+        }
+    } else {
+        None
+    };
+    let data_obj = data_obj.ok_or_else(|| vm.new_type_error("image must have _data".to_string()))?;
+    let data_list = data_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("image _data must be a list".to_string()))?;
+    
+    let values_vec = data_list.borrow_vec();
+    let expected_len = img_w * img_h * 4;
+    if values_vec.len() < expected_len {
+        return Err(vm.new_value_error(format!(
+            "image_data length {} < {} (need {}x{}x4)",
+            values_vec.len(), expected_len, img_w, img_h
+        )));
+    }
+    
+    // Copy to local u8 buffer (we need to release the PyList borrow)
+    let mut img_bytes: Vec<u8> = Vec::with_capacity(expected_len);
+    for i in 0..expected_len {
+        let v: i32 = values_vec[i].clone().try_into_value(vm)?;
+        img_bytes.push(v.clamp(0, 255) as u8);
+    }
+    drop(values_vec);
+    
+    // Get frame buffer
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let screen_w = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let screen_h = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. draw_image_centered must be called during tick().".to_string())
+    })?;
+    
+    let buffer_len = screen_w * screen_h * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    
+    // Clear to black
+    buffer.fill(0);
+    
+    // Scale to fit shorter edge, centered
+    let scale_w = screen_w as f32 / img_w as f32;
+    let scale_h = screen_h as f32 / img_h as f32;
+    let scale = scale_w.min(scale_h);
+    let sw = (img_w as f32 * scale) as usize;
+    let sh = (img_h as f32 * scale) as usize;
+    let ox = ((screen_w - sw) / 2) as i32;
+    let oy = ((screen_h - sh) / 2) as i32;
+    
+    for dy in 0..sh {
+        let sy = oy + dy as i32;
+        if sy < 0 || sy >= screen_h as i32 {
+            continue;
+        }
+        for dx in 0..sw {
+            let sx = ox + dx as i32;
+            if sx < 0 || sx >= screen_w as i32 {
+                continue;
+            }
+            let src_x = (dx as f32 / scale) as usize;
+            let src_y = (dy as f32 / scale) as usize;
+            let src_x = src_x.min(img_w.saturating_sub(1));
+            let src_y = src_y.min(img_h.saturating_sub(1));
+            let src_idx = (src_y * img_w + src_x) * 4;
+            let dst_idx = (sy as usize * screen_w + sx as usize) * 4;
+            if dst_idx + 3 < buffer.len() && src_idx + 3 < img_bytes.len() {
+                buffer[dst_idx + 0] = img_bytes[src_idx + 0];
+                buffer[dst_idx + 1] = img_bytes[src_idx + 1];
+                buffer[dst_idx + 2] = img_bytes[src_idx + 2];
+                buffer[dst_idx + 3] = img_bytes[src_idx + 3];
+            }
+        }
+    }
+    
+    Ok(vm.ctx.none())
+}
+
 /// xos.rasterizer.clear() - clear the frame buffer to black
 /// 
 /// Efficiently clears the entire frame buffer to black (all zeros)
@@ -878,5 +998,6 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("rects_filled", vm.new_function("rects_filled", rects_filled), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module.set_attr("text", vm.new_function("text", text), vm).unwrap();
+    module.set_attr("draw_image_centered", vm.new_function("draw_image_centered", draw_image_centered), vm).unwrap();
     module
 }
