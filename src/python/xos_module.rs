@@ -86,6 +86,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the ops submodule
     let ops_module = crate::python::ops::make_ops_module(vm);
     module.set_attr("ops", ops_module, vm).unwrap();
+
+    // Add the nn submodule (Burn-backed Linear, etc.)
+    let nn_module = crate::python::nn::make_nn_module(vm);
+    module.set_attr("nn", nn_module, vm).unwrap();
     
     // Add the tensors submodule (Burn-backed, replaces array)
     let tensors_module = crate::python::tensors::make_tensors_module(vm);

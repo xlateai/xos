@@ -4,11 +4,13 @@
 //! the engine's pixel buffer (requires &mut [u8] for rasterizer compatibility).
 
 pub mod conv;
+pub mod linear;
 
 pub use burn::tensor::backend::Backend;
 pub use burn::tensor::{ElementConversion, Int, Shape, Tensor, TensorData};
 pub use burn_ndarray::{NdArray, NdArrayDevice};
 pub use conv::{conv2d, depthwise_conv2d};
+pub use linear::{linear_init, linear_forward};
 
 /// Default backend and device for xos tensors
 pub type XosBackend = NdArray;

@@ -9,6 +9,7 @@ pub mod audio;
 pub mod system;
 pub mod dialoguer;
 pub mod math;
+pub mod nn;
 pub mod ops;
 pub mod dtypes;
 pub mod data;

@@ -2,9 +2,8 @@
 Random X->Y training demo - learns to map random inputs to random targets.
 
 Generates random X and Y with no relationship, then trains a simple
-linear model (y = w*x + b) via gradient descent. The model will eventually
-memorize the training data (overfit) - it's meaningless but demonstrates
-the training loop.
+linear model via gradient descent. Forward pass uses xos.nn.Linear (Burn-backed).
+Gradient calculation remains manual.
 """
 import xos
 
@@ -16,7 +15,7 @@ PRINT_EVERY = 100
 
 
 def main():
-    xos.print("Random X->Y Training Demo")
+    xos.print("Random X->Y Training Demo (Burn Linear forward)")
     xos.print("=" * 40)
 
     # Generate random X and Y (no relationship - purely random)
@@ -34,19 +33,23 @@ def main():
     xos.print(f"Y range: [{min(Y['_data']):.3f}, {max(Y['_data']):.3f}]")
     xos.print("")
 
-    # Extract data as lists for training
-    x_data = [X["_data"][i] for i in range(N_SAMPLES)]
-    y_data = [Y["_data"][i] for i in range(N_SAMPLES)]
+    # Linear model: forward uses Burn
+    model = xos.nn.Linear(1, 1)
+    # Override init to match original (w=0.5, b=0.0)
+    model._weight[0] = 0.5
+    model._bias[0] = 0.0
 
-    # Simple linear model: y_pred = w * x + b
-    w = 0.5  # random init
-    b = 0.0
+    x_data = X["_data"]
+    y_data = Y["_data"]
 
-    xos.print("Training (gradient descent on MSE loss)...")
+    xos.print("Training (Burn forward + manual gradients)...")
     xos.print("")
 
     for epoch in range(EPOCHS):
-        # Forward pass
+        # Forward pass via Burn
+        y_pred_batch = model(X)
+        y_pred_list = y_pred_batch["_data"]
+
         total_loss = 0.0
         grad_w = 0.0
         grad_b = 0.0
@@ -54,7 +57,7 @@ def main():
         for i in range(N_SAMPLES):
             x = x_data[i]
             y_true = y_data[i]
-            y_pred = w * x + b
+            y_pred = y_pred_list[i]
             loss = (y_pred - y_true) ** 2
             total_loss += loss
 
@@ -68,14 +71,16 @@ def main():
         grad_b /= N_SAMPLES
 
         # Gradient descent step
-        w -= LEARNING_RATE * grad_w
-        b -= LEARNING_RATE * grad_b
+        model._weight[0] -= LEARNING_RATE * grad_w
+        model._bias[0] -= LEARNING_RATE * grad_b
 
         if (epoch + 1) % PRINT_EVERY == 0 or epoch == 0:
+            w, b = model._weight[0], model._bias[0]
             xos.print(f"  Epoch {epoch + 1:4d} | Loss: {avg_loss:.6f} | w={w:.4f}, b={b:.4f}")
 
     xos.print("")
     xos.print("Training complete!")
+    w, b = model._weight[0], model._bias[0]
     xos.print(f"Final model: y = {w:.4f} * x + {b:.4f}")
     xos.print("")
     xos.print("(Since X and Y are unrelated random data, this model")
