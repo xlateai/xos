@@ -48,6 +48,23 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
         return;
     }
 
+    let mut guard = match HOST.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+            return;
+        }
+    };
+
+    // Already initialized (e.g. Java called init again before resize): same as resize, do not re-run setup.
+    if let Some(host) = guard.as_mut() {
+        host.engine.resize_frame(width as u32, height as u32);
+        let _ = host
+            .app
+            .on_screen_size_change(&mut host.engine, width as u32, height as u32);
+        return;
+    }
+
     let safe_region = SafeRegionBoundingRectangle::full_screen();
     let mut engine = EngineState {
         frame: FrameState::new(width as u32, height as u32, safe_region),
@@ -75,13 +92,6 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
         return;
     }
 
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
-            return;
-        }
-    };
     *guard = Some(Host { engine, app });
 }
 

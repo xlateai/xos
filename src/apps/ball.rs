@@ -134,7 +134,7 @@ impl Application for BallGame {
             let y = rand_float(BALL_RADIUS, height - BALL_RADIUS);
             self.balls.push(BallState::new_at_position(x, y, BALL_RADIUS));
         }
-        crate::print("+128 balls (initial spawn)");
+        crate::print("+512 balls (initial spawn)");
         Ok(())
     }
 
