@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
@@ -75,6 +75,30 @@ fn prompt_rebuild_ios() -> RebuildOption {
     }
 }
 
+/// Release artifact for the `xos` binary crate (`target/release/xos` or `xos.exe`).
+fn release_xos_executable(project_root: &Path) -> PathBuf {
+    project_root.join("target").join("release").join(if cfg!(windows) {
+        "xos.exe"
+    } else {
+        "xos"
+    })
+}
+
+/// Build the CLI with `cargo build --release` (does not replace a running `xos` in `PATH`).
+/// Use this instead of `cargo install` when the user may be executing `xos` from `~/.cargo/bin`
+/// — on Windows the install step fails with "Access is denied" while the binary is in use.
+fn cargo_build_release_xos(project_root: &Path) -> bool {
+    let mut cargo_cmd = Command::new("cargo");
+    cargo_cmd.current_dir(project_root);
+    cargo_cmd.args(["build", "--release", "-p", "xos"]);
+    cargo_cmd.stdout(Stdio::inherit());
+    cargo_cmd.stderr(Stdio::inherit());
+    let status = cargo_cmd
+        .status()
+        .expect("Failed to run cargo build");
+    status.success()
+}
+
 fn prompt_rebuild() -> bool {
     print!("Would you like to rebuild Rust? (Y/n): ");
     io::stdout().flush().unwrap();
@@ -130,21 +154,16 @@ fn find_project_root() -> PathBuf {
 
 fn build() {
     println!("🔨 Building xos...");
-    
+
     let project_root = find_project_root();
-    
-    let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
-    cargo_cmd.stdout(Stdio::inherit());
-    cargo_cmd.stderr(Stdio::inherit());
-    
-    let status = cargo_cmd.status().expect("Failed to run cargo install");
-    if !status.success() {
+    if !cargo_build_release_xos(&project_root) {
         eprintln!("❌ Build failed. Exiting.");
         std::process::exit(1);
     }
-    
-    println!("✅ Build complete.");
+
+    let out = release_xos_executable(&project_root);
+    println!("✅ Build complete: {}", out.display());
+    println!("   (To refresh the copy in ~/.cargo/bin, run `cargo install --path .` while xos is not running.)");
 }
 
 fn build_ios_rust() {
@@ -227,24 +246,18 @@ fn build_ios() {
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
     println!("🔨 Rebuilding xos...");
-    
+
     let project_root = find_project_root();
-    
-    let mut cargo_cmd = Command::new("cargo");
-    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
-    cargo_cmd.stdout(Stdio::inherit());
-    cargo_cmd.stderr(Stdio::inherit());
-    
-    let status = cargo_cmd.status().expect("Failed to run cargo install");
-    if !status.success() {
+    if !cargo_build_release_xos(&project_root) {
         eprintln!("❌ Build failed. Exiting.");
         std::process::exit(1);
     }
-    
+
+    let xos_bin = release_xos_executable(&project_root);
     println!("✅ Build complete. Re-executing command...\n");
-    
+
     // Re-execute the original command with -n to skip the prompt
-    let mut exec_cmd = Command::new("xos");
+    let mut exec_cmd = Command::new(&xos_bin);
     let mut new_args: Vec<String> = original_args[1..]
         .iter()
         .filter(|arg| arg != &"-y" && arg != &"--yes" && arg != &"-n" && arg != &"--no") // Remove -y/--yes/-n/--no if present
@@ -299,12 +312,7 @@ fn main() {
                 RebuildOption::RebuildAll => {
                     println!("🔨 Rebuilding Rust CLI...");
                     let project_root = find_project_root();
-                    let mut cargo_cmd = Command::new("cargo");
-                    cargo_cmd.args(&["install", "--path", project_root.to_str().unwrap()]);
-                    cargo_cmd.stdout(Stdio::inherit());
-                    cargo_cmd.stderr(Stdio::inherit());
-                    let status = cargo_cmd.status().expect("Failed to run cargo install");
-                    if !status.success() {
+                    if !cargo_build_release_xos(&project_root) {
                         eprintln!("❌ CLI build failed. Exiting.");
                         std::process::exit(1);
                     }
@@ -320,7 +328,7 @@ fn main() {
                         .cloned()
                         .collect();
                     new_args.insert(0, "-n".to_string());
-                    let mut exec_cmd = Command::new("xos");
+                    let mut exec_cmd = Command::new(release_xos_executable(&project_root));
                     exec_cmd.args(&new_args);
                     exec_cmd.stdout(Stdio::inherit());
                     exec_cmd.stderr(Stdio::inherit());
