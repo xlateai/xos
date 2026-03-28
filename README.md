@@ -4,7 +4,7 @@ A cross-platform application framework with a game-engine core in Rust, designed
 
 A true alternative to React Native: pure Python, zero JavaScript, no HTML or CSS. Build, run, and even edit your apps directly on-device, wherever you are.
 
-## TODOs
+## Progress
 - [x] Headless mode for applications without viewports.
 - [x] iOS audio drivers.
 - [ ] iOS haptics drivers.
