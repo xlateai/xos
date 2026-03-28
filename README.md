@@ -14,10 +14,10 @@ The xos API is currently experimental and subject to change. In particular, the 
 Planned extensions include Python-based scripting for application definition and computational workflows, with automatic delegation to available hardware accelerators—enabling lightweight, PyTorch-style numerical experimentation within the xos runtime.
 
 **Progress:**
-- [ ] Headless mode for applications without viewports.
-- [ ] iOS audio drivers.
+- [x] Headless mode for applications without viewports.
+- [x] iOS audio drivers.
 - [ ] iOS haptics drivers.
-- [ ] Python runtime and scripting.
+- [x] Python runtime and scripting.
 - [ ] Networking.
 - [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
 - [ ] Locally evaluating chat language models.
