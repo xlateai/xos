@@ -1,23 +1,28 @@
 //! JNI host for [`xos::engine::Application`]. Native library: `xos_jni` (`xos_jni.dll` / `libxos_jni.so` / `libxos_jni.dylib`).
 //!
 //! Java API: `ai.xlate.xos.XosNative` in `../java/`. Build with `cargo build -p xos_jni --release`.
+//!
+//! The engine is stored in [`thread_local`] storage: Minecraft must call these natives from the
+//! **client thread** only (same as other rendering/input). That allows non-[`Send`] apps such as
+//! [`CoderApp`] (RustPython is not `Send`).
 
 use jni::objects::JClass;
 use jni::sys::{jfloat, jint, jobject, jstring};
 use jni::JNIEnv;
-use std::sync::Mutex;
+use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
     Application, CursorStyleSetter, EngineState, FrameState, KeyboardState, MouseState,
     SafeRegionBoundingRectangle,
 };
 
-static HOST: Mutex<Option<Host>> = Mutex::new(None);
+thread_local! {
+    static HOST: RefCell<Option<Host>> = RefCell::new(None);
+}
 
 struct Host {
     engine: EngineState,
-    /// `Send` is required so `Mutex<Option<Host>>` can be `Sync` for a static.
-    app: Box<dyn Application + Send>,
+    app: Box<dyn Application>,
 }
 
 fn throw(env: &mut JNIEnv, class: &str, msg: &str) {
@@ -25,7 +30,7 @@ fn throw(env: &mut JNIEnv, class: &str, msg: &str) {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_ai_xlate_xos_XosNative_ping(mut env: JNIEnv, _class: JClass) -> jstring {
+pub extern "system" fn Java_ai_xlate_xos_XosNative_ping(env: JNIEnv, _class: JClass) -> jstring {
     match env.new_string("Hello from xos-jni!") {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -48,85 +53,71 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
         return;
     }
 
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+
+        // Already initialized (e.g. Java called init again before resize): same as resize, do not re-run setup.
+        if let Some(host) = guard.as_mut() {
+            host.engine.resize_frame(width as u32, height as u32);
+            let _ = host
+                .app
+                .on_screen_size_change(&mut host.engine, width as u32, height as u32);
             return;
         }
-    };
 
-    // Already initialized (e.g. Java called init again before resize): same as resize, do not re-run setup.
-    if let Some(host) = guard.as_mut() {
-        host.engine.resize_frame(width as u32, height as u32);
-        let _ = host
-            .app
-            .on_screen_size_change(&mut host.engine, width as u32, height as u32);
-        return;
-    }
+        let safe_region = SafeRegionBoundingRectangle::full_screen();
+        let mut engine = EngineState {
+            frame: FrameState::new(width as u32, height as u32, safe_region),
+            mouse: MouseState {
+                x: 0.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 0.0,
+                is_left_clicking: false,
+                is_right_clicking: false,
+                style: CursorStyleSetter::new(),
+            },
+            keyboard: KeyboardState {
+                onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
+            },
+        };
 
-    let safe_region = SafeRegionBoundingRectangle::full_screen();
-    let mut engine = EngineState {
-        frame: FrameState::new(width as u32, height as u32, safe_region),
-        mouse: MouseState {
-            x: 0.0,
-            y: 0.0,
-            dx: 0.0,
-            dy: 0.0,
-            is_left_clicking: false,
-            is_right_clicking: false,
-            style: CursorStyleSetter::new(),
-        },
-        keyboard: KeyboardState {
-            onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
-        },
-    };
+        let mut app: Box<dyn Application> = Box::new(CoderApp::new());
+        if let Err(e) = app.setup(&mut engine) {
+            throw(
+                &mut env,
+                "java/lang/RuntimeException",
+                &format!("xos Application::setup failed: {e}"),
+            );
+            return;
+        }
 
-    let mut app: Box<dyn Application + Send> = Box::new(CoderApp::new());
-    if let Err(e) = app.setup(&mut engine) {
-        throw(
-            &mut env,
-            "java/lang/RuntimeException",
-            &format!("xos Application::setup failed: {e}"),
-        );
-        return;
-    }
-
-    *guard = Some(Host { engine, app });
+        *guard = Some(Host { engine, app });
+    });
 }
 
 #[no_mangle]
-pub extern "system" fn Java_ai_xlate_xos_XosNative_shutdown(mut env: JNIEnv, _class: JClass) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
-            return;
-        }
-    };
-    guard.take();
+pub extern "system" fn Java_ai_xlate_xos_XosNative_shutdown(_env: JNIEnv, _class: JClass) {
+    HOST.with(|cell| {
+        cell.borrow_mut().take();
+    });
 }
 
 #[no_mangle]
 pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class: JClass) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
-        }
-    };
+        };
 
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    host.app.tick(&mut host.engine);
+        host.app.tick(&mut host.engine);
+    });
 }
 
 #[no_mangle]
@@ -134,40 +125,35 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_getFrameBuffer(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jobject {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
-            return std::ptr::null_mut();
-        }
-    };
-
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return std::ptr::null_mut();
-    };
-
-    let buffer = host.engine.frame_buffer_mut();
-    let len = buffer.len();
-    let ptr = buffer.as_mut_ptr().cast();
-
-    // Safety: `ptr`/`len` refer to the engine framebuffer owned by `HOST` for the buffer's lifetime.
-    // Java must not use the direct buffer after `shutdown` or `resize` (which may reallocate).
-    match unsafe { env.new_direct_byte_buffer(ptr, len) } {
-        Ok(bb) => bb.into_raw(),
-        Err(e) => {
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
             throw(
                 &mut env,
-                "java/lang/OutOfMemoryError",
-                &format!("new_direct_byte_buffer: {e}"),
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
             );
-            std::ptr::null_mut()
+            return std::ptr::null_mut();
+        };
+
+        let buffer = host.engine.frame_buffer_mut();
+        let len = buffer.len();
+        let ptr = buffer.as_mut_ptr().cast();
+
+        // Safety: `ptr`/`len` refer to the engine framebuffer owned by `HOST` for the buffer's lifetime.
+        // Java must not use the direct buffer after `shutdown` or `resize` (which may reallocate).
+        match unsafe { env.new_direct_byte_buffer(ptr, len) } {
+            Ok(bb) => bb.into_raw(),
+            Err(e) => {
+                throw(
+                    &mut env,
+                    "java/lang/OutOfMemoryError",
+                    &format!("new_direct_byte_buffer: {e}"),
+                );
+                std::ptr::null_mut()
+            }
         }
-    }
+    })
 }
 
 #[no_mangle]
@@ -186,27 +172,22 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_resize(
         return;
     }
 
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
-        }
-    };
+        };
 
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    host.engine.resize_frame(width as u32, height as u32);
-    let _ = host
-        .app
-        .on_screen_size_change(&mut host.engine, width as u32, height as u32);
+        host.engine.resize_frame(width as u32, height as u32);
+        let _ = host
+            .app
+            .on_screen_size_change(&mut host.engine, width as u32, height as u32);
+    });
 }
 
 #[no_mangle]
@@ -216,30 +197,25 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseMove(
     x: jfloat,
     y: jfloat,
 ) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
-        }
-    };
+        };
 
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    let prev_x = host.engine.mouse.x;
-    let prev_y = host.engine.mouse.y;
-    host.engine.mouse.dx = x - prev_x;
-    host.engine.mouse.dy = y - prev_y;
-    host.engine.mouse.x = x;
-    host.engine.mouse.y = y;
-    host.app.on_mouse_move(&mut host.engine);
+        let prev_x = host.engine.mouse.x;
+        let prev_y = host.engine.mouse.y;
+        host.engine.mouse.dx = x - prev_x;
+        host.engine.mouse.dy = y - prev_y;
+        host.engine.mouse.x = x;
+        host.engine.mouse.y = y;
+        host.app.on_mouse_move(&mut host.engine);
+    });
 }
 
 #[no_mangle]
@@ -248,29 +224,24 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseDown(
     _class: JClass,
     button: jint,
 ) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
+        };
+
+        match button {
+            0 => host.engine.mouse.is_left_clicking = true,
+            1 => host.engine.mouse.is_right_clicking = true,
+            _ => {}
         }
-    };
-
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    match button {
-        0 => host.engine.mouse.is_left_clicking = true,
-        1 => host.engine.mouse.is_right_clicking = true,
-        _ => {}
-    }
-    host.app.on_mouse_down(&mut host.engine);
+        host.app.on_mouse_down(&mut host.engine);
+    });
 }
 
 #[no_mangle]
@@ -279,29 +250,24 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseUp(
     _class: JClass,
     button: jint,
 ) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
+        };
+
+        match button {
+            0 => host.engine.mouse.is_left_clicking = false,
+            1 => host.engine.mouse.is_right_clicking = false,
+            _ => {}
         }
-    };
-
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    match button {
-        0 => host.engine.mouse.is_left_clicking = false,
-        1 => host.engine.mouse.is_right_clicking = false,
-        _ => {}
-    }
-    host.app.on_mouse_up(&mut host.engine);
+        host.app.on_mouse_up(&mut host.engine);
+    });
 }
 
 #[no_mangle]
@@ -311,24 +277,19 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onScroll(
     dx: jfloat,
     dy: jfloat,
 ) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
-        }
-    };
+        };
 
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
-
-    host.app.on_scroll(&mut host.engine, dx, dy);
+        host.app.on_scroll(&mut host.engine, dx, dy);
+    });
 }
 
 #[no_mangle]
@@ -337,31 +298,26 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onKeyChar(
     _class: JClass,
     codepoint: jint,
 ) {
-    let mut guard = match HOST.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            throw(&mut env, "java/lang/IllegalStateException", "HOST mutex poisoned");
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-jni not initialized; call init first",
+            );
             return;
-        }
-    };
+        };
 
-    let Some(host) = guard.as_mut() else {
-        throw(
-            &mut env,
-            "java/lang/IllegalStateException",
-            "xos-jni not initialized; call init first",
-        );
-        return;
-    };
+        let Ok(ch) = char::try_from(codepoint as u32) else {
+            throw(
+                &mut env,
+                "java/lang/IllegalArgumentException",
+                "invalid Unicode codepoint",
+            );
+            return;
+        };
 
-    let Ok(ch) = char::try_from(codepoint as u32) else {
-        throw(
-            &mut env,
-            "java/lang/IllegalArgumentException",
-            "invalid Unicode codepoint",
-        );
-        return;
-    };
-
-    host.app.on_key_char(&mut host.engine, ch);
+        host.app.on_key_char(&mut host.engine, ch);
+    });
 }
