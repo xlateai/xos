@@ -6,7 +6,7 @@ use jni::objects::JClass;
 use jni::sys::{jfloat, jint, jobject, jstring};
 use jni::JNIEnv;
 use std::sync::Mutex;
-use xos::apps::ball::BallGame;
+use xos::apps::coder::CoderApp;
 use xos::engine::{
     Application, CursorStyleSetter, EngineState, FrameState, KeyboardState, MouseState,
     SafeRegionBoundingRectangle,
@@ -82,7 +82,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
         },
     };
 
-    let mut app: Box<dyn Application + Send> = Box::new(BallGame::new());
+    let mut app: Box<dyn Application + Send> = Box::new(CoderApp::new());
     if let Err(e) = app.setup(&mut engine) {
         throw(
             &mut env,
