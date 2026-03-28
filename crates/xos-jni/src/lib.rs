@@ -3,7 +3,7 @@
 //! Java API: `ai.xlate.xos.XosNative` in `../java/`. Build with `cargo build -p xos_jni --release`.
 
 use jni::objects::JClass;
-use jni::sys::{jfloat, jint, jobject};
+use jni::sys::{jfloat, jint, jobject, jstring};
 use jni::JNIEnv;
 use std::sync::Mutex;
 use xos::apps::blank::BlankApp;
@@ -22,6 +22,14 @@ struct Host {
 
 fn throw(env: &mut JNIEnv, class: &str, msg: &str) {
     let _ = env.throw_new(class, msg);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_ai_xlate_xos_XosNative_ping(mut env: JNIEnv, _class: JClass) -> jstring {
+    match env.new_string("Hello from xos-jni!") {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 #[no_mangle]

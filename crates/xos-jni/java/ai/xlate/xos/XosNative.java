@@ -41,6 +41,19 @@ public final class XosNative {
         loaded = true;
     }
 
+    /**
+     * Low-level JNI smoke test: returns a string allocated on the Rust side.
+     * Call after {@link #initLibraryFromPath()} or {@link #initLibrary(String)}.
+     */
+    public static native String ping();
+
+    /**
+     * Hello-world check for mods: same as {@link #ping()} — verifies xos_jni is loaded and JNI works.
+     */
+    public static String helloWorld() {
+        return ping();
+    }
+
     public static native void init(int width, int height);
 
     public static native void shutdown();
