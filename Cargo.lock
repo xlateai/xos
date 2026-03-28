@@ -10313,7 +10313,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xos_jni"
+name = "xos-java"
 version = "0.1.0"
 dependencies = [
  "jni",
