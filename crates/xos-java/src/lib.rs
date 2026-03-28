@@ -117,6 +117,23 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
         };
 
         host.app.tick(&mut host.engine);
+
+        // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.
+        {
+            let shape = host.engine.frame.array.shape();
+            let height = shape[0] as u32;
+            let width = shape[1] as u32;
+            let mouse_x = host.engine.mouse.x;
+            let mouse_y = host.engine.mouse.y;
+            let safe_region = host.engine.frame.safe_region_boundaries.clone();
+            let (buffer, keyboard) = {
+                let buffer_ptr = host.engine.frame.buffer_mut() as *mut [u8];
+                let keyboard_ptr: *mut xos::text::onscreen_keyboard::OnScreenKeyboard =
+                    &mut host.engine.keyboard.onscreen;
+                (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+            };
+            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+        }
     });
 }
 
