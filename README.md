@@ -1,7 +1,5 @@
 # xos
 
-## What is xos?
-
 A cross-platform application framework with a game-engine core in Rust, designed to be built entirely in Python. Write hardware-accelerated apps once and run them everywhere—iOS, Windows, macOS, Linux, and beyond. From device drivers to viewports, rasterization, and acceleration primitives, everything is exposed through the xos runtime—no glue code, no friction.
 
 A true alternative to React Native: pure Python, zero JavaScript, no HTML or CSS. Build, run, and even edit your apps directly on-device, wherever you are.
