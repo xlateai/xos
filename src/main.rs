@@ -111,43 +111,13 @@ fn prompt_rebuild() -> bool {
     input.is_empty() || (!input.starts_with('n'))
 }
 
-/// Find the xos project root directory by searching for marker files
-/// (Cargo.toml or build-ios.sh) by walking up from the current directory
-/// Also checks for an "xos" subdirectory
 fn find_project_root() -> PathBuf {
-    // First, try using CARGO_MANIFEST_DIR if available (when building from source)
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let path = PathBuf::from(manifest_dir);
-        if path.join("build-ios.sh").exists() {
-            return path;
-        }
-    }
-    
-    // Otherwise, search from current working directory
-    let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
-    
-    loop {
-        // Check for marker files that indicate this is the project root
-        if current_dir.join("build-ios.sh").exists() || 
-           current_dir.join("Cargo.toml").exists() {
-            return current_dir;
-        }
-        
-        // Also check for an "xos" subdirectory
-        let xos_subdir = current_dir.join("xos");
-        if xos_subdir.join("build-ios.sh").exists() || 
-           xos_subdir.join("Cargo.toml").exists() {
-            return xos_subdir;
-        }
-        
-        // Move up one directory
-        match current_dir.parent() {
-            Some(parent) => current_dir = parent.to_path_buf(),
-            None => {
-                eprintln!("❌ Could not find xos project root. Make sure you're in or below the xos directory.");
-                eprintln!("   Looking for: build-ios.sh or Cargo.toml (or in an xos/ subdirectory)");
-                std::process::exit(1);
-            }
+    match xos::find_xos_project_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ Could not find xos project root: {e}");
+            eprintln!("   Set XOS_PROJECT_ROOT to your clone, use a copy of `xos` built from source, or cd into the repo.");
+            std::process::exit(1);
         }
     }
 }
