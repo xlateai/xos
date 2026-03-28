@@ -3,11 +3,11 @@ package ai.xlate.xos;
 import java.nio.ByteBuffer;
 
 /**
- * JNI bridge to the xos engine. Native library name: {@code xos_jni}
- * ({@code xos_jni.dll} / {@code libxos_jni.so} / {@code libxos_jni.dylib}).
+ * JNI bridge to the xos engine (xos-java crate). Native library name: {@code xos_java}
+ * ({@code xos_java.dll} / {@code libxos_java.so} / {@code libxos_java.dylib}).
  * <p>
  * Call {@link #initLibrary(String)} once before any other method, with the absolute path to the
- * native library, <em>or</em> ensure {@code xos_jni} is on {@code java.library.path} and use
+ * native library, <em>or</em> ensure {@code xos_java} is on {@code java.library.path} and use
  * {@link System#loadLibrary(String)} yourself before touching this class.
  * <p>
  * After {@link #resize}, any previously obtained {@link #getFrameBuffer()} may be invalid; obtain
@@ -20,7 +20,7 @@ public final class XosNative {
     private XosNative() {}
 
     /**
-     * Loads {@code xos_jni} from an absolute filesystem path (recommended for modded games).
+     * Loads {@code xos_java} from an absolute filesystem path (recommended for modded games).
      */
     public static synchronized void initLibrary(String absolutePathToNativeLibrary) {
         if (loaded) {
@@ -31,13 +31,13 @@ public final class XosNative {
     }
 
     /**
-     * Loads {@code xos_jni} from {@code java.library.path} (e.g. {@code -Djava.library.path=...}).
+     * Loads {@code xos_java} from {@code java.library.path} (e.g. {@code -Djava.library.path=...}).
      */
     public static synchronized void initLibraryFromPath() {
         if (loaded) {
             return;
         }
-        System.loadLibrary("xos_jni");
+        System.loadLibrary("xos_java");
         loaded = true;
     }
 
@@ -48,7 +48,7 @@ public final class XosNative {
     public static native String ping();
 
     /**
-     * Hello-world check for mods: same as {@link #ping()} — verifies xos_jni is loaded and JNI works.
+     * Hello-world check for mods: same as {@link #ping()} — verifies xos_java is loaded and JNI works.
      */
     public static String helloWorld() {
         return ping();

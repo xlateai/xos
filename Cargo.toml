@@ -93,5 +93,5 @@ name = "xos"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/xos-jni"]
+members = [".", "crates/xos-java"]
 resolver = "2"

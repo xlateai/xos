@@ -1,6 +1,6 @@
-//! JNI host for [`xos::engine::Application`]. Native library: `xos_jni` (`xos_jni.dll` / `libxos_jni.so` / `libxos_jni.dylib`).
+//! JNI host for [`xos::engine::Application`]. Native library: `xos_java` (`xos_java.dll` / `libxos_java.so` / `libxos_java.dylib`).
 //!
-//! Java API: `ai.xlate.xos.XosNative` in `../java/`. Build with `cargo build -p xos_jni --release`.
+//! Java API: `ai.xlate.xos.XosNative` in `../java/`. Build with `cargo build -p xos-java --release`.
 //!
 //! The engine is stored in [`thread_local`] storage: Minecraft must call these natives from the
 //! **client thread** only (same as other rendering/input). That allows non-[`Send`] apps such as
@@ -31,7 +31,7 @@ fn throw(env: &mut JNIEnv, class: &str, msg: &str) {
 
 #[no_mangle]
 pub extern "system" fn Java_ai_xlate_xos_XosNative_ping(env: JNIEnv, _class: JClass) -> jstring {
-    match env.new_string("Hello from xos-jni!") {
+    match env.new_string("Hello from xos-java!") {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
@@ -111,7 +111,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -131,7 +131,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_getFrameBuffer(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return std::ptr::null_mut();
         };
@@ -178,7 +178,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_resize(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -203,7 +203,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseMove(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -230,7 +230,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseDown(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -256,7 +256,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseUp(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -283,7 +283,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onScroll(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };
@@ -304,7 +304,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onKeyChar(
             throw(
                 &mut env,
                 "java/lang/IllegalStateException",
-                "xos-jni not initialized; call init first",
+                "xos-java not initialized; call init first",
             );
             return;
         };

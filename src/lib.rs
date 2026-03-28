@@ -29,7 +29,7 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     if !cargo.exists() {
         return false;
     }
-    if path.join("crates").join("xos-jni").join("Cargo.toml").exists() {
+    if path.join("crates").join("xos-java").join("Cargo.toml").exists() {
         return true;
     }
     if path.join("build-ios.sh").exists() {
