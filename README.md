@@ -1,39 +1,21 @@
 # xos
 
-You can watch a 30 minute primer on [what XOS is and it's future on YouTube here](https://www.youtube.com/watch?v=01APSubyLoQ).
+## What is xos?
 
-xos is a high-performance, cross-platform application framework for building interactive, compute-intensive software with a single, coherent architecture. It is designed to unify concepts from UI frameworks, game engines, tensor operator libraries, and experimental operating-system–like runtimes into a lightweight build system.
+A cross platform application framework with a game-engine style backed by Rust but developed in Python. Write your hardware accelerated applications in Python and deploy them across all platforms including iOS, windows, mac, linux, etc. Device drivers, viewports, rasterization primitives, and acceleration libraries at your fingertips using the `xos` package and built-in Python runtime.
 
-xos enables applications to target multiple platforms with minimal code divergence, providing explicit and ergonomic mechanisms for device-specific specialization, backend selection, and responsive layout across screen sizes.
+The ultimate replacement for React-Native, all Python, zero Javascript/Typescript/HTML/CSS. Edit code on-device, no matter the device.
 
-Applications built with xos are standalone programs that run on any supported backend. Implemented in Rust, xos leverages a modern build system, strong safety guarantees, and predictable performance, while maintaining broad platform compatibility and low-level control where required. This makes xos well-suited for rapid prototyping, research tooling, and experimental systems that span UI, graphics, and numerical computation.
-
-## Experimental Status
-The xos API is currently experimental and subject to change. In particular, the application engine interface is evolving to support headless execution, sub-frame embedding, and cross-application interoperability.
-
-Planned extensions include Python-based scripting for application definition and computational workflows, with automatic delegation to available hardware accelerators—enabling lightweight, PyTorch-style numerical experimentation within the xos runtime.
-
-**Progress:**
+## TODOs
 - [x] Headless mode for applications without viewports.
 - [x] iOS audio drivers.
 - [ ] iOS haptics drivers.
 - [x] Python runtime and scripting.
 - [ ] Networking.
 - [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
-- [ ] Locally evaluating chat language models.
-
-## Platform Support
-
-### ✅ Fully Supported
-
-- **macOS** - Native desktop applications
-- **iOS** - Native mobile applications (requires macOS + Xcode)
-- **Windows** - Native desktop applications
-- **Linux** - Native desktop applications (with optional ALSA for audio)
-
-### ⏸️ Paused (Planned Return)
-
-- **Web/WASM** - Browser-based execution (planned for future release)
+- [ ] Locally inferenced chat models.
+- [ ] Locally inferenced audio transcription models.
+- [ ] Re-enable WASM/Web support.
 
 ## Prerequisites
 
@@ -53,40 +35,39 @@ Planned extensions include Python-based scripting for application definition and
   ```
 
 ## Getting Started
+When getting started in xos, you only need to run the cargo commands listed below once. After you've installed xos using cargo, each subsequent change you make to xos can be updated by simply running `xos build` which will automatically rebuild your Rust changes. This is usually unnecessary however, as when attempting to run an application or Python script using xos, it will prompt the user with a Y/n question for if they would like to rebuild Rust or not. Only select Y (default) if you have made changes to Rust. If you haven't, you can decline (selecting 'n').
 
 ### Installing xos
 
-From the root of the repository:
+Run these once (when first installing xos):
 
 ```bash
 cargo build --release
 cargo install --path .
 ```
 
-Verify the CLI is working:
+### Explore the `xos` CLI
 
 ```bash
-xos --help
-```
+xos --help                # List top-level commands available
 
-## Running Applications
-
-```bash
+xos app                   # List available Rust-written xos-driven applications
 xos app <app-name>        # Run on your current platform
 xos app <app-name> --ios  # Run on connected iOS device
+
+xos python                # Open the Rust python interpreter
+xos python <file-path>    # Run a Python file from the xos interpreter (path/to/file.py)
 ```
 
-List all available applications:
-```bash
-xos app
-```
+### The --ios Flag
 
 For launching applications onto your iOS devices:
-1. Ensure your device is connected via USB and in Developer Mode
+
+1. Ensure your iOS device is connected via USB and in **Developer Mode**
 2. First-time setup: Open `ios/xos.xcworkspace` in Xcode and configure code signing (Signing & Capabilities tab)
 3. Run `xos app <app-name> --ios` - the CLI will build the Rust library (if needed), compile the Swift iOS app, and install/launch on your device
 
-## Developing Applications
+## `xos build`
 
 **Build for your current platform:**
 ```bash
