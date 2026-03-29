@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     application::ApplicationHandler,
@@ -336,7 +336,10 @@ impl ApplicationHandler for AppStateWrapper {
 
             let size = window.inner_size();
             let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-            let pixels = match Pixels::new(size.width, size.height, surface_texture) {
+            let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
+                .enable_vsync(false)
+                .build()
+            {
                 Ok(p) => unsafe { std::mem::transmute(p) }, // SAFETY: window outlives pixels
                 Err(e) => {
                     eprintln!("Failed to create pixels: {}", e);
