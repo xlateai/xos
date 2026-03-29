@@ -38,8 +38,35 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     path.join("src").join("apps").join("ball.rs").exists()
 }
 
-/// Locate the xos repo from any working directory: `XOS_PROJECT_ROOT`, compile-time manifest,
-/// parents of the running executable, then walk up from [`std::env::current_dir`].
+/// If `exe` is `.../target/release/xos(.exe)` or `.../target/debug/xos(.exe)`, returns the repo
+/// root that contains that `target/` directory—the tree this binary was built from.
+fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
+    let file_name = exe.file_name()?.to_str()?;
+    if file_name != "xos" && file_name != "xos.exe" {
+        return None;
+    }
+    let profile = exe.parent()?.file_name()?.to_str()?;
+    if profile != "release" && profile != "debug" {
+        return None;
+    }
+    let target_dir = exe.parent()?.parent()?;
+    if target_dir.file_name()?.to_str()? != "target" {
+        return None;
+    }
+    let root = target_dir.parent()?.to_path_buf();
+    if !is_xos_project_root(&root) {
+        return None;
+    }
+    match std::fs::canonicalize(&root) {
+        Ok(c) if is_xos_project_root(&c) => Some(c),
+        Ok(_) | Err(_) => Some(root),
+    }
+}
+
+/// Locate the xos repo: `XOS_PROJECT_ROOT`, then the repo containing a `target/release|debug`
+/// `xos` binary (if that is what is running), else walk parents of the executable, then
+/// compile-time [`CARGO_MANIFEST_DIR`] (for `cargo install` copies), then walk up from
+/// [`std::env::current_dir`].
 pub fn find_xos_project_root() -> Result<PathBuf, String> {
     if let Ok(env) = std::env::var("XOS_PROJECT_ROOT") {
         let p = PathBuf::from(env.trim());
@@ -52,14 +79,10 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
         ));
     }
 
-    if let Some(dir) = option_env!("CARGO_MANIFEST_DIR") {
-        let p = PathBuf::from(dir);
-        if is_xos_project_root(&p) {
-            return Ok(p);
-        }
-    }
-
     if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = project_root_from_target_executable(&exe) {
+            return Ok(root);
+        }
         let mut opt = exe.parent().map(PathBuf::from);
         for _ in 0..16 {
             if let Some(ref dir) = opt {
@@ -70,6 +93,13 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
             } else {
                 break;
             }
+        }
+    }
+
+    if let Some(dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(dir);
+        if is_xos_project_root(&p) {
+            return Ok(p);
         }
     }
 

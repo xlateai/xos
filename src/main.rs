@@ -90,6 +90,7 @@ fn release_xos_executable(project_root: &Path) -> PathBuf {
 /// Use this instead of `cargo install` when the user may be executing `xos` from `~/.cargo/bin`
 /// — on Windows the install step fails with "Access is denied" while the binary is in use.
 fn cargo_build_release_xos(project_root: &Path) -> bool {
+    println!("📁 Building xos in {}", project_root.display());
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
     cargo_cmd.args(["build", "--release", "-p", "xos"]);
@@ -247,6 +248,68 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
     std::process::exit(status.code().unwrap_or(1));
 }
 
+/// If the running `xos` is an older install (e.g. `~/.cargo/bin`) but `target/release` has a
+/// newer build, re-execute there without running `cargo build`. Skipping rebuild (N / `-n`)
+/// should not mean "run stale PATH binary" when a fresher local artifact exists.
+fn reexecute_through_fresher_release_if_needed(original_args: &[String]) {
+    let project_root = match xos::find_xos_project_root() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let release_bin = release_xos_executable(&project_root);
+    if !release_bin.exists() {
+        return;
+    }
+
+    let Ok(current_exe) = std::env::current_exe() else {
+        return;
+    };
+    if let (Ok(c_canon), Ok(r_canon)) = (
+        std::fs::canonicalize(&current_exe),
+        std::fs::canonicalize(&release_bin),
+    ) {
+        if c_canon == r_canon {
+            return;
+        }
+    }
+
+    let Ok(cur_meta) = std::fs::metadata(&current_exe) else {
+        return;
+    };
+    let Ok(rel_meta) = std::fs::metadata(&release_bin) else {
+        return;
+    };
+    let Ok(cur_t) = cur_meta.modified() else {
+        return;
+    };
+    let Ok(rel_t) = rel_meta.modified() else {
+        return;
+    };
+    if rel_t <= cur_t {
+        return;
+    }
+
+    println!(
+        "↪ Using newer build at {} (skip rebuild keeps this binary instead of PATH).",
+        release_bin.display()
+    );
+
+    let mut new_args: Vec<String> = original_args[1..]
+        .iter()
+        .filter(|arg| arg != &"-y" && arg != &"--yes" && arg != &"-n" && arg != &"--no")
+        .cloned()
+        .collect();
+    new_args.insert(0, "-n".to_string());
+
+    let mut exec_cmd = Command::new(&release_bin);
+    exec_cmd.args(&new_args);
+    exec_cmd.stdout(Stdio::inherit());
+    exec_cmd.stderr(Stdio::inherit());
+
+    let status = exec_cmd.status().expect("Failed to re-execute command");
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 
 fn main() {
     let original_args: Vec<String> = std::env::args().collect();
@@ -369,7 +432,9 @@ fn main() {
         rebuild_and_reexecute(original_args);
         return;
     }
-    // -n flag or user said no: just continue without rebuilding
+    // -n flag or user said no: continue without `cargo build`, but prefer a newer
+    // `target/release` binary over an outdated copy on PATH.
+    reexecute_through_fresher_release_if_needed(&original_args);
 
     match cli.command {
         Some(Commands::App { app }) => {
