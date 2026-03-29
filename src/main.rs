@@ -75,12 +75,12 @@ fn prompt_rebuild_ios() -> RebuildOption {
     }
 }
 
-/// Release artifact for the `xos` binary crate (`target/release/xos` or `xos.exe`).
+/// Release artifact for the `xos-run` binary (`target/release/xos-run` or `xos-run.exe`).
 fn release_xos_executable(project_root: &Path) -> PathBuf {
     project_root.join("target").join("release").join(if cfg!(windows) {
-        "xos.exe"
+        "xos-run.exe"
     } else {
-        "xos"
+        "xos-run"
     })
 }
 
@@ -317,7 +317,7 @@ fn main() {
                         .cloned()
                         .collect();
                     new_args.insert(0, "-n".to_string());
-                    let mut exec_cmd = Command::new("xos");
+                    let mut exec_cmd = Command::new("xos-run");
                     exec_cmd.args(&new_args);
                     exec_cmd.stdout(Stdio::inherit());
                     exec_cmd.stderr(Stdio::inherit());
@@ -334,7 +334,7 @@ fn main() {
                         .cloned()
                         .collect();
                     new_args.insert(0, "-n".to_string());
-                    let mut exec_cmd = Command::new("xos");
+                    let mut exec_cmd = Command::new("xos-run");
                     exec_cmd.args(&new_args);
                     exec_cmd.stdout(Stdio::inherit());
                     exec_cmd.stderr(Stdio::inherit());

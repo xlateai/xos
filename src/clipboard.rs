@@ -3,6 +3,7 @@
 /// Provides a simple interface for clipboard get/set operations
 /// that works on macOS, iOS, and other platforms.
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 #[cfg(target_os = "ios")]
@@ -101,6 +102,7 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
     {
         // For other platforms, do nothing
         // TODO: Add Linux/Windows clipboard support
+        let _ = text;
         Ok(())
     }
 }

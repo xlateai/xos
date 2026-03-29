@@ -5,6 +5,8 @@ edition = "2021"
 description = "Experimental OS Windows Manager"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
 license = "MIT"
+# Binary must not share the package/lib name or MSVC emits duplicate xos.pdb (Cargo #6313).
+default-run = "xos-run"
 
 [dependencies]
 burn = "0.20"
@@ -89,7 +91,7 @@ console_error_panic_hook = "0.1"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "xos"
+name = "xos-run"
 path = "src/main.rs"
 
 [workspace]
