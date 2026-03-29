@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::fill;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 
@@ -16,7 +17,10 @@ impl Application for BlankApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        state.frame.fill_solid_rgba(BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff);
+        fill(
+            &mut state.frame,
+            (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+        );
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {

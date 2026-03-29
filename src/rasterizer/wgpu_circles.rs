@@ -106,7 +106,6 @@ pub struct WgpuRasterRenderer {
     blit_sampler: wgpu::Sampler,
 
     circle_pipeline: wgpu::RenderPipeline,
-    circle_bind_group_layout: wgpu::BindGroupLayout,
     circle_bind_group: wgpu::BindGroup,
     screen_uniform: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
@@ -277,7 +276,6 @@ impl WgpuRasterRenderer {
             blit_bind_group_layout,
             blit_sampler,
             circle_pipeline,
-            circle_bind_group_layout,
             circle_bind_group,
             screen_uniform,
             instance_buffer,
@@ -324,7 +322,7 @@ impl WgpuRasterRenderer {
     }
 
     /// Blit base (inner pixel texture) to scratch, draw all circle batches, copy scratch back.
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

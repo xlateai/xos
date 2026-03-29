@@ -1,13 +1,28 @@
-//! Vectorized circle rasterization (`circles(frame, centers, radii, colors)`) — no engine state.
+//! Framebuffer raster helpers (`fill`, `circles`, …): **pure functions** `(&mut FrameState, …) -> …`
+//! with no hidden engine state, so the same APIs can be reused from Rust apps, Python, and future
+//! tensor / GPU paths.
 //!
-//! Desktop (non-wasm, non-iOS): batches are queued for the wgpu pass after CPU buffer upload.
+//! Desktop (non-wasm, non-iOS): circle batches are queued for the wgpu pass after CPU buffer upload.
 //! wasm / iOS: draws on the CPU frame buffer immediately.
 
 use crate::engine::FrameState;
+use crate::python::rasterizer::fill_buffer_solid_rgba;
 use std::sync::Mutex;
 
 mod cache;
 pub use cache::RasterCache;
+
+/// Fill `frame` with a solid RGBA color. Matches Python: `xos.rasterizer.fill(frame, (r, g, b, a))`.
+#[inline]
+pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
+    fill_buffer_solid_rgba(
+        frame.buffer_mut(),
+        color.0,
+        color.1,
+        color.2,
+        color.3,
+    );
+}
 
 /// One GPU draw worth of instances (cx, cy, radius px, RGBA8).
 #[derive(Clone, Debug)]
@@ -123,6 +138,7 @@ pub fn circles(
     }
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     {
+        let _ = frame;
         push_gpu_batch(GpuRasterBatch { instances });
     }
     Ok(())

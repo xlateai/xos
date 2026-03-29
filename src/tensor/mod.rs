@@ -56,19 +56,14 @@ impl FrameBuffer {
         self.buffer = vec![0u8; (width * height * 4) as usize];
     }
 
-    /// Fill the entire buffer with one RGBA color (same pattern as [`clear`](Self::clear), optimized for autovectorization).
-    pub fn fill_solid_rgba(&mut self, r: u8, g: u8, b: u8, a: u8) {
-        let px = [r, g, b, a];
-        for chunk in self.buffer.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&px);
-        }
-    }
-
     /// Clear the frame buffer to opaque black (RGBA 0,0,0,255).
     ///
     /// Filling all bytes with zero would clear to transparent black, which composites incorrectly
     /// when the buffer is uploaded as a texture with alpha blending.
     pub fn clear(&mut self) {
-        self.fill_solid_rgba(0, 0, 0, 0xff);
+        let px = [0u8, 0, 0, 0xff];
+        for chunk in self.buffer.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&px);
+        }
     }
 }

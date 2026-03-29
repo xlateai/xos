@@ -1,5 +1,5 @@
 use crate::engine::{Application, EngineState};
-use crate::rasterizer::circles;
+use crate::rasterizer::{circles, fill};
 
 const BALL_COLOR: (u8, u8, u8) = (200, 50, 200);
 const BALL_RADIUS: f32 = 15.0;
@@ -107,7 +107,7 @@ impl Application for BallGame {
 
     fn tick(&mut self, state: &mut EngineState) {
         // Clear the frame (no longer auto-cleared)
-        state.frame.clear();
+        fill(&mut state.frame, (0, 0, 0, 255));
         
         for ball in &mut self.balls {
             ball.update(
