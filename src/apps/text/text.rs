@@ -82,6 +82,9 @@ pub struct TextApp {
     pub show_cursor: bool,
     pub show_debug_visuals: bool,
     pub read_only: bool,
+    /// Last wrap width / font size used for glyph fade keys — when these change, reflow invalidates (x,y) keys.
+    last_fade_wrap_width: f32,
+    last_fade_font_size: f32,
 }
 
 
@@ -150,6 +153,8 @@ impl TextApp {
             show_cursor: true,
             show_debug_visuals: true,
             read_only: false,
+            last_fade_wrap_width: -1.0,
+            last_fade_font_size: -1.0,
         }
     }
 
@@ -326,7 +331,22 @@ impl Application for TextApp {
         let buffer = state.frame_buffer_mut();
     
         self.text_rasterizer.tick(width, content_bottom - content_top);
-    
+
+        // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
+        let wrap_width = width;
+        let font_size = self.text_rasterizer.font_size;
+        let layout_changed_for_fade = (wrap_width - self.last_fade_wrap_width).abs() > 0.01
+            || (font_size - self.last_fade_font_size).abs() > 0.01;
+        if layout_changed_for_fade {
+            self.fade_map.clear();
+            for character in &self.text_rasterizer.characters {
+                let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
+                self.fade_map.insert(fade_key, 1.0);
+            }
+            self.last_fade_wrap_width = wrap_width;
+            self.last_fade_font_size = font_size;
+        }
+
         // Clear screen
         for i in (0..buffer.len()).step_by(4) {
             buffer[i + 0] = BACKGROUND_COLOR.0;
