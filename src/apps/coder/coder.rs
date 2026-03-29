@@ -7,6 +7,7 @@ use include_dir::{include_dir, Dir};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 // Embed the entire python/ directory at compile time
 static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/python");
@@ -78,6 +79,9 @@ pub struct CoderApp {
     python_thread_handle: Option<thread::JoinHandle<()>>,
     python_thread_running: Arc<Mutex<bool>>,
     python_thread_generation: Arc<Mutex<u64>>, // Incremented each run; old threads ignored
+    fps_rasterizer: TextRasterizer,
+    fps_last_instant: Option<Instant>,
+    fps_smoothed: f32,
 }
 
 impl CoderApp {
@@ -154,6 +158,8 @@ impl CoderApp {
         self.stop_button.height = bh;
         self.clear_button.width = bh;
         self.clear_button.height = bh;
+
+        self.fps_rasterizer.set_font_size(18.0 * scale);
     }
     
     pub fn new() -> Self {
@@ -291,6 +297,9 @@ impl CoderApp {
         let mut clear_button_label = TextRasterizer::new(font.clone(), 30.0);
         clear_button_label.set_text("×".to_string()); // Multiplication sign
 
+        let mut fps_rasterizer = TextRasterizer::new(font.clone(), 18.0);
+        fps_rasterizer.set_text("— FPS".to_string());
+
         // Create text rasterizers for each explorer item (folder headers + files)
         let file_list_font_size = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let folder_font_size = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
@@ -343,6 +352,9 @@ impl CoderApp {
             python_thread_handle: None,
             python_thread_running: Arc::new(Mutex::new(false)),
             python_thread_generation: Arc::new(Mutex::new(0)),
+            fps_rasterizer,
+            fps_last_instant: None,
+            fps_smoothed: 60.0,
         }
     }
 
@@ -1156,6 +1168,16 @@ impl Application for CoderApp {
         let ui_scale = Self::ui_scale(width.min(height));
         self.apply_coder_ui_scale(ui_scale);
 
+        let now = Instant::now();
+        if let Some(prev) = self.fps_last_instant {
+            let dt = now.duration_since(prev).as_secs_f32().max(1e-5);
+            let instant_fps = 1.0 / dt;
+            self.fps_smoothed = self.fps_smoothed * 0.9 + instant_fps * 0.1;
+        }
+        self.fps_last_instant = Some(now);
+        let fps_display = self.fps_smoothed.round().max(0.0) as u32;
+        self.fps_rasterizer.set_text(format!("{fps_display} FPS"));
+
         // Get keyboard top edge coordinates (normalized 0-1)
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
@@ -1323,6 +1345,8 @@ impl Application for CoderApp {
         
         // Update clear button label
         self.clear_button_label.tick(width, height);
+
+        self.fps_rasterizer.tick(width, height);
         
         // Update file list rasterizers
         for rasterizer in &mut self.file_list_rasterizers {
@@ -1351,6 +1375,45 @@ impl Application for CoderApp {
                 safe_region_top_y,
                 ui_scale,
             );
+        }
+
+        // FPS overlay (top right, green) — always drawn when we have the buffer
+        let fps_text_color = (0, 255, 0);
+        let fps_text_width: f32 = self
+            .fps_rasterizer
+            .characters
+            .iter()
+            .map(|c| c.metrics.advance_width)
+            .sum();
+        let fps_pad = Self::padding_scaled(ui_scale) as f32;
+        let fps_origin_x = width - fps_text_width - fps_pad;
+        let fps_origin_y = safe_region_top_y + fps_pad;
+        for character in &self.fps_rasterizer.characters {
+            let char_x = fps_origin_x + character.x;
+            let char_y = fps_origin_y + character.y;
+            let cw = character.width as usize;
+            if cw == 0 {
+                continue;
+            }
+            for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
+                for (bitmap_x, &alpha) in row.iter().enumerate() {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let px = (char_x + bitmap_x as f32) as i32;
+                    let py = (char_y + bitmap_y as f32) as i32;
+                    if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                        let idx = ((py as u32 * width as u32 + px as u32) * 4) as usize;
+                        let alpha_f = alpha as f32 / 255.0;
+                        buffer[idx + 0] = ((fps_text_color.0 as f32 * alpha_f)
+                            + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
+                        buffer[idx + 1] = ((fps_text_color.1 as f32 * alpha_f)
+                            + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
+                        buffer[idx + 2] = ((fps_text_color.2 as f32 * alpha_f)
+                            + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                    }
+                }
+            }
         }
         
         // Only draw keyboard accessories when keyboard is shown
