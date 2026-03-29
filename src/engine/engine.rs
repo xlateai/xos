@@ -1,3 +1,7 @@
+mod fps_overlay;
+
+pub use fps_overlay::{tick_fps_overlay, FpsOverlay};
+
 use crate::tensor::FrameBuffer;
 
 /// Safe region bounding rectangle for UI elements
@@ -185,6 +189,8 @@ pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
     pub keyboard: KeyboardState,
+    /// Global FPS overlay (drawn by the engine after each app tick).
+    pub fps_overlay: FpsOverlay,
 }
 
 impl EngineState {

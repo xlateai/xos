@@ -13,7 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-use super::engine::{Application, EngineState, KeyboardState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use super::engine::{
+    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+};
 use crate::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,6 +81,8 @@ impl ApplicationHandler for AppState {
                     };
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
+
+                tick_fps_overlay(&mut self.engine_state);
 
                 let frame = self.pixels.frame_mut();
                 let buffer = self.engine_state.frame_buffer_mut();
@@ -321,6 +326,7 @@ impl ApplicationHandler for AppStateWrapper {
                 keyboard: KeyboardState {
                     onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
+                fps_overlay: super::engine::FpsOverlay::new(),
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
