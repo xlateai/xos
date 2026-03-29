@@ -7,12 +7,12 @@ pub mod conv;
 
 pub use burn::tensor::backend::Backend;
 pub use burn::tensor::{ElementConversion, Int, Shape, Tensor, TensorData};
-pub use burn_ndarray::{NdArray, NdArrayDevice};
+pub use burn_wgpu::{Wgpu, WgpuDevice};
 pub use conv::{conv2d, depthwise_conv2d};
 
-/// Default backend and device for xos tensors
-pub type XosBackend = NdArray;
-pub type XosDevice = NdArrayDevice;
+/// Default backend and device for xos tensors (GPU via wgpu; CPU fallback to be wired separately)
+pub type XosBackend = Wgpu;
+pub type XosDevice = WgpuDevice;
 
 /// Alias for float tensors using the default backend
 pub type FloatTensor<const D: usize> = Tensor<XosBackend, D>;

@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 burn = "0.20"
 burn-backend = "0.20"
-burn-ndarray = "0.20"
+burn-wgpu = "0.20"
 pixels = "0.15.0"
 winit = "0.30.12"
 winapi = { version = "0.3.9", features = ["winuser"] }
@@ -95,3 +95,8 @@ path = "src/main.rs"
 [workspace]
 members = [".", "crates/xos-java"]
 resolver = "2"
+
+# gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types
+# from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see patches/gpu-allocator/Cargo.toml).
+[patch.crates-io]
+gpu-allocator = { path = "patches/gpu-allocator" }
