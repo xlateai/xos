@@ -4,7 +4,10 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::engine::{Application, EngineState, MouseState, KeyboardState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use super::engine::{
+    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FpsOverlay,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+};
 
 
 #[cfg(target_arch = "wasm32")]
@@ -57,6 +60,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             keyboard: KeyboardState {
                 onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
+            fps_overlay: FpsOverlay::new(),
         },
         app,
     }));
@@ -288,6 +292,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.app.on_key_char(&mut state.engine_state, '\u{2193}'); // ↓
                         event.prevent_default();
                     }
+                    "F3" => {
+                        state.engine_state.fps_overlay.toggle_visible();
+                        event.prevent_default();
+                    }
                     "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
                         // Do nothing — non-character keys
                     }
@@ -358,6 +366,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     };
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
+
+                tick_fps_overlay(&mut state.engine_state);
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();

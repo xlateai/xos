@@ -14,7 +14,10 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
 use crate::apps;
 #[cfg(target_os = "ios")]
-use crate::engine::{Application, EngineState, KeyboardState, MouseState, FrameState, SafeRegionBoundingRectangle};
+use crate::engine::{
+    tick_fps_overlay, Application, EngineState, FpsOverlay, FrameState, KeyboardState, MouseState,
+    SafeRegionBoundingRectangle,
+};
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
 
@@ -151,6 +154,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         keyboard: KeyboardState {
             onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
         },
+        fps_overlay: FpsOverlay::new(),
     };
 
     // Call setup
@@ -223,6 +227,8 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             };
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
         }
+
+        tick_fps_overlay(&mut ios_state.engine_state);
         
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
         let frame_buffer = ios_state.engine_state.frame_buffer_mut();

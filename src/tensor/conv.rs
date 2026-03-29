@@ -5,7 +5,7 @@
 use burn::tensor::{Tensor, TensorData};
 use burn_backend::ops::ConvOptions;
 
-use super::{NdArrayDevice, XosBackend};
+use super::{WgpuDevice, XosBackend};
 
 /// Perform 2D convolution using Burn
 /// - input: NCHW [batch, in_c, h, w]
@@ -25,7 +25,7 @@ pub fn conv2d(
     stride: [usize; 2],
     padding: [usize; 2],
 ) {
-    let device = NdArrayDevice::default();
+    let device = WgpuDevice::default();
 
     let x = Tensor::<XosBackend, 4>::from_data(
         TensorData::new(input.to_vec(), [batch, in_channels, in_h, in_w]),
@@ -67,7 +67,7 @@ pub fn depthwise_conv2d(
     stride: [usize; 2],
     padding: [usize; 2],
 ) {
-    let device = NdArrayDevice::default();
+    let device = WgpuDevice::default();
 
     let x = Tensor::<XosBackend, 4>::from_data(
         TensorData::new(input.to_vec(), [batch, channels, in_h, in_w]),

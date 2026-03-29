@@ -1,7 +1,6 @@
 use crate::engine::{Application, EngineState};
 
-// Light gray ball color
-const BALL_COLOR: (u8, u8, u8) = (200, 200, 200);
+const BALL_COLOR: (u8, u8, u8) = (200, 50, 200);
 const BALL_RADIUS: f32 = 15.0;
 const SPEED_MULTIPLIER: f32 = 3.45;
 

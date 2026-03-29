@@ -12,8 +12,8 @@ use jni::JNIEnv;
 use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
-    Application, CursorStyleSetter, EngineState, FrameState, KeyboardState, MouseState,
-    SafeRegionBoundingRectangle,
+    tick_fps_overlay, Application, CursorStyleSetter, EngineState, FpsOverlay, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 thread_local! {
@@ -80,6 +80,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             keyboard: KeyboardState {
                 onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
+            fps_overlay: FpsOverlay::new(),
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -134,6 +135,8 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             };
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
         }
+
+        tick_fps_overlay(&mut host.engine);
     });
 }
 

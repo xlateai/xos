@@ -125,11 +125,6 @@ fn try_fill_random_metal(buffer: &mut [u8], low: f64, high: f64) -> bool {
     true
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-fn try_fill_random_metal(_buffer: &mut [u8], _low: f64, _high: f64) -> bool {
-    false
-}
-
 /// xos.random.uniform(low=0.0, high=1.0, shape=None, dtype=None) - returns a random float or array
 /// 
 /// Extract f64 from Python int or float

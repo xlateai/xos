@@ -20,6 +20,6 @@ pub use wasm_engine::run_web;
 pub use crate::py_engine::PyApplicationWrapper;
 
 pub use engine::{
-    Application, CursorStyleSetter, EngineState, FrameState, KeyboardState, MouseState,
-    SafeRegionBoundingRectangle,
+    tick_fps_overlay, Application, CursorStyleSetter, EngineState, FpsOverlay, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };

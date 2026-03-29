@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     application::ApplicationHandler,
@@ -13,11 +13,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-use super::engine::{Application, EngineState, KeyboardState, MouseState, CursorStyle, CursorStyleSetter, FrameState, SafeRegionBoundingRectangle};
+use super::engine::{
+    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+};
 use crate::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+/// Windows often reports 0×0 when minimized. Keep the last non-zero size for buffers so the app
+/// keeps simulating and `pixels` / `EngineState` stay the same length (avoids copy_from_slice panic).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn physical_size_for_buffers(
+    inner: winit::dpi::PhysicalSize<u32>,
+    stored: winit::dpi::PhysicalSize<u32>,
+) -> winit::dpi::PhysicalSize<u32> {
+    if inner.width == 0 || inner.height == 0 {
+        stored
+    } else {
+        inner
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
@@ -50,7 +68,8 @@ impl ApplicationHandler for AppState {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                let current_size = self.window.inner_size();
+                let current_size =
+                    physical_size_for_buffers(self.window.inner_size(), self.size);
                 if current_size != self.size {
                     self.size = current_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
@@ -79,32 +98,48 @@ impl ApplicationHandler for AppState {
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
 
+                tick_fps_overlay(&mut self.engine_state);
+
                 let frame = self.pixels.frame_mut();
                 let buffer = self.engine_state.frame_buffer_mut();
                 if frame.len() == buffer.len() {
                     frame.copy_from_slice(buffer);
                     let _ = self.pixels.render();
                 } else {
-                    // Resize if there's a mismatch
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
-                    // Notify app of screen size change
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    let frame = self.pixels.frame_mut();
                     let buffer = self.engine_state.frame_buffer_mut();
-                    frame.copy_from_slice(buffer);
-                    eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
+                    if frame.len() == buffer.len() {
+                        frame.copy_from_slice(buffer);
+                        let _ = self.pixels.render();
+                    } else {
+                        eprintln!(
+                            "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
+                            frame.len(),
+                            buffer.len(),
+                            self.size.width,
+                            self.size.height
+                        );
+                    }
                 }
             }
             WindowEvent::Resized(new_size) => {
-                self.size = new_size;
-                let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                self.engine_state.resize_frame(self.size.width, self.size.height);
-                // Notify app of screen size change
-                let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
-                self.window.request_redraw();
+                if new_size.width == 0 || new_size.height == 0 {
+                    self.window.request_redraw();
+                } else {
+                    self.size = new_size;
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                    self.engine_state.resize_frame(self.size.width, self.size.height);
+                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    self.window.request_redraw();
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
-                let new_size = self.window.inner_size();
+                let new_size = physical_size_for_buffers(self.window.inner_size(), self.size);
                 if new_size != self.size {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
@@ -193,6 +228,9 @@ impl ApplicationHandler for AppState {
                 if event.state == ElementState::Pressed {
                     // Handle special keys
                     match event.logical_key {
+                        Key::Named(NamedKey::F3) => {
+                            self.engine_state.fps_overlay.toggle_visible();
+                        }
                         Key::Named(NamedKey::Backspace) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{8}');
                         }
@@ -298,7 +336,10 @@ impl ApplicationHandler for AppStateWrapper {
 
             let size = window.inner_size();
             let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-            let pixels = match Pixels::new(size.width, size.height, surface_texture) {
+            let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
+                .enable_vsync(false)
+                .build()
+            {
                 Ok(p) => unsafe { std::mem::transmute(p) }, // SAFETY: window outlives pixels
                 Err(e) => {
                     eprintln!("Failed to create pixels: {}", e);
@@ -321,6 +362,7 @@ impl ApplicationHandler for AppStateWrapper {
                 keyboard: KeyboardState {
                     onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
+                fps_overlay: super::engine::FpsOverlay::new(),
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
