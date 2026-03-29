@@ -3,7 +3,7 @@ use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     application::ApplicationHandler,
-    dpi::{LogicalSize, PhysicalPosition},
+    dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
@@ -32,40 +32,40 @@ static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::La
 pub enum NativeLaunchMode {
     /// Default decorated window (`XOS Game`).
     Windowed,
-    /// Small borderless square, centered on the primary monitor, always on top (HUD-style).
+    /// Borderless HUD: ~30% of primary monitor, top-left with a small margin, transparent, always on top.
     ///
     /// On Windows, the window is also hidden from the taskbar.
     Overlay,
 }
 
-/// Logical size (CSS px) for [`NativeLaunchMode::Overlay`].
+/// ~30% of primary monitor size; inset from top-left by ~2% of the smaller monitor dimension (min 12px).
 #[cfg(not(target_arch = "wasm32"))]
-const OVERLAY_LOGICAL_PX: f64 = 320.0;
+fn overlay_window_attributes(event_loop: &ActiveEventLoop) -> WindowAttributes {
+    let (iw, ih, px, py) = event_loop
+        .primary_monitor()
+        .map(|m| {
+            let pos = m.position();
+            let sz = m.size();
+            let margin =
+                ((sz.width.min(sz.height) as f32) * 0.02).max(12.0).round() as i32;
+            let inner_w = ((sz.width as f32) * 0.3).max(200.0).round() as u32;
+            let inner_h = ((sz.height as f32) * 0.3).max(120.0).round() as u32;
+            (inner_w, inner_h, pos.x + margin, pos.y + margin)
+        })
+        .unwrap_or((480, 320, 24, 24));
 
-#[cfg(not(target_arch = "wasm32"))]
-fn window_attributes_for_mode(mode: NativeLaunchMode) -> WindowAttributes {
-    match mode {
-        NativeLaunchMode::Windowed => Window::default_attributes().with_title("XOS Game"),
-        NativeLaunchMode::Overlay => Window::default_attributes()
-            .with_title("xos overlay")
-            .with_decorations(false)
-            .with_inner_size(LogicalSize::new(OVERLAY_LOGICAL_PX, OVERLAY_LOGICAL_PX))
-            .with_window_level(WindowLevel::AlwaysOnTop),
-    }
+    Window::default_attributes()
+        .with_title("xos overlay")
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_inner_size(PhysicalSize::new(iw, ih))
+        .with_position(PhysicalPosition::new(px, py))
+        .with_window_level(WindowLevel::AlwaysOnTop)
 }
 
-/// Place the overlay window in the center of the monitor it appears on.
 #[cfg(not(target_arch = "wasm32"))]
-fn center_overlay_window(window: &Window) {
-    let Some(monitor) = window.current_monitor() else {
-        return;
-    };
-    let mon_pos = monitor.position();
-    let mon_size = monitor.size();
-    let outer = window.outer_size();
-    let x = mon_pos.x + (mon_size.width as i32 - outer.width as i32) / 2;
-    let y = mon_pos.y + (mon_size.height as i32 - outer.height as i32) / 2;
-    let _ = window.set_outer_position(PhysicalPosition::new(x, y));
+fn window_attributes_windowed() -> WindowAttributes {
+    Window::default_attributes().with_title("XOS Game")
 }
 
 /// Windows often reports 0×0 when minimized. Keep the last non-zero size for buffers so the app
@@ -391,7 +391,10 @@ struct AppStateWrapper {
 impl ApplicationHandler for AppStateWrapper {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.app_state.is_none() {
-            let attrs = window_attributes_for_mode(self.launch_mode);
+            let attrs = match self.launch_mode {
+                NativeLaunchMode::Windowed => window_attributes_windowed(),
+                NativeLaunchMode::Overlay => overlay_window_attributes(event_loop),
+            };
             let window = match event_loop.create_window(attrs) {
                 Ok(w) => {
                     // Enable IME for text input
@@ -399,9 +402,6 @@ impl ApplicationHandler for AppStateWrapper {
                     #[cfg(target_os = "windows")]
                     if matches!(self.launch_mode, NativeLaunchMode::Overlay) {
                         w.set_skip_taskbar(true);
-                    }
-                    if matches!(self.launch_mode, NativeLaunchMode::Overlay) {
-                        center_overlay_window(&w);
                     }
                     w
                 },
@@ -518,7 +518,7 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
 }
 
 /// Floating overlay host: same [`Application`] / [`EngineState`] as [`start_native`], but the
-/// surface is a small centered square and stays above normal windows.
+/// surface is a transparent top-left HUD (~30% of the primary monitor) and stays above normal windows.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 pub fn start_overlay_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
     run_native_event_loop(app, NativeLaunchMode::Overlay)
