@@ -2,8 +2,9 @@
 //! with no hidden engine state, so the same APIs can be reused from Rust apps, Python, and future
 //! tensor / GPU paths.
 //!
-//! Desktop (non-wasm, non-iOS): circle batches are queued for the wgpu pass after CPU buffer upload.
-//! wasm / iOS: draws on the CPU frame buffer immediately.
+//! Filled circles are rasterized on the CPU framebuffer so compositing order matches call order
+//! (Python / apps, then keyboard, then FPS overlay). `render_pending_gpu_passes` remains for any
+//! future GPU overlays; `circles()` no longer queues wgpu batches.
 
 use crate::engine::FrameState;
 use crate::python::rasterizer::fill_buffer_solid_rgba;
@@ -80,13 +81,6 @@ pub(crate) struct GpuRasterBatch {
 }
 
 static PENDING_GPU_BATCHES: Mutex<Vec<GpuRasterBatch>> = Mutex::new(Vec::new());
-
-fn push_gpu_batch(batch: GpuRasterBatch) {
-    if batch.instances.is_empty() {
-        return;
-    }
-    PENDING_GPU_BATCHES.lock().unwrap().push(batch);
-}
 
 fn drain_pending_gpu_batches() -> Vec<GpuRasterBatch> {
     let mut guard = PENDING_GPU_BATCHES.lock().unwrap();
@@ -178,17 +172,15 @@ pub fn circles(
         instances.push((centers[i].0, centers[i].1, r, c));
     }
 
-    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    // Always rasterize circles on the CPU framebuffer so compositing order matches draw order:
+    // app → keyboard → `tick_fps_overlay` all stay visually above circles. The previous desktop
+    // path queued wgpu instancing in `render_pending_gpu_passes`, which ran *after* the buffer upload
+    // and drew on top of the FPS overlay.
     {
         let shape = frame.shape();
         let width = shape[1];
         let height = shape[0];
         draw_circles_cpu_instances(frame.buffer_mut(), width, height, &instances);
-    }
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-    {
-        let _ = frame;
-        push_gpu_batch(GpuRasterBatch { instances });
     }
     Ok(())
 }

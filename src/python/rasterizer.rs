@@ -484,9 +484,8 @@ fn clear(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
-    
-    // Clear to black
-    buffer.fill(0);
+    // Opaque black (not RGBA=0, which is transparent and breaks compositing / FPS overlay).
+    fill_buffer_solid_rgba(buffer, 0, 0, 0, 0xff);
     
     Ok(vm.ctx.none())
 }

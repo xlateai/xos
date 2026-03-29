@@ -3,8 +3,9 @@ use crate::rasterizer::fill;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const DOT_COLOR: (u8, u8, u8) = (200, 200, 200);
-const DOT_SPACING: u32 = 40;
-const DOT_RADIUS: u32 = 2;
+const DOT_SPACING: f32 = 40.0;
+/// 2×2 px per grid point — same visual weight as the old r≈2 circles, ~50× fewer pixel writes.
+const DOT_SIDE: i32 = 2;
 
 pub struct ScrollApp {
     scroll_x: f32,
@@ -33,27 +34,51 @@ impl Application for ScrollApp {
 
     fn tick(&mut self, state: &mut EngineState) {
         let shape = state.frame.array.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let fw = shape[1] as usize;
+        let fh = shape[0] as usize;
+
         fill(
             &mut state.frame,
             (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
         );
-        let buffer = state.frame_buffer_mut();
 
-        // Draw dots
-        for y in 0..height {
-            for x in 0..width {
-                let world_x = x as f32 + self.scroll_x;
-                let world_y = y as f32 + self.scroll_y;
+        let half = DOT_SPACING * 0.5;
+        let kx0 = ((self.scroll_x - half) / DOT_SPACING).floor() as i32;
+        let kx1 = ((self.scroll_x + width - half) / DOT_SPACING).ceil() as i32;
+        let ky0 = ((self.scroll_y - half) / DOT_SPACING).floor() as i32;
+        let ky1 = ((self.scroll_y + height - half) / DOT_SPACING).ceil() as i32;
 
-                if (world_x.rem_euclid(DOT_SPACING as f32) - (DOT_SPACING / 2) as f32).abs() < DOT_RADIUS as f32 &&
-                   (world_y.rem_euclid(DOT_SPACING as f32) - (DOT_SPACING / 2) as f32).abs() < DOT_RADIUS as f32 {
-                    let i = ((y * width + x) * 4) as usize;
-                    buffer[i + 0] = DOT_COLOR.0;
-                    buffer[i + 1] = DOT_COLOR.1;
-                    buffer[i + 2] = DOT_COLOR.2;
-                    buffer[i + 3] = 0xff;
+        let buf = state.frame.buffer_mut();
+        let px = [DOT_COLOR.0, DOT_COLOR.1, DOT_COLOR.2, 0xff];
+
+        for kx in kx0..=kx1 {
+            for ky in ky0..=ky1 {
+                let cx = half + kx as f32 * DOT_SPACING;
+                let cy = half + ky as f32 * DOT_SPACING;
+                let sx = cx - self.scroll_x;
+                let sy = cy - self.scroll_y;
+                if sx < 0.0 || sx >= width || sy < 0.0 || sy >= height {
+                    continue;
+                }
+                let x0 = sx.floor() as i32;
+                let y0 = sy.floor() as i32;
+                for dy in 0..DOT_SIDE {
+                    for dx in 0..DOT_SIDE {
+                        let px_i = x0 + dx;
+                        let py_i = y0 + dy;
+                        if px_i < 0 || py_i < 0 {
+                            continue;
+                        }
+                        let px_u = px_i as usize;
+                        let py_u = py_i as usize;
+                        if px_u >= fw || py_u >= fh {
+                            continue;
+                        }
+                        let idx = (py_u * fw + px_u) * 4;
+                        buf[idx..idx + 4].copy_from_slice(&px);
+                    }
                 }
             }
         }
