@@ -16,18 +16,7 @@ impl Application for BlankApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        // Change this line:
-        // From: let mut buffer = &state.frame.buffer;
-        // To: let buffer = &mut state.frame.buffer;
-        let buffer = state.frame_buffer_mut();
-        let len = buffer.len();
-
-        for i in (0..len).step_by(4) {
-            buffer[i + 0] = BACKGROUND_COLOR.0;
-            buffer[i + 1] = BACKGROUND_COLOR.1;
-            buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 0xff;
-        }
+        state.frame.fill_solid_rgba(BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff);
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {

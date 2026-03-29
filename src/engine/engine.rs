@@ -98,9 +98,14 @@ impl FrameState {
         self.array.resize(width, height);
     }
 
-    /// Clear the frame buffer to black (all zeros)
+    /// Clear the frame buffer to opaque black.
     pub fn clear(&mut self) {
         self.array.clear();
+    }
+
+    /// Fill the frame with a solid RGBA color (same fast path as [`clear`](Self::clear)).
+    pub fn fill_solid_rgba(&mut self, r: u8, g: u8, b: u8, a: u8) {
+        self.array.fill_solid_rgba(r, g, b, a);
     }
 }
 
