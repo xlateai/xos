@@ -75,12 +75,12 @@ fn prompt_rebuild_ios() -> RebuildOption {
     }
 }
 
-/// Release artifact for the `xos-run` binary (`target/release/xos-run` or `xos-run.exe`).
+/// Release artifact for the `xos` binary (`target/release/xos` or `xos.exe`).
 fn release_xos_executable(project_root: &Path) -> PathBuf {
     project_root.join("target").join("release").join(if cfg!(windows) {
-        "xos-run.exe"
+        "xos.exe"
     } else {
-        "xos-run"
+        "xos"
     })
 }
 
@@ -311,13 +311,14 @@ fn main() {
                     println!("📦 Running pod install...");
                     build_ios_swift();
                     // Re-execute with -n to skip prompts
+                    let project_root = find_project_root();
                     let mut new_args: Vec<String> = original_args[1..]
                         .iter()
                         .filter(|arg| arg != &"-y" && arg != &"--yes" && arg != &"-n" && arg != &"--no")
                         .cloned()
                         .collect();
                     new_args.insert(0, "-n".to_string());
-                    let mut exec_cmd = Command::new("xos-run");
+                    let mut exec_cmd = Command::new(release_xos_executable(&project_root));
                     exec_cmd.args(&new_args);
                     exec_cmd.stdout(Stdio::inherit());
                     exec_cmd.stderr(Stdio::inherit());
@@ -328,13 +329,14 @@ fn main() {
                     println!("📦 Running pod install...");
                     build_ios_swift();
                     // Re-execute with -n to skip prompts
+                    let project_root = find_project_root();
                     let mut new_args: Vec<String> = original_args[1..]
                         .iter()
                         .filter(|arg| arg != &"-y" && arg != &"--yes" && arg != &"-n" && arg != &"--no")
                         .cloned()
                         .collect();
                     new_args.insert(0, "-n".to_string());
-                    let mut exec_cmd = Command::new("xos-run");
+                    let mut exec_cmd = Command::new(release_xos_executable(&project_root));
                     exec_cmd.args(&new_args);
                     exec_cmd.stdout(Stdio::inherit());
                     exec_cmd.stderr(Stdio::inherit());
