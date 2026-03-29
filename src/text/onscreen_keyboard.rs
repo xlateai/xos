@@ -1102,7 +1102,8 @@ impl OnScreenKeyboard {
         // Draw key label (centered) - scale font size with key size
         // Use the same approach as geometric.rs for accurate rendering
         let key_size = (key_w as f32).min(key_h as f32);
-        let font_size = (key_size * 0.36).max(18.0).min(43.2); // 10% smaller: 0.4 * 0.9 = 0.36, 20*0.9=18, 48*0.9=43.2
+        // Fraction of key size; no large minimum so tiny windows stay readable (avoids 18px floor dominating small keys).
+        let font_size = (key_size * 0.36).clamp(9.0, 43.2);
         let line_metrics = self.font.horizontal_line_metrics(font_size)
             .expect("Font missing horizontal metrics");
         

@@ -54,6 +54,21 @@ impl TextRasterizer {
         self.text = text;
     }
 
+    /// Updates metrics for a new font size (call before [`tick`](Self::tick) to relayout).
+    pub fn set_font_size(&mut self, font_size: f32) {
+        if (self.font_size - font_size).abs() < 0.02 {
+            return;
+        }
+        self.font_size = font_size;
+        let metrics = self
+            .font
+            .horizontal_line_metrics(font_size)
+            .expect("Font missing horizontal metrics");
+        self.ascent = metrics.ascent;
+        self.descent = metrics.descent.abs();
+        self.line_gap = metrics.line_gap;
+    }
+
     pub fn tick(&mut self, window_width: f32, _window_height: f32) {
         self.characters.clear();
         self.lines.clear();

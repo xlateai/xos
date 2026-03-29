@@ -153,6 +153,11 @@ impl TextApp {
         }
     }
 
+    /// Resize editor text; layout is updated on the next [`tick`](TextApp::tick).
+    pub fn set_font_size(&mut self, font_size: f32) {
+        self.text_rasterizer.set_font_size(font_size);
+    }
+
     fn draw_rect(
         buffer: &mut [u8],
         width: u32,
