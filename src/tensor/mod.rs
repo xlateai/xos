@@ -56,8 +56,16 @@ impl FrameBuffer {
         self.buffer = vec![0u8; (width * height * 4) as usize];
     }
 
-    /// Clear the frame buffer to black
+    /// Clear the frame buffer to opaque black (RGBA 0,0,0,255).
+    ///
+    /// Filling all bytes with zero would clear to transparent black, which composites incorrectly
+    /// when the buffer is uploaded as a texture with alpha blending.
     pub fn clear(&mut self) {
-        self.buffer.fill(0);
+        for chunk in self.buffer.chunks_exact_mut(4) {
+            chunk[0] = 0;
+            chunk[1] = 0;
+            chunk[2] = 0;
+            chunk[3] = 0xff;
+        }
     }
 }

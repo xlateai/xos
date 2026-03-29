@@ -81,31 +81,79 @@ pub struct CoderApp {
 }
 
 impl CoderApp {
-    // Get button/tab dimensions based on platform
-    fn get_button_size() -> (u32, u32) {
-        #[cfg(target_os = "ios")]
-        {
-            // 75% bigger on iOS for better touch targets
-            (280, 105)
-        }
-        #[cfg(not(target_os = "ios"))]
-        {
-            (160, 60)
-        }
+    /// Scale chrome and editor text from the shorter window edge (design reference ~920px).
+    fn ui_scale(short_edge: f32) -> f32 {
+        const REF: f32 = 920.0;
+        (short_edge / REF).clamp(0.28, 1.0)
     }
-    
-    // Get tab width (narrower on iOS to make room for stop button)
-    fn get_tab_width() -> u32 {
-        let (button_width, _) = Self::get_button_size();
+
+    fn layout_scale_from_state(state: &EngineState) -> f32 {
+        let shape = state.frame.array.shape();
+        Self::ui_scale((shape[1] as f32).min(shape[0] as f32))
+    }
+
+    fn button_size_scaled(scale: f32) -> (u32, u32) {
+        #[cfg(target_os = "ios")]
+        let (bw, bh) = (280.0_f32, 105.0_f32);
+        #[cfg(not(target_os = "ios"))]
+        let (bw, bh) = (160.0_f32, 60.0_f32);
+        let w = (bw * scale).max(44.0).round() as u32;
+        let h = (bh * scale).max(28.0).round() as u32;
+        (w, h)
+    }
+
+    fn tab_width_scaled(scale: f32) -> u32 {
+        let (button_width, _) = Self::button_size_scaled(scale);
         #[cfg(target_os = "ios")]
         {
-            // 20% narrower on iOS
-            (button_width as f32 * 0.8) as u32
+            (button_width as f32 * 0.8).round() as u32
         }
         #[cfg(not(target_os = "ios"))]
         {
             button_width
         }
+    }
+
+    fn padding_scaled(scale: f32) -> i32 {
+        (10.0_f32 * scale).max(4.0).round() as i32
+    }
+
+    fn apply_coder_ui_scale(&mut self, scale: f32) {
+        let editor_base = if cfg!(target_os = "ios") {
+            48.0 * 1.1
+        } else {
+            48.0
+        };
+        self.code_app.set_font_size(editor_base * scale);
+        self.terminal_app.set_font_size(editor_base * scale);
+        self.console_app.set_font_size(editor_base * scale);
+
+        self.code_tab_label.set_font_size(20.0 * scale);
+        self.terminal_tab_label.set_font_size(20.0 * scale);
+        self.viewport_tab_label.set_font_size(20.0 * scale);
+        self.clear_button_label.set_font_size(30.0 * scale);
+
+        let file_base = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
+        let folder_base = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
+        for (item, r) in self
+            .explorer_items
+            .iter()
+            .zip(self.file_list_rasterizers.iter_mut())
+        {
+            let sz = match item {
+                ExplorerItem::Folder(_) => folder_base * scale,
+                ExplorerItem::File(_) => file_base * scale,
+            };
+            r.set_font_size(sz);
+        }
+
+        let (bw, bh) = Self::button_size_scaled(scale);
+        self.run_button.width = bw;
+        self.run_button.height = bh;
+        self.stop_button.width = bh;
+        self.stop_button.height = bh;
+        self.clear_button.width = bh;
+        self.clear_button.height = bh;
     }
     
     pub fn new() -> Self {
@@ -206,8 +254,8 @@ impl CoderApp {
         // Initialize persistent scope for console
         let persistent_scope = None; // Will be created on first use
 
-        // Create run button (position will be updated in tick)
-        let (button_width, button_height) = Self::get_button_size();
+        // Create run button (position will be updated in tick; initial size matches scale 1.0)
+        let (button_width, button_height) = Self::button_size_scaled(1.0);
         let run_button = Button::new(0, 0, button_width, button_height, "Run".to_string());
         
         // Create stop button (smaller, appears during execution)
@@ -782,20 +830,20 @@ builtins.print = __custom_print__
         }
     }
     
-    /// Row height for file items
-    fn file_item_height() -> f32 {
-        if cfg!(target_os = "ios") { 117.0 } else { 60.0 }
+    fn file_item_height(scale: f32) -> f32 {
+        let base = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
+        (base * scale).max(24.0)
     }
-    
-    /// Row height for folder headers (smaller)
-    fn folder_item_height() -> f32 {
-        if cfg!(target_os = "ios") { 52.0 } else { 36.0 }
+
+    fn folder_item_height(scale: f32) -> f32 {
+        let base = if cfg!(target_os = "ios") { 52.0 } else { 36.0 };
+        (base * scale).max(20.0)
     }
-    
-    fn explorer_item_height(item: &ExplorerItem) -> f32 {
+
+    fn explorer_item_height(item: &ExplorerItem, scale: f32) -> f32 {
         match item {
-            ExplorerItem::Folder(_) => Self::folder_item_height(),
-            ExplorerItem::File(_) => Self::file_item_height(),
+            ExplorerItem::Folder(_) => Self::folder_item_height(scale),
+            ExplorerItem::File(_) => Self::file_item_height(scale),
         }
     }
     
@@ -818,7 +866,15 @@ builtins.print = __custom_print__
         }
     }
     
-    fn draw_file_explorer(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, viewport_height: f32, safe_region_top_y: f32) {
+    fn draw_file_explorer(
+        &self,
+        buffer: &mut [u8],
+        canvas_width: u32,
+        canvas_height: u32,
+        viewport_height: f32,
+        safe_region_top_y: f32,
+        ui_scale: f32,
+    ) {
         // Draw pitch black background for file list
         let bg_color = (0, 0, 0);
         
@@ -837,15 +893,16 @@ builtins.print = __custom_print__
             }
         }
         
-        let padding = if cfg!(target_os = "ios") { 26.0 } else { 10.0 };
-        
+        let padding_base = if cfg!(target_os = "ios") { 26.0 } else { 10.0 };
+        let padding = (padding_base * ui_scale).max(4.0);
+
         let mut y_offset = safe_region_top_y - self.file_list_scroll_y;
-        
+
         for (_i, (item, rasterizer)) in self.explorer_items.iter().zip(self.file_list_rasterizers.iter()).enumerate() {
             if !self.is_item_visible(item) {
                 continue; // Skip collapsed files
             }
-            let item_height = CoderApp::explorer_item_height(item);
+            let item_height = CoderApp::explorer_item_height(item, ui_scale);
             
             // Skip if not visible (check against safe region boundaries)
             if y_offset + item_height < safe_region_top_y || y_offset > viewport_height {
@@ -1095,14 +1152,16 @@ impl Application for CoderApp {
         let height = shape[0] as f32;
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
-        
+
+        let ui_scale = Self::ui_scale(width.min(height));
+        self.apply_coder_ui_scale(ui_scale);
+
         // Get keyboard top edge coordinates (normalized 0-1)
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
-        
-        // Calculate button/tab dimensions
-        let (_, button_height) = Self::get_button_size();
-        let padding = 10;
+
+        let (_button_w, button_height) = Self::button_size_scaled(ui_scale);
+        let padding = Self::padding_scaled(ui_scale);
         
         // Console is only shown on terminal tab
         let show_console = self.active_tab == Tab::Terminal;
@@ -1284,7 +1343,14 @@ impl Application for CoderApp {
             // Calculate the viewport height (everything above the tabs)
             let viewport_height = tabs_top_y;
             
-            self.draw_file_explorer(buffer, width as u32, height as u32, viewport_height, safe_region_top_y);
+            self.draw_file_explorer(
+                buffer,
+                width as u32,
+                height as u32,
+                viewport_height,
+                safe_region_top_y,
+                ui_scale,
+            );
         }
         
         // Only draw keyboard accessories when keyboard is shown
@@ -1395,7 +1461,7 @@ impl Application for CoderApp {
         
         // Draw tabs at tabs_top_y position (narrower on iOS)
         let tab_top_y = tabs_top_y as i32;
-        let tab_width = Self::get_tab_width();
+        let tab_width = Self::tab_width_scaled(ui_scale);
         let tab_height = button_height;
         
         // Draw code.py tab on the left
@@ -1508,9 +1574,10 @@ impl Application for CoderApp {
                 if self.code_view_mode == CodeViewMode::FileExplorer {
                     // Scroll the file list
                     self.file_list_scroll_y += dy;
+                    let scale = Self::layout_scale_from_state(state);
                     let max_scroll = self.explorer_items.iter()
                         .filter(|i| self.is_item_visible(i))
-                        .map(|i| CoderApp::explorer_item_height(i))
+                        .map(|i| CoderApp::explorer_item_height(i, scale))
                         .sum::<f32>()
                         .max(0.0);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
@@ -1575,13 +1642,14 @@ impl Application for CoderApp {
                     if self.file_explorer_dragging {
                         let dy = state.mouse.y - self.file_explorer_last_mouse_y;
                         self.file_list_scroll_y -= dy;
+                        let scale = Self::layout_scale_from_state(state);
                         let max_scroll = self.explorer_items.iter()
                             .filter(|i| self.is_item_visible(i))
-                            .map(|i| CoderApp::explorer_item_height(i))
+                            .map(|i| CoderApp::explorer_item_height(i, scale))
                             .sum::<f32>()
                             .max(0.0);
                         self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
-                        
+
                         self.file_explorer_last_mouse_y = state.mouse.y;
                     }
                 }
@@ -1610,9 +1678,10 @@ impl Application for CoderApp {
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
         
         // Tab dimensions (must match tick())
-        let (_, tab_height) = Self::get_button_size();
-        let tab_width = Self::get_tab_width();
-        let padding = 10;
+        let layout_scale = Self::layout_scale_from_state(state);
+        let (_, tab_height) = Self::button_size_scaled(layout_scale);
+        let tab_width = Self::tab_width_scaled(layout_scale);
+        let padding = Self::padding_scaled(layout_scale);
         
         // Calculate tab position (same as in tick)
         let shape = state.frame.array.shape();
@@ -1838,11 +1907,12 @@ impl Application for CoderApp {
                         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
                         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                         let keyboard_top_px = keyboard_top_y * height;
-                        let padding = 10;
-                        let (_, button_height) = Self::get_button_size();
+                        let layout_scale = Self::layout_scale_from_state(state);
+                        let padding = Self::padding_scaled(layout_scale);
+                        let (_, button_height) = Self::button_size_scaled(layout_scale);
                         let tabs_bottom_y = keyboard_top_px - padding as f32;
                         let tabs_top_y = tabs_bottom_y - button_height as f32;
-                        
+
                         if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
                             let click_y_in_list = mouse_y - safe_region_top_y + self.file_list_scroll_y;
                             let mut y = 0.0f32;
@@ -1850,7 +1920,7 @@ impl Application for CoderApp {
                                 if !self.is_item_visible(item) {
                                     continue;
                                 }
-                                let item_height = CoderApp::explorer_item_height(item);
+                                let item_height = CoderApp::explorer_item_height(item, layout_scale);
                                 if click_y_in_list >= y && click_y_in_list < y + item_height {
                                     match item {
                                         ExplorerItem::Folder(name) => {

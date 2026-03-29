@@ -1,6 +1,7 @@
 // --- Optional Python Bindings ---
 // Using rustpython-vm instead of pyo3
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, thread};
 use std::time::Duration;
@@ -21,6 +22,78 @@ pub mod shapes;
 pub mod python;
 pub mod clipboard;
 pub mod keyboard;
+
+/// True if `path` looks like the root of the xos repository (not just any Rust project).
+pub fn is_xos_project_root(path: &Path) -> bool {
+    let cargo = path.join("Cargo.toml");
+    if !cargo.exists() {
+        return false;
+    }
+    if path.join("crates").join("xos-java").join("Cargo.toml").exists() {
+        return true;
+    }
+    if path.join("build-ios.sh").exists() {
+        return true;
+    }
+    path.join("src").join("apps").join("ball.rs").exists()
+}
+
+/// Locate the xos repo from any working directory: `XOS_PROJECT_ROOT`, compile-time manifest,
+/// parents of the running executable, then walk up from [`std::env::current_dir`].
+pub fn find_xos_project_root() -> Result<PathBuf, String> {
+    if let Ok(env) = std::env::var("XOS_PROJECT_ROOT") {
+        let p = PathBuf::from(env.trim());
+        if is_xos_project_root(&p) {
+            return Ok(p);
+        }
+        return Err(format!(
+            "XOS_PROJECT_ROOT is set but does not look like the xos repo: {}",
+            p.display()
+        ));
+    }
+
+    if let Some(dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(dir);
+        if is_xos_project_root(&p) {
+            return Ok(p);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut opt = exe.parent().map(PathBuf::from);
+        for _ in 0..16 {
+            if let Some(ref dir) = opt {
+                if is_xos_project_root(dir) {
+                    return Ok(dir.clone());
+                }
+                opt = dir.parent().map(PathBuf::from);
+            } else {
+                break;
+            }
+        }
+    }
+
+    let mut current =
+        std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
+    loop {
+        if is_xos_project_root(&current) {
+            return Ok(current);
+        }
+        let xos_sub = current.join("xos");
+        if is_xos_project_root(&xos_sub) {
+            return Ok(xos_sub);
+        }
+        match current.parent() {
+            Some(parent) => current = parent.to_path_buf(),
+            None => {
+                return Err(
+                    "could not find xos project root (set XOS_PROJECT_ROOT to your clone, or run from inside the repo)"
+                        .into(),
+                );
+            }
+        }
+    }
+}
 
 pub mod py_engine {
     // Python application wrapper - TODO: Reimplement with proper rustpython API
@@ -238,22 +311,11 @@ pub fn launch_ios_app(app_name: &str) {
     {
         use std::process::{Command, Stdio};
         
-        // Find project root (same logic as main.rs)
-        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
-        let project_root = loop {
-            if current_dir.join("build-ios.sh").exists() || current_dir.join("Cargo.toml").exists() {
-                break current_dir;
-            }
-            let xos_subdir = current_dir.join("xos");
-            if xos_subdir.join("build-ios.sh").exists() || xos_subdir.join("Cargo.toml").exists() {
-                break xos_subdir;
-            }
-            match current_dir.parent() {
-                Some(parent) => current_dir = parent.to_path_buf(),
-                None => {
-                    eprintln!("❌ Could not find xos project root");
-                    std::process::exit(1);
-                }
+        let project_root = match find_xos_project_root() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
             }
         };
         

@@ -91,3 +91,7 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "xos"
 path = "src/main.rs"
+
+[workspace]
+members = [".", "crates/xos-java"]
+resolver = "2"
