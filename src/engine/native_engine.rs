@@ -386,7 +386,7 @@ impl ApplicationHandler for AppStateWrapper {
                     onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
                 fps_overlay: super::engine::FpsOverlay::new(),
-                delta_secs: 1.0 / 60.0,
+                delta_time_seconds: 1.0 / 60.0,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {

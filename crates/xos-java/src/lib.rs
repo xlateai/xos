@@ -82,7 +82,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
                 onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
-            delta_secs: 1.0 / 60.0,
+            delta_time_seconds: 1.0 / 60.0,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());

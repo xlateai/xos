@@ -61,7 +61,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
-            delta_secs: 1.0 / 60.0,
+            delta_time_seconds: 1.0 / 60.0,
         },
         app,
     }));

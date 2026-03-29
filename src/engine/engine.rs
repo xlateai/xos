@@ -192,8 +192,8 @@ pub struct EngineState {
     /// Global FPS overlay (drawn by the engine after each app tick).
     pub fps_overlay: FpsOverlay,
     /// Seconds since the previous `Application::tick` (set by the host immediately before each tick).
-    /// The first tick uses `1.0 / 60.0` as a nominal step so simulations can use `delta_secs` safely.
-    pub delta_secs: f32,
+    /// The first tick uses `1.0 / 60.0` as a nominal step so simulations can use `delta_time_seconds` safely.
+    pub delta_time_seconds: f32,
 }
 
 impl EngineState {
@@ -209,11 +209,11 @@ impl EngineState {
     }
 }
 
-/// Updates [`EngineState::delta_secs`] from wall-clock time since the previous tick.
+/// Updates [`EngineState::delta_time_seconds`] from wall-clock time since the previous tick.
 /// The first tick uses `1.0 / 60.0` seconds so frame-independent logic has a reasonable initial step.
 pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Option<std::time::Instant>) {
     let now = std::time::Instant::now();
-    engine_state.delta_secs = last_instant
+    engine_state.delta_time_seconds = last_instant
         .map(|prev| (now - prev).as_secs_f32())
         .unwrap_or(1.0 / 60.0);
     *last_instant = Some(now);

@@ -156,7 +156,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
         },
         fps_overlay: FpsOverlay::new(),
-        delta_secs: 1.0 / 60.0,
+        delta_time_seconds: 1.0 / 60.0,
     };
 
     // Call setup

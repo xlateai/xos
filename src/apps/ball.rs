@@ -113,7 +113,7 @@ impl Application for BallGame {
             ball.update(
                 state.frame.array.shape()[1] as f32,
                 state.frame.array.shape()[0] as f32,
-                state.delta_secs,
+                state.delta_time_seconds,
             );
         }
 
