@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::fill;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 const CURSOR_COLOR: (u8, u8, u8) = (255, 255, 255); // White
@@ -24,15 +25,11 @@ impl Application for CursorApp {
         let height = shape[0] as u32;
         let mx = state.mouse.x.round() as i32;
         let my = state.mouse.y.round() as i32;
+        fill(
+            &mut state.frame,
+            (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+        );
         let buffer = state.frame_buffer_mut();
-
-        // Fill background
-        for i in (0..buffer.len()).step_by(4) {
-            buffer[i + 0] = BACKGROUND_COLOR.0;
-            buffer[i + 1] = BACKGROUND_COLOR.1;
-            buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 0xff;
-        }
 
         // Draw white dot at mouse location
         let radius = 2;

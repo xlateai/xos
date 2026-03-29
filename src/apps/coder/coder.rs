@@ -1,5 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::text::text::TextApp;
+use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::ui::Button;
 use crate::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
@@ -77,6 +78,8 @@ pub struct CoderApp {
     python_thread_handle: Option<thread::JoinHandle<()>>,
     python_thread_running: Arc<Mutex<bool>>,
     python_thread_generation: Arc<Mutex<u64>>, // Incremented each run; old threads ignored
+    /// Skip `apply_coder_ui_scale` when scale is unchanged (avoids scanning explorer rasterizers).
+    last_applied_ui_scale: f32,
 }
 
 impl CoderApp {
@@ -118,6 +121,10 @@ impl CoderApp {
     }
 
     fn apply_coder_ui_scale(&mut self, scale: f32) {
+        if (self.last_applied_ui_scale - scale).abs() < 1e-4 {
+            return;
+        }
+        self.last_applied_ui_scale = scale;
         let editor_base = if cfg!(target_os = "ios") {
             48.0 * 1.1
         } else {
@@ -342,6 +349,7 @@ impl CoderApp {
             python_thread_handle: None,
             python_thread_running: Arc::new(Mutex::new(false)),
             python_thread_generation: Arc::new(Mutex::new(0)),
+            last_applied_ui_scale: f32::NAN,
         }
     }
 
@@ -698,72 +706,64 @@ builtins.print = __custom_print__
     fn draw_tab(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32, x: i32, y: i32, width: u32, height: u32, label_rasterizer: &TextRasterizer, is_active: bool) {
         let bg_color = if is_active { (60, 60, 60) } else { (40, 40, 40) };
         let text_color = if is_active { (255, 255, 255) } else { (150, 150, 150) };
-        
-        // Draw tab background
-        for dy in 0..height {
-            for dx in 0..width {
-                let px = x + dx as i32;
-                let py = y + dy as i32;
-                
-                if px >= 0 && px < canvas_width as i32 && py >= 0 && py < canvas_height as i32 {
-                    let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
-                    buffer[idx + 0] = bg_color.0;
-                    buffer[idx + 1] = bg_color.1;
-                    buffer[idx + 2] = bg_color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
-        }
-        
-        // Draw tab border
-        // Top border
-        for dx in 0..width {
-            let px = x + dx as i32;
-            if px >= 0 && px < canvas_width as i32 && y >= 0 && y < canvas_height as i32 {
-                let idx = ((y as u32 * canvas_width + px as u32) * 4) as usize;
-                buffer[idx + 0] = text_color.0;
-                buffer[idx + 1] = text_color.1;
-                buffer[idx + 2] = text_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-        // Bottom border (only if not active)
+        let cw = canvas_width as usize;
+        let ch = canvas_height as usize;
+        let x1 = x + width as i32;
+        let y1 = y + height as i32;
+
+        fill_rect_buffer(
+            buffer,
+            cw,
+            ch,
+            x,
+            y,
+            x1,
+            y1,
+            (bg_color.0, bg_color.1, bg_color.2, 0xff),
+        );
+        fill_rect_buffer(
+            buffer,
+            cw,
+            ch,
+            x,
+            y,
+            x1,
+            y + 1,
+            (text_color.0, text_color.1, text_color.2, 0xff),
+        );
         if !is_active {
-            let bottom_y = y + height as i32 - 1;
-            for dx in 0..width {
-                let px = x + dx as i32;
-                if px >= 0 && px < canvas_width as i32 && bottom_y >= 0 && bottom_y < canvas_height as i32 {
-                    let idx = ((bottom_y as u32 * canvas_width + px as u32) * 4) as usize;
-                    buffer[idx + 0] = text_color.0;
-                    buffer[idx + 1] = text_color.1;
-                    buffer[idx + 2] = text_color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
+            let bottom_y = y1 - 1;
+            fill_rect_buffer(
+                buffer,
+                cw,
+                ch,
+                x,
+                bottom_y,
+                x1,
+                y1,
+                (text_color.0, text_color.1, text_color.2, 0xff),
+            );
         }
-        // Left border
-        for dy in 0..height {
-            let py = y + dy as i32;
-            if py >= 0 && py < canvas_height as i32 && x >= 0 && x < canvas_width as i32 {
-                let idx = ((py as u32 * canvas_width + x as u32) * 4) as usize;
-                buffer[idx + 0] = text_color.0;
-                buffer[idx + 1] = text_color.1;
-                buffer[idx + 2] = text_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-        // Right border
-        let right_x = x + width as i32 - 1;
-        for dy in 0..height {
-            let py = y + dy as i32;
-            if py >= 0 && py < canvas_height as i32 && right_x >= 0 && right_x < canvas_width as i32 {
-                let idx = ((py as u32 * canvas_width + right_x as u32) * 4) as usize;
-                buffer[idx + 0] = text_color.0;
-                buffer[idx + 1] = text_color.1;
-                buffer[idx + 2] = text_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
+        fill_rect_buffer(
+            buffer,
+            cw,
+            ch,
+            x,
+            y,
+            x + 1,
+            y1,
+            (text_color.0, text_color.1, text_color.2, 0xff),
+        );
+        fill_rect_buffer(
+            buffer,
+            cw,
+            ch,
+            x1 - 1,
+            y,
+            x1,
+            y1,
+            (text_color.0, text_color.1, text_color.2, 0xff),
+        );
         
         // Draw label text centered in the tab
         for character in &label_rasterizer.characters {
@@ -874,23 +874,19 @@ builtins.print = __custom_print__
         safe_region_top_y: f32,
         ui_scale: f32,
     ) {
-        // Draw pitch black background for file list
-        let bg_color = (0, 0, 0);
-        
-        // Start drawing from safe region top (below Dynamic Island on iOS)
+        let cw = canvas_width as usize;
+        let ch = canvas_height as usize;
         let start_y = safe_region_top_y as i32;
-        
-        for y in start_y..(viewport_height as i32) {
-            if y >= 0 && y < canvas_height as i32 {
-                for x in 0..(canvas_width as i32) {
-                    let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
-                    buffer[idx + 0] = bg_color.0;
-                    buffer[idx + 1] = bg_color.1;
-                    buffer[idx + 2] = bg_color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
-        }
+        fill_rect_buffer(
+            buffer,
+            cw,
+            ch,
+            0,
+            start_y,
+            canvas_width as i32,
+            viewport_height as i32,
+            (0, 0, 0, 0xff),
+        );
         
         let padding_base = if cfg!(target_os = "ios") { 26.0 } else { 10.0 };
         let padding = (padding_base * ui_scale).max(4.0);
@@ -918,18 +914,18 @@ builtins.print = __custom_print__
                 _ => (15, 15, 15),
             };
             
-            for dy in 0..(item_height as i32) {
-                let y = y_offset as i32 + dy;
-                if y >= safe_region_top_y as i32 && y < viewport_height as i32 {
-                    for x in 0..(canvas_width as i32) {
-                        let idx = ((y as u32 * canvas_width + x as u32) * 4) as usize;
-                        buffer[idx + 0] = item_bg_color.0;
-                        buffer[idx + 1] = item_bg_color.1;
-                        buffer[idx + 2] = item_bg_color.2;
-                        buffer[idx + 3] = 0xff;
-                    }
-                }
-            }
+            let row_y0 = y_offset as i32;
+            let row_y1 = row_y0 + item_height as i32;
+            fill_rect_buffer(
+                buffer,
+                cw,
+                ch,
+                0,
+                row_y0.max(safe_region_top_y as i32),
+                canvas_width as i32,
+                row_y1.min(viewport_height as i32),
+                (item_bg_color.0, item_bg_color.1, item_bg_color.2, 0xff),
+            );
             
             // Draw text using TextRasterizer
             let text_color = match item {
@@ -972,13 +968,16 @@ builtins.print = __custom_print__
             // Draw separator line
             let separator_y = (y_offset + item_height - 1.0) as i32;
             if separator_y >= safe_region_top_y as i32 && separator_y < viewport_height as i32 {
-                for x in 0..(canvas_width as i32) {
-                    let idx = ((separator_y as u32 * canvas_width + x as u32) * 4) as usize;
-                    buffer[idx + 0] = 30;
-                    buffer[idx + 1] = 30;
-                    buffer[idx + 2] = 30;
-                    buffer[idx + 3] = 0xff;
-                }
+                fill_rect_buffer(
+                    buffer,
+                    cw,
+                    ch,
+                    0,
+                    separator_y,
+                    canvas_width as i32,
+                    separator_y + 1,
+                    (30, 30, 30, 0xff),
+                );
             }
             
             y_offset += item_height;
@@ -992,7 +991,6 @@ builtins.print = __custom_print__
         let height = self.run_button.height;
         
         let bg_color = if is_hovered {
-            // Slightly lighter when hovered
             (
                 (color.0 as u16 * 120 / 100).min(255) as u8,
                 (color.1 as u16 * 120 / 100).min(255) as u8,
@@ -1001,71 +999,18 @@ builtins.print = __custom_print__
         } else {
             color
         };
-        
-        // Draw button background
-        for dy in 0..height {
-            for dx in 0..width {
-                let px = x + dx as i32;
-                let py = y + dy as i32;
-                
-                if px >= 0 && px < canvas_width as i32 && py >= 0 && py < canvas_height as i32 {
-                    let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
-                    buffer[idx + 0] = bg_color.0;
-                    buffer[idx + 1] = bg_color.1;
-                    buffer[idx + 2] = bg_color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
-        }
-        
-        // Draw button border
+        let cw = canvas_width as usize;
+        let ch = canvas_height as usize;
+        let x1 = x + width as i32;
+        let y1 = y + height as i32;
+        fill_rect_buffer(buffer, cw, ch, x, y, x1, y1, (bg_color.0, bg_color.1, bg_color.2, 0xff));
         let border_color = (255, 255, 255);
-        // Top border
-        for dx in 0..width {
-            let px = x + dx as i32;
-            if px >= 0 && px < canvas_width as i32 && y >= 0 && y < canvas_height as i32 {
-                let idx = ((y as u32 * canvas_width + px as u32) * 4) as usize;
-                buffer[idx + 0] = border_color.0;
-                buffer[idx + 1] = border_color.1;
-                buffer[idx + 2] = border_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-        // Bottom border
-        let bottom_y = y + height as i32 - 1;
-        for dx in 0..width {
-            let px = x + dx as i32;
-            if px >= 0 && px < canvas_width as i32 && bottom_y >= 0 && bottom_y < canvas_height as i32 {
-                let idx = ((bottom_y as u32 * canvas_width + px as u32) * 4) as usize;
-                buffer[idx + 0] = border_color.0;
-                buffer[idx + 1] = border_color.1;
-                buffer[idx + 2] = border_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-        // Left border
-        for dy in 0..height {
-            let py = y + dy as i32;
-            if py >= 0 && py < canvas_height as i32 && x >= 0 && x < canvas_width as i32 {
-                let idx = ((py as u32 * canvas_width + x as u32) * 4) as usize;
-                buffer[idx + 0] = border_color.0;
-                buffer[idx + 1] = border_color.1;
-                buffer[idx + 2] = border_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
-        // Right border
-        let right_x = x + width as i32 - 1;
-        for dy in 0..height {
-            let py = y + dy as i32;
-            if py >= 0 && py < canvas_height as i32 && right_x >= 0 && right_x < canvas_width as i32 {
-                let idx = ((py as u32 * canvas_width + right_x as u32) * 4) as usize;
-                buffer[idx + 0] = border_color.0;
-                buffer[idx + 1] = border_color.1;
-                buffer[idx + 2] = border_color.2;
-                buffer[idx + 3] = 0xff;
-            }
-        }
+        let bc = (border_color.0, border_color.1, border_color.2, 0xff);
+        fill_rect_buffer(buffer, cw, ch, x, y, x1, y + 1, bc);
+        let bottom_y = y1 - 1;
+        fill_rect_buffer(buffer, cw, ch, x, bottom_y, x1, y1, bc);
+        fill_rect_buffer(buffer, cw, ch, x, y, x + 1, y1, bc);
+        fill_rect_buffer(buffer, cw, ch, x1 - 1, y, x1, y1, bc);
         
         // Note: Button text rendering is not implemented yet
         // The button will just show as a colored rectangle
@@ -1101,7 +1046,10 @@ impl Application for CoderApp {
         // Update terminal from background thread output
         if let Ok(buffer) = self.python_output_buffer.try_lock() {
             if !buffer.is_empty() {
-                self.terminal_app.text_rasterizer.text = buffer.clone();
+                let s = buffer.as_str();
+                if s != self.terminal_app.text_rasterizer.text.as_str() {
+                    self.terminal_app.text_rasterizer.text = buffer.clone();
+                }
             }
         }
         
@@ -1193,14 +1141,7 @@ impl Application for CoderApp {
             Tab::Viewport => {
                 // Render Python app if available, otherwise show black screen
                 if let Some(ref app_instance) = self.viewport_app {
-                    // Clear to black first
-                    let buffer = state.frame_buffer_mut();
-                    for i in (0..buffer.len()).step_by(4) {
-                        buffer[i + 0] = 0; // R
-                        buffer[i + 1] = 0; // G
-                        buffer[i + 2] = 0; // B
-                        buffer[i + 3] = 0xff; // A
-                    }
+                    fill(&mut state.frame, (0, 0, 0, 0xff));
                     
                     // Setup Python app if not done yet
                     if !self.viewport_app_setup_done {
@@ -1299,40 +1240,32 @@ impl Application for CoderApp {
                         crate::python::rasterizer::clear_frame_buffer_context();
                     }
                 } else {
-                    // No Python app - show black screen
-                    let buffer = state.frame_buffer_mut();
-                    for i in (0..buffer.len()).step_by(4) {
-                        buffer[i + 0] = 0; // R
-                        buffer[i + 1] = 0; // G
-                        buffer[i + 2] = 0; // B
-                        buffer[i + 3] = 0xff; // A
-                    }
+                    fill(&mut state.frame, (0, 0, 0, 0xff));
                 }
             }
         }
         
-        // Tick console separately with its own viewport
-        // Console needs to know its available space for rendering
-        self.console_app.text_rasterizer.tick(width, console_height as f32);
-        
-        // Update tab label rasterizers
-        self.code_tab_label.tick(width, height);
-        self.terminal_tab_label.tick(width, height);
-        self.viewport_tab_label.tick(width, height);
-        
-        // Update clear button label
-        self.clear_button_label.tick(width, height);
-        
-        // Update file list rasterizers
-        for rasterizer in &mut self.file_list_rasterizers {
-            rasterizer.tick(width, height);
+        let keyboard_is_shown = state.keyboard.onscreen.is_shown();
+
+        // Console + tab chrome layout only when the on-screen keyboard is up (nothing to draw otherwise).
+        if keyboard_is_shown {
+            self.console_app
+                .text_rasterizer
+                .tick(width, console_height as f32);
+            self.code_tab_label.tick(width, height);
+            self.terminal_tab_label.tick(width, height);
+            self.viewport_tab_label.tick(width, height);
+            self.clear_button_label.tick(width, height);
+        }
+
+        if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
+            for rasterizer in &mut self.file_list_rasterizers {
+                rasterizer.tick(width, height);
+            }
         }
         
         // Get safe region top boundary (in pixels) before mutable borrow
         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
-        
-        // Check if keyboard is shown - only draw accessories if keyboard is visible
-        let keyboard_is_shown = state.keyboard.onscreen.is_shown();
         
         // Get buffer again for drawing console, file explorer, tabs and buttons on top
         let buffer = state.frame_buffer_mut();
@@ -1359,19 +1292,19 @@ impl Application for CoderApp {
         
         // Draw console above tabs (only when on terminal tab)
         if show_console {
-            // Draw console area background (above keyboard)
-            let console_bg_color = (20, 20, 20);
-            for y in (console_top_y as i32)..(console_bottom_y as i32) {
-                if y >= 0 && y < height as i32 {
-                    for x in 0..(width as i32) {
-                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                        buffer[idx + 0] = console_bg_color.0;
-                        buffer[idx + 1] = console_bg_color.1;
-                        buffer[idx + 2] = console_bg_color.2;
-                        buffer[idx + 3] = 0xff;
-                    }
-                }
-            }
+            let fw = width as usize;
+            let fh = height as usize;
+            let w_i = width as i32;
+            fill_rect_buffer(
+                buffer,
+                fw,
+                fh,
+                0,
+                console_top_y as i32,
+                w_i,
+                console_bottom_y as i32,
+                (20, 20, 20, 0xff),
+            );
             
             // Draw console text
             let text_color = (0, 255, 0); // Green terminal-style text
@@ -1443,19 +1376,16 @@ impl Application for CoderApp {
                 }
             }
             
-            // Draw console border
-            let border_color = (100, 100, 100);
-            // Top border
-            for x in 0..(width as i32) {
-                let y = console_top_y as i32;
-                if y >= 0 && y < height as i32 {
-                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                    buffer[idx + 0] = border_color.0;
-                    buffer[idx + 1] = border_color.1;
-                    buffer[idx + 2] = border_color.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
+            fill_rect_buffer(
+                buffer,
+                fw,
+                fh,
+                0,
+                console_top_y as i32,
+                w_i,
+                console_top_y as i32 + 1,
+                (100, 100, 100, 0xff),
+            );
         }
         
         // Draw tabs at tabs_top_y position (narrower on iOS)

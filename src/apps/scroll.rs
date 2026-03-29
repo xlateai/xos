@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::fill;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
 const DOT_COLOR: (u8, u8, u8) = (200, 200, 200);
@@ -34,15 +35,11 @@ impl Application for ScrollApp {
         let shape = state.frame.array.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
+        fill(
+            &mut state.frame,
+            (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+        );
         let buffer = state.frame_buffer_mut();
-
-        // Fill background
-        for i in (0..buffer.len()).step_by(4) {
-            buffer[i + 0] = BACKGROUND_COLOR.0;
-            buffer[i + 1] = BACKGROUND_COLOR.1;
-            buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 0xff;
-        }
 
         // Draw dots
         for y in 0..height {
