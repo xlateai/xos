@@ -1,11 +1,9 @@
-//! Fullscreen overlay demo: the engine uses borderless fullscreen on the primary monitor (see
-//! [`crate::engine::start_overlay_native`]). Draw a simple top bar as a stand-in for a future
-//! Discord-style HUD.
+//! Floating overlay demo: small always-on-top square (see [`crate::engine::start_overlay_native`]).
 
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::{fill, fill_rect};
 
-const BAR_HEIGHT: u32 = 56;
+const BAR_HEIGHT: u32 = 36;
 const BG: (u8, u8, u8, u8) = (12, 14, 22, 255);
 const BAR: (u8, u8, u8, u8) = (40, 44, 58, 255);
 

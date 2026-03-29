@@ -3,10 +3,11 @@ use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     application::ApplicationHandler,
+    dpi::{LogicalSize, PhysicalPosition},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
-    window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
+    window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel},
 };
 #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
 use winit::platform::windows::WindowExtWindows;
@@ -25,18 +26,21 @@ use crate::rasterizer::RasterCache;
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
-/// How the native host creates the winit window: a normal windowed app vs fullscreen overlay.
+/// How the native host creates the winit window: a normal windowed app vs floating overlay.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub enum NativeLaunchMode {
     /// Default decorated window (`XOS Game`).
     Windowed,
-    /// Borderless fullscreen on the primary monitor, always on top (for HUD-style overlays).
+    /// Small borderless square, centered on the primary monitor, always on top (HUD-style).
     ///
-    /// On Windows, the window is also hidden from the taskbar. Full desktop pixel capture is a
-    /// separate feature (e.g. DXGI / Graphics Capture) and can be added later.
+    /// On Windows, the window is also hidden from the taskbar.
     Overlay,
 }
+
+/// Logical size (CSS px) for [`NativeLaunchMode::Overlay`].
+#[cfg(not(target_arch = "wasm32"))]
+const OVERLAY_LOGICAL_PX: f64 = 320.0;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn window_attributes_for_mode(mode: NativeLaunchMode) -> WindowAttributes {
@@ -45,9 +49,23 @@ fn window_attributes_for_mode(mode: NativeLaunchMode) -> WindowAttributes {
         NativeLaunchMode::Overlay => Window::default_attributes()
             .with_title("xos overlay")
             .with_decorations(false)
-            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .with_inner_size(LogicalSize::new(OVERLAY_LOGICAL_PX, OVERLAY_LOGICAL_PX))
             .with_window_level(WindowLevel::AlwaysOnTop),
     }
+}
+
+/// Place the overlay window in the center of the monitor it appears on.
+#[cfg(not(target_arch = "wasm32"))]
+fn center_overlay_window(window: &Window) {
+    let Some(monitor) = window.current_monitor() else {
+        return;
+    };
+    let mon_pos = monitor.position();
+    let mon_size = monitor.size();
+    let outer = window.outer_size();
+    let x = mon_pos.x + (mon_size.width as i32 - outer.width as i32) / 2;
+    let y = mon_pos.y + (mon_size.height as i32 - outer.height as i32) / 2;
+    let _ = window.set_outer_position(PhysicalPosition::new(x, y));
 }
 
 /// Windows often reports 0×0 when minimized. Keep the last non-zero size for buffers so the app
@@ -382,6 +400,9 @@ impl ApplicationHandler for AppStateWrapper {
                     if matches!(self.launch_mode, NativeLaunchMode::Overlay) {
                         w.set_skip_taskbar(true);
                     }
+                    if matches!(self.launch_mode, NativeLaunchMode::Overlay) {
+                        center_overlay_window(&w);
+                    }
                     w
                 },
                 Err(e) => {
@@ -496,8 +517,8 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     run_native_event_loop(app, NativeLaunchMode::Windowed)
 }
 
-/// Fullscreen overlay host: same [`Application`] / [`EngineState`] as [`start_native`], but the
-/// surface is borderless fullscreen on the primary monitor and stays above normal windows.
+/// Floating overlay host: same [`Application`] / [`EngineState`] as [`start_native`], but the
+/// surface is a small centered square and stays above normal windows.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 pub fn start_overlay_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
     run_native_event_loop(app, NativeLaunchMode::Overlay)

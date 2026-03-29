@@ -87,19 +87,22 @@ fn release_xos_executable(project_root: &Path) -> PathBuf {
     })
 }
 
-/// Build the CLI with `cargo build --release` (does not replace a running `xos` in `PATH`).
-/// Use this instead of `cargo install` when the user may be executing `xos` from `~/.cargo/bin`
-/// — on Windows the install step fails with "Access is denied" while the binary is in use.
-fn cargo_build_release_xos(project_root: &Path) -> bool {
-    println!("📁 Building xos in {}", project_root.display());
+/// Build and install the `xos` CLI the same way as manual development: `cargo install --path . --force`.
+/// Updates `target/release` and the copy in `~/.cargo/bin` (same as `cargo install --path .` from the repo).
+/// If install fails with "Access is denied" (Windows) or similar, exit any running `xos` and retry.
+fn cargo_install_path_xos(project_root: &Path) -> bool {
+    println!(
+        "📁 Installing xos from {} (`cargo install --path . --force`)…",
+        project_root.display()
+    );
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
-    cargo_cmd.args(["build", "--release", "-p", "xos"]);
+    cargo_cmd.args(["install", "--path", ".", "--force"]);
     cargo_cmd.stdout(Stdio::inherit());
     cargo_cmd.stderr(Stdio::inherit());
     let status = cargo_cmd
         .status()
-        .expect("Failed to run cargo build");
+        .expect("Failed to run cargo install");
     status.success()
 }
 
@@ -130,14 +133,13 @@ fn build() {
     println!("🔨 Building xos...");
 
     let project_root = find_project_root();
-    if !cargo_build_release_xos(&project_root) {
-        eprintln!("❌ Build failed. Exiting.");
+    if !cargo_install_path_xos(&project_root) {
+        eprintln!("❌ Install failed. Exiting.");
         std::process::exit(1);
     }
 
     let out = release_xos_executable(&project_root);
-    println!("✅ Build complete: {}", out.display());
-    println!("   (To refresh the copy in ~/.cargo/bin, run `cargo install --path .` while xos is not running.)");
+    println!("✅ Install complete: {}", out.display());
 }
 
 fn build_ios_rust() {
@@ -219,11 +221,11 @@ fn build_ios() {
 
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
-    println!("🔨 Rebuilding xos...");
+    println!("🔨 Installing xos (`cargo install --path . --force`)…");
 
     let project_root = find_project_root();
-    if !cargo_build_release_xos(&project_root) {
-        eprintln!("❌ Build failed. Exiting.");
+    if !cargo_install_path_xos(&project_root) {
+        eprintln!("❌ Install failed. Exiting.");
         std::process::exit(1);
     }
 
@@ -250,7 +252,7 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
 }
 
 /// If the running `xos` is an older install (e.g. `~/.cargo/bin`) but `target/release` has a
-/// newer build, re-execute there without running `cargo build`. Skipping rebuild (N / `-n`)
+/// newer build, re-execute there without running `cargo install`. Skipping rebuild (N / `-n`)
 /// should not mean "run stale PATH binary" when a fresher local artifact exists.
 fn reexecute_through_fresher_release_if_needed(original_args: &[String]) {
     let project_root = match xos::find_xos_project_root() {
@@ -357,13 +359,13 @@ fn main() {
                     // Continue without rebuilding
                 }
                 RebuildOption::RebuildAll => {
-                    println!("🔨 Rebuilding Rust CLI...");
+                    println!("🔨 Installing Rust CLI (`cargo install --path . --force`)…");
                     let project_root = find_project_root();
-                    if !cargo_build_release_xos(&project_root) {
-                        eprintln!("❌ CLI build failed. Exiting.");
+                    if !cargo_install_path_xos(&project_root) {
+                        eprintln!("❌ CLI install failed. Exiting.");
                         std::process::exit(1);
                     }
-                    println!("✅ CLI build complete.");
+                    println!("✅ CLI install complete.");
                     println!("🦀 Rebuilding Rust library for iOS...");
                     build_ios_rust();
                     println!("📦 Running pod install...");
@@ -433,7 +435,7 @@ fn main() {
         rebuild_and_reexecute(original_args);
         return;
     }
-    // -n flag or user said no: continue without `cargo build`, but prefer a newer
+    // -n flag or user said no: continue without `cargo install`, but prefer a newer
     // `target/release` binary over an outdated copy on PATH.
     reexecute_through_fresher_release_if_needed(&original_args);
 
