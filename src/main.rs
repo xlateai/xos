@@ -41,6 +41,8 @@ enum Commands {
         /// Python file to execute (if not provided, starts interactive console)
         file: Option<PathBuf>,
     },
+    /// Print the filesystem path of this running xos executable
+    Path,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,6 +265,17 @@ fn main() {
         }
         return;
     }
+
+    if matches!(&cli.command, Some(Commands::Path)) {
+        match std::env::current_exe() {
+            Ok(path) => println!("{}", path.display()),
+            Err(e) => {
+                eprintln!("❌ Could not resolve path of running executable: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     
     // Check if this is an iOS app command
     let is_ios = matches!(
@@ -378,6 +391,7 @@ fn main() {
                 run_python_interactive();
             }
         }
+        Some(Commands::Path) => unreachable!("path is handled before rebuild prompt"),
         None => {
             eprintln!("❗ No command provided.\n");
             Cli::command().print_help().unwrap();
