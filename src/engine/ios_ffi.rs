@@ -15,8 +15,8 @@ use std::sync::{Mutex, OnceLock};
 use crate::apps;
 #[cfg(target_os = "ios")]
 use crate::engine::{
-    tick_fps_overlay, Application, EngineState, FpsOverlay, FrameState, KeyboardState, MouseState,
-    SafeRegionBoundingRectangle,
+    tick_fps_overlay, tick_frame_delta, Application, EngineState, FpsOverlay, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
@@ -33,6 +33,7 @@ struct IosEngineState {
     engine_state: EngineState,
     width: u32,
     height: u32,
+    last_tick_instant: Option<std::time::Instant>,
 }
 
 // Unsafe Send implementation - safe because iOS FFI is called from main thread only
@@ -155,6 +156,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
         },
         fps_overlay: FpsOverlay::new(),
+        delta_secs: 1.0 / 60.0,
     };
 
     // Call setup
@@ -167,6 +169,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         engine_state,
         width,
         height,
+        last_tick_instant: None,
     };
 
     let mut state = ENGINE_STATE.lock().unwrap();
@@ -204,6 +207,10 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // We use AssertUnwindSafe because we know the FFI boundary is safe
         // and we're catching panics to prevent them from crossing the boundary unsafely
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            tick_frame_delta(
+                &mut ios_state.engine_state,
+                &mut ios_state.last_tick_instant,
+            );
             ios_state.app.tick(&mut ios_state.engine_state);
         }));
         

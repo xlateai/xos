@@ -12,8 +12,8 @@ use jni::JNIEnv;
 use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
-    tick_fps_overlay, Application, CursorStyleSetter, EngineState, FpsOverlay, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_fps_overlay, tick_frame_delta, Application, CursorStyleSetter, EngineState, FpsOverlay,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 thread_local! {
@@ -23,6 +23,7 @@ thread_local! {
 struct Host {
     engine: EngineState,
     app: Box<dyn Application>,
+    last_tick_instant: Option<std::time::Instant>,
 }
 
 fn throw(env: &mut JNIEnv, class: &str, msg: &str) {
@@ -81,6 +82,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
                 onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
+            delta_secs: 1.0 / 60.0,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -93,7 +95,11 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             return;
         }
 
-        *guard = Some(Host { engine, app });
+        *guard = Some(Host {
+            engine,
+            app,
+            last_tick_instant: None,
+        });
     });
 }
 
@@ -117,6 +123,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             return;
         };
 
+        tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
         host.app.tick(&mut host.engine);
 
         // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.

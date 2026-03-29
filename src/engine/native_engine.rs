@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::engine::{
-    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_fps_overlay, tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 use crate::keyboard::shortcuts::detect_shortcut;
 use crate::rasterizer::RasterCache;
@@ -46,6 +46,7 @@ struct AppState {
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
     raster_cache: RasterCache,
+    last_tick_instant: Option<std::time::Instant>,
     // Modifier key tracking for shortcuts
     command_held: bool,
     shift_held: bool,
@@ -100,6 +101,7 @@ impl ApplicationHandler for AppState {
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
                 
+                tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
                 
@@ -384,6 +386,7 @@ impl ApplicationHandler for AppStateWrapper {
                     onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
                 fps_overlay: super::engine::FpsOverlay::new(),
+                delta_secs: 1.0 / 60.0,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -399,6 +402,7 @@ impl ApplicationHandler for AppStateWrapper {
                 app,
                 size,
                 raster_cache: RasterCache::new(),
+                last_tick_instant: None,
                 command_held: false,
                 shift_held: false,
                 alt_held: false,

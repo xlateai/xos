@@ -114,9 +114,9 @@ pub fn circles(
         instances.push((centers[i].0, centers[i].1, r, c));
     }
 
-    let shape = frame.shape();
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
     {
+        let shape = frame.shape();
         let width = shape[1];
         let height = shape[0];
         draw_circles_cpu_instances(frame.buffer_mut(), width, height, &instances);

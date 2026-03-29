@@ -4,6 +4,8 @@ use crate::rasterizer::circles;
 const BALL_COLOR: (u8, u8, u8) = (200, 50, 200);
 const BALL_RADIUS: f32 = 15.0;
 const SPEED_MULTIPLIER: f32 = 3.45;
+/// Original movement was per-frame at ~60 Hz; scale random [-2,2]*multiplier to px/s.
+const REF_FPS: f32 = 60.0;
 
 struct BallState {
     x: f32,
@@ -15,8 +17,8 @@ struct BallState {
 
 impl BallState {
     fn new_at_position(x: f32, y: f32, radius: f32) -> Self {
-        let vx = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
-        let vy = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER;
+        let vx = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER * REF_FPS;
+        let vy = rand_float(-2.0, 2.0) * SPEED_MULTIPLIER * REF_FPS;
         
         Self {
             x,
@@ -27,9 +29,9 @@ impl BallState {
         }
     }
 
-    fn update(&mut self, width: f32, height: f32) {
-        self.x += self.vx;
-        self.y += self.vy;
+    fn update(&mut self, width: f32, height: f32, dt: f32) {
+        self.x += self.vx * dt;
+        self.y += self.vy * dt;
 
         // Check if ball is completely off screen (rather than just touching the edge)
         let is_off_screen = 
@@ -108,7 +110,11 @@ impl Application for BallGame {
         state.frame.clear();
         
         for ball in &mut self.balls {
-            ball.update(state.frame.array.shape()[1] as f32, state.frame.array.shape()[0] as f32);
+            ball.update(
+                state.frame.array.shape()[1] as f32,
+                state.frame.array.shape()[0] as f32,
+                state.delta_secs,
+            );
         }
 
         let centers: Vec<(f32, f32)> = self.balls.iter().map(|b| (b.x, b.y)).collect();
