@@ -348,3 +348,20 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onKeyChar(
         host.app.on_key_char(&mut host.engine, ch);
     });
 }
+
+#[no_mangle]
+pub extern "system" fn Java_ai_xlate_xos_XosNative_onF3(mut env: JNIEnv, _class: JClass) {
+    HOST.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let Some(host) = guard.as_mut() else {
+            throw(
+                &mut env,
+                "java/lang/IllegalStateException",
+                "xos-java not initialized; call init first",
+            );
+            return;
+        };
+
+        host.engine.fps_overlay.toggle_visible();
+    });
+}

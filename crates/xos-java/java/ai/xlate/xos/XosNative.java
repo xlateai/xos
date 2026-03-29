@@ -79,4 +79,9 @@ public final class XosNative {
 
     /** Unicode code point (e.g. from {@link Character#codePointAt(CharSequence, int)}). */
     public static native void onKeyChar(int codepoint);
+
+    /**
+     * F3 toggles the global FPS overlay (same as desktop/winit). Not sent as a Unicode character.
+     */
+    public static native void onF3();
 }
