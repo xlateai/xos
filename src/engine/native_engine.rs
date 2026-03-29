@@ -22,6 +22,21 @@ use crate::keyboard::shortcuts::detect_shortcut;
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
+/// Windows often reports 0×0 when minimized. Keep the last non-zero size for buffers so the app
+/// keeps simulating and `pixels` / `EngineState` stay the same length (avoids copy_from_slice panic).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn physical_size_for_buffers(
+    inner: winit::dpi::PhysicalSize<u32>,
+    stored: winit::dpi::PhysicalSize<u32>,
+) -> winit::dpi::PhysicalSize<u32> {
+    if inner.width == 0 || inner.height == 0 {
+        stored
+    } else {
+        inner
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct AppState {
     window: Window,
@@ -53,7 +68,8 @@ impl ApplicationHandler for AppState {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                let current_size = self.window.inner_size();
+                let current_size =
+                    physical_size_for_buffers(self.window.inner_size(), self.size);
                 if current_size != self.size {
                     self.size = current_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
@@ -90,26 +106,40 @@ impl ApplicationHandler for AppState {
                     frame.copy_from_slice(buffer);
                     let _ = self.pixels.render();
                 } else {
-                    // Resize if there's a mismatch
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
-                    // Notify app of screen size change
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    let frame = self.pixels.frame_mut();
                     let buffer = self.engine_state.frame_buffer_mut();
-                    frame.copy_from_slice(buffer);
-                    eprintln!("Buffer size mismatch detected and fixed. New size: {}", frame.len());
+                    if frame.len() == buffer.len() {
+                        frame.copy_from_slice(buffer);
+                        let _ = self.pixels.render();
+                    } else {
+                        eprintln!(
+                            "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
+                            frame.len(),
+                            buffer.len(),
+                            self.size.width,
+                            self.size.height
+                        );
+                    }
                 }
             }
             WindowEvent::Resized(new_size) => {
-                self.size = new_size;
-                let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                self.engine_state.resize_frame(self.size.width, self.size.height);
-                // Notify app of screen size change
-                let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
-                self.window.request_redraw();
+                if new_size.width == 0 || new_size.height == 0 {
+                    self.window.request_redraw();
+                } else {
+                    self.size = new_size;
+                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                    self.engine_state.resize_frame(self.size.width, self.size.height);
+                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    self.window.request_redraw();
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
-                let new_size = self.window.inner_size();
+                let new_size = physical_size_for_buffers(self.window.inner_size(), self.size);
                 if new_size != self.size {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
