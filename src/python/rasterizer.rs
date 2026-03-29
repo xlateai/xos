@@ -117,45 +117,14 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
-    // Now draw all circles directly to the Rust buffer
-    for (cx, cy, radius) in circles_to_draw {
-        draw_circle_direct(buffer, width, height, cx, cy, radius, color);
-    }
-    
-    Ok(vm.ctx.none())
-}
+    let c = [color.0, color.1, color.2, color.3];
+    let instances: Vec<(f32, f32, f32, [u8; 4])> = circles_to_draw
+        .iter()
+        .map(|&(cx, cy, r)| (cx, cy, r, c))
+        .collect();
+    crate::rasterizer::draw_circles_cpu_instances(buffer, width, height, &instances);
 
-fn draw_circle_direct(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    cx: f32,
-    cy: f32,
-    radius: f32,
-    color: (u8, u8, u8, u8),
-) {
-    let radius_squared = radius * radius;
-    
-    let start_x = (cx - radius).max(0.0) as usize;
-    let end_x = ((cx + radius + 1.0) as usize).min(width);
-    let start_y = (cy - radius).max(0.0) as usize;
-    let end_y = ((cy + radius + 1.0) as usize).min(height);
-    
-    for y in start_y..end_y {
-        for x in start_x..end_x {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            if dx * dx + dy * dy <= radius_squared {
-                let idx = (y * width + x) * 4;
-                if idx + 3 < buffer.len() {
-                    buffer[idx + 0] = color.0;
-                    buffer[idx + 1] = color.1;
-                    buffer[idx + 2] = color.2;
-                    buffer[idx + 3] = color.3;
-                }
-            }
-        }
-    }
+    Ok(vm.ctx.none())
 }
 
 /// xos.rasterizer.lines() - efficiently draw lines directly on the Rust frame buffer
@@ -422,7 +391,7 @@ fn draw_line_direct(
     
     if length < 0.001 {
         // Degenerate line, just draw a circle
-        draw_circle_direct(buffer, width, height, x1, y1, radius, color);
+        crate::rasterizer::draw_circle_cpu(buffer, width, height, x1, y1, radius, color);
         return;
     }
     
@@ -437,7 +406,7 @@ fn draw_line_direct(
         let t = (i as f32) / (num_steps as f32);
         let x = x1 + dx * t;
         let y = y1 + dy * t;
-        draw_circle_direct(buffer, width, height, x, y, radius, color);
+        crate::rasterizer::draw_circle_cpu(buffer, width, height, x, y, radius, color);
     }
 }
 

@@ -22,6 +22,7 @@ pub mod shapes;
 pub mod python;
 pub mod clipboard;
 pub mod keyboard;
+pub mod rasterizer;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).
 pub fn is_xos_project_root(path: &Path) -> bool {

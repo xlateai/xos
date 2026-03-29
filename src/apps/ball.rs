@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::circles;
 
 const BALL_COLOR: (u8, u8, u8) = (200, 50, 200);
 const BALL_RADIUS: f32 = 15.0;
@@ -86,41 +87,6 @@ impl BallGame {
     pub fn new() -> Self {
         Self { balls: Vec::new() }
     }
-
-    fn draw_circle(
-        &self,
-        state: &mut EngineState,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-    ) {
-        let shape = state.frame.array.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let buffer = state.frame_buffer_mut();
-        let radius_squared = radius * radius;
-
-        let start_x = (cx - radius).max(0.0) as u32;
-        let end_x = (cx + radius + 1.0).min(width as f32) as u32;
-        let start_y = (cy - radius).max(0.0) as u32;
-        let end_y = (cy + radius + 1.0).min(height as f32) as u32;
-
-        for y in start_y..end_y {
-            for x in start_x..end_x {
-                let dx = x as f32 - cx;
-                let dy = y as f32 - cy;
-                if dx * dx + dy * dy <= radius_squared {
-                    let i = ((y * width + x) * 4) as usize;
-                    if i + 3 < buffer.len() {
-                        buffer[i + 0] = BALL_COLOR.0;
-                        buffer[i + 1] = BALL_COLOR.1;
-                        buffer[i + 2] = BALL_COLOR.2;
-                        buffer[i + 3] = 0xff;
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl Application for BallGame {
@@ -145,14 +111,11 @@ impl Application for BallGame {
             ball.update(state.frame.array.shape()[1] as f32, state.frame.array.shape()[0] as f32);
         }
 
-        for ball in &self.balls {
-            self.draw_circle(
-                state,
-                ball.x,
-                ball.y,
-                ball.radius,
-            );
-        }
+        let centers: Vec<(f32, f32)> = self.balls.iter().map(|b| (b.x, b.y)).collect();
+        let radii: Vec<f32> = self.balls.iter().map(|b| b.radius).collect();
+        let rgba = [BALL_COLOR.0, BALL_COLOR.1, BALL_COLOR.2, 255u8];
+        let colors: Vec<[u8; 4]> = vec![rgba; self.balls.len()];
+        let _ = circles(&mut state.frame, &centers, &radii, &colors);
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {

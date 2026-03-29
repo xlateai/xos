@@ -18,6 +18,7 @@ use super::engine::{
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 use crate::keyboard::shortcuts::detect_shortcut;
+use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
@@ -44,10 +45,30 @@ struct AppState {
     engine_state: EngineState,
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
+    raster_cache: RasterCache,
     // Modifier key tracking for shortcuts
     command_held: bool,
     shift_held: bool,
     alt_held: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl AppState {
+    fn render_pixels(&mut self) -> Result<(), pixels::Error> {
+        self.pixels.render_with(|encoder, render_target, context| {
+            crate::rasterizer::render_pending_gpu_passes(
+                &mut self.raster_cache,
+                encoder,
+                &context.device,
+                &context.queue,
+                &context.texture,
+                context.texture_extent,
+                context.texture_format,
+            );
+            context.scaling_renderer.render(encoder, render_target);
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -104,7 +125,7 @@ impl ApplicationHandler for AppState {
                 let buffer = self.engine_state.frame_buffer_mut();
                 if frame.len() == buffer.len() {
                     frame.copy_from_slice(buffer);
-                    let _ = self.pixels.render();
+                    let _ = self.render_pixels();
                 } else {
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
@@ -114,7 +135,7 @@ impl ApplicationHandler for AppState {
                     let buffer = self.engine_state.frame_buffer_mut();
                     if frame.len() == buffer.len() {
                         frame.copy_from_slice(buffer);
-                        let _ = self.pixels.render();
+                        let _ = self.render_pixels();
                     } else {
                         eprintln!(
                             "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
@@ -377,6 +398,7 @@ impl ApplicationHandler for AppStateWrapper {
                 engine_state,
                 app,
                 size,
+                raster_cache: RasterCache::new(),
                 command_held: false,
                 shift_held: false,
                 alt_held: false,
