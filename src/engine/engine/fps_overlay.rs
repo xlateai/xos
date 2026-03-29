@@ -117,12 +117,15 @@ pub fn tick_fps_overlay(state: &mut EngineState) {
                 if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
                     let idx = ((py as u32 * width as u32 + px as u32) * 4) as usize;
                     let alpha_f = alpha as f32 / 255.0;
+                    // Blend RGB for antialiasing, but always write A=255 so nothing underneath
+                    // (e.g. Python viewport balls) shows through the label.
                     buffer[idx + 0] = ((fps_text_color.0 as f32 * alpha_f)
                         + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
                     buffer[idx + 1] = ((fps_text_color.1 as f32 * alpha_f)
                         + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
                     buffer[idx + 2] = ((fps_text_color.2 as f32 * alpha_f)
                         + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                    buffer[idx + 3] = 0xff;
                 }
             }
         }

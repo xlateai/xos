@@ -5,8 +5,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::engine::{
-    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FpsOverlay,
-    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_fps_overlay, tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState,
+    FpsOverlay, FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 
@@ -61,6 +61,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
+            delta_time_seconds: 1.0 / 60.0,
         },
         app,
     }));
@@ -325,6 +326,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             state_ptr: *mut WasmState,
             canvas: HtmlCanvasElement,
             context: CanvasRenderingContext2d,
+            last_tick_instant: Option<std::time::Instant>,
         }
         
         let anim_state_ptr = Box::into_raw(Box::new(AnimationState {
@@ -332,6 +334,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             state_ptr,
             canvas: canvas.clone(),
             context: context.clone(),
+            last_tick_instant: None,
         }));
         
         // Create the animation frame callback
@@ -350,6 +353,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     state.app.on_screen_size_change(&mut state.engine_state, width, height);
                 }
                 
+                tick_frame_delta(
+                    &mut state.engine_state,
+                    &mut anim_state.last_tick_instant,
+                );
                 // Tick the app first
                 state.app.tick(&mut state.engine_state);
                 

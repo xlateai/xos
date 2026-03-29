@@ -61,11 +61,9 @@ impl FrameBuffer {
     /// Filling all bytes with zero would clear to transparent black, which composites incorrectly
     /// when the buffer is uploaded as a texture with alpha blending.
     pub fn clear(&mut self) {
+        let px = [0u8, 0, 0, 0xff];
         for chunk in self.buffer.chunks_exact_mut(4) {
-            chunk[0] = 0;
-            chunk[1] = 0;
-            chunk[2] = 0;
-            chunk[3] = 0xff;
+            chunk.copy_from_slice(&px);
         }
     }
 }

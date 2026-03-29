@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::text::text_rasterization::TextRasterizer;
 use crate::text::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -327,9 +328,6 @@ impl Application for TextApp {
             self.scroll_y = self.scroll_y.max(limit_min).min(limit_max);
         }
         
-        // Now get mutable buffer (after all immutable borrows are released)
-        let buffer = state.frame_buffer_mut();
-    
         self.text_rasterizer.tick(width, content_bottom - content_top);
 
         // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
@@ -347,26 +345,31 @@ impl Application for TextApp {
             self.last_fade_font_size = font_size;
         }
 
-        // Clear screen
-        for i in (0..buffer.len()).step_by(4) {
-            buffer[i + 0] = BACKGROUND_COLOR.0;
-            buffer[i + 1] = BACKGROUND_COLOR.1;
-            buffer[i + 2] = BACKGROUND_COLOR.2;
-            buffer[i + 3] = 0xff;
-        }
-    
+        fill(
+            &mut state.frame,
+            (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+        );
+
+        let buffer = state.frame_buffer_mut();
+        let fw = width as usize;
+        let fh = height as usize;
+        let w_i = width as i32;
+
         // Draw baselines (offset by content_top)
         if DRAW_BASELINES && self.show_debug_visuals {
             for line in &self.text_rasterizer.lines {
                 let y = ((line.baseline_y - self.scroll_y) + content_top) as i32;
                 if y >= 0 && y < height as i32 {
-                    for x in 0..width as i32 {
-                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                        buffer[idx + 0] = BASELINE_COLOR.0;
-                        buffer[idx + 1] = BASELINE_COLOR.1;
-                        buffer[idx + 2] = BASELINE_COLOR.2;
-                        buffer[idx + 3] = 0xff;
-                    }
+                    fill_rect_buffer(
+                        buffer,
+                        fw,
+                        fh,
+                        0,
+                        y,
+                        w_i,
+                        y + 1,
+                        (BASELINE_COLOR.0, BASELINE_COLOR.1, BASELINE_COLOR.2, 0xff),
+                    );
                 }
             }
         }

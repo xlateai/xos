@@ -14,10 +14,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::engine::{
-    tick_fps_overlay, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_fps_overlay, tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 use crate::keyboard::shortcuts::detect_shortcut;
+use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
@@ -44,10 +45,31 @@ struct AppState {
     engine_state: EngineState,
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
+    raster_cache: RasterCache,
+    last_tick_instant: Option<std::time::Instant>,
     // Modifier key tracking for shortcuts
     command_held: bool,
     shift_held: bool,
     alt_held: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl AppState {
+    fn render_pixels(&mut self) -> Result<(), pixels::Error> {
+        self.pixels.render_with(|encoder, render_target, context| {
+            crate::rasterizer::render_pending_gpu_passes(
+                &mut self.raster_cache,
+                encoder,
+                &context.device,
+                &context.queue,
+                &context.texture,
+                context.texture_extent,
+                context.texture_format,
+            );
+            context.scaling_renderer.render(encoder, render_target);
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,6 +101,7 @@ impl ApplicationHandler for AppState {
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
                 
+                tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
                 
@@ -104,7 +127,7 @@ impl ApplicationHandler for AppState {
                 let buffer = self.engine_state.frame_buffer_mut();
                 if frame.len() == buffer.len() {
                     frame.copy_from_slice(buffer);
-                    let _ = self.pixels.render();
+                    let _ = self.render_pixels();
                 } else {
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
@@ -114,7 +137,7 @@ impl ApplicationHandler for AppState {
                     let buffer = self.engine_state.frame_buffer_mut();
                     if frame.len() == buffer.len() {
                         frame.copy_from_slice(buffer);
-                        let _ = self.pixels.render();
+                        let _ = self.render_pixels();
                     } else {
                         eprintln!(
                             "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
@@ -363,6 +386,7 @@ impl ApplicationHandler for AppStateWrapper {
                     onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
                 fps_overlay: super::engine::FpsOverlay::new(),
+                delta_time_seconds: 1.0 / 60.0,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -377,6 +401,8 @@ impl ApplicationHandler for AppStateWrapper {
                 engine_state,
                 app,
                 size,
+                raster_cache: RasterCache::new(),
+                last_tick_instant: None,
                 command_held: false,
                 shift_held: false,
                 alt_held: false,
