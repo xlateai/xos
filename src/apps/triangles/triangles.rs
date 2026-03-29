@@ -1,7 +1,5 @@
 use crate::engine::{Application, EngineState};
-use crate::apps::triangles::geometric_utils::{
-    draw_filled_triangle, edge_function,
-};
+use crate::rasterizer::fill;
 use delaunator::{triangulate, Point};
 use std::collections::HashMap;
 
@@ -14,15 +12,12 @@ const MAX_POINTS: usize = 5000;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 
-
 pub fn random_color() -> (u8, u8, u8) {
-    // generate a random purple
     let r = randint(0, 256);
     let g = randint(0, 11);
     let b = randint(0, 256);
     (r as u8, g as u8, b as u8)
 }
-
 
 #[derive(Clone)]
 struct IdentifiedPoint {
@@ -36,6 +31,8 @@ pub struct TrianglesApp {
     points: Vec<IdentifiedPoint>,
     triangles: Vec<[usize; 3]>,
     triangle_colors: HashMap<TriangleKey, (u8, u8, u8)>,
+    /// Skip `triangulate` when the point set is unchanged (e.g. idle).
+    last_delaunay_input: Option<Vec<Point>>,
     scroll_x: f64,
     scroll_y: f64,
     dragging: bool,
@@ -50,6 +47,7 @@ impl TrianglesApp {
             points: Vec::with_capacity(MAX_POINTS),
             triangles: Vec::with_capacity(MAX_POINTS),
             triangle_colors: HashMap::with_capacity(MAX_POINTS),
+            last_delaunay_input: None,
             scroll_x: 0.0,
             scroll_y: 0.0,
             dragging: false,
@@ -64,16 +62,16 @@ impl TrianglesApp {
         let view_top = self.scroll_y - VIEW_MARGIN;
         let view_right = self.scroll_x + width + VIEW_MARGIN;
         let view_bottom = self.scroll_y + height + VIEW_MARGIN;
-    
+
         self.points.retain(|p| {
             let x = p.pos.x;
             let y = p.pos.y;
             x >= view_left && x <= view_right && y >= view_top && y <= view_bottom
         });
-    
+
         let target_area = (view_right - view_left) * (view_bottom - view_top);
         let target_points = (POINT_DENSITY * target_area) as usize;
-    
+
         while self.points.len() < target_points && self.points.len() < MAX_POINTS {
             let x = uniform_range(view_left - SPAWN_PADDING, view_right + SPAWN_PADDING);
             let y = uniform_range(view_top - SPAWN_PADDING, view_bottom + SPAWN_PADDING);
@@ -83,21 +81,23 @@ impl TrianglesApp {
             });
             self.next_point_id += 1;
         }
-    
+
         let delaunay_points: Vec<Point> = self.points.iter().map(|p| p.pos.clone()).collect();
+        if self.last_delaunay_input.as_ref() == Some(&delaunay_points) {
+            return;
+        }
+        self.last_delaunay_input = Some(delaunay_points.clone());
+
         let result = triangulate(&delaunay_points);
-    
+
         self.triangles.clear();
         self.triangles.extend(
-            result.triangles.chunks(3).filter_map(|tri| {
-                if tri.len() == 3 {
-                    Some([tri[0], tri[1], tri[2]])
-                } else {
-                    None
-                }
-            }),
+            result
+                .triangles
+                .chunks(3)
+                .filter_map(|tri| (tri.len() == 3).then_some([tri[0], tri[1], tri[2]])),
         );
-    
+
         let mut new_colors = HashMap::with_capacity(self.triangles.len());
         for tri in &self.triangles {
             let mut ids = [
@@ -116,10 +116,9 @@ impl TrianglesApp {
             };
             new_colors.insert(key, color);
         }
-    
+
         self.triangle_colors = new_colors;
     }
-    
 }
 
 impl Application for TrianglesApp {
@@ -131,14 +130,16 @@ impl Application for TrianglesApp {
         let shape = state.frame.array.shape();
         let width = shape[1] as f64;
         let height = shape[0] as f64;
-        let buffer = state.frame_buffer_mut();
 
-        for chunk in buffer.chunks_exact_mut(4) {
-            chunk[0] = BACKGROUND_COLOR.0;
-            chunk[1] = BACKGROUND_COLOR.1;
-            chunk[2] = BACKGROUND_COLOR.2;
-            chunk[3] = 255;
-        }
+        fill(
+            &mut state.frame,
+            (
+                BACKGROUND_COLOR.0,
+                BACKGROUND_COLOR.1,
+                BACKGROUND_COLOR.2,
+                255,
+            ),
+        );
 
         self.regenerate(width, height);
 
@@ -151,11 +152,11 @@ impl Application for TrianglesApp {
             })
             .collect();
 
-        for tri in &self.triangles {
-            let a = &screen_points[tri[0]];
-            let b = &screen_points[tri[1]];
-            let c = &screen_points[tri[2]];
+        let n_tri = self.triangles.len();
+        let mut flat: Vec<(f32, f32)> = Vec::with_capacity(n_tri.saturating_mul(3));
+        let mut tri_colors: Vec<[u8; 4]> = Vec::with_capacity(n_tri);
 
+        for tri in &self.triangles {
             let mut ids = [
                 self.points[tri[0]].id,
                 self.points[tri[1]].id,
@@ -163,22 +164,18 @@ impl Application for TrianglesApp {
             ];
             ids.sort();
             let color = self.triangle_colors[&ids];
+            let rgba = [color.0, color.1, color.2, 255];
 
-            let area = edge_function(a, b, c.x, c.y);
-            if area < 0.0 {
-                draw_filled_triangle(c, b, a, buffer, width, height, color);
-            } else {
-                draw_filled_triangle(a, b, c, buffer, width, height, color);
-            }
-
-            // draw_line(a.x, a.y, b.x, b.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
-            // draw_line(b.x, b.y, c.x, c.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
-            // draw_line(c.x, c.y, a.x, a.y, buffer, width, height, LINE_THICKNESS, LINE_COLOR);
+            let a = &screen_points[tri[0]];
+            let b = &screen_points[tri[1]];
+            let c = &screen_points[tri[2]];
+            flat.push((a.x as f32, a.y as f32));
+            flat.push((b.x as f32, b.y as f32));
+            flat.push((c.x as f32, c.y as f32));
+            tri_colors.push(rgba);
         }
 
-        // for p in &screen_points {
-        //     draw_circle(p.x, p.y, POINT_RADIUS, buffer, width, height, POINT_COLOR);
-        // }
+        let _ = crate::rasterizer::triangles(&mut state.frame, &flat, &tri_colors);
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {

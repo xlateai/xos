@@ -6,8 +6,10 @@ use winit::{
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
-    window::{CursorIcon, Window, WindowId},
+    window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
 };
+#[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
+use winit::platform::windows::WindowExtWindows;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +24,31 @@ use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+/// How the native host creates the winit window: a normal windowed app vs fullscreen overlay.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+pub enum NativeLaunchMode {
+    /// Default decorated window (`XOS Game`).
+    Windowed,
+    /// Borderless fullscreen on the primary monitor, always on top (for HUD-style overlays).
+    ///
+    /// On Windows, the window is also hidden from the taskbar. Full desktop pixel capture is a
+    /// separate feature (e.g. DXGI / Graphics Capture) and can be added later.
+    Overlay,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_attributes_for_mode(mode: NativeLaunchMode) -> WindowAttributes {
+    match mode {
+        NativeLaunchMode::Windowed => Window::default_attributes().with_title("XOS Game"),
+        NativeLaunchMode::Overlay => Window::default_attributes()
+            .with_title("xos overlay")
+            .with_decorations(false)
+            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .with_window_level(WindowLevel::AlwaysOnTop),
+    }
+}
 
 /// Windows often reports 0×0 when minimized. Keep the last non-zero size for buffers so the app
 /// keeps simulating and `pixels` / `EngineState` stay the same length (avoids copy_from_slice panic).
@@ -339,16 +366,22 @@ impl ApplicationHandler for AppState {
 struct AppStateWrapper {
     app_state: Option<AppState>,
     app: Box<dyn Application>,
+    launch_mode: NativeLaunchMode,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ApplicationHandler for AppStateWrapper {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.app_state.is_none() {
-            let window = match event_loop.create_window(Window::default_attributes().with_title("XOS Game")) {
+            let attrs = window_attributes_for_mode(self.launch_mode);
+            let window = match event_loop.create_window(attrs) {
                 Ok(w) => {
                     // Enable IME for text input
                     w.set_ime_allowed(true);
+                    #[cfg(target_os = "windows")]
+                    if matches!(self.launch_mode, NativeLaunchMode::Overlay) {
+                        w.set_skip_taskbar(true);
+                    }
                     w
                 },
                 Err(e) => {
@@ -424,7 +457,10 @@ impl ApplicationHandler for AppStateWrapper {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_native_event_loop(
+    app: Box<dyn Application>,
+    launch_mode: NativeLaunchMode,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Install Ctrl+C handler for clean shutdown
     let should_exit = SHOULD_EXIT.clone();
     ctrlc::set_handler(move || {
@@ -438,17 +474,31 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
                 std::process::exit(0);
             }
         });
-    }).expect("Error setting Ctrl+C handler");
-    
+    })
+    .expect("Error setting Ctrl+C handler");
+
     let event_loop = EventLoop::new().unwrap();
-    
+
     let mut wrapper = AppStateWrapper {
         app_state: None,
         app,
+        launch_mode,
     };
-    
+
     event_loop.run_app(&mut wrapper)?;
-    
+
     println!("Event loop exited cleanly");
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+    run_native_event_loop(app, NativeLaunchMode::Windowed)
+}
+
+/// Fullscreen overlay host: same [`Application`] / [`EngineState`] as [`start_native`], but the
+/// surface is borderless fullscreen on the primary monitor and stays above normal windows.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub fn start_overlay_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error::Error>> {
+    run_native_event_loop(app, NativeLaunchMode::Overlay)
 }

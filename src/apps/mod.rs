@@ -10,6 +10,9 @@ macro_rules! define_apps {
         #[derive(clap::Subcommand)]
         pub enum AppCommands {
             $(
+                /// Subcommand name matches the app module (e.g. `overlay` for `xos app overlay`).
+                /// `visible_alias` keeps the enum variant name working (e.g. `xos app Overlay`).
+                #[command(name = stringify!($file), visible_alias = stringify!($Variant))]
                 #[allow(non_camel_case_types)]
                 $Variant {
                     #[arg(long)]
@@ -77,4 +80,5 @@ define_apps! {
     Leds => leds::Leds,
     IosSensors => ios_sensors::IosSensorsApp,
     AudioRelay => audio_relay::AudioRelay,
+    Overlay => overlay::OverlayApp,
 }

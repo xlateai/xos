@@ -136,6 +136,123 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.triangles(frame, points, colors)
+///
+/// - `points`: list of `(x, y)` for each vertex; length must be a multiple of 3 (triangles are `a,b,c` repeated).
+/// - `colors`: list of `(r, g, b, a)` per triangle, or one tuple broadcast to all triangles.
+fn triangles_py(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 3 {
+        return Err(vm.new_type_error(format!(
+            "triangles() takes exactly 3 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+
+    let _frame = &args_vec[0];
+    let points_list = &args_vec[1];
+    let colors_list = &args_vec[2];
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error(
+            "No frame buffer context set. Rasterizer must be called during tick().".to_string(),
+        )
+    })?;
+
+    let positions = points_list
+        .downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("points must be a list".to_string()))?;
+    let colors = colors_list
+        .downcast_ref::<rustpython_vm::builtins::PyList>()
+        .ok_or_else(|| vm.new_type_error("colors must be a list".to_string()))?;
+
+    let positions_vec = positions.borrow_vec();
+    let colors_vec = colors.borrow_vec();
+
+    if positions_vec.len() % 3 != 0 {
+        return Err(vm.new_type_error(
+            "points length must be divisible by 3 (a,b,c per triangle)".to_string(),
+        ));
+    }
+    let n_tri = positions_vec.len() / 3;
+    if n_tri == 0 {
+        return Ok(vm.ctx.none());
+    }
+    if colors_vec.is_empty() {
+        return Err(vm.new_type_error("colors is empty".to_string()));
+    }
+    if colors_vec.len() != n_tri && colors_vec.len() != 1 {
+        return Err(vm.new_type_error(format!(
+            "colors length {} must be {} (one per triangle) or 1",
+            colors_vec.len(),
+            n_tri
+        )));
+    }
+
+    let mut points_flat: Vec<(f32, f32)> = Vec::with_capacity(positions_vec.len());
+    for pos_obj in positions_vec.iter() {
+        let pos_tuple = pos_obj
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("each point must be (x, y)".to_string()))?;
+        let pos_vec = pos_tuple.as_slice();
+        if pos_vec.len() != 2 {
+            return Err(vm.new_type_error("each point must be (x, y)".to_string()));
+        }
+        let x: f64 = pos_vec[0].clone().try_into_value(vm)?;
+        let y: f64 = pos_vec[1].clone().try_into_value(vm)?;
+        points_flat.push((x as f32, y as f32));
+    }
+
+    let mut rgba: Vec<[u8; 4]> = Vec::with_capacity(n_tri);
+    if colors_vec.len() == 1 {
+        let color_obj = colors_vec[0]
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+        let color_slice = color_obj.as_slice();
+        if color_slice.len() != 4 {
+            return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+        }
+        let r: i32 = color_slice[0].clone().try_into_value(vm)?;
+        let g: i32 = color_slice[1].clone().try_into_value(vm)?;
+        let b: i32 = color_slice[2].clone().try_into_value(vm)?;
+        let a: i32 = color_slice[3].clone().try_into_value(vm)?;
+        let c = [r as u8, g as u8, b as u8, a as u8];
+        rgba.resize(n_tri, c);
+    } else {
+        for i in 0..n_tri {
+            let color_obj = colors_vec[i]
+                .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+            let color_slice = color_obj.as_slice();
+            if color_slice.len() != 4 {
+                return Err(vm.new_type_error("color must be (r, g, b, a)".to_string()));
+            }
+            let r: i32 = color_slice[0].clone().try_into_value(vm)?;
+            let g: i32 = color_slice[1].clone().try_into_value(vm)?;
+            let b: i32 = color_slice[2].clone().try_into_value(vm)?;
+            let a: i32 = color_slice[3].clone().try_into_value(vm)?;
+            rgba.push([r as u8, g as u8, b as u8, a as u8]);
+        }
+    }
+
+    drop(positions_vec);
+    drop(colors_vec);
+
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+
+    if let Err(e) = crate::rasterizer::triangles_buffer(buffer, width, height, &points_flat, &rgba)
+    {
+        return Err(vm.new_runtime_error(e));
+    }
+
+    Ok(vm.ctx.none())
+}
+
 /// xos.rasterizer.lines() - efficiently draw lines directly on the Rust frame buffer
 /// 
 /// Usage: xos.rasterizer.lines(frame, start_points, end_points, thicknesses, color)
@@ -842,6 +959,7 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
+    module.set_attr("triangles", vm.new_function("triangles", triangles_py), vm).unwrap();
     module.set_attr("lines", vm.new_function("lines", lines), vm).unwrap();
     module.set_attr("lines_batched", vm.new_function("lines_batched", lines_batched), vm).unwrap();
     module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();

@@ -168,6 +168,10 @@ pub mod py_engine {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(app) = apps::get_app(game) {
+        #[cfg(not(target_os = "ios"))]
+        if game == "overlay" {
+            return engine::start_overlay_native(app);
+        }
         engine::start_native(app)
     } else {
         Err(format!("App '{}' not found", game).into())
