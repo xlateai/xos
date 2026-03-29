@@ -96,8 +96,8 @@ pub fn fill_triangle_buffer(
     if width == 0 || height == 0 {
         return;
     }
-    let mut ax = v0.0 as f64;
-    let mut ay = v0.1 as f64;
+    let ax = v0.0 as f64;
+    let ay = v0.1 as f64;
     let mut bx = v1.0 as f64;
     let mut by = v1.1 as f64;
     let mut cx = v2.0 as f64;

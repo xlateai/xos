@@ -25,7 +25,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run an application
+    /// Run an application (`xos app <name>` matches `src/apps/<name>.rs`, e.g. `overlay`, `ball`)
+    #[command(subcommand_required = true)]
     App {
         #[command(subcommand)]
         app: AppCommands,
