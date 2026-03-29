@@ -61,8 +61,23 @@ public final class XosNative {
     public static native void tick();
 
     /**
-     * Direct buffer over the engine RGBA framebuffer (native memory). Not valid after
-     * {@link #shutdown} or if the native side reallocates; call again after {@link #resize}.
+     * Number of completed native {@link #tick()} calls since {@link #init} (wraps on overflow).
+     * Use this in the mod UI to confirm xos advances in lockstep with {@link #pumpFrame}.
+     */
+    public static native long getEngineTickCount();
+
+    /**
+     * Uniform alpha for the viewport texture when {@link #getFrameBuffer()} is packed for
+     * {@link com.mojang.blaze3d.platform.NativeImage#setPixelRGBA}. Call before {@link #tick}
+     * (e.g. each frame from the mod when idle vs hover changes).
+     */
+    public static native void setMinecraftViewportAlpha(int alpha0to255);
+
+    /**
+     * Direct buffer of packed pixels for Minecraft upload (little-endian int per pixel, same as
+     * {@code setPixelRGBA} / Minekov {@code packAbgr}). Produced after {@link #tick}; avoids
+     * per-pixel Java conversion from engine RGBA. Not valid after {@link #shutdown} or
+     * {@link #resize} — obtain a fresh buffer.
      */
     public static native ByteBuffer getFrameBuffer();
 
