@@ -198,6 +198,9 @@ impl ApplicationHandler for AppState {
                 if event.state == ElementState::Pressed {
                     // Handle special keys
                     match event.logical_key {
+                        Key::Named(NamedKey::F3) => {
+                            self.engine_state.fps_overlay.toggle_visible();
+                        }
                         Key::Named(NamedKey::Backspace) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{8}');
                         }

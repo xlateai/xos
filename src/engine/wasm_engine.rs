@@ -292,6 +292,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.app.on_key_char(&mut state.engine_state, '\u{2193}'); // ↓
                         event.prevent_default();
                     }
+                    "F3" => {
+                        state.engine_state.fps_overlay.toggle_visible();
+                        event.prevent_default();
+                    }
                     "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
                         // Do nothing — non-character keys
                     }
