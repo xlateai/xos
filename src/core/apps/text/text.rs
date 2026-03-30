@@ -99,8 +99,8 @@ impl TextApp {
         // let font_bytes = include_bytes!("../../assets/NotoSansJP-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
-        // Increase font size by 10% on iOS
-        let base_font_size = 48.0;
+        // Increase font size by 10% on iOS (~50% smaller than legacy 48px default for perf at long docs)
+        let base_font_size = 24.0;
         let font_size = if cfg!(target_os = "ios") {
             base_font_size * 1.1 // 10% larger on iOS
         } else {
@@ -170,7 +170,7 @@ impl TextApp {
         let mut t = Self::new();
         t.transparent_background = true;
         t.bound_color = (57, 255, 20);
-        t.set_font_size(28.0);
+        t.set_font_size(14.0);
         t
     }
 
@@ -374,6 +374,7 @@ impl Application for TextApp {
         let fw = width as usize;
         let fh = height as usize;
         let w_i = width as i32;
+        let h_i = height as i32;
 
         // Draw baselines (offset by content_top)
         if DRAW_BASELINES && self.show_debug_visuals {
@@ -428,32 +429,53 @@ impl Application for TextApp {
                 }
             }
             
-            // Draw selection rectangles per line
+            // Draw selection rectangles per line (clip to viewport — avoids O(selection×pixels) off-screen)
             for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
                 let sel_left = *min_x as i32;
                 let sel_right = *max_x as i32;
                 let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top) as i32;
                 let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top) as i32;
                 
+                let y0 = sel_top.max(0).min(h_i);
+                let y1 = sel_bottom.max(0).min(h_i);
+                let x0 = sel_left.max(0).min(w_i);
+                let x1 = sel_right.max(0).min(w_i);
+                
                 // Draw semi-transparent selection rectangle
-                for y in sel_top..sel_bottom {
-                    for x in sel_left..sel_right {
-                        if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                            // Alpha blend the selection color
-                            let alpha = SELECTION_COLOR.3 as f32 / 255.0;
-                            let inv_alpha = 1.0 - alpha;
-                            buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
-                            buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
-                            buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
-                        }
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        // Alpha blend the selection color
+                        let alpha = SELECTION_COLOR.3 as f32 / 255.0;
+                        let inv_alpha = 1.0 - alpha;
+                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
+                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
+                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
                     }
                 }
             }
         }
     
+        // Viewport in document space: only blit glyphs that can appear on screen. Glyph bitmaps are
+        // cached in [`TextRasterizer`] (CPU); the cost per frame is proportional to *drawn* pixels.
+        let vis_top = self.scroll_y;
+        let vis_bottom = self.scroll_y + visible_height;
+
         // Draw characters with fade and slide-in (offset by content_top)
         for character in &self.text_rasterizer.characters {
+            let g_top = character.y;
+            let g_bottom = character.y + character.height;
+            if g_bottom < vis_top || g_top > vis_bottom {
+                continue;
+            }
+            // Slide-in can shift the glyph left by up to one bitmap width; include that in x bounds.
+            let slide_max = character.width;
+            let g_left = character.x - slide_max;
+            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
+            if g_right < 0.0 || g_left > width {
+                continue;
+            }
+
             let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
             let fade = self.fade_map.entry(fade_key).or_insert(0.0);
             *fade = (*fade + 0.16).min(1.0); // Fast fade
