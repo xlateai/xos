@@ -188,6 +188,7 @@ class Application:
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
+        self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
     
     def get_width(self):
         """Get the current frame width"""
@@ -233,6 +234,8 @@ class Application:
 pub struct PyApp {
     interpreter: Interpreter,
     app_instance: Option<PyObjectRef>,
+    /// Number of `tick()` calls that have fully finished (starts at 0; incremented after each tick).
+    ticks_completed: u64,
 }
 
 impl PyApp {
@@ -240,6 +243,7 @@ impl PyApp {
         Self {
             interpreter,
             app_instance: Some(app_instance),
+            ticks_completed: 0,
         }
     }
 }
@@ -285,6 +289,8 @@ impl Application for PyApp {
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
                 app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
+                app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
+                    .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
                 
                 // Call setup
                 match vm.call_method(app_instance, "setup", ()) {
@@ -308,6 +314,8 @@ impl Application for PyApp {
             let height = shape[0];
             let buffer = state.frame.buffer_mut();
             crate::python_api::rasterizer::set_frame_buffer_context(buffer, width, height);
+
+            let tick_index = self.ticks_completed;
             
             self.interpreter.enter(|vm| {
                 // Update frame data before calling tick
@@ -324,6 +332,9 @@ impl Application for PyApp {
                     // Expose engine FPS directly to Python app.
                     let timestep = state.delta_time_seconds.max(1e-5) as f64;
                     let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
+
+                    // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
+                    let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     
                     // Call tick
                     if let Err(e) = vm.call_method(app_instance, "tick", ()) {
@@ -332,6 +343,8 @@ impl Application for PyApp {
                     }
                 }
             });
+
+            self.ticks_completed = self.ticks_completed.saturating_add(1);
             
             // Clear the frame buffer context after tick
             crate::python_api::rasterizer::clear_frame_buffer_context();
