@@ -31,7 +31,12 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     if path.join("crates").join("xos-java").join("Cargo.toml").exists() {
         return true;
     }
-    if path.join("src").join("build-ios.sh").exists() {
+    if path
+        .join("src")
+        .join("ios")
+        .join("build-ios.sh")
+        .exists()
+    {
         return true;
     }
     path.join("src").join("core").join("apps").join("ball.rs").exists()

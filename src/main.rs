@@ -144,7 +144,7 @@ fn build_ios_rust() {
     println!("🦀 Building Rust library for iOS...");
     
     let project_root = find_project_root();
-    let script_path = project_root.join("src").join("build-ios.sh");
+    let script_path = project_root.join("src").join("ios").join("build-ios.sh");
     
     if !script_path.exists() {
         eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
@@ -157,7 +157,9 @@ fn build_ios_rust() {
     build_cmd.stdout(Stdio::inherit());
     build_cmd.stderr(Stdio::inherit());
     
-    let status = build_cmd.status().expect("Failed to run src/build-ios.sh");
+    let status = build_cmd
+        .status()
+        .expect("Failed to run src/ios/build-ios.sh");
     if !status.success() {
         eprintln!("❌ iOS build failed. Exiting.");
         std::process::exit(1);
