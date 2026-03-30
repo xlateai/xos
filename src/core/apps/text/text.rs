@@ -19,15 +19,21 @@ const DRAW_BASELINES: bool = true;
 const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
 const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
 
-// Scroll physics constants
-const SCROLL_MOMENTUM_DECAY: f32 = 0.95; // How quickly momentum decays (0-1, higher = longer momentum)
-const SCROLL_MOMENTUM_THRESHOLD: f32 = 0.1; // Stop momentum below this velocity
+// Scroll physics constants (velocity is px/s; integration uses [`EngineState::delta_time_seconds`])
+const SCROLL_REF_DT: f32 = 1.0 / 60.0; // Reference step for per-frame decay factors below
+const SCROLL_MOMENTUM_DECAY: f32 = 0.95; // Factor per SCROLL_REF_DT (≈60fps); actual decay uses dt via powf
+const SCROLL_MOMENTUM_THRESHOLD: f32 = 12.0; // px/s — stop coasting below this
 const SCROLL_ELASTIC_STRENGTH: f32 = 0.04; // Strength of elastic bounce at edges (lower = softer, more springy)
-const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 5.0; // Don't trigger double-tap if scrolling faster than this
+const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 180.0; // px/s — don't treat as tap-to-keyboard if coasting faster
 const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25; // How far off-screen you can scroll (0.25 = 25% of visible height on each side)
+const SCROLL_MAX_VELOCITY: f32 = 5200.0; // px/s — clamp wheel + drag impulses
 
 /// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels.
 const MOUSE_WHEEL_LINE_SCALE: f32 = 48.0;
+/// Converts wheel delta (px-equivalent) into scroll velocity (px/s) for coasting.
+const WHEEL_TO_VELOCITY: f32 = 3.4;
+/// Immediate scroll (fraction of line step) so a notch feels snappy before dt integration runs.
+const WHEEL_IMMEDIATE_FRACTION: f32 = 0.2;
 
 // Arrow key characters (using Unicode arrow symbols)
 const ARROW_LEFT: char = '\u{2190}';  // ←
@@ -54,9 +60,8 @@ pub struct TextApp {
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
     initial_scroll_y: f32,
-    // Scroll momentum
+    // Scroll momentum (px/s; integrated with [`EngineState::delta_time_seconds`])
     scroll_velocity: f32,
-    last_frame_time: Option<Instant>,
     // Drag velocity tracking (for momentum on release)
     last_drag_time: Option<Instant>,
     last_drag_y: f32,
@@ -139,7 +144,6 @@ impl TextApp {
             pending_cursor_tap_y: None,
             initial_scroll_y: 0.0,
             scroll_velocity: 0.0,
-            last_frame_time: None,
             last_drag_time: None,
             last_drag_y: 0.0,
             trackpad_active: false,
@@ -277,22 +281,17 @@ impl Application for TextApp {
         };
         
         // === SCROLL PHYSICS ===
-        
-        // Only apply momentum when NOT dragging (after finger release)
+        // Use engine delta so momentum matches frame time (works at VRR / any FPS).
+        let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
+
         if !self.dragging {
-            let current_time = Instant::now();
-            if let Some(last_time) = self.last_frame_time {
-                let dt = current_time.duration_since(last_time).as_secs_f32();
-                
-                // Apply velocity to scroll position
-                if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
-                    self.scroll_y += self.scroll_velocity * dt;
-                    self.scroll_velocity *= SCROLL_MOMENTUM_DECAY; // Decay momentum
-                } else {
-                    self.scroll_velocity = 0.0; // Stop if below threshold
-                }
+            if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
+                self.scroll_y += self.scroll_velocity * dt;
+                // Frame-rate-independent decay: same coast length at 60Hz, 120Hz, etc.
+                self.scroll_velocity *= SCROLL_MOMENTUM_DECAY.powf(dt / SCROLL_REF_DT);
+            } else {
+                self.scroll_velocity = 0.0;
             }
-            self.last_frame_time = Some(current_time);
         }
         
         // 2. Calculate elastic bounds based on safe regions
@@ -327,20 +326,20 @@ impl Application for TextApp {
             if self.scroll_y < natural_min {
                 let overshoot = natural_min - self.scroll_y;
                 self.scroll_y += overshoot * SCROLL_ELASTIC_STRENGTH;
-                self.scroll_velocity *= 0.8; // Dampen momentum at edge
+                self.scroll_velocity *= 0.8_f32.powf(dt / SCROLL_REF_DT); // Dampen momentum at edge
             } else if self.scroll_y > natural_max {
                 let overshoot = self.scroll_y - natural_max;
                 self.scroll_y -= overshoot * SCROLL_ELASTIC_STRENGTH;
-                self.scroll_velocity *= 0.8; // Dampen momentum at edge
+                self.scroll_velocity *= 0.8_f32.powf(dt / SCROLL_REF_DT);
             }
             
             // Hard clamp at absolute limits (with extra dampening)
             if self.scroll_y < limit_min {
                 self.scroll_y = limit_min;
-                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
+                self.scroll_velocity *= 0.3_f32.powf(dt / SCROLL_REF_DT);
             } else if self.scroll_y > limit_max {
                 self.scroll_y = limit_max;
-                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
+                self.scroll_velocity *= 0.3_f32.powf(dt / SCROLL_REF_DT);
             }
         } else {
             // While dragging: only apply hard limits (no elastic pull-back)
@@ -634,8 +633,11 @@ impl Application for TextApp {
             dy * 1.0
         };
         // Invert so wheel matches OS / touchpad expectations (scroll down → see lower content).
-        self.scroll_y -= scaled;
-        self.scroll_velocity -= scaled * 0.25;
+        self.scroll_y -= scaled * WHEEL_IMMEDIATE_FRACTION;
+        self.scroll_velocity -= scaled * WHEEL_TO_VELOCITY;
+        self.scroll_velocity = self
+            .scroll_velocity
+            .clamp(-SCROLL_MAX_VELOCITY, SCROLL_MAX_VELOCITY);
         self.last_tap_scrolled = true;
     }
 
