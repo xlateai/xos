@@ -89,26 +89,13 @@ impl CoderApp {
         (short_edge / REF).clamp(0.28, 1.0)
     }
 
-    /// Slider mapping for coder only (F3 percent 1–100). Replaces linear `percent/50`:
-    /// - **1%** and **100%** are **10×** the old min/max multipliers (0.02 → 0.2, 2.0 → 20.0),
-    /// - **50%** is **1.2×** the old midpoint (1.0 → 1.2), piecewise linear between.
-    fn coder_ui_scale_multiplier(percent: u8) -> f32 {
-        let p = percent.clamp(1, 100) as f32;
-        if p <= 50.0 {
-            // (1, 0.2) → (50, 1.2): 10× old at 1%, +20% at 50%
-            0.2 + (p - 1.0) * (1.0 / 49.0)
-        } else {
-            // (50, 1.2) → (100, 20): 10× old at 100%
-            1.2 + (p - 50.0) * (18.8 / 50.0)
-        }
-    }
-
     /// Calibrate prior coder chrome (~75% vs text) to ~50% at default slider, with ~30% zoom-out.
+    /// F3 scale uses [`crate::engine::f3_ui_scale_multiplier`] (same curve as standalone text).
     fn layout_scale_from_state(state: &EngineState) -> f32 {
         const CODER_UI_CALIBRATION: f32 = (50.0 / 75.0) * 0.7;
         let shape = state.frame.tensor.shape();
         Self::ui_scale((shape[1] as f32).min(shape[0] as f32))
-            * Self::coder_ui_scale_multiplier(state.ui_scale_percent)
+            * state.f3_ui_scale_multiplier()
             * CODER_UI_CALIBRATION
     }
 

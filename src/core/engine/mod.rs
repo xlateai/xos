@@ -36,6 +36,6 @@ pub use f3_menu::{
     F3Menu,
 };
 pub use engine::{
-    tick_frame_delta, Application, CursorStyleSetter, EngineState, FrameState, KeyboardState,
-    MouseState, SafeRegionBoundingRectangle,
+    f3_ui_scale_multiplier, tick_frame_delta, Application, CursorStyleSetter, EngineState,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };

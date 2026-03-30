@@ -317,11 +317,11 @@ impl Application for TextApp {
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
 
-        // Standalone text app: global UI scale + calibration (prior ~20% → ~50% at default slider).
+        // Standalone text app: same F3 curve as coder ([`EngineState::f3_ui_scale_multiplier`]) + calibration.
         if !self.uses_parent_ui_scale {
             let short_edge = width.min(height);
             let base_u = (short_edge / 920.0).clamp(0.28, 1.0);
-            let coeff = state.ui_scale_coefficient();
+            let coeff = state.f3_ui_scale_multiplier();
             let ios = if cfg!(target_os = "ios") { 1.1 } else { 1.0 };
             let (base_px, text_cal) = if self.transparent_background {
                 (14.0_f32, 1.0)
