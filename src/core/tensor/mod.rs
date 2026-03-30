@@ -85,10 +85,9 @@ impl FrameTensor {
 
     /// If the CPU staging was mutated, upload it to the GPU tensor before Burn raster ops.
     ///
-    /// This is a **CPU → GPU** copy (u8 → f32 tensor). Call sites that **replace the entire
-    /// framebuffer** (e.g. solid [`burn_raster::fill_solid`]) must **not** merge first: they
-    /// should clear `cpu_dirty` and write both sides in one shot (see [`Self::fill_solid_fast`]),
-    /// otherwise you pay an extra full-frame upload right before discarding it.
+    /// This is a **CPU → GPU** copy (u8 → f32 tensor). Full-frame solid fill ([`Self::fill_solid_fast`])
+    /// only updates CPU staging and sets `cpu_dirty` so this runs before the next Burn raster op,
+    /// avoiding a per-frame tensor upload that can stress the wgpu queue (and risk device loss).
     pub(crate) fn ensure_gpu_from_cpu(&mut self) {
         if self.cpu_dirty {
             self.tensor = burn_raster::tensor_from_rgba_u8(
@@ -101,20 +100,18 @@ impl FrameTensor {
         }
     }
 
-    /// Full-frame solid color: fill CPU staging once, one tensor upload, both sides in sync.
+    /// Full-frame solid color: fill CPU staging only (no Burn tensor upload this frame).
     ///
-    /// Skips [`Self::ensure_gpu_from_cpu`]: a full replace makes any prior `cpu_dirty` merge
-    /// pointless (and was doubling work when e.g. the keyboard had dirtied CPU last frame).
+    /// Per-frame `Tensor::from_data` / GPU uploads were doubling FPS vs the old GPU path but could
+    /// trigger `Queue::submit` / device loss under load. Presentation reads `cpu_staging` via
+    /// [`Self::buffer_mut`]; the GPU tensor is stale until [`Self::ensure_gpu_from_cpu`] runs
+    /// before a Burn raster op.
     pub(crate) fn fill_solid_fast(&mut self, color: (u8, u8, u8, u8)) {
         let px = [color.0, color.1, color.2, color.3];
         for chunk in self.cpu_staging.chunks_exact_mut(4) {
             chunk.copy_from_slice(&px);
         }
-        self.cpu_dirty = false;
-        let w = self.width as usize;
-        let h = self.height as usize;
-        self.tensor = burn_raster::tensor_from_rgba_u8(&self.device, w, h, &self.cpu_staging);
-        self.gpu_dirty = false;
+        self.cpu_dirty = true;
     }
 
     fn sync_tensor_to_cpu(&mut self) {
