@@ -239,6 +239,7 @@ impl CoderApp {
         // On iOS, start at top like terminal. On macOS, start at top too.
         code_app.scroll_y = 0.0;
         code_app.scroll_target = 0.0;
+        code_app.clear_wheel_scroll_accel();
         
         // Create the terminal text app (empty initially)
         let mut terminal_app = TextApp::new();
@@ -817,6 +818,7 @@ builtins.print = __custom_print__
             self.code_app.cursor_position = 0;
             self.code_app.scroll_y = 0.0; // Start at top when loading a file
             self.code_app.scroll_target = 0.0;
+            self.code_app.clear_wheel_scroll_accel();
             self.code_view_mode = CodeViewMode::Editor;
             
             // Update the tab label to show the current file name
@@ -1041,6 +1043,7 @@ impl Application for CoderApp {
         // Override code_app scroll to start at top (TextApp's setup sets it to 1/3 down on iOS)
         self.code_app.scroll_y = 0.0;
         self.code_app.scroll_target = 0.0;
+        self.code_app.clear_wheel_scroll_accel();
         
         Ok(())
     }
