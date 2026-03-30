@@ -99,98 +99,36 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32) -> PanelGe
     }
 }
 
-fn percent_from_slider_x(x: f32, geom: &PanelGeom) -> u8 {
-    let t = (x - geom.slider_left) / (geom.slider_right - geom.slider_left).max(1.0);
+/// Map mouse x to percent so the **knob center** follows the cursor (same geometry as drawing).
+fn percent_from_mouse_x(mx: f32, geom: &PanelGeom, knob_w: f32) -> u8 {
+    let knob_w = knob_w.max(1.0);
+    let track = (geom.slider_right - geom.slider_left).max(1.0);
+    let inner = (track - knob_w).max(1.0);
+    let half = knob_w * 0.5;
+    let cx = mx.clamp(geom.slider_left + half, geom.slider_right - half);
+    let t = (cx - geom.slider_left - half) / inner;
     let p = (1.0 + t * 99.0).round() as i32;
     p.clamp(1, 100) as u8
 }
 
-/// Returns true if the event should not be forwarded to the application.
-pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
-    if !state.f3_menu.visible {
-        return false;
-    }
-    let shape = state.frame.tensor.shape();
-    let w = shape[1] as f32;
-    let h = shape[0] as f32;
-    if w < 1.0 || h < 1.0 {
-        return false;
-    }
-    let us = F3Menu::ui_scale(w.min(h));
-    let pad = F3Menu::padding_scaled(us);
-    let approx_content = 260.0 * us;
-    let geom = panel_geom(state, approx_content, us, pad);
-    let mx = state.mouse.x;
-    let my = state.mouse.y;
-    let in_panel = mx >= geom.panel_left
-        && mx <= geom.panel_left + geom.panel_w
-        && my >= geom.panel_top
-        && my <= geom.panel_top + geom.panel_h;
-    if !in_panel {
-        return false;
-    }
-    let on_slider = mx >= geom.slider_left
-        && mx <= geom.slider_right
-        && my >= geom.slider_top
-        && my <= geom.slider_bottom;
-    if on_slider {
-        state.f3_menu.scale_dragging = true;
-        state.ui_scale_percent = percent_from_slider_x(mx, &geom);
-    }
-    state.f3_menu.pointer_captured = true;
-    true
-}
-
-/// Returns true if the app should not receive this move (slider drag).
-pub fn f3_menu_handle_mouse_move(state: &mut EngineState) -> bool {
-    let menu = &mut state.f3_menu;
-    if !menu.visible || !menu.scale_dragging {
-        return false;
-    }
-    let shape = state.frame.tensor.shape();
-    let w = shape[1] as f32;
-    let h = shape[0] as f32;
-    if w < 1.0 || h < 1.0 {
-        return false;
-    }
-    let us = F3Menu::ui_scale(w.min(h));
-    let pad = F3Menu::padding_scaled(us);
-    let approx_content = 260.0 * us;
-    let geom = panel_geom(state, approx_content, us, pad);
-    state.ui_scale_percent = percent_from_slider_x(state.mouse.x, &geom);
-    true
-}
-
-pub fn f3_menu_handle_mouse_up(state: &mut EngineState) -> bool {
-    let menu = &mut state.f3_menu;
-    menu.scale_dragging = false;
-    let cap = menu.pointer_captured;
-    menu.pointer_captured = false;
-    cap
-}
-
-/// Update smoothed FPS and composite the F3 menu into the frame (after app + keyboard).
-pub fn tick_f3_menu(state: &mut EngineState) {
+/// Match rasterized label widths to [`tick_f3_menu`] so hit-testing uses the same panel and slider as drawing.
+fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
     let shape = state.frame.tensor.shape();
     let width = shape[1] as f32;
     let height = shape[0] as f32;
     if width < 1.0 || height < 1.0 {
-        return;
+        return None;
     }
-
-    if !state.f3_menu.visible {
-        return;
-    }
-
     let ui_scale = F3Menu::ui_scale(width.min(height));
     let pad = F3Menu::padding_scaled(ui_scale);
     let font_px = BASE_FONT * ui_scale;
-
     let fps_display = (1.0 / state.delta_time_seconds.max(1e-5)).round().max(0.0) as u32;
+
     {
         let menu = &mut state.f3_menu;
         menu.fps_rasterizer.set_font_size(font_px);
-        menu.fps_rasterizer
+        menu
+            .fps_rasterizer
             .set_text(format!("{fps_display} FPS"));
         menu.fps_rasterizer.tick(width, height);
 
@@ -216,8 +154,74 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         .map(|c| c.metrics.advance_width)
         .sum();
     let content_w = fps_w.max(label_w);
-
     let geom = panel_geom(state, content_w, ui_scale, pad);
+    let knob_w = (12.0 * ui_scale).max(8.0).round().max(1.0);
+    Some((geom, knob_w))
+}
+
+/// Returns true if the event should not be forwarded to the application.
+pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
+    if !state.f3_menu.visible {
+        return false;
+    }
+    let Some((geom, knob_w)) = measure_f3_panel(state) else {
+        return false;
+    };
+    let mx = state.mouse.x;
+    let my = state.mouse.y;
+    let in_panel = mx >= geom.panel_left
+        && mx <= geom.panel_left + geom.panel_w
+        && my >= geom.panel_top
+        && my <= geom.panel_top + geom.panel_h;
+    if !in_panel {
+        return false;
+    }
+    let on_slider = mx >= geom.slider_left
+        && mx <= geom.slider_right
+        && my >= geom.slider_top
+        && my <= geom.slider_bottom;
+    if on_slider {
+        state.f3_menu.scale_dragging = true;
+        state.ui_scale_percent = percent_from_mouse_x(mx, &geom, knob_w);
+    }
+    state.f3_menu.pointer_captured = true;
+    true
+}
+
+/// Returns true if the app should not receive this move (slider drag).
+pub fn f3_menu_handle_mouse_move(state: &mut EngineState) -> bool {
+    let menu = &mut state.f3_menu;
+    if !menu.visible || !menu.scale_dragging {
+        return false;
+    }
+    let Some((geom, knob_w)) = measure_f3_panel(state) else {
+        return false;
+    };
+    state.ui_scale_percent = percent_from_mouse_x(state.mouse.x, &geom, knob_w);
+    true
+}
+
+pub fn f3_menu_handle_mouse_up(state: &mut EngineState) -> bool {
+    let menu = &mut state.f3_menu;
+    menu.scale_dragging = false;
+    let cap = menu.pointer_captured;
+    menu.pointer_captured = false;
+    cap
+}
+
+/// Update smoothed FPS and composite the F3 menu into the frame (after app + keyboard).
+pub fn tick_f3_menu(state: &mut EngineState) {
+    if !state.f3_menu.visible {
+        return;
+    }
+
+    let Some((geom, knob_w)) = measure_f3_panel(state) else {
+        return;
+    };
+
+    let shape = state.frame.tensor.shape();
+    let width = shape[1] as f32;
+    let height = shape[0] as f32;
 
     let buffer = state.frame.buffer_mut();
     let fw = width as usize;
@@ -251,11 +255,12 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         (55, 55, 55, 0xff),
     );
 
-    // Knob position from percent
-    let knob_w = (12.0 * ui_scale).max(8.0).round() as i32;
+    // Knob position from percent (same inner range as [`percent_from_mouse_x`])
+    let knob_w_i = knob_w as i32;
+    let inner = (geom.slider_right - geom.slider_left - knob_w).max(1.0);
     let t = (state.ui_scale_percent.saturating_sub(1) as f32) / 99.0;
-    let knob_left = geom.slider_left + t * (geom.slider_right - geom.slider_left - knob_w as f32);
-    let knob_x1 = (knob_left + knob_w as f32).ceil() as i32;
+    let knob_left = geom.slider_left + t * inner;
+    let knob_x1 = (knob_left + knob_w_i as f32).ceil() as i32;
     let knob_y0 = (geom.slider_top - 1.0).floor() as i32;
     let knob_y1 = (geom.slider_bottom + 1.0).ceil() as i32;
     fill_rect_buffer(
@@ -269,6 +274,8 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         (220, 220, 220, 0xff),
     );
 
+    let ui_scale = F3Menu::ui_scale(width.min(height));
+    let pad = F3Menu::padding_scaled(ui_scale);
     let fps_origin_x = geom.panel_left + pad;
     let fps_origin_y = geom.panel_top + pad;
 
