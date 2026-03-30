@@ -95,10 +95,10 @@ name = "xos"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "crates/xos-java"]
+members = [".", "src/core/crates/xos-java"]
 resolver = "2"
 
 # gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types
-# from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see patches/gpu-allocator/Cargo.toml).
+# from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see src/core/patches/gpu-allocator/Cargo.toml).
 [patch.crates-io]
-gpu-allocator = { path = "patches/gpu-allocator" }
+gpu-allocator = { path = "src/core/patches/gpu-allocator" }
