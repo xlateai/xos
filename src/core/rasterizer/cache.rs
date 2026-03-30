@@ -1,20 +1,15 @@
-//! GPU resources for raster post-passes (WGSL circle compute).
+//! Opaque GPU resource cache for post-upload raster passes. Extend with new backends via
+//! `Box<dyn Any>` payloads (see `render_pending_gpu_passes` in `mod.rs`).
 
-#[cfg(not(target_arch = "wasm32"))]
-use super::shapes::circles::CirclesGpu;
-
-/// Per-window GPU state used by [`super::render_pending_gpu_passes`].
+/// Reserved for future GPU post-pass state (currently unused; Burn raster runs on the frame tensor).
 pub struct RasterCache {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) circles_gpu: Option<CirclesGpu>,
+    #[allow(dead_code)]
+    pub(crate) inner: Option<Box<dyn std::any::Any + Send>>,
 }
 
 impl RasterCache {
     pub fn new() -> Self {
-        Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            circles_gpu: None,
-        }
+        Self { inner: None }
     }
 }
 

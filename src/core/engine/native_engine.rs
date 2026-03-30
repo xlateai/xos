@@ -104,7 +104,6 @@ impl AppState {
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
         self.pixels.render_with(|encoder, render_target, context| {
             crate::rasterizer::render_pending_gpu_passes(
-                &mut self.engine_state.frame,
                 &mut self.raster_cache,
                 encoder,
                 &context.device,
@@ -148,9 +147,6 @@ impl ApplicationHandler for AppState {
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
 
-                // When lengths match, `FrameTensor` staging aliases `pixels`' internal `Vec<u8>`: fill /
-                // rasterizers write the same memory that `Pixels::render` uploads — no engine↔pixels
-                // `copy_from_slice` (the `else` branch below).
                 let expected_len = (self.size.width * self.size.height * 4) as usize;
                 let mut mirror_ok = false;
                 {
@@ -438,13 +434,8 @@ impl ApplicationHandler for AppStateWrapper {
 
             let size = window.inner_size();
             let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-            // `enable_vsync(false)` alone uses PresentMode::AutoNoVsync, which can still fall back to
-            // Fifo on some adapters/surfaces — that caps submit/present near the display refresh (~60 Hz).
-            // Immediate submits frames as fast as the GPU allows (may tear). Mailbox is a safer fallback.
             let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
-                .texture_format(pixels::wgpu::TextureFormat::Rgba8Unorm)
                 .enable_vsync(false)
-                .present_mode(pixels::wgpu::PresentMode::Immediate)
                 .build()
             {
                 Ok(p) => unsafe { std::mem::transmute(p) }, // SAFETY: window outlives pixels

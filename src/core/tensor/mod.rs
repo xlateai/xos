@@ -3,13 +3,6 @@
 //! Re-exports Burn's [`Tensor`] and provides [`FrameTensor`]: RGBA frame storage as a
 //! [`Tensor`] on [`XosDevice`] (wgpu), with a CPU staging buffer for `pixels` upload and
 //! legacy `&mut [u8]` raster paths.
-//!
-//! Not every draw path uses this tensor: on **native**, `rasterizer::circles` queues a **WGSL
-//! compute** pass after the CPU→GPU upload (see `rasterizer::render_pending_gpu_passes`); it does
-//! not rasterize circles through Burn. **Python** `xos.rasterizer.circles` uses **CPU** helpers
-//! (`draw_circles_cpu_instances`). WASM still uses Burn for circles (`rasterizer::shapes::circles`).
-
-mod fill;
 
 pub mod burn_raster;
 pub mod conv;
@@ -152,7 +145,12 @@ impl FrameTensor {
     /// (or the `pixels` mirror on native) via [`Self::buffer_mut`]; the GPU tensor is stale until
     /// [`Self::ensure_gpu_from_cpu`] runs before a Burn raster op.
     pub(crate) fn fill_solid_fast(&mut self, color: (u8, u8, u8, u8)) {
-        fill::fill_solid_fast(self, color);
+        let px = [color.0, color.1, color.2, color.3];
+        let buf = self.staging_slice_mut();
+        for chunk in buf.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&px);
+        }
+        self.cpu_dirty = true;
     }
 
     fn sync_tensor_to_cpu(&mut self) {
