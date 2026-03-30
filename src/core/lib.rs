@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, thread};
-use std::time::Duration;
 use tiny_http::{Server, Response};
 use webbrowser;
 
@@ -222,7 +221,6 @@ fn build_wasm(app_name: &str) {
 
 fn launch_browser() {
     thread::spawn(|| {
-        thread::sleep(Duration::from_millis(500));
         let _ = webbrowser::open("http://localhost:8080");
     });
 }

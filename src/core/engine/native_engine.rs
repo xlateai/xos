@@ -488,14 +488,6 @@ fn run_native_event_loop(
     ctrlc::set_handler(move || {
         println!("\nReceived Ctrl+C, shutting down gracefully...");
         should_exit.store(true, Ordering::Relaxed);
-        // Force exit after a short timeout in case event loop doesn't respond
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if SHOULD_EXIT.load(Ordering::Relaxed) {
-                println!("Force exiting...");
-                std::process::exit(0);
-            }
-        });
     })
     .expect("Error setting Ctrl+C handler");
 
@@ -561,8 +553,6 @@ pub fn start_headless_native(
         tick_frame_delta(&mut engine_state, &mut last_tick_instant);
         app.tick(&mut engine_state);
         tick_fps_overlay(&mut engine_state);
-        // Avoid busy-spinning at max CPU in headless mode.
-        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     println!("Headless engine stopped.");
     SHOULD_EXIT.store(false, Ordering::Relaxed);

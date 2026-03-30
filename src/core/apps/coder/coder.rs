@@ -377,10 +377,10 @@ impl CoderApp {
         let is_viewport_app = code.contains("xos.Application") || code.contains("class") && code.contains("Application");
         
         if is_viewport_app {
-            // Execute in main thread for viewport apps (they use tick(), not sleep)
+            // Execute in main thread for viewport apps (they use tick())
             self.execute_viewport_app(code);
         } else {
-            // Execute in background thread for scripts with sleep/print
+            // Execute in background thread for non-viewport scripts (e.g. print loops)
             self.execute_background_script(code);
         }
     }
