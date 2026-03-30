@@ -1,6 +1,7 @@
 //! Axis-aligned rectangle fill helpers.
 
 use crate::engine::FrameState;
+use crate::tensor::burn_raster;
 
 /// Fill a clipped axis-aligned rectangle `[x0, x1) × [y0, y1)` in pixel coordinates.
 /// Faster than per-pixel loops; uses row-wise `copy_from_slice`.
@@ -48,5 +49,5 @@ pub fn fill_rect(
     let shape = frame.shape();
     let h = shape[0];
     let w = shape[1];
-    fill_rect_buffer(frame.buffer_mut(), w, h, x0, y0, x1, y1, color);
+    burn_raster::fill_rect(&mut frame.tensor, w, h, x0, y0, x1, y1, color);
 }

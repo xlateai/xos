@@ -9,7 +9,7 @@ pub mod triangles;
 
 pub use basic_shapes::draw_circle;
 pub use circles::{
-    circles, draw_circle_cpu, draw_circles_cpu, draw_circles_cpu_instances, GpuRasterBatch,
+    circles, draw_circle_cpu, draw_circles_cpu, draw_circles_cpu_instances,
 };
 pub use lines::{draw_line_bresenham, draw_line_direct};
 pub use niche_shapes::draw_play_button;

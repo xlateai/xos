@@ -1,6 +1,7 @@
 //! Filled triangle rasterization.
 
 use crate::engine::FrameState;
+use crate::tensor::burn_raster;
 
 /// Half-space edge test (same sign convention as `apps::triangles::geometric_utils::edge_function`).
 #[inline]
@@ -135,8 +136,5 @@ pub fn triangles(
     points: &[(f32, f32)],
     colors: &[[u8; 4]],
 ) -> Result<(), String> {
-    let shape = frame.shape();
-    let w = shape[1];
-    let h = shape[0];
-    triangles_buffer(frame.buffer_mut(), w, h, points, colors)
+    burn_raster::triangles(&mut frame.tensor, points, colors)
 }
