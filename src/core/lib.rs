@@ -31,7 +31,7 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     if path.join("crates").join("xos-java").join("Cargo.toml").exists() {
         return true;
     }
-    if path.join("build-ios.sh").exists() {
+    if path.join("src").join("build-ios.sh").exists() {
         return true;
     }
     path.join("src").join("core").join("apps").join("ball.rs").exists()
@@ -352,11 +352,11 @@ pub fn launch_ios_app(app_name: &str) {
             }
         };
         
-        let launch_script = project_root.join("ios").join("launch-device.sh");
+        let launch_script = project_root.join("src").join("ios").join("launch-device.sh");
         
         if !launch_script.exists() {
             eprintln!("❌ launch-device.sh not found at: {}", launch_script.display());
-            eprintln!("   Expected location: ios/launch-device.sh");
+            eprintln!("   Expected location: src/ios/launch-device.sh");
             std::process::exit(1);
         }
         
@@ -364,7 +364,7 @@ pub fn launch_ios_app(app_name: &str) {
         
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
-        cmd.current_dir(project_root.join("ios"));
+        cmd.current_dir(project_root.join("src").join("ios"));
         // Pass the app name via environment variable - this is used by the build system
         cmd.env("XOS_APP_NAME", app_name);
         cmd.stdout(Stdio::inherit());

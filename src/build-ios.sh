@@ -3,9 +3,10 @@ set -e
 
 echo "🦀 Building Rust library for iOS..."
 
-# Get the directory of this script
+# Get absolute paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 # Install iOS targets if not already installed
 # This adds the aarch64-apple-ios target to rustup, which is required for
