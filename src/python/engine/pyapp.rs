@@ -151,6 +151,36 @@ class _FrameWrapper:
     def __setitem__(self, key, value):
         self._data[key] = value
 
+    def clear(self, *color):
+        """
+        Clear the frame with an RGB or RGBA color.
+        Accepts:
+          - frame.clear()                      -> black
+          - frame.clear((r, g, b))            -> alpha defaults to 255
+          - frame.clear((r, g, b, a))
+          - frame.clear(r, g, b)
+          - frame.clear(r, g, b, a)
+        """
+        import xos
+
+        if len(color) == 0:
+            rgba = (0, 0, 0, 255)
+        elif len(color) == 1 and isinstance(color[0], tuple):
+            if len(color[0]) == 3:
+                rgba = (color[0][0], color[0][1], color[0][2], 255)
+            elif len(color[0]) == 4:
+                rgba = color[0]
+            else:
+                raise TypeError("frame.clear color tuple must be RGB or RGBA")
+        elif len(color) == 3:
+            rgba = (color[0], color[1], color[2], 255)
+        elif len(color) == 4:
+            rgba = (color[0], color[1], color[2], color[3])
+        else:
+            raise TypeError("frame.clear accepts (), RGB, or RGBA")
+
+        xos.rasterizer.fill(self, rgba)
+
 class Application:
     """Base class for xos applications. Extend this class and implement setup() and tick()."""
     

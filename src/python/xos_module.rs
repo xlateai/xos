@@ -39,6 +39,85 @@ fn xos_sleep(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame.clear(...) - clear current frame buffer context
+/// Supports:
+/// - clear()
+/// - clear((r, g, b)) or clear((r, g, b, a))
+/// - clear(r, g, b) or clear(r, g, b, a)
+fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+
+    let parse_rgba_from_tuple = |tuple_obj: &rustpython_vm::builtins::PyTuple| -> PyResult<(i32, i32, i32, i32)> {
+        let items = tuple_obj.as_slice();
+        if items.len() == 3 {
+            let r: i32 = items[0].clone().try_into_value(vm)?;
+            let g: i32 = items[1].clone().try_into_value(vm)?;
+            let b: i32 = items[2].clone().try_into_value(vm)?;
+            Ok((r, g, b, 255))
+        } else if items.len() == 4 {
+            let r: i32 = items[0].clone().try_into_value(vm)?;
+            let g: i32 = items[1].clone().try_into_value(vm)?;
+            let b: i32 = items[2].clone().try_into_value(vm)?;
+            let a: i32 = items[3].clone().try_into_value(vm)?;
+            Ok((r, g, b, a))
+        } else {
+            Err(vm.new_type_error("color tuple must be (r, g, b) or (r, g, b, a)".to_string()))
+        }
+    };
+
+    let (r, g, b, a): (i32, i32, i32, i32) = match args_vec.len() {
+        0 => (0, 0, 0, 255),
+        1 => {
+            let color_tuple = args_vec[0]
+                .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("clear(color): color must be a tuple".to_string()))?;
+            parse_rgba_from_tuple(color_tuple)?
+        }
+        3 => {
+            let r: i32 = args_vec[0].clone().try_into_value(vm)?;
+            let g: i32 = args_vec[1].clone().try_into_value(vm)?;
+            let b: i32 = args_vec[2].clone().try_into_value(vm)?;
+            (r, g, b, 255)
+        }
+        4 => {
+            let r: i32 = args_vec[0].clone().try_into_value(vm)?;
+            let g: i32 = args_vec[1].clone().try_into_value(vm)?;
+            let b: i32 = args_vec[2].clone().try_into_value(vm)?;
+            let a: i32 = args_vec[3].clone().try_into_value(vm)?;
+            (r, g, b, a)
+        }
+        _ => {
+            return Err(vm.new_type_error(
+                "clear() accepts (), (r,g,b), (r,g,b,a), r,g,b, or r,g,b,a".to_string(),
+            ));
+        }
+    };
+
+    let buffer_ptr_opt = crate::python::rasterizer::CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
+    let width = *crate::python::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *crate::python::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap();
+
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. frame.clear must be called during tick().".to_string())
+    })?;
+
+    let buffer_len = width * height * 4;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
+    crate::python::rasterizer::fill_buffer_solid_rgba(
+        buffer,
+        r.clamp(0, 255) as u8,
+        g.clamp(0, 255) as u8,
+        b.clamp(0, 255) as u8,
+        a.clamp(0, 255) as u8,
+    );
+
+    Ok(vm.ctx.none())
+}
+
 /// Create the xos module with Application base class
 pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos", vm.ctx.new_dict(), None);
@@ -62,6 +141,51 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the rasterizer submodule
     let rasterizer_module = crate::python::rasterizer::make_rasterizer_module(vm);
     module.set_attr("rasterizer", rasterizer_module, vm).unwrap();
+
+    // Add the frame submodule
+    let frame_module = vm.new_module("xos.frame", vm.ctx.new_dict(), None);
+    frame_module
+        .set_attr("clear", vm.new_function("clear", frame_clear), vm)
+        .unwrap();
+    module.set_attr("frame", frame_module, vm).unwrap();
+
+    // Add color palette submodule (Minecraft 16 dye colors, RGB tuples)
+    let color_module = vm.new_module("xos.color", vm.ctx.new_dict(), None);
+    color_module.set_attr("white", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(255).into(), vm.ctx.new_int(254).into()]), vm).unwrap();
+    color_module.set_attr("orange", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(128).into(), vm.ctx.new_int(29).into()]), vm).unwrap();
+    color_module.set_attr("magenta", vm.ctx.new_tuple(vec![vm.ctx.new_int(199).into(), vm.ctx.new_int(78).into(), vm.ctx.new_int(189).into()]), vm).unwrap();
+    color_module.set_attr("light_blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(58).into(), vm.ctx.new_int(179).into(), vm.ctx.new_int(218).into()]), vm).unwrap();
+    color_module.set_attr("yellow", vm.ctx.new_tuple(vec![vm.ctx.new_int(254).into(), vm.ctx.new_int(216).into(), vm.ctx.new_int(61).into()]), vm).unwrap();
+    color_module.set_attr("lime", vm.ctx.new_tuple(vec![vm.ctx.new_int(128).into(), vm.ctx.new_int(199).into(), vm.ctx.new_int(31).into()]), vm).unwrap();
+    color_module.set_attr("pink", vm.ctx.new_tuple(vec![vm.ctx.new_int(243).into(), vm.ctx.new_int(139).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
+    color_module.set_attr("gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(71).into(), vm.ctx.new_int(79).into(), vm.ctx.new_int(82).into()]), vm).unwrap();
+    color_module.set_attr("light_gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(157).into(), vm.ctx.new_int(157).into(), vm.ctx.new_int(151).into()]), vm).unwrap();
+    color_module.set_attr("cyan", vm.ctx.new_tuple(vec![vm.ctx.new_int(22).into(), vm.ctx.new_int(156).into(), vm.ctx.new_int(156).into()]), vm).unwrap();
+    color_module.set_attr("purple", vm.ctx.new_tuple(vec![vm.ctx.new_int(137).into(), vm.ctx.new_int(50).into(), vm.ctx.new_int(184).into()]), vm).unwrap();
+    color_module.set_attr("blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(60).into(), vm.ctx.new_int(68).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
+    color_module.set_attr("brown", vm.ctx.new_tuple(vec![vm.ctx.new_int(131).into(), vm.ctx.new_int(84).into(), vm.ctx.new_int(50).into()]), vm).unwrap();
+    color_module.set_attr("green", vm.ctx.new_tuple(vec![vm.ctx.new_int(94).into(), vm.ctx.new_int(124).into(), vm.ctx.new_int(22).into()]), vm).unwrap();
+    color_module.set_attr("red", vm.ctx.new_tuple(vec![vm.ctx.new_int(176).into(), vm.ctx.new_int(46).into(), vm.ctx.new_int(38).into()]), vm).unwrap();
+    color_module.set_attr("black", vm.ctx.new_tuple(vec![vm.ctx.new_int(29).into(), vm.ctx.new_int(29).into(), vm.ctx.new_int(33).into()]), vm).unwrap();
+
+    // Uppercase aliases for ergonomics (e.g. xos.color.BLACK)
+    if let Ok(v) = color_module.get_attr("white", vm) { color_module.set_attr("WHITE", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("orange", vm) { color_module.set_attr("ORANGE", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("magenta", vm) { color_module.set_attr("MAGENTA", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("light_blue", vm) { color_module.set_attr("LIGHT_BLUE", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("yellow", vm) { color_module.set_attr("YELLOW", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("lime", vm) { color_module.set_attr("LIME", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("pink", vm) { color_module.set_attr("PINK", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("gray", vm) { color_module.set_attr("GRAY", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("light_gray", vm) { color_module.set_attr("LIGHT_GRAY", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("cyan", vm) { color_module.set_attr("CYAN", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("purple", vm) { color_module.set_attr("PURPLE", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("blue", vm) { color_module.set_attr("BLUE", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("brown", vm) { color_module.set_attr("BROWN", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("green", vm) { color_module.set_attr("GREEN", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("red", vm) { color_module.set_attr("RED", v, vm).unwrap(); }
+    if let Ok(v) = color_module.get_attr("black", vm) { color_module.set_attr("BLACK", v, vm).unwrap(); }
+    module.set_attr("color", color_module, vm).unwrap();
     
     // Add the sensors submodule
     let sensors_module = crate::python::sensors::make_sensors_module(vm);

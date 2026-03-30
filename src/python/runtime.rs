@@ -338,12 +338,30 @@ pub fn run_python_app(file_path: &PathBuf) {
     }
     
     if let Some(app_instance) = app_instance {
-        println!("🎮 Launching xos engine with Python app...");
+        let headless = interpreter.enter(|vm| {
+            vm.get_attribute_opt(app_instance.clone(), "headless")
+                .ok()
+                .flatten()
+                .and_then(|obj| obj.try_into_value::<bool>(vm).ok())
+                .unwrap_or(false)
+        });
+
+        if headless {
+            println!("🎮 Launching xos engine with Python app (headless mode)...");
+        } else {
+            println!("🎮 Launching xos engine with Python app...");
+        }
+
         let pyapp = PyApp::new(interpreter, app_instance);
         
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Err(e) = crate::engine::start_native(Box::new(pyapp)) {
+            let result = if headless {
+                crate::engine::start_headless_native(Box::new(pyapp), 800, 600)
+            } else {
+                crate::engine::start_native(Box::new(pyapp))
+            };
+            if let Err(e) = result {
                 eprintln!("❌ Engine error: {}", e);
                 std::process::exit(1);
             }

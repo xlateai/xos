@@ -517,6 +517,57 @@ pub fn start_native(app: Box<dyn Application>) -> Result<(), Box<dyn std::error:
     run_native_event_loop(app, NativeLaunchMode::Windowed)
 }
 
+/// Headless host: runs setup/tick continuously without creating a window or renderer.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_headless_native(
+    mut app: Box<dyn Application>,
+    width: u32,
+    height: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Reset and install Ctrl+C handler for headless loop shutdown.
+    SHOULD_EXIT.store(false, Ordering::Relaxed);
+    let should_exit = SHOULD_EXIT.clone();
+    ctrlc::set_handler(move || {
+        should_exit.store(true, Ordering::Relaxed);
+    })
+    .map_err(|e| format!("Error setting Ctrl+C handler: {}", e))?;
+
+    let safe_region = SafeRegionBoundingRectangle::full_screen();
+    let mut engine_state = EngineState {
+        frame: FrameState::new(width.max(1), height.max(1), safe_region),
+        mouse: MouseState {
+            x: 0.0,
+            y: 0.0,
+            dx: 0.0,
+            dy: 0.0,
+            is_left_clicking: false,
+            is_right_clicking: false,
+            style: CursorStyleSetter::new(),
+        },
+        keyboard: KeyboardState {
+            onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+        },
+        fps_overlay: super::engine::FpsOverlay::new(),
+        delta_time_seconds: 1.0 / 60.0,
+    };
+
+    if let Err(e) = app.setup(&mut engine_state) {
+        return Err(format!("Failed to setup app: {}", e).into());
+    }
+
+    let mut last_tick_instant: Option<std::time::Instant> = None;
+    while !SHOULD_EXIT.load(Ordering::Relaxed) {
+        tick_frame_delta(&mut engine_state, &mut last_tick_instant);
+        app.tick(&mut engine_state);
+        tick_fps_overlay(&mut engine_state);
+        // Avoid busy-spinning at max CPU in headless mode.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    println!("Headless engine stopped.");
+    SHOULD_EXIT.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
 /// Floating overlay host: same [`Application`] / [`EngineState`] as [`start_native`], but the
 /// surface is a transparent top-left HUD (~30% of the primary monitor) and stays above normal windows.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
