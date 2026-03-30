@@ -1,5 +1,6 @@
-// Per-pixel parallel SDF circles: each thread loads the CPU-uploaded frame, then last-hit wins
-// over all circles (same painter order as a forward loop).
+// Per-pixel parallel circles: each thread loads the CPU-uploaded frame, then last-hit wins.
+// Axis-aligned bounds checks skip distant circles cheaply (full-screen × hundreds of circles
+// otherwise does dist² for every circle at every pixel — worse than tight CPU bbox loops).
 
 struct Params {
     width: u32,
@@ -12,7 +13,7 @@ struct Circle {
     cx: f32,
     cy: f32,
     rad: f32,
-    _pad: f32,
+    rad_sq: f32,
     cr: f32,
     cg: f32,
     cb: f32,
@@ -42,8 +43,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let c = circles[i];
         let dx = px - c.cx;
         let dy = py - c.cy;
-        let r2 = c.rad * c.rad;
-        if (dx * dx + dy * dy <= r2) {
+        // Cheap reject: outside axis-aligned square of side 2*rad (skip heavy muls for far circles).
+        if (abs(dx) > c.rad || abs(dy) > c.rad) {
+            continue;
+        }
+        if (dx * dx + dy * dy <= c.rad_sq) {
             color = vec4<f32>(c.cr, c.cg, c.cb, c.ca);
         }
     }

@@ -3,9 +3,13 @@
 //! Re-exports Burn's [`Tensor`] and provides [`FrameTensor`]: RGBA frame storage as a
 //! [`Tensor`] on [`XosDevice`] (wgpu), with a CPU staging buffer for `pixels` upload and
 //! legacy `&mut [u8]` raster paths.
+//!
+//! Not every draw path uses this tensor: on **native**, `rasterizer::circles` queues a **WGSL
+//! compute** pass after the CPU→GPU upload (see `rasterizer::render_pending_gpu_passes`); it does
+//! not rasterize circles through Burn. **Python** `xos.rasterizer.circles` uses **CPU** helpers
+//! (`draw_circles_cpu_instances`). WASM still uses Burn for circles (`rasterizer::shapes::circles`).
 
 mod fill;
-mod circles;
 
 pub mod burn_raster;
 pub mod conv;

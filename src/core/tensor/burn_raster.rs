@@ -79,14 +79,6 @@ pub fn fill_rect(
     frame.set_tensor(t);
 }
 
-/// Filled circles (opaque overwrites destination where inside the disc).
-pub fn circles(
-    frame: &mut FrameTensor,
-    instances: &[(f32, f32, f32, [u8; 4])],
-) {
-    super::circles::circles(frame, instances);
-}
-
 /// One filled triangle; vertices in pixel space (same winding / degenerate checks as CPU path).
 pub fn fill_triangle(
     frame: &mut FrameTensor,

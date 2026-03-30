@@ -1,7 +1,7 @@
 //! GPU resources for raster post-passes (WGSL circle compute).
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::circles_compute::CirclesGpu;
+use super::shapes::circles::CirclesGpu;
 
 /// Per-window GPU state used by [`super::render_pending_gpu_passes`].
 pub struct RasterCache {

@@ -6,11 +6,9 @@ use crate::engine::FrameState;
 use crate::tensor::burn_raster;
 
 mod cache;
-#[cfg(not(target_arch = "wasm32"))]
-mod circles_compute;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use circles_compute::GpuCircle;
+pub use shapes::circles::GpuCircle;
 pub mod shapes;
 pub mod text;
 pub use cache::RasterCache;
@@ -52,7 +50,7 @@ pub fn render_pending_gpu_passes(
     }
 
     if cache.circles_gpu.is_none() {
-        cache.circles_gpu = Some(circles_compute::CirclesGpu::new(device, extent));
+        cache.circles_gpu = Some(shapes::circles::CirclesGpu::new(device, extent));
     }
     let gpu = cache.circles_gpu.as_mut().expect("circles_gpu");
     let input_view = inner_texture.create_view(&pixels::wgpu::TextureViewDescriptor::default());
