@@ -37,6 +37,9 @@ const DRAG_MOMENTUM_STOP: f32 = 38.0;
 const DRAG_MOMENTUM_SETTLE_FOR_TAP: f32 = 130.0;
 
 /// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels (~+45% vs legacy).
+/// Standalone text only: 30% smaller than the prior default while the F3 slider stays at 50% = 1.0× engine coeff.
+const TEXT_STANDALONE_SIZE_FACTOR: f32 = 0.7;
+
 const MOUSE_WHEEL_LINE_SCALE: f32 = 80.0;
 /// Per wheel event: adds to [`TextApp::wheel_accel_target`] (0..=1). Sustained scrolling stacks toward 3×.
 const WHEEL_CHARGE_PER_NOTCH: f32 = 0.085;
@@ -325,7 +328,12 @@ impl Application for TextApp {
             } else {
                 (24.0_f32 * ios, 50.0 / 20.0)
             };
-            let target_font = base_px * base_u * coeff * text_cal;
+            let standalone_mul = if self.transparent_background {
+                1.0
+            } else {
+                TEXT_STANDALONE_SIZE_FACTOR
+            };
+            let target_font = base_px * base_u * coeff * text_cal * standalone_mul;
             if (target_font - self.last_engine_scaled_font).abs() > 0.01 {
                 self.set_font_size(target_font);
                 self.last_engine_scaled_font = target_font;
