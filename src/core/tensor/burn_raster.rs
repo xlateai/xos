@@ -83,50 +83,6 @@ pub fn fill_rect(
     frame.set_tensor(t);
 }
 
-/// Filled circles (opaque overwrites destination where inside the disc).
-pub fn circles(
-    frame: &mut FrameTensor,
-    instances: &[(f32, f32, f32, [u8; 4])],
-) {
-    if instances.is_empty() {
-        return;
-    }
-    let shape = frame.tensor_dims();
-    let h = shape[0];
-    let w = shape[1];
-    if h == 0 || w == 0 {
-        return;
-    }
-    let device = frame.device().clone();
-    frame.ensure_gpu_from_cpu();
-
-    let y = Tensor::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
-    let x = Tensor::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
-    let [yy, xx] = meshgrid(&[y, x], GridOptions::default());
-
-    let mut t = frame.tensor().clone();
-    for &(cx, cy, r, c_u8) in instances {
-        if r <= 0.0 {
-            continue;
-        }
-        let r_sq = r * r;
-        let dx = xx.clone() - cx;
-        let dy = yy.clone() - cy;
-        let dist_sq = dx.clone() * dx + dy.clone() * dy;
-        let mask = dist_sq.lower_equal_elem(r_sq);
-        let c = [
-            c_u8[0] as f32,
-            c_u8[1] as f32,
-            c_u8[2] as f32,
-            c_u8[3] as f32,
-        ];
-        let color_plane = rgba_tensor(&device, h, w, c);
-        let mask4 = mask.unsqueeze_dim::<3>(2).expand([h, w, 4]);
-        t = t.mask_where(mask4, color_plane);
-    }
-    frame.set_tensor(t);
-}
-
 /// One filled triangle; vertices in pixel space (same winding / degenerate checks as CPU path).
 pub fn fill_triangle(
     frame: &mut FrameTensor,

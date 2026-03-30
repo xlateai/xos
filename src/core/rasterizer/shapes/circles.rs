@@ -1,7 +1,6 @@
-//! Filled circles via Burn tensors (wgpu); CPU helpers for legacy `&mut [u8]` callers.
+//! Filled circles: CPU raster into the frame buffer (same path as Python `xos.rasterizer.circles`).
 
 use crate::engine::FrameState;
-use crate::tensor::burn_raster;
 
 /// Draw filled circles into `frame`. Pixel coordinates; `centers`, `radii`, and `colors` must align:
 /// - `radii.len() == n` or `radii.len() == 1` (broadcast),
@@ -49,7 +48,11 @@ pub fn circles(
         instances.push((centers[i].0, centers[i].1, r, c));
     }
 
-    burn_raster::circles(&mut frame.tensor, &instances);
+    let shape = frame.shape();
+    let height = shape[0];
+    let width = shape[1];
+    let buffer = frame.buffer_mut();
+    draw_circles_cpu_instances(buffer, width, height, &instances);
     Ok(())
 }
 

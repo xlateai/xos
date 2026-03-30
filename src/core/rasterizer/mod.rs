@@ -1,6 +1,7 @@
 //! Framebuffer raster helpers (`fill`, `circles`, …): **pure functions** `(&mut FrameState, …) -> …`
-//! with no hidden engine state. Shape fills use Burn on [`crate::tensor::XosBackend`] (wgpu); CPU
-//! staging is synced for keyboard / FPS overlay and `pixels` upload.
+//! with no hidden engine state. Filled circles are CPU-rasterized into staging; solid fill and
+//! other shapes may use Burn on [`crate::tensor::XosBackend`] (wgpu); CPU staging is synced for
+//! keyboard / FPS overlay and `pixels` upload.
 
 use crate::engine::FrameState;
 use crate::tensor::burn_raster;
