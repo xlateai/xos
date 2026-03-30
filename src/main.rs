@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
-use xos::python::{run_python_app, run_python_interactive};
+use xos::python_api::{run_python_app, run_python_interactive};
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -25,7 +25,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run an application (`xos app <name>` matches `src/apps/<name>.rs`, e.g. `overlay`, `ball`)
+    /// Run an application (`xos app <name>` matches `src/core/apps/<name>.rs`, e.g. `overlay`, `ball`)
     #[command(subcommand_required = true)]
     App {
         #[command(subcommand)]

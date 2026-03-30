@@ -87,6 +87,7 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [lib]
+path = "src/core/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
