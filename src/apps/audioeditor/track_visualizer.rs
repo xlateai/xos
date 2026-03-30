@@ -34,7 +34,7 @@ impl TrackVisualizer {
     /// Render the waveform background and waveform at the bottom of the screen
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render(&self, state: &mut EngineState, playback_position: f32, zoom_level: f32, zoom_center: f32) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();

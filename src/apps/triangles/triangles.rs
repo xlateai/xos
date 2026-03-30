@@ -127,7 +127,7 @@ impl Application for TrianglesApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f64;
         let height = shape[0] as f64;
 

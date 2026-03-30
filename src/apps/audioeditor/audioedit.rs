@@ -265,7 +265,7 @@ impl AudioEditApp {
 
     /// Render the play/pause button at the center of the screen
     fn render_play_pause_button(&self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -370,7 +370,7 @@ impl AudioEditApp {
     /// Render the zoom slider above the waveform area
     #[cfg(not(target_arch = "wasm32"))]
     fn render_zoom_slider(&self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -453,7 +453,7 @@ impl AudioEditApp {
     /// Check if mouse is over the zoom slider and handle dragging
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_zoom_slider_interaction(&mut self, state: &mut EngineState) -> bool {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f32;
         let height = shape[0] as u32;
         let mouse_x = state.mouse.x;
@@ -573,7 +573,7 @@ impl AudioEditApp {
     /// Check if mouse is over the position line and handle dragging
     #[cfg(not(target_arch = "wasm32"))]
     fn handle_position_line_interaction(&mut self, state: &mut EngineState) -> bool {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let mouse_x = state.mouse.x;
@@ -754,7 +754,7 @@ impl Application for AudioEditApp {
             if self.is_dragging_zoom_slider {
                 if state.mouse.is_left_clicking {
                     // Continue dragging
-                    let shape = state.frame.array.shape();
+                    let shape = state.frame.tensor.shape();
                     let width = shape[1] as f32;
                     let mouse_x = state.mouse.x;
                     
@@ -785,7 +785,7 @@ impl Application for AudioEditApp {
             if self.is_dragging_position {
                 if state.mouse.is_left_clicking {
                     // Continue dragging - map mouse_x to actual audio position accounting for zoom
-                    let shape = state.frame.array.shape();
+                    let shape = state.frame.tensor.shape();
                     let width = shape[1] as f32;
                     let mouse_x = state.mouse.x;
                     
@@ -864,7 +864,7 @@ impl Application for AudioEditApp {
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let shape = state.frame.array.shape();
+            let shape = state.frame.tensor.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
             let mouse_x = state.mouse.x;
@@ -953,7 +953,7 @@ impl Application for AudioEditApp {
         {
             // Update zoom slider if dragging
             if self.is_dragging_zoom_slider && state.mouse.is_left_clicking {
-                let shape = state.frame.array.shape();
+                let shape = state.frame.tensor.shape();
                 let width = shape[1] as f32;
                 let mouse_x = state.mouse.x;
                 
@@ -978,7 +978,7 @@ impl Application for AudioEditApp {
             
             // Update position if dragging - map mouse_x to actual audio position accounting for zoom
             if self.is_dragging_position && state.mouse.is_left_clicking {
-                let shape = state.frame.array.shape();
+                let shape = state.frame.tensor.shape();
                 let width = shape[1] as f32;
                 let mouse_x = state.mouse.x;
                 

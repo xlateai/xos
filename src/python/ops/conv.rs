@@ -35,7 +35,7 @@ fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Optio
 /// xos.ops.convolve(image, kernel, padding="same")
 /// Fast 2D convolution operation using tensor backend
 /// 
-/// - image: frame.array (modified in-place)
+/// - image: frame.tensor (modified in-place)
 /// - kernel: 3D array [height, width, channels] - e.g., KxKx3 for RGB
 /// - padding: "same" (default) maintains image dimensions
 /// 
@@ -203,7 +203,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// xos.ops.convolve_depthwise(image, kernel, padding="same")
 /// Fast 2D depthwise convolution - each channel processed independently using tensor backend
 /// 
-/// - image: frame.array (modified in-place)
+/// - image: frame.tensor (modified in-place)
 /// - kernel: 2D array [height, width] = KxK values (applied to each channel separately)
 /// - padding: "same" (default) maintains image dimensions
 /// 

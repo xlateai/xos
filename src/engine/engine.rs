@@ -2,7 +2,7 @@ mod fps_overlay;
 
 pub use fps_overlay::{tick_fps_overlay, FpsOverlay};
 
-use crate::tensor::FrameBuffer;
+use crate::tensor::FrameTensor;
 
 /// Safe region bounding rectangle for UI elements
 /// 
@@ -65,11 +65,11 @@ impl SafeRegionBoundingRectangle {
     }
 }
 
-/// Frame state containing the pixel array and safe region information
+/// Frame state containing the pixel tensor and safe region information
 #[derive(Debug)]
 pub struct FrameState {
     /// The pixel buffer with shape [height, width, 4] for RGBA pixels
-    pub array: FrameBuffer,
+    pub tensor: FrameTensor,
     /// Safe region bounding rectangle for UI elements
     pub safe_region_boundaries: SafeRegionBoundingRectangle,
 }
@@ -78,29 +78,29 @@ impl FrameState {
     /// Create a new FrameState with given dimensions and safe region
     pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
         Self {
-            array: FrameBuffer::new(width, height),
+            tensor: FrameTensor::new(width, height),
             safe_region_boundaries: safe_region,
         }
     }
 
     /// Get mutable access to the frame buffer (zero-copy for rasterizer)
     pub fn buffer_mut(&mut self) -> &mut [u8] {
-        self.array.buffer_mut()
+        self.tensor.buffer_mut()
     }
 
     /// Get the frame shape [height, width, 4]
     pub fn shape(&self) -> Vec<usize> {
-        self.array.shape().to_vec()
+        self.tensor.shape().to_vec()
     }
 
     /// Resize the frame to new dimensions (preserves safe region, as it's normalized)
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.array.resize(width, height);
+        self.tensor.resize(width, height);
     }
 
     /// Clear the frame buffer to opaque black.
     pub fn clear(&mut self) {
-        self.array.clear();
+        self.tensor.clear();
     }
 }
 

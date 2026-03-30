@@ -123,7 +123,7 @@ impl Whiteboard {
 
 impl Application for Whiteboard {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         self.cached_width = shape[1] as u32;
         self.cached_height = shape[0] as u32;
         self.cached_canvas = vec![0; (self.cached_width * self.cached_height * 4) as usize];
@@ -132,7 +132,7 @@ impl Application for Whiteboard {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let (width, height) = (shape[1] as u32, shape[0] as u32);
 
         if width != self.cached_width || height != self.cached_height {

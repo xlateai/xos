@@ -197,7 +197,7 @@ impl Application for OverlayApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let dst_w = shape[1];
         let dst_h = shape[0];
 

@@ -75,23 +75,23 @@ pub fn create_py_frame_state(vm: &VirtualMachine, frame: &mut FrameState) -> PyR
     let shape = frame.shape();
     let buffer = frame.buffer_mut();
     
-    // Create array dict
-    let array_dict = vm.ctx.new_dict();
-    array_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
-    array_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    // Tensor metadata dict (CPU RGBA; rasterizer writes the real buffer directly)
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     
     // Create a Python list that directly wraps the buffer
     let py_buffer: Vec<PyObjectRef> = buffer.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
-    array_dict.set_item("data", vm.ctx.new_list(py_buffer).into(), vm)?;
+    tensor_dict.set_item("data", vm.ctx.new_list(py_buffer).into(), vm)?;
     
-    array_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
-    array_dict.set_item("size", vm.ctx.new_int(buffer.len()).into(), vm)?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
+    tensor_dict.set_item("size", vm.ctx.new_int(buffer.len()).into(), vm)?;
     
     // Create frame dict
     let frame_dict = vm.ctx.new_dict();
     frame_dict.set_item("width", vm.ctx.new_int(shape[1]).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(shape[0]).into(), vm)?;
-    frame_dict.set_item("array", array_dict.into(), vm)?;
+    frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
     
     Ok(frame_dict.into())
 }
@@ -113,15 +113,15 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     let frame_dict = actual_dict.downcast_ref::<rustpython_vm::builtins::PyDict>()
         .ok_or_else(|| vm.new_type_error("frame is not a dict".to_string()))?;
     
-    // Get the array from the frame
-    let array_obj = frame_dict.get_item("array", vm)?;
+    // Get the tensor metadata dict from the frame
+    let tensor_obj = frame_dict.get_item("tensor", vm)?;
     
-    let array_dict = array_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
-        .ok_or_else(|| vm.new_type_error("array is not a dict".to_string()))?;
+    let tensor_dict = tensor_obj.downcast_ref::<rustpython_vm::builtins::PyDict>()
+        .ok_or_else(|| vm.new_type_error("tensor is not a dict".to_string()))?;
     
-    // Update the array's shape (in case of window resize)
+    // Update the tensor's shape (in case of window resize)
     let shape = frame.shape();
-    array_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
+    tensor_dict.set_item("shape", vm.ctx.new_tuple(shape.iter().map(|&s| vm.ctx.new_int(s).into()).collect()).into(), vm)?;
     
     // DON'T copy the entire buffer to Python - that's millions of allocations!
     // Instead, store a pointer that the rasterizer can use directly

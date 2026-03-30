@@ -25,7 +25,7 @@ class DepthwiseConvolution(xos.Application):
         width = self.get_width()
         height = self.get_height()
         xos.print(f"Generating random {width}x{height} image...")
-        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        xos.random.uniform_fill(self.frame.tensor, 0.0, 255.0)
     
     def tick(self):
         """First tick: init. Then: depthwise conv every frame."""
@@ -35,7 +35,7 @@ class DepthwiseConvolution(xos.Application):
             self.needs_init = False
             return
         
-        self.frame.array[:] = xos.ops.convolve_depthwise(self.frame.array, self.kernel)
+        self.frame.tensor[:] = xos.ops.convolve_depthwise(self.frame.tensor, self.kernel)
     
     def on_screen_size_change(self, width, height):
         xos.print(f"Screen resized to {width}x{height}")

@@ -90,7 +90,7 @@ impl CoderApp {
     }
 
     fn layout_scale_from_state(state: &EngineState) -> f32 {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         Self::ui_scale((shape[1] as f32).min(shape[0] as f32))
     }
 
@@ -1094,7 +1094,7 @@ impl Application for CoderApp {
         }
         
         // Get dimensions before mutable borrow
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let mouse_x = state.mouse.x;
@@ -1204,7 +1204,7 @@ impl Application for CoderApp {
                     // Tick the Python app
                     if self.viewport_app_setup_done {
                         // Set the frame buffer context for the rasterizer
-                        let shape = state.frame.array.shape();
+                        let shape = state.frame.tensor.shape();
                         let width = shape[1];
                         let height = shape[0];
                         let buffer = state.frame.buffer_mut();
@@ -1613,7 +1613,7 @@ impl Application for CoderApp {
         let padding = Self::padding_scaled(layout_scale);
         
         // Calculate tab position (same as in tick)
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
@@ -1831,7 +1831,7 @@ impl Application for CoderApp {
                     // Only select file if user didn't drag
                     if !self.file_explorer_dragging && dx < drag_threshold && dy < drag_threshold {
                         // Calculate which item was tapped (variable row heights)
-                        let shape = state.frame.array.shape();
+                        let shape = state.frame.tensor.shape();
                         let height = shape[0] as f32;
                         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;
                         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();

@@ -221,7 +221,7 @@ impl Application for TextApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         // On iOS, initialize scroll to 0 (text starts at safe region top)
         if cfg!(target_os = "ios") && !self.text_rasterizer.text.is_empty() {
-            let shape = state.frame.array.shape();
+            let shape = state.frame.tensor.shape();
             let height = shape[0] as f32;
             let safe_region = &state.frame.safe_region_boundaries;
             let content_top = safe_region.y1 * height;
@@ -255,7 +255,7 @@ impl Application for TextApp {
         
         // Extract all needed values in a block to release borrows
         let (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown) = {
-            let shape = state.frame.array.shape();
+            let shape = state.frame.tensor.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
             
@@ -614,7 +614,7 @@ impl Application for TextApp {
         }
         
         // Get content height for cursor visibility checks
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let safe_region = &state.frame.safe_region_boundaries;
         let content_top = safe_region.y1 * height;
@@ -724,7 +724,7 @@ impl Application for TextApp {
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         
@@ -927,7 +927,7 @@ impl Application for TextApp {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         
         // Check if keyboard handled the event
@@ -1079,7 +1079,7 @@ impl Application for TextApp {
             // Only move cursor if user didn't scroll and didn't drag/select
             if scroll_delta < scroll_threshold && !self.selecting && (!self.dragging || drag_distance < drag_threshold) {
                 // Move cursor to tap location
-                let shape = state.frame.array.shape();
+                let shape = state.frame.tensor.shape();
                 let height = shape[0] as f32;
                 let safe_region = &state.frame.safe_region_boundaries;
                 let content_top = safe_region.y1 * height;
@@ -1499,7 +1499,7 @@ impl TextApp {
     
     fn handle_action_key(&mut self, action: KeyType, state: &mut EngineState) {
         // Get content height for cursor visibility checks
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let safe_region = &state.frame.safe_region_boundaries;
         let content_top = safe_region.y1 * height;

@@ -59,7 +59,7 @@ impl TracersApp {
 impl Application for TracersApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         for _ in 0..PARTICLE_COUNT {
-            let shape = state.frame.array.shape();
+            let shape = state.frame.tensor.shape();
             self.particles.push(Particle::new(
                 shape[1] as f32,
                 shape[0] as f32,
@@ -69,7 +69,7 @@ impl Application for TracersApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
 

@@ -60,7 +60,7 @@ class StaticWithAudio(xos.Application):
         height = self.get_height()
         
         # Generate random visual static EVERY frame (like random_image.py)
-        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        xos.random.uniform_fill(self.frame.tensor, 0.0, 255.0)
         
         # Print status message only once
         if not self.image_generated:

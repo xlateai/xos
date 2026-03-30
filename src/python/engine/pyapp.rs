@@ -132,12 +132,12 @@ class _FrameWrapper:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
         self._data = data
-        self._array_wrapper = _ArrayWrapper(data.get('array', {}))
+        self._tensor_wrapper = _ArrayWrapper(data.get('tensor', {}))
     
     @property
-    def array(self):
-        """Get the array wrapper with slice assignment support"""
-        return self._array_wrapper
+    def tensor(self):
+        """Get the tensor wrapper with slice assignment support (CPU RGBA frame)."""
+        return self._tensor_wrapper
     
     def get_width(self):
         return self._data['width']

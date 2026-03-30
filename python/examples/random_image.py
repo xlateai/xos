@@ -20,7 +20,7 @@ class RandomImage(xos.Application):
         xos.print(f"Generating {width}x{height} random image...")
         
         # Generate random image data and update frame
-        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        xos.random.uniform_fill(self.frame.tensor, 0.0, 255.0)
         
         xos.print("Random image displayed!")
         self.image_generated = True

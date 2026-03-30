@@ -26,7 +26,7 @@ class Convolution(xos.Application):
         width = self.get_width()
         height = self.get_height()
         xos.print(f"Generating random {width}x{height} image...")
-        xos.random.uniform_fill(self.frame.array, 0.0, 255.0)
+        xos.random.uniform_fill(self.frame.tensor, 0.0, 255.0)
     
     def tick(self):
         """First tick: init image. Then: apply convolution every frame."""
@@ -36,8 +36,8 @@ class Convolution(xos.Application):
             self.needs_init = False
             return
         
-        result = xos.ops.convolve(self.frame.array, self.kernel)
-        self.frame.array[:] = result
+        result = xos.ops.convolve(self.frame.tensor, self.kernel)
+        self.frame.tensor[:] = result
     
     def on_screen_size_change(self, width, height):
         xos.print(f"Screen resized to {width}x{height}")

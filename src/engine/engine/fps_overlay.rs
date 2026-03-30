@@ -54,7 +54,7 @@ impl FpsOverlay {
 
 /// Update smoothed FPS and composite the label into the frame (after app + keyboard).
 pub fn tick_fps_overlay(state: &mut EngineState) {
-    let shape = state.frame.array.shape();
+    let shape = state.frame.tensor.shape();
     let width = shape[1] as f32;
     let height = shape[0] as f32;
     if width < 1.0 || height < 1.0 {

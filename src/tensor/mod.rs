@@ -1,7 +1,8 @@
 //! Burn tensor integration for xos
 //!
-//! Re-exports Burn's tensor types and provides a lightweight FrameBuffer for
-//! the engine's pixel buffer (requires &mut [u8] for rasterizer compatibility).
+//! Re-exports Burn's [`Tensor`] and provides [`FrameTensor`]: a CPU-side RGBA pixel grid used by
+//! the engine and rasterizer (`&mut [u8]`). It is **not** a Burn tensor; ML ops use Burn separately
+//! (see [`conv`]).
 
 pub mod conv;
 
@@ -19,17 +20,20 @@ pub type FloatTensor<const D: usize> = Tensor<XosBackend, D>;
 /// Alias for int tensors using the default backend
 pub type IntTensor<const D: usize> = Tensor<XosBackend, D, Int>;
 
-/// Frame buffer for the engine - stores RGBA pixels as [height, width, 4]
-/// Uses Vec<u8> for zero-copy rasterizer access (&mut [u8])
+/// CPU RGBA frame storage for the engine: shape `[height, width, 4]`, `Vec<u8>` backing.
+///
+/// Named [`FrameTensor`] to avoid clashing with Burn's [`Tensor`], which is GPU-backed and typed
+/// (typically `f32` for conv). The display framebuffer stays on the CPU for zero-copy rasterization;
+/// Burn is used only where you explicitly move data to [`XosDevice`] (e.g. [`conv2d`]).
 #[derive(Debug)]
-pub struct FrameBuffer {
+pub struct FrameTensor {
     /// Raw RGBA pixel data
     buffer: Vec<u8>,
     /// Shape [height, width, 4]
     shape: Vec<usize>,
 }
 
-impl FrameBuffer {
+impl FrameTensor {
     /// Create a new frame buffer with given dimensions
     pub fn new(width: u32, height: u32) -> Self {
         let shape = vec![height as usize, width as usize, 4];
@@ -38,6 +42,12 @@ impl FrameBuffer {
             buffer: vec![0u8; len],
             shape,
         }
+    }
+
+    /// Immutable view of the pixel bytes (e.g. iOS FFI pointer).
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        &self.buffer
     }
 
     /// Get mutable access to the pixel buffer (zero-copy for rasterizer)
@@ -67,3 +77,6 @@ impl FrameBuffer {
         }
     }
 }
+
+/// Backwards-compatible name for [`FrameTensor`].
+pub type FrameBuffer = FrameTensor;

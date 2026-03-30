@@ -32,7 +32,7 @@ impl WaveformVisualizer {
 
     /// Render the waveform to the frame buffer with randomization based on seek position
     pub fn tick_with_seed(&mut self, state: &mut EngineState, seek_position: f32) {
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let buffer = state.frame_buffer_mut();

@@ -380,7 +380,7 @@ impl ConvolutionalWaveform {
 
         // Apply convolution each frame
         self.apply_convolution();
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();

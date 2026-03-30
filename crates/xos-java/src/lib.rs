@@ -175,7 +175,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
 
         // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.
         {
-            let shape = host.engine.frame.array.shape();
+            let shape = host.engine.frame.tensor.shape();
             let height = shape[0] as u32;
             let width = shape[1] as u32;
             let mouse_x = host.engine.mouse.x;
@@ -192,7 +192,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
 
         tick_fps_overlay(&mut host.engine);
 
-        let shape = host.engine.frame.array.shape();
+        let shape = host.engine.frame.tensor.shape();
         let w = shape[1];
         let h = shape[0];
         let src = host.engine.frame_buffer_mut();

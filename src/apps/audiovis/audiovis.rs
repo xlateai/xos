@@ -253,7 +253,7 @@ impl Application for AudiovisApp {
         }
 
         // Update and render the selector
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         self.visual_type_selector.update(shape[1] as f32, shape[0] as f32);
         
         // Check if selector is closed and we have a selection

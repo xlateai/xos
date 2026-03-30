@@ -153,7 +153,7 @@ impl Application for Waveform {
 
     fn tick(&mut self, state: &mut EngineState) {
         let Some(listener) = &self.listener else { return };
-        let shape = state.frame.array.shape();
+        let shape = state.frame.tensor.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
