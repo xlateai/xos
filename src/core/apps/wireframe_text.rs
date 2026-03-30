@@ -38,7 +38,7 @@ pub struct WireframeText {
 
 impl WireframeText {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font_bytes = include_bytes!("../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).unwrap();
         let mut text_rasterizer = TextRasterizer::new(font, 24.0);
         text_rasterizer.set_text("start typing...".to_string());

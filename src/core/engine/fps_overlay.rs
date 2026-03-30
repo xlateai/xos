@@ -20,7 +20,7 @@ impl std::fmt::Debug for FpsOverlay {
 
 impl FpsOverlay {
     pub fn new() -> Self {
-        let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
+        let font_data = include_bytes!("../assets/JetBrainsMono-Regular.ttf");
         let font = fontdue::Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default())
             .expect("Failed to load font for FPS overlay");
         let mut rasterizer = TextRasterizer::new(font, 18.0);

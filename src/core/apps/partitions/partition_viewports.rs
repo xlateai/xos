@@ -15,7 +15,7 @@ pub struct PartitionA {
 
 impl PartitionA {
     pub fn new(left: f32, right: f32, top: f32, bottom: f32) -> Self {
-        let font_bytes = include_bytes!("../../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
         let mut text_rasterizer = TextRasterizer::new(font, 24.0);
         text_rasterizer.set_text("Hello, welcome to the partition view display demo. I hope this finds you well, as it's become a priority of xos to make simple and powerful design tooling available at all levels of the system.".to_string());

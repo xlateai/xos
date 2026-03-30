@@ -812,7 +812,7 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut font_lock = GLOBAL_FONT.lock().unwrap();
     if font_lock.is_none() {
         // Load default font (NotoSans-Medium)
-        let font_data = include_bytes!("../../assets/NotoSans-Medium.ttf");
+        let font_data = include_bytes!("../core/assets/NotoSans-Medium.ttf");
         match Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
             Ok(font) => *font_lock = Some(font),
             Err(e) => return Err(vm.new_runtime_error(format!("Failed to load font: {}", e))),

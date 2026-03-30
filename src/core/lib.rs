@@ -197,7 +197,7 @@ pub fn start() -> Result<(), JsValue> {
 
 // --- Tooling helpers ---
 fn build_wasm(app_name: &str) {
-    let out_dir = format!("static/pkg/");
+    let out_dir = format!("src/core/react-native-embedder/static/pkg/");
 
     let mut command = Command::new("wasm-pack");
     command
@@ -242,15 +242,23 @@ fn start_web_server() {
         let url = request.url();
         let path = if url == "/" {
             // always use the XOS root index.html
-            concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/core/react-native-embedder/static/index.html"
+            )
+            .to_string()
         } else {
-            let full_path = format!("static{}", url);
+            let full_path = format!("src/core/react-native-embedder/static{}", url);
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
                 full_path
             } else {
                 eprintln!("❌ File not found: {full_path}");
                 // fallback to index.html so SPA still loads
-                concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html").to_string()
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/src/core/react-native-embedder/static/index.html"
+                )
+                .to_string()
             }
         };
 
@@ -273,7 +281,7 @@ fn start_web_server() {
 fn launch_expo() {
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
-    cmd.current_dir("src/core/native-bridge");
+    cmd.current_dir("src/core/react-native-embedder");
 
     let status = cmd.status().expect("Failed to launch Expo. Is it installed?");
     if !status.success() {

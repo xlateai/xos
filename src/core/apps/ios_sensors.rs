@@ -64,7 +64,7 @@ pub struct IosSensorsApp {
 
 impl IosSensorsApp {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+        let font_bytes = include_bytes!("../assets/JetBrainsMono-Regular.ttf") as &[u8];
         
         // Font sizes - smaller and more reasonable
         let magnitude_font_size = if cfg!(target_os = "ios") {

@@ -43,7 +43,7 @@ pub struct AudioRelay {
 impl AudioRelay {
     pub fn new() -> Self {
         // Load font
-        let font_data = include_bytes!("../../../assets/NotoSans-Medium.ttf");
+        let font_data = include_bytes!("../assets/NotoSans-Medium.ttf");
         let font = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()).ok();
         
         Self {
