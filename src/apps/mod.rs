@@ -10,6 +10,9 @@ macro_rules! define_apps {
         #[derive(clap::Subcommand)]
         pub enum AppCommands {
             $(
+                // Intentionally no `///` doc: the macro repeats one string for every variant and
+                // would spam `xos app --help`. Subcommand names are `src/apps/<file>.rs`.
+                #[command(name = stringify!($file), about = "")]
                 #[allow(non_camel_case_types)]
                 $Variant {
                     #[arg(long)]
@@ -77,4 +80,5 @@ define_apps! {
     Leds => leds::Leds,
     IosSensors => ios_sensors::IosSensorsApp,
     AudioRelay => audio_relay::AudioRelay,
+    Overlay => overlay::OverlayApp,
 }

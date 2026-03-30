@@ -14,6 +14,9 @@ pub mod ios_ffi;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_engine::start_native;
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub use native_engine::{start_overlay_native, NativeLaunchMode};
+
 #[cfg(target_arch = "wasm32")]
 pub use wasm_engine::run_web;
 

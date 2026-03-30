@@ -86,6 +86,10 @@ pub struct TextApp {
     /// Last wrap width / font size used for glyph fade keys — when these change, reflow invalidates (x,y) keys.
     last_fade_wrap_width: f32,
     last_fade_font_size: f32,
+    /// When true, clear the frame to transparent instead of [`BACKGROUND_COLOR`] (for overlay windows).
+    pub transparent_background: bool,
+    /// Color for debug glyph bounding rectangles ([`SHOW_BOUNDING_RECTANGLES`]).
+    pub bound_color: (u8, u8, u8),
 }
 
 
@@ -156,7 +160,18 @@ impl TextApp {
             read_only: false,
             last_fade_wrap_width: -1.0,
             last_fade_font_size: -1.0,
+            transparent_background: false,
+            bound_color: BOUND_COLOR,
         }
+    }
+
+    /// Same as [`TextApp::new`] but tuned for the small transparent overlay (`xos app overlay`).
+    pub fn new_for_overlay() -> Self {
+        let mut t = Self::new();
+        t.transparent_background = true;
+        t.bound_color = (57, 255, 20);
+        t.set_font_size(28.0);
+        t
     }
 
     /// Resize editor text; layout is updated on the next [`tick`](TextApp::tick).
@@ -173,6 +188,7 @@ impl TextApp {
         w: u32,
         h: u32,
         alpha: u8,
+        rgb: (u8, u8, u8),
     ) {
         if x < 0 || y < 0 || w == 0 || h == 0 {
             return;
@@ -183,9 +199,9 @@ impl TextApp {
         let mut draw_pixel = |x, y| {
             if x < width && y < height {
                 let idx = ((y * width + x) * 4) as usize;
-                buffer[idx + 0] = BOUND_COLOR.0;
-                buffer[idx + 1] = BOUND_COLOR.1;
-                buffer[idx + 2] = BOUND_COLOR.2;
+                buffer[idx + 0] = rgb.0;
+                buffer[idx + 1] = rgb.1;
+                buffer[idx + 2] = rgb.2;
                 buffer[idx + 3] = alpha;
             }
         };
@@ -345,10 +361,14 @@ impl Application for TextApp {
             self.last_fade_font_size = font_size;
         }
 
-        fill(
-            &mut state.frame,
-            (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
-        );
+        if self.transparent_background {
+            fill(&mut state.frame, (0, 0, 0, 0));
+        } else {
+            fill(
+                &mut state.frame,
+                (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+            );
+        }
 
         let buffer = state.frame_buffer_mut();
         let fw = width as usize;
@@ -466,7 +486,17 @@ impl Application for TextApp {
             }
     
             if SHOW_BOUNDING_RECTANGLES && self.show_debug_visuals {
-                Self::draw_rect(buffer, width as u32, height as u32, px, py, pw, ph, alpha);
+                Self::draw_rect(
+                    buffer,
+                    width as u32,
+                    height as u32,
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    alpha,
+                    self.bound_color,
+                );
             }
         }
     
