@@ -19,20 +19,14 @@ fn rgba_tensor(
     Tensor::cat(vec![r, g, b, a], 2)
 }
 
-/// Solid fill (replaces entire frame tensor; merges CPU staging first if dirty).
+/// Solid fill (replaces the entire framebuffer).
+///
+/// Uses a fast path: one CPU fill + one [`tensor_from_rgba_u8`] upload. The previous
+/// implementation called [`FrameTensor::ensure_gpu_from_cpu`] then built the frame with four
+/// [`Tensor::full`] planes and `cat` on GPU, which was much heavier at 1080p+ and still forced
+/// redundant work when `cpu_dirty` was set after overlays.
 pub fn fill_solid(frame: &mut FrameTensor, color: (u8, u8, u8, u8)) {
-    let c = [
-        color.0 as f32,
-        color.1 as f32,
-        color.2 as f32,
-        color.3 as f32,
-    ];
-    frame.ensure_gpu_from_cpu();
-    let shape = frame.tensor_dims();
-    let h = shape[0];
-    let w = shape[1];
-    let t = rgba_tensor(frame.device(), h, w, c);
-    frame.set_tensor(t);
+    frame.fill_solid_fast(color);
 }
 
 /// Axis-aligned rectangle `[x0, x1) × [y0, y1)` in pixel coordinates, clipped to the frame.
