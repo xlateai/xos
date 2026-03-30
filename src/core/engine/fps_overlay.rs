@@ -3,7 +3,6 @@
 
 use crate::engine::EngineState;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
-use std::time::Instant;
 
 const REF_SHORT_EDGE: f32 = 920.0;
 
@@ -11,8 +10,6 @@ pub struct FpsOverlay {
     /// When false (default), FPS is still tracked but not drawn. Toggle with F3 (desktop/web).
     pub visible: bool,
     rasterizer: TextRasterizer,
-    last_instant: Option<Instant>,
-    smoothed_fps: f32,
 }
 
 impl std::fmt::Debug for FpsOverlay {
@@ -31,8 +28,6 @@ impl FpsOverlay {
         Self {
             visible: false,
             rasterizer,
-            last_instant: None,
-            smoothed_fps: 60.0,
         }
     }
 
@@ -61,17 +56,6 @@ pub fn tick_fps_overlay(state: &mut EngineState) {
         return;
     }
 
-    {
-        let overlay = &mut state.fps_overlay;
-        let now = Instant::now();
-        if let Some(prev) = overlay.last_instant {
-            let dt = now.duration_since(prev).as_secs_f32().max(1e-5);
-            let instant_fps = 1.0 / dt;
-            overlay.smoothed_fps = overlay.smoothed_fps * 0.9 + instant_fps * 0.1;
-        }
-        overlay.last_instant = Some(now);
-    }
-
     if !state.fps_overlay.visible {
         return;
     }
@@ -83,7 +67,7 @@ pub fn tick_fps_overlay(state: &mut EngineState) {
     {
         let overlay = &mut state.fps_overlay;
         overlay.rasterizer.set_font_size(18.0 * ui_scale);
-        let fps_display = overlay.smoothed_fps.round().max(0.0) as u32;
+        let fps_display = (1.0 / state.delta_time_seconds.max(1e-5)).round().max(0.0) as u32;
         overlay.rasterizer.set_text(format!("{fps_display} FPS"));
         overlay.rasterizer.tick(width, height);
     }
