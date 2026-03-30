@@ -189,6 +189,8 @@ class Application:
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
+        # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
+        self.scale = 0.5
     
     def get_width(self):
         """Get the current frame width"""
@@ -291,6 +293,8 @@ impl Application for PyApp {
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
                 app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
+                app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
+                    .map_err(|e| format!("Failed to set scale attribute: {:?}", e))?;
                 
                 // Call setup
                 match vm.call_method(app_instance, "setup", ()) {
@@ -335,6 +339,7 @@ impl Application for PyApp {
 
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
+                    let _ = app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
                     // Call tick
                     if let Err(e) = vm.call_method(app_instance, "tick", ()) {

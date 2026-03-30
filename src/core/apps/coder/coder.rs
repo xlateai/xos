@@ -89,9 +89,14 @@ impl CoderApp {
         (short_edge / REF).clamp(0.28, 1.0)
     }
 
+    /// Calibrate prior coder chrome (~75% vs text) to ~50% at default slider, with ~30% zoom-out.
+    /// F3 scale uses [`crate::engine::f3_ui_scale_multiplier`] (same curve as standalone text).
     fn layout_scale_from_state(state: &EngineState) -> f32 {
+        const CODER_UI_CALIBRATION: f32 = (50.0 / 75.0) * 0.7;
         let shape = state.frame.tensor.shape();
         Self::ui_scale((shape[1] as f32).min(shape[0] as f32))
+            * state.f3_ui_scale_multiplier()
+            * CODER_UI_CALIBRATION
     }
 
     fn button_size_scaled(scale: f32) -> (u32, u32) {
@@ -234,13 +239,17 @@ impl CoderApp {
         
         // Create the code editor text app with default code from ball.py
         let mut code_app = TextApp::new();
+        code_app.uses_parent_ui_scale = true;
         code_app.text_rasterizer.text = python_files[0].content.clone();
         code_app.show_debug_visuals = false; // Hide debug visuals in code editor
         // On iOS, start at top like terminal. On macOS, start at top too.
         code_app.scroll_y = 0.0;
+        code_app.scroll_target = 0.0;
+        code_app.clear_wheel_scroll_accel();
         
         // Create the terminal text app (empty initially)
         let mut terminal_app = TextApp::new();
+        terminal_app.uses_parent_ui_scale = true;
         terminal_app.text_rasterizer.text = "".to_string();
         terminal_app.read_only = true; // Terminal is read-only
         terminal_app.show_cursor = false; // Hide cursor in terminal
@@ -248,6 +257,7 @@ impl CoderApp {
         
         // Create the console text app for interactive Python
         let mut console_app = TextApp::new();
+        console_app.uses_parent_ui_scale = true;
         console_app.text_rasterizer.text = "".to_string();
         console_app.show_debug_visuals = false; // Hide debug visuals in console
 
@@ -815,6 +825,8 @@ builtins.print = __custom_print__
             self.code_app.text_rasterizer.text = self.python_files[file_index].content.clone();
             self.code_app.cursor_position = 0;
             self.code_app.scroll_y = 0.0; // Start at top when loading a file
+            self.code_app.scroll_target = 0.0;
+            self.code_app.clear_wheel_scroll_accel();
             self.code_view_mode = CodeViewMode::Editor;
             
             // Update the tab label to show the current file name
@@ -1038,6 +1050,8 @@ impl Application for CoderApp {
         
         // Override code_app scroll to start at top (TextApp's setup sets it to 1/3 down on iOS)
         self.code_app.scroll_y = 0.0;
+        self.code_app.scroll_target = 0.0;
+        self.code_app.clear_wheel_scroll_accel();
         
         Ok(())
     }
@@ -1100,7 +1114,7 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
 
-        let ui_scale = Self::ui_scale(width.min(height));
+        let ui_scale = Self::layout_scale_from_state(state);
         self.apply_coder_ui_scale(ui_scale);
 
         // Get keyboard top edge coordinates (normalized 0-1)

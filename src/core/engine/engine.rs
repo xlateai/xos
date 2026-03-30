@@ -1,4 +1,4 @@
-use super::fps_overlay::FpsOverlay;
+use super::f3_menu::F3Menu;
 
 use crate::tensor::FrameTensor;
 
@@ -187,14 +187,44 @@ pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
     pub keyboard: KeyboardState,
-    /// Global FPS overlay (drawn by the engine after each app tick).
-    pub fps_overlay: FpsOverlay,
+    /// Global F3 menu (FPS + UI scale; drawn by the engine after each app tick).
+    pub f3_menu: F3Menu,
+    /// UI scale slider value (1–100%). Default 50% → [`EngineState::ui_scale_coefficient`] is 1.0.
+    pub ui_scale_percent: u8,
     /// Seconds since the previous `Application::tick` (set by the host immediately before each tick).
     /// The first tick uses `1.0 / 60.0` as a nominal step so simulations can use `delta_time_seconds` safely.
     pub delta_time_seconds: f32,
 }
 
+/// F3 “Scale” slider curve shared by [`crate::apps::coder::CoderApp`] and standalone [`crate::apps::text::text::TextApp`]
+/// so zoom feels **1:1** between them (same relative response vs linear `percent/50`).
+///
+/// - **1%** → **0.2**, **50%** → **1.2**, **100%** → **20/3** (~6.67); piecewise linear between.
+#[inline]
+pub fn f3_ui_scale_multiplier(percent: u8) -> f32 {
+    let p = percent.clamp(1, 100) as f32;
+    if p <= 50.0 {
+        0.2 + (p - 1.0) * (1.0 / 49.0)
+    } else {
+        const MAX_M: f32 = 20.0 / 3.0;
+        1.2 + (p - 50.0) * ((MAX_M - 1.2) / 50.0)
+    }
+}
+
 impl EngineState {
+    /// Multiplier for UI sizing: `ui_scale_percent / 50` (so 50% → 1.0, symmetric zoom in/out).
+    /// Prefer [`Self::f3_ui_scale_multiplier`] for app chrome that should match the F3 curve used by text/coder.
+    #[inline]
+    pub fn ui_scale_coefficient(&self) -> f32 {
+        (self.ui_scale_percent.clamp(1, 100) as f32) / 50.0
+    }
+
+    /// Same curve as [`f3_ui_scale_multiplier`] for this frame’s [`EngineState::ui_scale_percent`].
+    #[inline]
+    pub fn f3_ui_scale_multiplier(&self) -> f32 {
+        f3_ui_scale_multiplier(self.ui_scale_percent)
+    }
+
     /// Get mutable access to the frame buffer (zero-copy for CPU arrays)
     /// Panics if the array is on a non-CPU device
     pub fn frame_buffer_mut(&mut self) -> &mut [u8] {

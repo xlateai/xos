@@ -4,7 +4,10 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-use super::{tick_fps_overlay, FpsOverlay};
+use super::{
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    F3Menu,
+};
 use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
@@ -61,7 +64,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             keyboard: KeyboardState {
                 onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
-            fps_overlay: FpsOverlay::new(),
+            f3_menu: F3Menu::new(),
+            ui_scale_percent: 50,
             delta_time_seconds: 1.0 / 60.0,
         },
         app,
@@ -90,7 +94,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.x = new_x;
                 state.engine_state.mouse.y = new_y;
         
-                state.app.on_mouse_move(&mut state.engine_state);
+                if !f3_menu_handle_mouse_move(&mut state.engine_state) {
+                    state.app.on_mouse_move(&mut state.engine_state);
+                }
         
                 let cursor_style = state.engine_state.mouse.style.get();
                 let style = match cursor_style {
@@ -141,7 +147,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = true;
-                        state.app.on_mouse_down(&mut state.engine_state);
+                        if !f3_menu_handle_mouse_down(&mut state.engine_state) {
+                            state.app.on_mouse_down(&mut state.engine_state);
+                        }
                     }
                     2 => {
                         state.engine_state.mouse.is_right_clicking = true;
@@ -167,7 +175,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = false;
-                        state.app.on_mouse_up(&mut state.engine_state);
+                        if !f3_menu_handle_mouse_up(&mut state.engine_state) {
+                            state.app.on_mouse_up(&mut state.engine_state);
+                        }
                     }
                     2 => {
                         state.engine_state.mouse.is_right_clicking = false;
@@ -198,11 +208,14 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     let prev_y = state.engine_state.mouse.y;
                     state.engine_state.mouse.x = x as f32;
                     state.engine_state.mouse.y = y as f32;
-                    state.app.on_mouse_move(&mut state.engine_state);
+                    let f3 = f3_menu_handle_mouse_move(&mut state.engine_state);
+                    if !f3 {
+                        state.app.on_mouse_move(&mut state.engine_state);
+                    }
 
                     let dx = state.engine_state.mouse.x - prev_x;
                     let dy = state.engine_state.mouse.y - prev_y;
-                    if state.engine_state.mouse.is_left_clicking {
+                    if state.engine_state.mouse.is_left_clicking && !f3 {
                         state.app.on_scroll(&mut state.engine_state, -dx, -dy);
                     }
                 }
@@ -229,7 +242,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     state.engine_state.mouse.x = x as f32;
                     state.engine_state.mouse.y = y as f32;
                     state.engine_state.mouse.is_left_clicking = true;
-                    state.app.on_mouse_down(&mut state.engine_state);
+                    if !f3_menu_handle_mouse_down(&mut state.engine_state) {
+                        state.app.on_mouse_down(&mut state.engine_state);
+                    }
                 }
                 event.prevent_default();
             }
@@ -247,7 +262,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 state.engine_state.mouse.is_left_clicking = false;
-                state.app.on_mouse_up(&mut state.engine_state);
+                if !f3_menu_handle_mouse_up(&mut state.engine_state) {
+                    state.app.on_mouse_up(&mut state.engine_state);
+                }
                 event.prevent_default();
             }
         }) as Box<dyn FnMut(_)>);
@@ -295,7 +312,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         event.prevent_default();
                     }
                     "F3" => {
-                        state.engine_state.fps_overlay.toggle_visible();
+                        state.engine_state.f3_menu.toggle_visible();
                         event.prevent_default();
                     }
                     "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
@@ -375,7 +392,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
 
-                tick_fps_overlay(&mut state.engine_state);
+                tick_f3_menu(&mut state.engine_state);
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();

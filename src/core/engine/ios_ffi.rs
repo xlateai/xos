@@ -15,8 +15,9 @@ use std::sync::{Mutex, OnceLock};
 use crate::apps;
 #[cfg(target_os = "ios")]
 use crate::engine::{
-    tick_fps_overlay, tick_frame_delta, Application, EngineState, FpsOverlay, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    tick_frame_delta, Application, EngineState, F3Menu, FrameState, KeyboardState, MouseState,
+    SafeRegionBoundingRectangle,
 };
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
@@ -155,7 +156,8 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         keyboard: KeyboardState {
             onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
         },
-        fps_overlay: FpsOverlay::new(),
+        f3_menu: F3Menu::new(),
+        ui_scale_percent: 50,
         delta_time_seconds: 1.0 / 60.0,
     };
 
@@ -235,7 +237,7 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
         }
 
-        tick_fps_overlay(&mut ios_state.engine_state);
+        tick_f3_menu(&mut ios_state.engine_state);
         
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
         let frame_buffer = ios_state.engine_state.frame_buffer_mut();
@@ -265,7 +267,7 @@ pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
         Err(_) => return ptr::null(),
     };
 
-    if let Some(ref ios_state) = *state {
+    if let Some(ref mut ios_state) = *state {
         let data = ios_state.engine_state.frame.tensor.data();
         if data.is_empty() {
             ptr::null()
@@ -286,7 +288,7 @@ pub extern "C" fn xos_engine_get_frame_buffer_size() -> usize {
         Err(_) => return 0,
     };
 
-    if let Some(ref ios_state) = *state {
+    if let Some(ref mut ios_state) = *state {
         ios_state.engine_state.frame.tensor.data().len()
     } else {
         0
@@ -335,7 +337,9 @@ pub extern "C" fn xos_engine_update_mouse(x: f32, y: f32) -> i32 {
         ios_state.engine_state.mouse.dx = x - prev_x;
         ios_state.engine_state.mouse.dy = y - prev_y;
         
-        ios_state.app.on_mouse_move(&mut ios_state.engine_state);
+        if !f3_menu_handle_mouse_move(&mut ios_state.engine_state) {
+            ios_state.app.on_mouse_move(&mut ios_state.engine_state);
+        }
         0
     } else {
         1
@@ -353,7 +357,9 @@ pub extern "C" fn xos_engine_mouse_down() -> i32 {
 
     if let Some(ref mut ios_state) = *state {
         ios_state.engine_state.mouse.is_left_clicking = true;
-        ios_state.app.on_mouse_down(&mut ios_state.engine_state);
+        if !f3_menu_handle_mouse_down(&mut ios_state.engine_state) {
+            ios_state.app.on_mouse_down(&mut ios_state.engine_state);
+        }
         0
     } else {
         1
@@ -371,7 +377,9 @@ pub extern "C" fn xos_engine_mouse_up() -> i32 {
 
     if let Some(ref mut ios_state) = *state {
         ios_state.engine_state.mouse.is_left_clicking = false;
-        ios_state.app.on_mouse_up(&mut ios_state.engine_state);
+        if !f3_menu_handle_mouse_up(&mut ios_state.engine_state) {
+            ios_state.app.on_mouse_up(&mut ios_state.engine_state);
+        }
         0
     } else {
         1

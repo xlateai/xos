@@ -16,7 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
-use super::{tick_fps_overlay, FpsOverlay};
+use super::{
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    F3Menu,
+};
 use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
@@ -146,11 +149,26 @@ impl ApplicationHandler for AppState {
                     // Notify app of screen size change
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
-                
+
+                let expected_len = (self.size.width * self.size.height * 4) as usize;
+                let mut mirror_ok = false;
+                {
+                    let f = self.pixels.frame_mut();
+                    if f.len() == expected_len {
+                        unsafe {
+                            self.engine_state
+                                .frame
+                                .tensor
+                                .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
+                        }
+                        mirror_ok = true;
+                    }
+                }
+
                 tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
-                
+
                 // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
                 {
                     let width = self.size.width;
@@ -167,31 +185,36 @@ impl ApplicationHandler for AppState {
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
 
-                tick_fps_overlay(&mut self.engine_state);
+                tick_f3_menu(&mut self.engine_state);
 
-                let frame = self.pixels.frame_mut();
-                let buffer = self.engine_state.frame_buffer_mut();
-                if frame.len() == buffer.len() {
-                    frame.copy_from_slice(buffer);
+                if mirror_ok {
+                    self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
                     let _ = self.render_pixels();
                 } else {
-                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.resize_frame(self.size.width, self.size.height);
-                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                     let frame = self.pixels.frame_mut();
                     let buffer = self.engine_state.frame_buffer_mut();
                     if frame.len() == buffer.len() {
                         frame.copy_from_slice(buffer);
                         let _ = self.render_pixels();
                     } else {
-                        eprintln!(
-                            "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
-                            frame.len(),
-                            buffer.len(),
-                            self.size.width,
-                            self.size.height
-                        );
+                        let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                        let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                        self.engine_state.resize_frame(self.size.width, self.size.height);
+                        let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                        let frame = self.pixels.frame_mut();
+                        let buffer = self.engine_state.frame_buffer_mut();
+                        if frame.len() == buffer.len() {
+                            frame.copy_from_slice(buffer);
+                            let _ = self.render_pixels();
+                        } else {
+                            eprintln!(
+                                "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
+                                frame.len(),
+                                buffer.len(),
+                                self.size.width,
+                                self.size.height
+                            );
+                        }
                     }
                 }
             }
@@ -229,7 +252,9 @@ impl ApplicationHandler for AppState {
                 self.engine_state.mouse.dx = self.engine_state.mouse.x - prev_x;
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
             
-                let _ = self.app.on_mouse_move(&mut self.engine_state);
+                if !f3_menu_handle_mouse_move(&mut self.engine_state) {
+                    let _ = self.app.on_mouse_move(&mut self.engine_state);
+                }
             }
             WindowEvent::MouseInput {
                 state: button_state,
@@ -238,11 +263,15 @@ impl ApplicationHandler for AppState {
             } => match button_state {
                 ElementState::Pressed => {
                     self.engine_state.mouse.is_left_clicking = true;
-                    let _ = self.app.on_mouse_down(&mut self.engine_state);
+                    if !f3_menu_handle_mouse_down(&mut self.engine_state) {
+                        let _ = self.app.on_mouse_down(&mut self.engine_state);
+                    }
                 }
                 ElementState::Released => {
                     self.engine_state.mouse.is_left_clicking = false;
-                    let _ = self.app.on_mouse_up(&mut self.engine_state);
+                    if !f3_menu_handle_mouse_up(&mut self.engine_state) {
+                        let _ = self.app.on_mouse_up(&mut self.engine_state);
+                    }
                 }
             },
             WindowEvent::MouseInput {
@@ -298,7 +327,7 @@ impl ApplicationHandler for AppState {
                     // Handle special keys
                     match event.logical_key {
                         Key::Named(NamedKey::F3) => {
-                            self.engine_state.fps_overlay.toggle_visible();
+                            self.engine_state.f3_menu.toggle_visible();
                         }
                         Key::Named(NamedKey::Backspace) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{8}');
@@ -440,7 +469,8 @@ impl ApplicationHandler for AppStateWrapper {
                 keyboard: KeyboardState {
                     onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
-                fps_overlay: FpsOverlay::new(),
+                f3_menu: F3Menu::new(),
+                ui_scale_percent: 50,
                 delta_time_seconds: 1.0 / 60.0,
             };
 
@@ -540,7 +570,8 @@ pub fn start_headless_native(
         keyboard: KeyboardState {
             onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
         },
-        fps_overlay: FpsOverlay::new(),
+        f3_menu: F3Menu::new(),
+        ui_scale_percent: 50,
         delta_time_seconds: 1.0 / 60.0,
     };
 
@@ -552,7 +583,7 @@ pub fn start_headless_native(
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
         tick_frame_delta(&mut engine_state, &mut last_tick_instant);
         app.tick(&mut engine_state);
-        tick_fps_overlay(&mut engine_state);
+        tick_f3_menu(&mut engine_state);
     }
     println!("Headless engine stopped.");
     SHOULD_EXIT.store(false, Ordering::Relaxed);

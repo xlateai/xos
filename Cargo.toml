@@ -13,7 +13,7 @@ burn-backend = "0.20"
 burn-wgpu = "0.20"
 pixels = "0.15.0"
 winit = "0.30.12"
-winapi = { version = "0.3.9", features = ["winuser", "wingdi"] }
+winapi = { version = "0.3.9", features = ["winuser", "wingdi", "winbase"] }
 clap = { version = "4.4.10", features = ["derive"] }
 cpal = "0.16.0"
 dialoguer = "0.11"

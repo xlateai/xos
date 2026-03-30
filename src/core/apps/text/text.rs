@@ -19,12 +19,36 @@ const DRAW_BASELINES: bool = true;
 const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
 const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
 
-// Scroll physics constants
-const SCROLL_MOMENTUM_DECAY: f32 = 0.95; // How quickly momentum decays (0-1, higher = longer momentum)
-const SCROLL_MOMENTUM_THRESHOLD: f32 = 0.1; // Stop momentum below this velocity
+// Scroll: `scroll_target` is authoritative; `scroll_y` eases toward it (smooth). Mouse wheel stacks
+// acceleration toward 3× (smooth), idle decay — no target coast. Clears `drag_scroll_momentum`.
+// Click-drag: `drag_scroll_momentum` coasts after release; wheel streak clears when drag-scroll starts.
+const SCROLL_REF_DT: f32 = 1.0 / 60.0;
 const SCROLL_ELASTIC_STRENGTH: f32 = 0.04; // Strength of elastic bounce at edges (lower = softer, more springy)
-const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 5.0; // Don't trigger double-tap if scrolling faster than this
 const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25; // How far off-screen you can scroll (0.25 = 25% of visible height on each side)
+/// Higher = snappier catch-up to [`TextApp::scroll_target`] (1/s). Uses `1 - exp(-rate * dt)`.
+const SCROLL_SMOOTH_RATE: f32 = 18.0;
+/// Treat scroll animation as settled for double-tap if |target − y| is below this (px).
+const SCROLL_SETTLE_FOR_TAP: f32 = 12.0;
+/// After finger release, coast `scroll_target` with this decay per [`SCROLL_REF_DT`].
+const DRAG_MOMENTUM_DECAY: f32 = 0.94;
+/// Stop drag coast when |velocity| falls below this (px/s).
+const DRAG_MOMENTUM_STOP: f32 = 38.0;
+/// Double-tap keyboard only if drag coast speed is below this (px/s).
+const DRAG_MOMENTUM_SETTLE_FOR_TAP: f32 = 130.0;
+
+/// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels (~+45% vs legacy).
+/// Standalone text only: 30% smaller than the prior default while the F3 slider stays at 50% = 1.0× engine coeff.
+const TEXT_STANDALONE_SIZE_FACTOR: f32 = 0.7;
+
+const MOUSE_WHEEL_LINE_SCALE: f32 = 80.0;
+/// Per wheel event: adds to [`TextApp::wheel_accel_target`] (0..=1). Sustained scrolling stacks toward 3×.
+const WHEEL_CHARGE_PER_NOTCH: f32 = 0.085;
+/// Idle decay of wheel streak per [`SCROLL_REF_DT`] (no momentum after you stop — target eases down).
+const WHEEL_ACCEL_IDLE_DECAY: f32 = 0.86;
+/// dt-corrected smooth: `wheel_accel_smooth` eases toward target each tick.
+const WHEEL_ACCEL_SMOOTH_RATE: f32 = 14.0;
+/// Per wheel event, blend smooth toward target so bursts ramp quickly (same-frame multi-notch).
+const WHEEL_STEP_SMOOTH_BLEND: f32 = 0.42;
 
 // Arrow key characters (using Unicode arrow symbols)
 const ARROW_LEFT: char = '\u{2190}';  // ←
@@ -36,7 +60,10 @@ use std::collections::HashMap;
 
 pub struct TextApp {
     pub text_rasterizer: TextRasterizer,
+    /// Smoothed scroll offset used for drawing (eases toward [`Self::scroll_target`]).
     pub scroll_y: f32,
+    /// Desired scroll offset (wheel / drag / auto-scroll). Reset both when snapping from outside (e.g. coder).
+    pub scroll_target: f32,
     pub smooth_cursor_x: f32,
     pub fade_map: HashMap<(char, u32, u32), f32>,
     last_tap_time: Option<Instant>,
@@ -50,13 +77,15 @@ pub struct TextApp {
     // Cursor positioning on release
     pending_cursor_tap_x: Option<f32>,
     pending_cursor_tap_y: Option<f32>,
-    initial_scroll_y: f32,
-    // Scroll momentum
-    scroll_velocity: f32,
-    last_frame_time: Option<Instant>,
-    // Drag velocity tracking (for momentum on release)
-    last_drag_time: Option<Instant>,
-    last_drag_y: f32,
+    /// [`TextApp::scroll_target`] at mouse down — detect scroll between tap and release.
+    initial_scroll_target: f32,
+    /// Finger-derived scroll speed (px/s) while drag-scrolling; after release, coasts `scroll_target`.
+    drag_scroll_momentum: f32,
+    last_drag_sample_time: Option<Instant>,
+    /// 0..=1 — wheel speed stack toward 3×; decays when idle (no coast on `scroll_target`).
+    wheel_accel_target: f32,
+    /// Smoothed toward [`Self::wheel_accel_target`] for transitions; multiplier = `1 + 2 * smooth`.
+    wheel_accel_smooth: f32,
     // Trackpad mode tracking
     trackpad_active: bool,
     trackpad_last_tap_time: Option<Instant>,
@@ -90,6 +119,10 @@ pub struct TextApp {
     pub transparent_background: bool,
     /// Color for debug glyph bounding rectangles ([`SHOW_BOUNDING_RECTANGLES`]).
     pub bound_color: (u8, u8, u8),
+    /// Last font size applied from global UI scale (standalone text only); avoids redundant `set_font_size`.
+    last_engine_scaled_font: f32,
+    /// When true (e.g. [`CoderApp`] editors), skip global scale here — parent sets [`TextApp::set_font_size`].
+    pub uses_parent_ui_scale: bool,
 }
 
 
@@ -99,8 +132,8 @@ impl TextApp {
         // let font_bytes = include_bytes!("../../assets/NotoSansJP-Regular.ttf") as &[u8];
         let font = Font::from_bytes(font_bytes, FontSettings::default()).expect("Failed to load font");
 
-        // Increase font size by 10% on iOS
-        let base_font_size = 48.0;
+        // Increase font size by 10% on iOS (~50% smaller than legacy 48px default for perf at long docs)
+        let base_font_size = 24.0;
         let font_size = if cfg!(target_os = "ios") {
             base_font_size * 1.1 // 10% larger on iOS
         } else {
@@ -122,6 +155,7 @@ impl TextApp {
         Self {
             text_rasterizer,
             scroll_y: 0.0, // Always start at 0 (top of safe region)
+            scroll_target: 0.0,
             smooth_cursor_x: 0.0,
             fade_map: HashMap::new(),
             last_tap_time: None,
@@ -134,11 +168,11 @@ impl TextApp {
             touch_started_on_keyboard: false,
             pending_cursor_tap_x: None,
             pending_cursor_tap_y: None,
-            initial_scroll_y: 0.0,
-            scroll_velocity: 0.0,
-            last_frame_time: None,
-            last_drag_time: None,
-            last_drag_y: 0.0,
+            initial_scroll_target: 0.0,
+            drag_scroll_momentum: 0.0,
+            last_drag_sample_time: None,
+            wheel_accel_target: 0.0,
+            wheel_accel_smooth: 0.0,
             trackpad_active: false,
             trackpad_last_tap_time: None,
             trackpad_selecting: false,
@@ -162,6 +196,8 @@ impl TextApp {
             last_fade_font_size: -1.0,
             transparent_background: false,
             bound_color: BOUND_COLOR,
+            last_engine_scaled_font: -1.0,
+            uses_parent_ui_scale: false,
         }
     }
 
@@ -170,13 +206,20 @@ impl TextApp {
         let mut t = Self::new();
         t.transparent_background = true;
         t.bound_color = (57, 255, 20);
-        t.set_font_size(28.0);
+        t.set_font_size(14.0);
+        t.last_engine_scaled_font = 14.0;
         t
     }
 
     /// Resize editor text; layout is updated on the next [`tick`](TextApp::tick).
     pub fn set_font_size(&mut self, font_size: f32) {
         self.text_rasterizer.set_font_size(font_size);
+    }
+
+    /// Clears stacked wheel speed (1×…3×). Call when resetting scroll from outside (e.g. coder file load).
+    pub fn clear_wheel_scroll_accel(&mut self) {
+        self.wheel_accel_target = 0.0;
+        self.wheel_accel_smooth = 0.0;
     }
 
     fn draw_rect(
@@ -232,6 +275,7 @@ impl Application for TextApp {
             
             // Start with scroll at 0 (text at top of safe region)
             self.scroll_y = 0.0;
+            self.scroll_target = 0.0;
         }
         Ok(())
     }
@@ -272,26 +316,52 @@ impl Application for TextApp {
             
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
-        
-        // === SCROLL PHYSICS ===
-        
-        // Only apply momentum when NOT dragging (after finger release)
-        if !self.dragging {
-            let current_time = Instant::now();
-            if let Some(last_time) = self.last_frame_time {
-                let dt = current_time.duration_since(last_time).as_secs_f32();
-                
-                // Apply velocity to scroll position
-                if self.scroll_velocity.abs() > SCROLL_MOMENTUM_THRESHOLD {
-                    self.scroll_y += self.scroll_velocity * dt;
-                    self.scroll_velocity *= SCROLL_MOMENTUM_DECAY; // Decay momentum
-                } else {
-                    self.scroll_velocity = 0.0; // Stop if below threshold
-                }
+
+        // Standalone text app: same F3 curve as coder ([`EngineState::f3_ui_scale_multiplier`]) + calibration.
+        if !self.uses_parent_ui_scale {
+            let short_edge = width.min(height);
+            let base_u = (short_edge / 920.0).clamp(0.28, 1.0);
+            let coeff = state.f3_ui_scale_multiplier();
+            let ios = if cfg!(target_os = "ios") { 1.1 } else { 1.0 };
+            let (base_px, text_cal) = if self.transparent_background {
+                (14.0_f32, 1.0)
+            } else {
+                (24.0_f32 * ios, 50.0 / 20.0)
+            };
+            let standalone_mul = if self.transparent_background {
+                1.0
+            } else {
+                TEXT_STANDALONE_SIZE_FACTOR
+            };
+            let target_font = base_px * base_u * coeff * text_cal * standalone_mul;
+            if (target_font - self.last_engine_scaled_font).abs() > 0.01 {
+                self.set_font_size(target_font);
+                self.last_engine_scaled_font = target_font;
             }
-            self.last_frame_time = Some(current_time);
         }
         
+        let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
+
+        // Mouse wheel acceleration: decay streak when idle; smooth toward target (no target coast).
+        self.wheel_accel_target *= WHEEL_ACCEL_IDLE_DECAY.powf(dt / SCROLL_REF_DT);
+        self.wheel_accel_target = self.wheel_accel_target.clamp(0.0, 1.0);
+        let wa_diff = self.wheel_accel_target - self.wheel_accel_smooth;
+        if wa_diff.abs() > 1e-5 {
+            let a = 1.0 - (-WHEEL_ACCEL_SMOOTH_RATE * dt).exp();
+            self.wheel_accel_smooth += wa_diff * a;
+        } else {
+            self.wheel_accel_smooth = self.wheel_accel_target;
+        }
+        self.wheel_accel_smooth = self.wheel_accel_smooth.clamp(0.0, 1.0);
+
+        // Drag-release coast: move target by momentum, then decay (dt-corrected).
+        if !self.dragging && self.drag_scroll_momentum.abs() > DRAG_MOMENTUM_STOP {
+            self.scroll_target += self.drag_scroll_momentum * dt;
+            self.drag_scroll_momentum *= DRAG_MOMENTUM_DECAY.powf(dt / SCROLL_REF_DT);
+        } else if !self.dragging {
+            self.drag_scroll_momentum = 0.0;
+        }
+
         // 2. Calculate elastic bounds based on safe regions
         // Text should be able to scroll from top safe region to bottom safe region
         // With symmetric overscroll allowance beyond both edges
@@ -316,34 +386,29 @@ impl Application for TextApp {
         let limit_min = natural_min - overscroll_distance;
         let limit_max = natural_max + overscroll_distance;
         
-        // 5. Apply limits and physics
+        // 5. Apply limits and physics (authoritative `scroll_target`, smoothed `scroll_y`)
         if !self.dragging {
-            // Only apply elastic resistance and dampening after finger release
-            
-            // Elastic pull-back when beyond natural bounds
-            if self.scroll_y < natural_min {
-                let overshoot = natural_min - self.scroll_y;
-                self.scroll_y += overshoot * SCROLL_ELASTIC_STRENGTH;
-                self.scroll_velocity *= 0.8; // Dampen momentum at edge
-            } else if self.scroll_y > natural_max {
-                let overshoot = self.scroll_y - natural_max;
-                self.scroll_y -= overshoot * SCROLL_ELASTIC_STRENGTH;
-                self.scroll_velocity *= 0.8; // Dampen momentum at edge
+            if self.scroll_target < natural_min {
+                let overshoot = natural_min - self.scroll_target;
+                self.scroll_target += overshoot * SCROLL_ELASTIC_STRENGTH;
+            } else if self.scroll_target > natural_max {
+                let overshoot = self.scroll_target - natural_max;
+                self.scroll_target -= overshoot * SCROLL_ELASTIC_STRENGTH;
             }
-            
-            // Hard clamp at absolute limits (with extra dampening)
-            if self.scroll_y < limit_min {
-                self.scroll_y = limit_min;
-                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
-            } else if self.scroll_y > limit_max {
-                self.scroll_y = limit_max;
-                self.scroll_velocity *= 0.3; // Strong dampening at hard limit
+            self.scroll_target = self.scroll_target.max(limit_min).min(limit_max);
+
+            let diff = self.scroll_target - self.scroll_y;
+            if diff.abs() > 0.02 {
+                let alpha = 1.0 - (-SCROLL_SMOOTH_RATE * dt).exp();
+                self.scroll_y += diff * alpha;
+            } else {
+                self.scroll_y = self.scroll_target;
             }
         } else {
-            // While dragging: only apply hard limits (no elastic pull-back)
-            self.scroll_y = self.scroll_y.max(limit_min).min(limit_max);
+            self.scroll_target = self.scroll_target.max(limit_min).min(limit_max);
+            self.scroll_y = self.scroll_target;
         }
-        
+
         self.text_rasterizer.tick(width, content_bottom - content_top);
 
         // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
@@ -374,6 +439,7 @@ impl Application for TextApp {
         let fw = width as usize;
         let fh = height as usize;
         let w_i = width as i32;
+        let h_i = height as i32;
 
         // Draw baselines (offset by content_top)
         if DRAW_BASELINES && self.show_debug_visuals {
@@ -428,32 +494,53 @@ impl Application for TextApp {
                 }
             }
             
-            // Draw selection rectangles per line
+            // Draw selection rectangles per line (clip to viewport — avoids O(selection×pixels) off-screen)
             for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
                 let sel_left = *min_x as i32;
                 let sel_right = *max_x as i32;
                 let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top) as i32;
                 let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top) as i32;
                 
+                let y0 = sel_top.max(0).min(h_i);
+                let y1 = sel_bottom.max(0).min(h_i);
+                let x0 = sel_left.max(0).min(w_i);
+                let x1 = sel_right.max(0).min(w_i);
+                
                 // Draw semi-transparent selection rectangle
-                for y in sel_top..sel_bottom {
-                    for x in sel_left..sel_right {
-                        if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                            let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                            // Alpha blend the selection color
-                            let alpha = SELECTION_COLOR.3 as f32 / 255.0;
-                            let inv_alpha = 1.0 - alpha;
-                            buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
-                            buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
-                            buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
-                        }
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        // Alpha blend the selection color
+                        let alpha = SELECTION_COLOR.3 as f32 / 255.0;
+                        let inv_alpha = 1.0 - alpha;
+                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
+                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
+                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
                     }
                 }
             }
         }
     
+        // Viewport in document space: only blit glyphs that can appear on screen. Glyph bitmaps are
+        // cached in [`TextRasterizer`] (CPU); the cost per frame is proportional to *drawn* pixels.
+        let vis_top = self.scroll_y;
+        let vis_bottom = self.scroll_y + visible_height;
+
         // Draw characters with fade and slide-in (offset by content_top)
         for character in &self.text_rasterizer.characters {
+            let g_top = character.y;
+            let g_bottom = character.y + character.height;
+            if g_bottom < vis_top || g_top > vis_bottom {
+                continue;
+            }
+            // Slide-in can shift the glyph left by up to one bitmap width; include that in x bounds.
+            let slide_max = character.width;
+            let g_left = character.x - slide_max;
+            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
+            if g_right < 0.0 || g_left > width {
+                continue;
+            }
+
             let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
             let fade = self.fade_map.entry(fade_key).or_insert(0.0);
             *fade = (*fade + 0.16).min(1.0); // Fast fade
@@ -548,14 +635,22 @@ impl Application for TextApp {
                         // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
                         let progress = 1.0 - (dist_from_top / edge_threshold); // 0 at threshold, 1 at edge
                         let scroll_speed = base_scroll_speed * progress;
-                        self.scroll_y = (self.scroll_y - scroll_speed).max(0.0);
+                        self.drag_scroll_momentum = 0.0;
+                        self.wheel_accel_target = 0.0;
+                        self.wheel_accel_smooth = 0.0;
+                        self.scroll_target = (self.scroll_target - scroll_speed).max(0.0);
+                        self.scroll_y = self.scroll_target;
                         did_scroll = true;
                     } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
                         // Near bottom edge - scroll down
                         // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
                         let progress = 1.0 - (dist_from_bottom / edge_threshold); // 0 at threshold, 1 at edge
                         let scroll_speed = base_scroll_speed * progress;
-                        self.scroll_y += scroll_speed;
+                        self.drag_scroll_momentum = 0.0;
+                        self.wheel_accel_target = 0.0;
+                        self.wheel_accel_smooth = 0.0;
+                        self.scroll_target += scroll_speed;
+                        self.scroll_y = self.scroll_target;
                         did_scroll = true;
                     }
                     
@@ -601,9 +696,19 @@ impl Application for TextApp {
     
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        // Add to scroll velocity for momentum (accumulates with multiple flicks)
-        self.scroll_velocity += dy;
-        // Mark that scrolling occurred (for double-tap detection)
+        self.drag_scroll_momentum = 0.0;
+        let scaled = if dy.abs() <= 3.0 {
+            dy * MOUSE_WHEEL_LINE_SCALE
+        } else {
+            dy * 1.0
+        };
+        self.wheel_accel_target = (self.wheel_accel_target + WHEEL_CHARGE_PER_NOTCH).min(1.0);
+        let step = self.wheel_accel_target - self.wheel_accel_smooth;
+        self.wheel_accel_smooth += step * WHEEL_STEP_SMOOTH_BLEND;
+        self.wheel_accel_smooth = self.wheel_accel_smooth.clamp(0.0, 1.0);
+        let mult = 1.0 + 2.0 * self.wheel_accel_smooth;
+        // Invert so wheel matches OS / touchpad expectations (scroll down → see lower content).
+        self.scroll_target -= scaled * mult;
         self.last_tap_scrolled = true;
     }
 
@@ -831,8 +936,6 @@ impl Application for TextApp {
                     // iOS: Always scroll on touch, selection only via trackpad (handled separately)
                     self.dragging = true;
                     self.last_mouse_y = state.mouse.y;
-                    self.last_drag_time = Some(Instant::now());
-                    self.last_drag_y = state.mouse.y;
                 }
                 
                 #[cfg(not(target_os = "ios"))]
@@ -846,8 +949,6 @@ impl Application for TextApp {
                             // Vertical movement dominates - scroll
                             self.dragging = true;
                             self.last_mouse_y = state.mouse.y;
-                            self.last_drag_time = Some(Instant::now());
-                            self.last_drag_y = state.mouse.y;
                         } else {
                             // Horizontal movement dominates - select
                             self.selecting = true;
@@ -878,8 +979,6 @@ impl Application for TextApp {
                         } else {
                             self.dragging = true;
                             self.last_mouse_y = state.mouse.y;
-                            self.last_drag_time = Some(Instant::now());
-                            self.last_drag_y = state.mouse.y;
                         }
                     }
                 }
@@ -901,28 +1000,25 @@ impl Application for TextApp {
             self.cursor_position = char_index;
         }
         
-        // Handle dragging for scrolling (direct 1:1 finger tracking)
+        // Scroll drag: 1:1 tracking + EMA of finger speed for release momentum.
         if self.dragging {
+            if self.last_drag_sample_time.is_none() {
+                self.wheel_accel_target = 0.0;
+                self.wheel_accel_smooth = 0.0;
+            }
             let now = Instant::now();
             let dy = state.mouse.y - self.last_mouse_y;
-            
-            // Direct scroll: move exactly with finger (1:1 tracking)
-            self.scroll_y -= dy;
-            
-            self.last_mouse_y = state.mouse.y;
-            
-            // Track velocity for momentum after release
-            if let Some(last_time) = self.last_drag_time {
-                let dt = now.duration_since(last_time).as_secs_f32();
-                if dt > 0.0 {
-                    // Calculate instantaneous velocity in pixels per second
-                    let instant_velocity = (-dy / dt) * 0.5; // Scale factor for natural momentum
-                    // Exponential moving average for smoother velocity
-                    self.scroll_velocity = self.scroll_velocity * 0.5 + instant_velocity * 0.5;
-                }
+            if let Some(t0) = self.last_drag_sample_time {
+                let sample_dt = now.duration_since(t0).as_secs_f32().max(1e-4);
+                let instant_v = (-dy) / sample_dt;
+                self.drag_scroll_momentum = self.drag_scroll_momentum * 0.42 + instant_v * 0.58;
+            } else {
+                self.drag_scroll_momentum = 0.0;
             }
-            self.last_drag_time = Some(now);
-            self.last_drag_y = state.mouse.y;
+            self.last_drag_sample_time = Some(now);
+            self.scroll_target -= dy;
+            self.scroll_y = self.scroll_target;
+            self.last_mouse_y = state.mouse.y;
         }
     }
 
@@ -1014,7 +1110,8 @@ impl Application for TextApp {
             time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) 
                 && distance < DOUBLE_TAP_DISTANCE 
                 && !self.last_tap_scrolled // Don't trigger if user scrolled
-                && self.scroll_velocity.abs() < SCROLL_VELOCITY_THRESHOLD_FOR_TAP // Don't trigger if fast scrolling
+                && (self.scroll_target - self.scroll_y).abs() < SCROLL_SETTLE_FOR_TAP
+                && self.drag_scroll_momentum.abs() < DRAG_MOMENTUM_SETTLE_FOR_TAP // Not coasting from drag
         } else {
             false
         };
@@ -1046,7 +1143,7 @@ impl Application for TextApp {
         // We'll move cursor on mouse up if user didn't scroll
         self.pending_cursor_tap_x = Some(state.mouse.x);
         self.pending_cursor_tap_y = Some(state.mouse.y);
-        self.initial_scroll_y = self.scroll_y;
+        self.initial_scroll_target = self.scroll_target;
         
         // Clear any existing selection when starting a new interaction
         self.selection_start = None;
@@ -1069,7 +1166,7 @@ impl Application for TextApp {
         // Check if we should move cursor (only if user didn't scroll and didn't drag/select)
         if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {
             // Check if user scrolled (scroll_y changed significantly)
-            let scroll_delta = (self.scroll_y - self.initial_scroll_y).abs();
+            let scroll_delta = (self.scroll_target - self.initial_scroll_target).abs();
             let scroll_threshold = 1.0; // pixels
             
             // Check if user dragged (moved mouse significantly)
@@ -1101,11 +1198,10 @@ impl Application for TextApp {
             self.pending_cursor_tap_y = None;
         }
         
-        // Stop dragging and selecting (momentum will continue via scroll_velocity)
+        // Stop dragging and selecting
         self.dragging = false;
+        self.last_drag_sample_time = None;
         self.selecting = false;
-        // Reset drag tracking
-        self.last_drag_time = None;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
         // Clear selection on tap release if no drag occurred
@@ -1170,13 +1266,19 @@ impl TextApp {
         
         // If cursor is above visible area, scroll up
         if cursor_top < visible_top + top_padding {
-            self.scroll_y = (cursor_top - top_padding).max(0.0);
-            self.scroll_velocity = 0.0; // Stop momentum when auto-scrolling
+            self.drag_scroll_momentum = 0.0;
+            self.wheel_accel_target = 0.0;
+            self.wheel_accel_smooth = 0.0;
+            self.scroll_target = (cursor_top - top_padding).max(0.0);
+            self.scroll_y = self.scroll_target;
         }
         // If cursor is below visible area, scroll down
         else if cursor_bottom > visible_bottom - bottom_padding {
-            self.scroll_y = cursor_bottom + bottom_padding - content_height;
-            self.scroll_velocity = 0.0; // Stop momentum when auto-scrolling
+            self.drag_scroll_momentum = 0.0;
+            self.wheel_accel_target = 0.0;
+            self.wheel_accel_smooth = 0.0;
+            self.scroll_target = cursor_bottom + bottom_padding - content_height;
+            self.scroll_y = self.scroll_target;
         }
     }
     
