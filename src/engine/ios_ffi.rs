@@ -153,7 +153,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             style: CursorStyleSetter::new(),
         },
         keyboard: KeyboardState {
-            onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+            onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
         },
         fps_overlay: FpsOverlay::new(),
         delta_time_seconds: 1.0 / 60.0,
@@ -229,7 +229,7 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             // Split borrows: get buffer and keyboard separately
             let (buffer, keyboard) = {
                 let buffer_ptr = ios_state.engine_state.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut ios_state.engine_state.keyboard.onscreen;
+                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut ios_state.engine_state.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
@@ -414,7 +414,7 @@ pub extern "C" fn xos_engine_cleanup() {
 // ===== Magnetometer FFI =====
 
 #[cfg(target_os = "ios")]
-struct MagnetometerWrapper(crate::sensors::Magnetometer);
+struct MagnetometerWrapper(crate::engine::sensors::Magnetometer);
 
 // Safe because iOS FFI is single-threaded on main thread
 #[cfg(target_os = "ios")]
@@ -433,7 +433,7 @@ pub extern "C" fn xos_magnetometer_init() -> i32 {
         Err(_) => return 1,
     };
     
-    match crate::sensors::Magnetometer::new() {
+    match crate::engine::sensors::Magnetometer::new() {
         Ok(m) => {
             *mag = Some(MagnetometerWrapper(m));
             0

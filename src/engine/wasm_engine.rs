@@ -4,9 +4,10 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
+use super::{tick_fps_overlay, FpsOverlay};
 use super::engine::{
-    tick_fps_overlay, tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState,
-    FpsOverlay, FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 
@@ -58,7 +59,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 style: CursorStyleSetter::new(),
             },
             keyboard: KeyboardState {
-                onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
             delta_time_seconds: 1.0 / 60.0,
@@ -368,7 +369,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     // Split borrows: get buffer and keyboard separately
                     let (buffer, keyboard) = {
                         let buffer_ptr = state.engine_state.frame.buffer_mut() as *mut [u8];
-                        let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut state.engine_state.keyboard.onscreen;
+                        let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut state.engine_state.keyboard.onscreen;
                         (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
                     };
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);

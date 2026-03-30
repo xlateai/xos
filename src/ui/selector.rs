@@ -1,6 +1,6 @@
 use crate::engine::EngineState;
-use crate::text::text_rasterization::TextRasterizer;
-use crate::text::fonts;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::fonts;
 
 /// A simple, reusable selector component for choosing between options
 pub struct Selector {

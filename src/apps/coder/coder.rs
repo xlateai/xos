@@ -2,7 +2,7 @@ use crate::engine::{Application, EngineState};
 use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::ui::Button;
-use crate::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use rustpython_vm::{Interpreter, AsObject};
 use include_dir::{include_dir, Dir};
 use std::collections::HashSet;

@@ -1,5 +1,5 @@
 use super::partition::{Partition, PartitionData};
-use crate::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::{Font, FontSettings};
 use std::cell::RefCell;
 

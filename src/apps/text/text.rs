@@ -1,9 +1,9 @@
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::{fill, fill_rect_buffer};
-use crate::text::text_rasterization::TextRasterizer;
-use crate::text::onscreen_keyboard::KeyType;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
-use crate::keyboard::shortcuts::ShortcutAction;
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 

@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
-use crate::sensors::{Magnetometer, MagnetometerReading};
-use crate::text::text_rasterization::TextRasterizer;
+use crate::engine::sensors::{Magnetometer, MagnetometerReading};
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use crate::ui::Selector;
 use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};

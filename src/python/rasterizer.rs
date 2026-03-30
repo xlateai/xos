@@ -1,7 +1,7 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 use std::sync::Mutex;
 use crate::rasterizer::shapes::lines::draw_line_direct;
-use crate::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 
 // Thread-safe wrapper for raw pointer

@@ -1,4 +1,4 @@
-use crate::sensors::MagnetometerReading;
+use super::MagnetometerReading;
 
 /// Stub magnetometer implementation for non-iOS platforms
 pub struct Magnetometer {

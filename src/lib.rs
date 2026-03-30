@@ -9,18 +9,14 @@ use tiny_http::{Server, Response};
 use webbrowser;
 
 pub mod random;
-pub mod text;
 pub mod tuneable;
 pub mod engine;
 pub mod video;
-pub mod audio;
-pub mod sensors;
 pub mod apps;
 pub mod ui;
 pub mod tensor;
 pub mod python;
 pub mod clipboard;
-pub mod keyboard;
 pub mod rasterizer;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).

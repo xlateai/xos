@@ -16,11 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
+use super::{tick_fps_overlay, FpsOverlay};
 use super::engine::{
-    tick_fps_overlay, tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState,
-    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
-use crate::keyboard::shortcuts::detect_shortcut;
+use crate::engine::keyboard::shortcuts::detect_shortcut;
 use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,7 +161,7 @@ impl ApplicationHandler for AppState {
                     // Split borrows: get buffer and keyboard separately through engine_state
                     let (buffer, keyboard) = {
                         let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
-                        let keyboard_ptr: *mut crate::text::onscreen_keyboard::OnScreenKeyboard = &mut self.engine_state.keyboard.onscreen;
+                        let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut self.engine_state.keyboard.onscreen;
                         (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
                     };
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
@@ -437,9 +438,9 @@ impl ApplicationHandler for AppStateWrapper {
                     style: CursorStyleSetter::new(),
                 },
                 keyboard: KeyboardState {
-                    onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+                    onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
                 },
-                fps_overlay: super::engine::FpsOverlay::new(),
+                fps_overlay: FpsOverlay::new(),
                 delta_time_seconds: 1.0 / 60.0,
             };
 
@@ -545,9 +546,9 @@ pub fn start_headless_native(
             style: CursorStyleSetter::new(),
         },
         keyboard: KeyboardState {
-            onscreen: crate::text::onscreen_keyboard::OnScreenKeyboard::new(),
+            onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
         },
-        fps_overlay: super::engine::FpsOverlay::new(),
+        fps_overlay: FpsOverlay::new(),
         delta_time_seconds: 1.0 / 60.0,
     };
 

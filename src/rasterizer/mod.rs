@@ -11,6 +11,7 @@ use crate::python::rasterizer::fill_buffer_solid_rgba;
 
 mod cache;
 pub mod shapes;
+pub mod text;
 pub use cache::RasterCache;
 
 pub use shapes::{

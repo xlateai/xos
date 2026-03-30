@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
-use crate::audio::{devices, default_input, default_output, AudioListener, AudioPlayer, AudioDevice};
-use crate::text::text_rasterization::TextRasterizer;
+use crate::engine::audio::{devices, default_input, default_output, AudioListener, AudioPlayer, AudioDevice};
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 use std::time::{Instant, Duration};
 

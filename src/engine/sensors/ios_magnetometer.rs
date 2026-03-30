@@ -1,6 +1,6 @@
 use ringbuf::{HeapRb, Producer, Consumer};
 use std::sync::{Mutex, Arc};
-use crate::sensors::MagnetometerReading;
+use super::MagnetometerReading;
 
 /// Thread-safe wrapper for Producer (needed for FFI callbacks)
 struct ProducerWrapper {

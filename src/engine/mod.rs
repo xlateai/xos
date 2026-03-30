@@ -1,4 +1,10 @@
+mod fps_overlay;
+
 pub mod engine;
+
+pub mod audio;
+pub mod keyboard;
+pub mod sensors;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_engine;
@@ -25,7 +31,8 @@ pub use wasm_engine::run_web;
 
 pub use crate::py_engine::PyApplicationWrapper;
 
+pub use fps_overlay::{tick_fps_overlay, FpsOverlay};
 pub use engine::{
-    tick_fps_overlay, tick_frame_delta, Application, CursorStyleSetter, EngineState, FpsOverlay,
-    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    tick_frame_delta, Application, CursorStyleSetter, EngineState, FrameState, KeyboardState,
+    MouseState, SafeRegionBoundingRectangle,
 };

@@ -1,7 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::tuneable::write_all_to_source;
 use crate::tuneables;
-use crate::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::{Font, FontSettings};
 
 tuneables! {

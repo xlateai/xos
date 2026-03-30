@@ -1,8 +1,8 @@
 //! Global FPS overlay (top-right, green, JetBrains Mono) for all xos applications.
 //! Matches the former coder-app style; composited after each frame tick and keyboard pass.
 
-use super::EngineState;
-use crate::text::text_rasterization::TextRasterizer;
+use crate::engine::EngineState;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use std::time::Instant;
 
 const REF_SHORT_EDGE: f32 = 920.0;
@@ -23,7 +23,7 @@ impl std::fmt::Debug for FpsOverlay {
 
 impl FpsOverlay {
     pub fn new() -> Self {
-        let font_data = include_bytes!("../../../assets/JetBrainsMono-Regular.ttf");
+        let font_data = include_bytes!("../../assets/JetBrainsMono-Regular.ttf");
         let font = fontdue::Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default())
             .expect("Failed to load font for FPS overlay");
         let mut rasterizer = TextRasterizer::new(font, 18.0);

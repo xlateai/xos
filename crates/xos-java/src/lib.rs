@@ -121,7 +121,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
                 style: CursorStyleSetter::new(),
             },
             keyboard: KeyboardState {
-                onscreen: xos::text::onscreen_keyboard::OnScreenKeyboard::new(),
+                onscreen: xos::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             fps_overlay: FpsOverlay::new(),
             delta_time_seconds: 1.0 / 60.0,
@@ -183,7 +183,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             let safe_region = host.engine.frame.safe_region_boundaries.clone();
             let (buffer, keyboard) = {
                 let buffer_ptr = host.engine.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut xos::text::onscreen_keyboard::OnScreenKeyboard =
+                let keyboard_ptr: *mut xos::ui::onscreen_keyboard::OnScreenKeyboard =
                     &mut host.engine.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
