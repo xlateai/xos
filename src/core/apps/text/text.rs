@@ -36,8 +36,8 @@ const DRAG_MOMENTUM_STOP: f32 = 38.0;
 /// Double-tap keyboard only if drag coast speed is below this (px/s).
 const DRAG_MOMENTUM_SETTLE_FOR_TAP: f32 = 130.0;
 
-/// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels.
-const MOUSE_WHEEL_LINE_SCALE: f32 = 55.2;
+/// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels (~+45% vs legacy).
+const MOUSE_WHEEL_LINE_SCALE: f32 = 80.0;
 /// Per wheel event: adds to [`TextApp::wheel_accel_target`] (0..=1). Sustained scrolling stacks toward 3×.
 const WHEEL_CHARGE_PER_NOTCH: f32 = 0.085;
 /// Idle decay of wheel streak per [`SCROLL_REF_DT`] (no momentum after you stop — target eases down).
