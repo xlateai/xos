@@ -1,6 +1,10 @@
-//! Filled circles via Burn tensors (wgpu); CPU helpers for legacy `&mut [u8]` callers.
+//! Filled circles: native uses WGSL compute (`crate::rasterizer::render_pending_gpu_passes`); WASM
+//! uses Burn tensors; CPU helpers for legacy `&mut [u8]` callers.
 
 use crate::engine::FrameState;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::rasterizer::GpuCircle;
+#[cfg(target_arch = "wasm32")]
 use crate::tensor::burn_raster;
 
 /// Draw filled circles into `frame`. Pixel coordinates; `centers`, `radii`, and `colors` must align:
@@ -49,7 +53,18 @@ pub fn circles(
         instances.push((centers[i].0, centers[i].1, r, c));
     }
 
-    burn_raster::circles(&mut frame.tensor, &instances);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        for &(cx, cy, r, c) in &instances {
+            frame
+                .wgpu_circles_pending
+                .push(GpuCircle::new(cx, cy, r, c));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        burn_raster::circles(&mut frame.tensor, &instances);
+    }
     Ok(())
 }
 

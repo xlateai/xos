@@ -25,6 +25,7 @@ delaunator = "1.0"
 rustpython-vm = "0.3.0"
 ringbuf = "0.3"
 include_dir = "0.7"
+bytemuck = { version = "1.14", features = ["derive"] }
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies

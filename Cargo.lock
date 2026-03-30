@@ -10278,6 +10278,7 @@ dependencies = [
  "burn",
  "burn-backend",
  "burn-wgpu",
+ "bytemuck",
  "clap",
  "console_error_panic_hook",
  "cpal",

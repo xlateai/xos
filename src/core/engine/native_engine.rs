@@ -104,6 +104,7 @@ impl AppState {
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
         self.pixels.render_with(|encoder, render_target, context| {
             crate::rasterizer::render_pending_gpu_passes(
+                &mut self.engine_state.frame,
                 &mut self.raster_cache,
                 encoder,
                 &context.device,
@@ -435,6 +436,7 @@ impl ApplicationHandler for AppStateWrapper {
             let size = window.inner_size();
             let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
             let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
+                .texture_format(pixels::wgpu::TextureFormat::Rgba8Unorm)
                 .enable_vsync(false)
                 .build()
             {

@@ -1,5 +1,7 @@
 use super::fps_overlay::FpsOverlay;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::rasterizer::GpuCircle;
 use crate::tensor::FrameTensor;
 
 /// Safe region bounding rectangle for UI elements
@@ -70,6 +72,9 @@ pub struct FrameState {
     pub tensor: FrameTensor,
     /// Safe region bounding rectangle for UI elements
     pub safe_region_boundaries: SafeRegionBoundingRectangle,
+    /// Circles rasterized by the WGSL compute pass after CPU upload (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wgpu_circles_pending: Vec<GpuCircle>,
 }
 
 impl FrameState {
@@ -78,7 +83,14 @@ impl FrameState {
         Self {
             tensor: FrameTensor::new(width, height),
             safe_region_boundaries: safe_region,
+            #[cfg(not(target_arch = "wasm32"))]
+            wgpu_circles_pending: Vec::new(),
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_wgpu_circles(&mut self) -> Vec<GpuCircle> {
+        std::mem::take(&mut self.wgpu_circles_pending)
     }
 
     /// Get mutable access to the frame buffer (zero-copy for rasterizer)
@@ -93,6 +105,8 @@ impl FrameState {
 
     /// Resize the frame to new dimensions (preserves safe region, as it's normalized)
     pub fn resize(&mut self, width: u32, height: u32) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wgpu_circles_pending.clear();
         self.tensor.resize(width, height);
     }
 

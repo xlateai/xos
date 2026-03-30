@@ -6,6 +6,11 @@ use crate::engine::FrameState;
 use crate::tensor::burn_raster;
 
 mod cache;
+#[cfg(not(target_arch = "wasm32"))]
+mod circles_compute;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use circles_compute::GpuCircle;
 pub mod shapes;
 pub mod text;
 pub use cache::RasterCache;
@@ -21,15 +26,43 @@ pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
     burn_raster::fill_solid(&mut frame.tensor, color);
 }
 
-/// Hook for future GPU passes after CPU upload; currently a no-op (Burn raster runs on the frame tensor).
+/// After `pixels` uploads the CPU frame buffer, runs WGSL circle compositing when
+/// [`GpuCircle`]s were queued for this frame (native desktop).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_pending_gpu_passes(
-    _cache: &mut RasterCache,
-    _encoder: &mut pixels::wgpu::CommandEncoder,
-    _device: &pixels::wgpu::Device,
-    _queue: &pixels::wgpu::Queue,
-    _inner_texture: &pixels::wgpu::Texture,
-    _extent: pixels::wgpu::Extent3d,
-    _texture_format: pixels::wgpu::TextureFormat,
+    frame: &mut FrameState,
+    cache: &mut RasterCache,
+    encoder: &mut pixels::wgpu::CommandEncoder,
+    device: &pixels::wgpu::Device,
+    queue: &pixels::wgpu::Queue,
+    inner_texture: &pixels::wgpu::Texture,
+    extent: pixels::wgpu::Extent3d,
+    texture_format: pixels::wgpu::TextureFormat,
 ) {
+    let pending = frame.take_wgpu_circles();
+    if pending.is_empty() {
+        return;
+    }
+    if texture_format != pixels::wgpu::TextureFormat::Rgba8Unorm {
+        eprintln!(
+            "xos: WGSL circles expect Rgba8Unorm framebuffer; got {:?}",
+            texture_format
+        );
+        return;
+    }
+
+    if cache.circles_gpu.is_none() {
+        cache.circles_gpu = Some(circles_compute::CirclesGpu::new(device, extent));
+    }
+    let gpu = cache.circles_gpu.as_mut().expect("circles_gpu");
+    let input_view = inner_texture.create_view(&pixels::wgpu::TextureViewDescriptor::default());
+    gpu.encode(
+        device,
+        queue,
+        encoder,
+        &input_view,
+        inner_texture,
+        extent,
+        &pending,
+    );
 }

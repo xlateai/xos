@@ -4,6 +4,9 @@
 //! [`Tensor`] on [`XosDevice`] (wgpu), with a CPU staging buffer for `pixels` upload and
 //! legacy `&mut [u8]` raster paths.
 
+mod fill;
+mod circles;
+
 pub mod burn_raster;
 pub mod conv;
 
@@ -145,12 +148,7 @@ impl FrameTensor {
     /// (or the `pixels` mirror on native) via [`Self::buffer_mut`]; the GPU tensor is stale until
     /// [`Self::ensure_gpu_from_cpu`] runs before a Burn raster op.
     pub(crate) fn fill_solid_fast(&mut self, color: (u8, u8, u8, u8)) {
-        let px = [color.0, color.1, color.2, color.3];
-        let buf = self.staging_slice_mut();
-        for chunk in buf.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&px);
-        }
-        self.cpu_dirty = true;
+        fill::fill_solid_fast(self, color);
     }
 
     fn sync_tensor_to_cpu(&mut self) {
