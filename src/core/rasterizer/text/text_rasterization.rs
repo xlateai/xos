@@ -90,7 +90,8 @@ impl TextRasterizer {
     }
 
     pub fn set_text(&mut self, text: String) {
-        self.text = text;
+        // Normalize Windows-style CRLF to LF so '\r' doesn't render as a visible trailing glyph.
+        self.text = text.replace("\r\n", "\n").replace('\r', "\n");
     }
 
     /// Updates metrics for a new font size (call before [`tick`](Self::tick) to relayout).
