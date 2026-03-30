@@ -19,8 +19,9 @@ const DRAW_BASELINES: bool = true;
 const DOUBLE_TAP_TIME_MS: u64 = 300; // 300ms window for double tap
 const DOUBLE_TAP_DISTANCE: f32 = 50.0; // Maximum distance between taps in pixels
 
-// Scroll: `scroll_target` is authoritative. Mouse wheel: no momentum — snap `scroll_y` to target.
-// Click-drag: `drag_scroll_momentum` (px/s) coasts after release; `scroll_y` still eases toward target.
+// Scroll: `scroll_target` is authoritative; `scroll_y` eases toward it (smooth). Mouse wheel only
+// moves `scroll_target` and clears `drag_scroll_momentum` — no coast after you stop wheeling.
+// Click-drag: `drag_scroll_momentum` coasts `scroll_target` after finger release; `scroll_y` eases.
 const SCROLL_REF_DT: f32 = 1.0 / 60.0;
 const SCROLL_ELASTIC_STRENGTH: f32 = 0.04; // Strength of elastic bounce at edges (lower = softer, more springy)
 const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25; // How far off-screen you can scroll (0.25 = 25% of visible height on each side)
@@ -634,7 +635,6 @@ impl Application for TextApp {
         };
         // Invert so wheel matches OS / touchpad expectations (scroll down → see lower content).
         self.scroll_target -= scaled;
-        self.scroll_y = self.scroll_target;
         self.last_tap_scrolled = true;
     }
 
