@@ -26,6 +26,9 @@ const SCROLL_ELASTIC_STRENGTH: f32 = 0.04; // Strength of elastic bounce at edge
 const SCROLL_VELOCITY_THRESHOLD_FOR_TAP: f32 = 5.0; // Don't trigger double-tap if scrolling faster than this
 const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25; // How far off-screen you can scroll (0.25 = 25% of visible height on each side)
 
+/// Mouse wheel [`MouseScrollDelta::LineDelta`] is typically ±1 per notch; scale to ~pixels.
+const MOUSE_WHEEL_LINE_SCALE: f32 = 48.0;
+
 // Arrow key characters (using Unicode arrow symbols)
 const ARROW_LEFT: char = '\u{2190}';  // ←
 const ARROW_RIGHT: char = '\u{2192}'; // →
@@ -623,9 +626,16 @@ impl Application for TextApp {
     
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        // Add to scroll velocity for momentum (accumulates with multiple flicks)
-        self.scroll_velocity += dy;
-        // Mark that scrolling occurred (for double-tap detection)
+        // winit: `LineDelta` y is usually ±1 per notch (too small for `scroll_velocity += dy`).
+        // `PixelDelta` (trackpad) is already in pixels — scale lightly.
+        let scaled = if dy.abs() <= 3.0 {
+            dy * MOUSE_WHEEL_LINE_SCALE
+        } else {
+            dy * 1.0
+        };
+        // Invert so wheel matches OS / touchpad expectations (scroll down → see lower content).
+        self.scroll_y -= scaled;
+        self.scroll_velocity -= scaled * 0.25;
         self.last_tap_scrolled = true;
     }
 
