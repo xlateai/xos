@@ -146,11 +146,26 @@ impl ApplicationHandler for AppState {
                     // Notify app of screen size change
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
-                
+
+                let expected_len = (self.size.width * self.size.height * 4) as usize;
+                let mut mirror_ok = false;
+                {
+                    let f = self.pixels.frame_mut();
+                    if f.len() == expected_len {
+                        unsafe {
+                            self.engine_state
+                                .frame
+                                .tensor
+                                .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
+                        }
+                        mirror_ok = true;
+                    }
+                }
+
                 tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 // Tick the app first
                 let _ = self.app.tick(&mut self.engine_state);
-                
+
                 // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
                 {
                     let width = self.size.width;
@@ -169,29 +184,34 @@ impl ApplicationHandler for AppState {
 
                 tick_fps_overlay(&mut self.engine_state);
 
-                let frame = self.pixels.frame_mut();
-                let buffer = self.engine_state.frame_buffer_mut();
-                if frame.len() == buffer.len() {
-                    frame.copy_from_slice(buffer);
+                if mirror_ok {
+                    self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
                     let _ = self.render_pixels();
                 } else {
-                    let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.resize_frame(self.size.width, self.size.height);
-                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                     let frame = self.pixels.frame_mut();
                     let buffer = self.engine_state.frame_buffer_mut();
                     if frame.len() == buffer.len() {
                         frame.copy_from_slice(buffer);
                         let _ = self.render_pixels();
                     } else {
-                        eprintln!(
-                            "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
-                            frame.len(),
-                            buffer.len(),
-                            self.size.width,
-                            self.size.height
-                        );
+                        let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
+                        let _ = self.pixels.resize_surface(self.size.width, self.size.height);
+                        self.engine_state.resize_frame(self.size.width, self.size.height);
+                        let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                        let frame = self.pixels.frame_mut();
+                        let buffer = self.engine_state.frame_buffer_mut();
+                        if frame.len() == buffer.len() {
+                            frame.copy_from_slice(buffer);
+                            let _ = self.render_pixels();
+                        } else {
+                            eprintln!(
+                                "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
+                                frame.len(),
+                                buffer.len(),
+                                self.size.width,
+                                self.size.height
+                            );
+                        }
                     }
                 }
             }

@@ -22,16 +22,22 @@ pub type FloatTensor<const D: usize> = Tensor<XosBackend, D>;
 pub type IntTensor<const D: usize> = Tensor<XosBackend, D, Int>;
 
 use burn::tensor::Float;
+use std::ptr::NonNull;
 
 /// RGBA frame: primary storage is a Burn [`Tensor`] `f32` in **0..=255** per channel; shape
 /// `[height, width, 4]`. A CPU mirror is kept for presentation (`pixels`) and code that still
 /// writes `&mut [u8]`.
+///
+/// On **native desktop**, the winit host can bind `pixels::Pixels::frame_mut` so the engine draws
+/// into the same `Vec` that `pixels.render` uploads — avoiding a full-frame `copy_from_slice` every tick.
 pub struct FrameTensor {
     tensor: Tensor<XosBackend, 3, Float>,
     device: WgpuDevice,
     width: u32,
     height: u32,
     cpu_staging: Vec<u8>,
+    /// When set, `buffer_mut` / fills use this memory instead of `cpu_staging` (native + `pixels`).
+    pixels_mirror: Option<(NonNull<u8>, usize)>,
     /// GPU tensor has newer pixels than `cpu_staging`.
     gpu_dirty: bool,
     /// CPU staging was written since last GPU sync.
@@ -56,8 +62,38 @@ impl FrameTensor {
             width,
             height,
             cpu_staging,
+            pixels_mirror: None,
             gpu_dirty: false,
             cpu_dirty: false,
+        }
+    }
+
+    /// # Safety
+    /// `ptr` must be valid for writes of `len` bytes until [`Self::clear_pixels_mirror_buffer`].
+    /// `len` must be `width * height * 4`. The caller must not resize the backing buffer or
+    /// call `pixels.frame_mut()` again until this is cleared.
+    pub(crate) unsafe fn set_pixels_mirror_buffer(&mut self, ptr: *mut u8, len: usize) {
+        debug_assert_eq!(len, (self.width * self.height * 4) as usize);
+        self.pixels_mirror = Some((NonNull::new(ptr).expect("pixels mirror ptr"), len));
+    }
+
+    pub(crate) fn clear_pixels_mirror_buffer(&mut self) {
+        self.pixels_mirror = None;
+    }
+
+    fn staging_slice_mut(&mut self) -> &mut [u8] {
+        if let Some((ptr, len)) = &self.pixels_mirror {
+            unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), *len) }
+        } else {
+            &mut self.cpu_staging
+        }
+    }
+
+    fn staging_slice(&self) -> &[u8] {
+        if let Some((ptr, len)) = &self.pixels_mirror {
+            unsafe { std::slice::from_raw_parts(ptr.as_ptr(), *len) }
+        } else {
+            &self.cpu_staging
         }
     }
 
@@ -90,12 +126,14 @@ impl FrameTensor {
     /// avoiding a per-frame tensor upload that can stress the wgpu queue (and risk device loss).
     pub(crate) fn ensure_gpu_from_cpu(&mut self) {
         if self.cpu_dirty {
-            self.tensor = burn_raster::tensor_from_rgba_u8(
-                &self.device,
-                self.width as usize,
-                self.height as usize,
-                &self.cpu_staging,
-            );
+            let w = self.width as usize;
+            let h = self.height as usize;
+            let (ptr, len) = match &self.pixels_mirror {
+                Some((p, l)) => (p.as_ptr() as *const u8, *l),
+                None => (self.cpu_staging.as_ptr(), self.cpu_staging.len()),
+            };
+            let staging = unsafe { std::slice::from_raw_parts(ptr, len) };
+            self.tensor = burn_raster::tensor_from_rgba_u8(&self.device, w, h, staging);
             self.cpu_dirty = false;
         }
     }
@@ -103,12 +141,13 @@ impl FrameTensor {
     /// Full-frame solid color: fill CPU staging only (no Burn tensor upload this frame).
     ///
     /// Per-frame `Tensor::from_data` / GPU uploads were doubling FPS vs the old GPU path but could
-    /// trigger `Queue::submit` / device loss under load. Presentation reads `cpu_staging` via
-    /// [`Self::buffer_mut`]; the GPU tensor is stale until [`Self::ensure_gpu_from_cpu`] runs
-    /// before a Burn raster op.
+    /// trigger `Queue::submit` / device loss under load. Presentation reads the staging buffer
+    /// (or the `pixels` mirror on native) via [`Self::buffer_mut`]; the GPU tensor is stale until
+    /// [`Self::ensure_gpu_from_cpu`] runs before a Burn raster op.
     pub(crate) fn fill_solid_fast(&mut self, color: (u8, u8, u8, u8)) {
         let px = [color.0, color.1, color.2, color.3];
-        for chunk in self.cpu_staging.chunks_exact_mut(4) {
+        let buf = self.staging_slice_mut();
+        for chunk in buf.chunks_exact_mut(4) {
             chunk.copy_from_slice(&px);
         }
         self.cpu_dirty = true;
@@ -119,12 +158,13 @@ impl FrameTensor {
         let w = self.width as usize;
         let data = self.tensor.clone().into_data();
         let s = data.as_slice::<f32>().expect("frame f32");
+        let buf = self.staging_slice_mut();
         for i in 0..(h * w) {
             let o = i * 4;
-            self.cpu_staging[o] = s[o].clamp(0., 255.) as u8;
-            self.cpu_staging[o + 1] = s[o + 1].clamp(0., 255.) as u8;
-            self.cpu_staging[o + 2] = s[o + 2].clamp(0., 255.) as u8;
-            self.cpu_staging[o + 3] = s[o + 3].clamp(0., 255.) as u8;
+            buf[o] = s[o].clamp(0., 255.) as u8;
+            buf[o + 1] = s[o + 1].clamp(0., 255.) as u8;
+            buf[o + 2] = s[o + 2].clamp(0., 255.) as u8;
+            buf[o + 3] = s[o + 3].clamp(0., 255.) as u8;
         }
     }
 
@@ -134,7 +174,7 @@ impl FrameTensor {
             self.sync_tensor_to_cpu();
             self.gpu_dirty = false;
         }
-        &self.cpu_staging
+        self.staging_slice()
     }
 
     /// Legacy zero-copy-style CPU buffer (keyboard, text, FFI). Syncs GPU→CPU when needed.
@@ -144,7 +184,7 @@ impl FrameTensor {
             self.gpu_dirty = false;
         }
         self.cpu_dirty = true;
-        &mut self.cpu_staging
+        self.staging_slice_mut()
     }
 
     /// Get the frame shape `[height, width, 4]`
@@ -164,6 +204,7 @@ impl FrameTensor {
     /// Clear to opaque black (GPU + CPU).
     pub fn clear(&mut self) {
         let len = (self.width * self.height * 4) as usize;
+        self.pixels_mirror = None;
         self.cpu_staging.clear();
         self.cpu_staging.resize(len, 0);
         for chunk in self.cpu_staging.chunks_exact_mut(4) {
@@ -185,6 +226,7 @@ impl std::fmt::Debug for FrameTensor {
         f.debug_struct("FrameTensor")
             .field("width", &self.width)
             .field("height", &self.height)
+            .field("pixels_mirror", &self.pixels_mirror.is_some())
             .field("gpu_dirty", &self.gpu_dirty)
             .field("cpu_dirty", &self.cpu_dirty)
             .finish()
