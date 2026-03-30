@@ -1,0 +1,15 @@
+[package]
+name = "xos-java"
+version = "0.1.0"
+edition = "2021"
+description = "JNI bridge for embedding the xos engine in a JVM (e.g. Minecraft). See java/ for the matching API."
+publish = false
+
+[lib]
+# Native artifact: xos_java.dll / libxos_java.so / libxos_java.dylib (Java System.loadLibrary("xos_java"))
+name = "xos_java"
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+xos = { path = "../../../.." }

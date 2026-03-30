@@ -58,6 +58,10 @@ xos python                # Open the Rust python interpreter
 xos python <file-path>    # Run a Python file from the xos interpreter (path/to/file.py)
 ```
 
+### Debugging the CLI
+
+If you run into any weird quirks of the CLI, such as not being able to find a path or seemingly outdated versions of the code being executed when relying on the `xos build` or `xos app {...}` commands for execution, then please `cd` into the xos code directory and run `cargo install --path .`. That should reinstall the CLI and all of the driver code which should fix any issues with `xos build` and or `xos app {...}`. If not, make sure there are no duplicate versions of `xos` running, and be mindful of the path for the executable (`xos path` might help find it).
+
 ### The --ios Flag
 
 For launching applications onto your iOS devices:

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
-use xos::python::{run_python_app, run_python_interactive};
+use xos::python_api::{run_python_app, run_python_interactive};
 
 #[derive(Parser)]
 #[command(name = "xos")]
@@ -25,7 +25,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run an application (`xos app <name>` matches `src/apps/<name>.rs`, e.g. `overlay`, `ball`)
+    /// Run an application (`xos app <name>` matches `src/core/apps/<name>.rs`, e.g. `overlay`, `ball`)
     #[command(subcommand_required = true)]
     App {
         #[command(subcommand)]
@@ -144,7 +144,7 @@ fn build_ios_rust() {
     println!("🦀 Building Rust library for iOS...");
     
     let project_root = find_project_root();
-    let script_path = project_root.join("build-ios.sh");
+    let script_path = project_root.join("src").join("ios").join("build-ios.sh");
     
     if !script_path.exists() {
         eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
@@ -157,7 +157,9 @@ fn build_ios_rust() {
     build_cmd.stdout(Stdio::inherit());
     build_cmd.stderr(Stdio::inherit());
     
-    let status = build_cmd.status().expect("Failed to run build-ios.sh");
+    let status = build_cmd
+        .status()
+        .expect("Failed to run src/ios/build-ios.sh");
     if !status.success() {
         eprintln!("❌ iOS build failed. Exiting.");
         std::process::exit(1);
@@ -170,10 +172,10 @@ fn build_ios_swift() {
     println!("📦 Running pod install...");
     
     let project_root = find_project_root();
-    let ios_dir = project_root.join("ios");
+    let ios_dir = project_root.join("src").join("ios");
     
     if !ios_dir.exists() {
-        eprintln!("❌ ios/ directory not found at: {}", ios_dir.display());
+        eprintln!("❌ src/ios directory not found at: {}", ios_dir.display());
         std::process::exit(1);
     }
     
@@ -212,7 +214,7 @@ fn build_ios() {
     build_ios_swift();
     
     println!("📱 Next steps:");
-    println!("   1. Open xos.xcworkspace in Xcode (or use: xed ios/)");
+    println!("   1. Open xos.xcworkspace in Xcode (or use: xed src/ios/)");
     println!("   2. Configure code signing in Xcode");
     println!("   3. Build and run on device or simulator");
 }
