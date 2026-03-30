@@ -15,6 +15,7 @@ A true alternative to React Native: pure Python, zero JavaScript, no HTML or CSS
 - [ ] Locally inferenced audio transcription models.
 - [ ] Re-enable WASM/Web support.
 - [ ] Build for iOS without xcode on the developer's machine.
+- [ ] Tests + performance checks
 
 ## Prerequisites
 
