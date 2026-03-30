@@ -1,4 +1,4 @@
-// Shared edge test for Delaunay / winding checks (see `rasterizer::fill_triangle_buffer` for fills).
+// Shared edge test for Delaunay / winding checks (see `rasterizer::shapes::triangles::fill_triangle_buffer` for fills).
 
 use delaunator::Point;
 

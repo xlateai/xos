@@ -1,13 +1,156 @@
-//! Instanced discs composited via an offscreen scratch texture (inner `pixels` texture is only
-//! COPY_DST | TEXTURE_BINDING, not RENDER_ATTACHMENT). Flow: blit base → scratch, draw circles,
-//! copy scratch → inner.
+//! Filled circles (CPU) and optional GPU batch plumbing (instanced discs via wgpu, desktop).
 
+use crate::engine::FrameState;
+use std::sync::Mutex;
+
+/// One GPU draw worth of instances (cx, cy, radius px, RGBA8).
+#[derive(Clone, Debug)]
+pub struct GpuRasterBatch {
+    pub instances: Vec<(f32, f32, f32, [u8; 4])>,
+}
+
+static PENDING_GPU_BATCHES: Mutex<Vec<GpuRasterBatch>> = Mutex::new(Vec::new());
+
+pub(crate) fn drain_pending_gpu_batches() -> Vec<GpuRasterBatch> {
+    let mut guard = PENDING_GPU_BATCHES.lock().unwrap();
+    std::mem::take(&mut *guard)
+}
+
+/// Draw filled circles into `frame`. Pixel coordinates; `centers`, `radii`, and `colors` must align:
+/// - `radii.len() == n` or `radii.len() == 1` (broadcast),
+/// - `colors.len() == n` or `colors.len() == 1` (broadcast),
+/// where `n = centers.len()`.
+pub fn circles(
+    frame: &mut FrameState,
+    centers: &[(f32, f32)],
+    radii: &[f32],
+    colors: &[[u8; 4]],
+) -> Result<(), String> {
+    let n = centers.len();
+    if n == 0 {
+        return Ok(());
+    }
+    if radii.is_empty() {
+        return Err("radii is empty".into());
+    }
+    if colors.is_empty() {
+        return Err("colors is empty".into());
+    }
+    if radii.len() != n && radii.len() != 1 {
+        return Err(format!(
+            "radii length {} must match centers ({}) or be 1",
+            radii.len(),
+            n
+        ));
+    }
+    if colors.len() != n && colors.len() != 1 {
+        return Err(format!(
+            "colors length {} must match centers ({}) or be 1",
+            colors.len(),
+            n
+        ));
+    }
+
+    let mut instances = Vec::with_capacity(n);
+    for i in 0..n {
+        let r = if radii.len() == 1 { radii[0] } else { radii[i] };
+        let c = if colors.len() == 1 {
+            colors[0]
+        } else {
+            colors[i]
+        };
+        instances.push((centers[i].0, centers[i].1, r, c));
+    }
+
+    // Always rasterize circles on the CPU framebuffer so compositing order matches draw order:
+    // app → keyboard → `tick_fps_overlay` all stay visually above circles.
+    {
+        let shape = frame.shape();
+        let width = shape[1];
+        let height = shape[0];
+        draw_circles_cpu_instances(frame.buffer_mut(), width, height, &instances);
+    }
+    Ok(())
+}
+
+/// CPU: filled circles with per-instance RGBA (wasm / iOS path and internal helper).
+pub fn draw_circles_cpu_instances(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    instances: &[(f32, f32, f32, [u8; 4])],
+) {
+    for &(cx, cy, r, c) in instances {
+        draw_circle_cpu(
+            buffer,
+            width,
+            height,
+            cx,
+            cy,
+            r,
+            (c[0], c[1], c[2], c[3]),
+        );
+    }
+}
+
+/// CPU path with a single RGBA for every circle (Python / legacy helpers).
+pub fn draw_circles_cpu(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    circles: &[(f32, f32, f32)],
+    color: (u8, u8, u8, u8),
+) {
+    for &(cx, cy, r) in circles {
+        draw_circle_cpu(buffer, width, height, cx, cy, r, color);
+    }
+}
+
+pub fn draw_circle_cpu(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    color: (u8, u8, u8, u8),
+) {
+    let radius_squared = radius * radius;
+
+    let start_x = (cx - radius).max(0.0) as usize;
+    let end_x = ((cx + radius + 1.0) as usize).min(width);
+    let start_y = (cy - radius).max(0.0) as usize;
+    let end_y = ((cy + radius + 1.0) as usize).min(height);
+
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            if dx * dx + dy * dy <= radius_squared {
+                let idx = (y * width + x) * 4;
+                if idx + 3 < buffer.len() {
+                    buffer[idx + 0] = color.0;
+                    buffer[idx + 1] = color.1;
+                    buffer[idx + 2] = color.2;
+                    buffer[idx + 3] = color.3;
+                }
+            }
+        }
+    }
+}
+
+// --- GPU path (desktop `pixels` / wgpu): scratch texture + instanced discs -----------------------
+
+#[cfg(not(target_arch = "wasm32"))]
 use pixels::wgpu;
 
-use super::GpuRasterBatch;
+/// Instanced discs composited via an offscreen scratch texture (inner `pixels` texture is only
+/// `COPY_DST | TEXTURE_BINDING`, not `RENDER_ATTACHMENT`). Flow: blit base → scratch, draw circles,
+/// copy scratch → inner.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_GPU_INSTANCES: usize = 8192;
 
-const MAX_INSTANCES: usize = 8192;
-
+#[cfg(not(target_arch = "wasm32"))]
 const BLIT_SHADER: &str = r#"
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -41,6 +184,7 @@ fn fs_blit(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+#[cfg(not(target_arch = "wasm32"))]
 const CIRCLE_SHADER: &str = r#"
 struct ScreenUniform {
     screen: vec2<f32>,
@@ -98,6 +242,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct WgpuRasterRenderer {
     texture_format: wgpu::TextureFormat,
 
@@ -113,6 +258,7 @@ pub struct WgpuRasterRenderer {
     scratch: Option<(wgpu::Texture, wgpu::TextureView, wgpu::Extent3d)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl WgpuRasterRenderer {
     pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat) -> Self {
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -265,7 +411,7 @@ impl WgpuRasterRenderer {
 
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("raster_instances"),
-            size: (MAX_INSTANCES * 32) as u64,
+            size: (MAX_GPU_INSTANCES * 32) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -340,8 +486,6 @@ impl WgpuRasterRenderer {
         }
 
         self.ensure_scratch(device, extent, texture_format);
-        // Move scratch out so `render_circle_chunks` can take `&mut self` without overlapping
-        // borrows of `self.scratch`.
         let (scratch_tex, scratch_view, scratch_extent) =
             self.scratch.take().expect("scratch after ensure");
 
@@ -429,7 +573,7 @@ impl WgpuRasterRenderer {
 
         let mut chunk_start = 0usize;
         while chunk_start < total {
-            let chunk_end = (chunk_start + MAX_INSTANCES).min(total);
+            let chunk_end = (chunk_start + MAX_GPU_INSTANCES).min(total);
             let n = chunk_end - chunk_start;
             let mut inst_data = vec![0u8; n * 32];
             for (i, idx) in (chunk_start..chunk_end).enumerate() {

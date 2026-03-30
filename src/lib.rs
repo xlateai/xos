@@ -18,7 +18,6 @@ pub mod sensors;
 pub mod apps;
 pub mod ui;
 pub mod tensor;
-pub mod shapes;
 pub mod python;
 pub mod clipboard;
 pub mod keyboard;

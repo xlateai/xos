@@ -1,7 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
-use crate::shapes::basic_shapes;
-use crate::shapes::niche_shapes;
+use crate::rasterizer::shapes::basic_shapes;
+use crate::rasterizer::shapes::niche_shapes;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, OutputStream, Sink, Source};

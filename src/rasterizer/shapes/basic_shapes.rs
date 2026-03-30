@@ -28,14 +28,14 @@ pub fn draw_circle(
         for dx in -radius_i - padding..=radius_i + padding {
             let px = center_x_i + dx;
             let py = center_y_i + dy;
-            
+
             if px < 0 || py < 0 || (px as u32) >= width || (py as u32) >= height {
                 continue;
             }
 
             let dist_sq = (dx * dx + dy * dy) as f32;
             let dist = dist_sq.sqrt();
-            
+
             let idx = ((py as u32 * width + px as u32) * 4) as usize;
             if idx + 3 >= buffer.len() {
                 continue;
@@ -79,5 +79,3 @@ pub fn draw_circle(
         }
     }
 }
-
-

@@ -8,10 +8,17 @@
 
 use crate::engine::FrameState;
 use crate::python::rasterizer::fill_buffer_solid_rgba;
-use std::sync::Mutex;
 
 mod cache;
+pub mod shapes;
 pub use cache::RasterCache;
+
+pub use shapes::{
+    circles, draw_circle_cpu, draw_circles_cpu, draw_circles_cpu_instances, fill_rect,
+    fill_rect_buffer, fill_triangle_buffer, triangles, triangles_buffer,
+};
+
+pub use shapes::circles::GpuRasterBatch;
 
 /// Fill `frame` with a solid RGBA color. Matches Python: `xos.rasterizer.fill(frame, (r, g, b, a))`.
 #[inline]
@@ -23,207 +30,6 @@ pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
         color.2,
         color.3,
     );
-}
-
-/// Fill a clipped axis-aligned rectangle `[x0, x1) × [y0, y1)` in pixel coordinates.
-/// Faster than per-pixel loops; uses row-wise `copy_from_slice`.
-#[inline]
-pub fn fill_rect_buffer(
-    buffer: &mut [u8],
-    frame_width: usize,
-    frame_height: usize,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    color: (u8, u8, u8, u8),
-) {
-    let fw = frame_width as i32;
-    let fh = frame_height as i32;
-    let x0 = x0.max(0).min(fw);
-    let x1 = x1.max(0).min(fw);
-    let y0 = y0.max(0).min(fh);
-    let y1 = y1.max(0).min(fh);
-    if x0 >= x1 || y0 >= y1 {
-        return;
-    }
-    let rgba = [color.0, color.1, color.2, color.3];
-    for y in y0..y1 {
-        let row_start = (y as usize * frame_width + x0 as usize) * 4;
-        let row_end = (y as usize * frame_width + x1 as usize) * 4;
-        debug_assert!(row_end <= buffer.len());
-        for chunk in buffer[row_start..row_end].chunks_exact_mut(4) {
-            chunk.copy_from_slice(&rgba);
-        }
-    }
-}
-
-/// Same as [`fill_rect_buffer`] but takes a [`FrameState`].
-#[inline]
-pub fn fill_rect(
-    frame: &mut FrameState,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    color: (u8, u8, u8, u8),
-) {
-    let shape = frame.shape();
-    let h = shape[0];
-    let w = shape[1];
-    fill_rect_buffer(frame.buffer_mut(), w, h, x0, y0, x1, y1, color);
-}
-
-/// Half-space edge test (same sign convention as `apps::triangles::geometric_utils::edge_function`).
-#[inline]
-fn edge_ori(ax: f64, ay: f64, bx: f64, by: f64, px: f64, py: f64) -> f64 {
-    (bx - ax) * (py - ay) - (by - ay) * (px - ax)
-}
-
-/// Filled triangle into an RGBA8 buffer. Pixel-space coordinates; clipped to the framebuffer.
-///
-/// Uses a bounding box plus incremental half-space weights along each scanline (O(bbox area),
-/// fast inner loop vs naive double `edge_function` per pixel).
-pub fn fill_triangle_buffer(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    v0: (f32, f32),
-    v1: (f32, f32),
-    v2: (f32, f32),
-    color: [u8; 4],
-) {
-    if width == 0 || height == 0 {
-        return;
-    }
-    let ax = v0.0 as f64;
-    let ay = v0.1 as f64;
-    let mut bx = v1.0 as f64;
-    let mut by = v1.1 as f64;
-    let mut cx = v2.0 as f64;
-    let mut cy = v2.1 as f64;
-
-    let area = edge_ori(ax, ay, bx, by, cx, cy);
-    if area < 0.0 {
-        std::mem::swap(&mut bx, &mut cx);
-        std::mem::swap(&mut by, &mut cy);
-    }
-    if edge_ori(ax, ay, bx, by, cx, cy).abs() < 1e-20 {
-        return;
-    }
-
-    let wi = width as i32;
-    let hi = height as i32;
-    let min_x = ax.min(bx).min(cx).floor() as i32;
-    let max_x = ax.max(bx).max(cx).ceil() as i32;
-    let min_y = ay.min(by).min(cy).floor() as i32;
-    let max_y = ay.max(by).max(cy).ceil() as i32;
-
-    let min_x = min_x.max(0).min(wi - 1);
-    let max_x = max_x.max(0).min(wi - 1);
-    let min_y = min_y.max(0).min(hi - 1);
-    let max_y = max_y.max(0).min(hi - 1);
-    if min_x > max_x || min_y > max_y {
-        return;
-    }
-
-    let w0_dx = by - cy;
-    let w1_dx = cy - ay;
-    let w2_dx = ay - by;
-
-    for y in min_y..=max_y {
-        let py = y as f64 + 0.5;
-        let px0 = min_x as f64 + 0.5;
-        let mut w0 = edge_ori(bx, by, cx, cy, px0, py);
-        let mut w1 = edge_ori(cx, cy, ax, ay, px0, py);
-        let mut w2 = edge_ori(ax, ay, bx, by, px0, py);
-        for x in min_x..=max_x {
-            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                let idx = (y as usize * width + x as usize) * 4;
-                if idx + 3 < buffer.len() {
-                    buffer[idx..idx + 4].copy_from_slice(&color);
-                }
-            }
-            w0 += w0_dx;
-            w1 += w1_dx;
-            w2 += w2_dx;
-        }
-    }
-}
-
-/// Filled triangles: `points` is `[a0, b0, c0, a1, b1, c1, …]` in pixel coordinates.
-/// `colors.len()` must be `n` or `1` (broadcast), where `n = points.len() / 3`.
-pub fn triangles_buffer(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    points: &[(f32, f32)],
-    colors: &[[u8; 4]],
-) -> Result<(), String> {
-    if points.len() % 3 != 0 {
-        return Err(format!(
-            "points length {} is not divisible by 3",
-            points.len()
-        ));
-    }
-    let n = points.len() / 3;
-    if n == 0 {
-        return Ok(());
-    }
-    if colors.is_empty() {
-        return Err("colors is empty".into());
-    }
-    if colors.len() != n && colors.len() != 1 {
-        return Err(format!(
-            "colors length {} must match triangle count ({}) or be 1",
-            colors.len(),
-            n
-        ));
-    }
-
-    for i in 0..n {
-        let c = if colors.len() == 1 {
-            colors[0]
-        } else {
-            colors[i]
-        };
-        let j = i * 3;
-        fill_triangle_buffer(
-            buffer,
-            width,
-            height,
-            points[j],
-            points[j + 1],
-            points[j + 2],
-            c,
-        );
-    }
-    Ok(())
-}
-
-/// Same as [`triangles_buffer`] but takes a [`FrameState`].
-pub fn triangles(
-    frame: &mut FrameState,
-    points: &[(f32, f32)],
-    colors: &[[u8; 4]],
-) -> Result<(), String> {
-    let shape = frame.shape();
-    let w = shape[1];
-    let h = shape[0];
-    triangles_buffer(frame.buffer_mut(), w, h, points, colors)
-}
-
-/// One GPU draw worth of instances (cx, cy, radius px, RGBA8).
-#[derive(Clone, Debug)]
-pub(crate) struct GpuRasterBatch {
-    pub instances: Vec<(f32, f32, f32, [u8; 4])>,
-}
-
-static PENDING_GPU_BATCHES: Mutex<Vec<GpuRasterBatch>> = Mutex::new(Vec::new());
-
-fn drain_pending_gpu_batches() -> Vec<GpuRasterBatch> {
-    let mut guard = PENDING_GPU_BATCHES.lock().unwrap();
-    std::mem::take(&mut *guard)
 }
 
 /// After the CPU buffer is uploaded to the inner pixel texture, run any queued wgpu passes
@@ -238,12 +44,12 @@ pub fn render_pending_gpu_passes(
     extent: pixels::wgpu::Extent3d,
     texture_format: pixels::wgpu::TextureFormat,
 ) {
-    let batches = drain_pending_gpu_batches();
+    let batches = shapes::circles::drain_pending_gpu_batches();
     if !batches.iter().any(|b| !b.instances.is_empty()) {
         return;
     }
     if cache.inner.is_none() {
-        cache.inner = Some(Box::new(wgpu_circles::WgpuRasterRenderer::new(
+        cache.inner = Some(Box::new(shapes::circles::WgpuRasterRenderer::new(
             device,
             texture_format,
         )));
@@ -251,7 +57,7 @@ pub fn render_pending_gpu_passes(
     let renderer = cache
         .inner
         .as_mut()
-        .and_then(|b| b.downcast_mut::<wgpu_circles::WgpuRasterRenderer>())
+        .and_then(|b| b.downcast_mut::<shapes::circles::WgpuRasterRenderer>())
         .expect("raster cache: expected WgpuRasterRenderer payload for GPU passes");
     renderer.ensure_format(device, texture_format);
     renderer.render(
@@ -264,131 +70,3 @@ pub fn render_pending_gpu_passes(
         &batches,
     );
 }
-
-/// Draw filled circles into `frame`. Pixel coordinates; `centers`, `radii`, and `colors` must align:
-/// - `radii.len() == n` or `radii.len() == 1` (broadcast),
-/// - `colors.len() == n` or `colors.len() == 1` (broadcast),
-/// where `n = centers.len()`.
-pub fn circles(
-    frame: &mut FrameState,
-    centers: &[(f32, f32)],
-    radii: &[f32],
-    colors: &[[u8; 4]],
-) -> Result<(), String> {
-    let n = centers.len();
-    if n == 0 {
-        return Ok(());
-    }
-    if radii.is_empty() {
-        return Err("radii is empty".into());
-    }
-    if colors.is_empty() {
-        return Err("colors is empty".into());
-    }
-    if radii.len() != n && radii.len() != 1 {
-        return Err(format!(
-            "radii length {} must match centers ({}) or be 1",
-            radii.len(),
-            n
-        ));
-    }
-    if colors.len() != n && colors.len() != 1 {
-        return Err(format!(
-            "colors length {} must match centers ({}) or be 1",
-            colors.len(),
-            n
-        ));
-    }
-
-    let mut instances = Vec::with_capacity(n);
-    for i in 0..n {
-        let r = if radii.len() == 1 { radii[0] } else { radii[i] };
-        let c = if colors.len() == 1 {
-            colors[0]
-        } else {
-            colors[i]
-        };
-        instances.push((centers[i].0, centers[i].1, r, c));
-    }
-
-    // Always rasterize circles on the CPU framebuffer so compositing order matches draw order:
-    // app → keyboard → `tick_fps_overlay` all stay visually above circles. The previous desktop
-    // path queued wgpu instancing in `render_pending_gpu_passes`, which ran *after* the buffer upload
-    // and drew on top of the FPS overlay.
-    {
-        let shape = frame.shape();
-        let width = shape[1];
-        let height = shape[0];
-        draw_circles_cpu_instances(frame.buffer_mut(), width, height, &instances);
-    }
-    Ok(())
-}
-
-/// CPU: filled circles with per-instance RGBA (wasm / iOS path and internal helper).
-pub fn draw_circles_cpu_instances(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    instances: &[(f32, f32, f32, [u8; 4])],
-) {
-    for &(cx, cy, r, c) in instances {
-        draw_circle_cpu(
-            buffer,
-            width,
-            height,
-            cx,
-            cy,
-            r,
-            (c[0], c[1], c[2], c[3]),
-        );
-    }
-}
-
-/// CPU path with a single RGBA for every circle (Python / legacy helpers).
-pub fn draw_circles_cpu(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    circles: &[(f32, f32, f32)],
-    color: (u8, u8, u8, u8),
-) {
-    for &(cx, cy, r) in circles {
-        draw_circle_cpu(buffer, width, height, cx, cy, r, color);
-    }
-}
-
-pub fn draw_circle_cpu(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    cx: f32,
-    cy: f32,
-    radius: f32,
-    color: (u8, u8, u8, u8),
-) {
-    let radius_squared = radius * radius;
-
-    let start_x = (cx - radius).max(0.0) as usize;
-    let end_x = ((cx + radius + 1.0) as usize).min(width);
-    let start_y = (cy - radius).max(0.0) as usize;
-    let end_y = ((cy + radius + 1.0) as usize).min(height);
-
-    for y in start_y..end_y {
-        for x in start_x..end_x {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            if dx * dx + dy * dy <= radius_squared {
-                let idx = (y * width + x) * 4;
-                if idx + 3 < buffer.len() {
-                    buffer[idx + 0] = color.0;
-                    buffer[idx + 1] = color.1;
-                    buffer[idx + 2] = color.2;
-                    buffer[idx + 3] = color.3;
-                }
-            }
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub mod wgpu_circles;
