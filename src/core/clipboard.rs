@@ -3,7 +3,7 @@
 /// Provides a simple interface for clipboard get/set operations
 /// that works on macOS, iOS, and other platforms.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 
 #[cfg(target_os = "ios")]
@@ -52,8 +52,27 @@ pub fn get_contents() -> Option<String> {
             }
         }
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+            .output()
+            .ok()
+            .and_then(|output| {
+                if !output.status.success() {
+                    return None;
+                }
+                let text = String::from_utf8(output.stdout).ok()?;
+                if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+    }
     
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     {
         // For other platforms, return None
         // TODO: Add Linux/Windows clipboard support
@@ -97,11 +116,37 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
             }
         }
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        let mut child = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(text.as_bytes())?;
+        }
+        let status = child.wait()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to set clipboard contents",
+            ))
+        }
+    }
     
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
     {
         // For other platforms, do nothing
-        // TODO: Add Linux/Windows clipboard support
+        // TODO: Add Linux clipboard support
         let _ = text;
         Ok(())
     }
