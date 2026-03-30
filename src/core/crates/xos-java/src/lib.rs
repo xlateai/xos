@@ -12,8 +12,9 @@ use jni::JNIEnv;
 use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
-    tick_fps_overlay, tick_frame_delta, Application, CursorStyleSetter, EngineState, FpsOverlay,
-    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    tick_frame_delta, Application, CursorStyleSetter, EngineState, F3Menu, FrameState, KeyboardState,
+    MouseState, SafeRegionBoundingRectangle,
 };
 
 thread_local! {
@@ -123,7 +124,8 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             keyboard: KeyboardState {
                 onscreen: xos::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
-            fps_overlay: FpsOverlay::new(),
+            f3_menu: F3Menu::new(),
+            ui_scale_percent: 50,
             delta_time_seconds: 1.0 / 60.0,
         };
 
@@ -190,7 +192,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
         }
 
-        tick_fps_overlay(&mut host.engine);
+        tick_f3_menu(&mut host.engine);
 
         let shape = host.engine.frame.tensor.shape();
         let w = shape[1];
@@ -329,7 +331,9 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseMove(
         host.engine.mouse.dy = y - prev_y;
         host.engine.mouse.x = x;
         host.engine.mouse.y = y;
-        host.app.on_mouse_move(&mut host.engine);
+        if !f3_menu_handle_mouse_move(&mut host.engine) {
+            host.app.on_mouse_move(&mut host.engine);
+        }
     });
 }
 
@@ -355,7 +359,13 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseDown(
             1 => host.engine.mouse.is_right_clicking = true,
             _ => {}
         }
-        host.app.on_mouse_down(&mut host.engine);
+        if button == 0 {
+            if !f3_menu_handle_mouse_down(&mut host.engine) {
+                host.app.on_mouse_down(&mut host.engine);
+            }
+        } else {
+            host.app.on_mouse_down(&mut host.engine);
+        }
     });
 }
 
@@ -381,7 +391,13 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onMouseUp(
             1 => host.engine.mouse.is_right_clicking = false,
             _ => {}
         }
-        host.app.on_mouse_up(&mut host.engine);
+        if button == 0 {
+            if !f3_menu_handle_mouse_up(&mut host.engine) {
+                host.app.on_mouse_up(&mut host.engine);
+            }
+        } else {
+            host.app.on_mouse_up(&mut host.engine);
+        }
     });
 }
 
@@ -450,6 +466,6 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onF3(mut env: JNIEnv, _class:
             return;
         };
 
-        host.engine.fps_overlay.toggle_visible();
+        host.engine.f3_menu.toggle_visible();
     });
 }

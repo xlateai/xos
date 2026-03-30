@@ -1,4 +1,4 @@
-use super::fps_overlay::FpsOverlay;
+use super::f3_menu::F3Menu;
 
 use crate::tensor::FrameTensor;
 
@@ -187,14 +187,22 @@ pub struct EngineState {
     pub frame: FrameState,
     pub mouse: MouseState,
     pub keyboard: KeyboardState,
-    /// Global FPS overlay (drawn by the engine after each app tick).
-    pub fps_overlay: FpsOverlay,
+    /// Global F3 menu (FPS + UI scale; drawn by the engine after each app tick).
+    pub f3_menu: F3Menu,
+    /// UI scale slider value (1–100%). Default 50% → [`EngineState::ui_scale_coefficient`] is 1.0.
+    pub ui_scale_percent: u8,
     /// Seconds since the previous `Application::tick` (set by the host immediately before each tick).
     /// The first tick uses `1.0 / 60.0` as a nominal step so simulations can use `delta_time_seconds` safely.
     pub delta_time_seconds: f32,
 }
 
 impl EngineState {
+    /// Multiplier for UI sizing: `ui_scale_percent / 50` (so 50% → 1.0, symmetric zoom in/out).
+    #[inline]
+    pub fn ui_scale_coefficient(&self) -> f32 {
+        (self.ui_scale_percent.clamp(1, 100) as f32) / 50.0
+    }
+
     /// Get mutable access to the frame buffer (zero-copy for CPU arrays)
     /// Panics if the array is on a non-CPU device
     pub fn frame_buffer_mut(&mut self) -> &mut [u8] {

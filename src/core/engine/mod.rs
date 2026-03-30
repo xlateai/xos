@@ -1,4 +1,4 @@
-mod fps_overlay;
+mod f3_menu;
 
 pub mod engine;
 
@@ -31,7 +31,10 @@ pub use wasm_engine::run_web;
 
 pub use crate::py_engine::PyApplicationWrapper;
 
-pub use fps_overlay::{tick_fps_overlay, FpsOverlay};
+pub use f3_menu::{
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    F3Menu,
+};
 pub use engine::{
     tick_frame_delta, Application, CursorStyleSetter, EngineState, FrameState, KeyboardState,
     MouseState, SafeRegionBoundingRectangle,

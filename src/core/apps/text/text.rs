@@ -116,6 +116,10 @@ pub struct TextApp {
     pub transparent_background: bool,
     /// Color for debug glyph bounding rectangles ([`SHOW_BOUNDING_RECTANGLES`]).
     pub bound_color: (u8, u8, u8),
+    /// Last font size applied from global UI scale (standalone text only); avoids redundant `set_font_size`.
+    last_engine_scaled_font: f32,
+    /// When true (e.g. [`CoderApp`] editors), skip global scale here — parent sets [`TextApp::set_font_size`].
+    pub uses_parent_ui_scale: bool,
 }
 
 
@@ -189,6 +193,8 @@ impl TextApp {
             last_fade_font_size: -1.0,
             transparent_background: false,
             bound_color: BOUND_COLOR,
+            last_engine_scaled_font: -1.0,
+            uses_parent_ui_scale: false,
         }
     }
 
@@ -198,6 +204,7 @@ impl TextApp {
         t.transparent_background = true;
         t.bound_color = (57, 255, 20);
         t.set_font_size(14.0);
+        t.last_engine_scaled_font = 14.0;
         t
     }
 
@@ -306,6 +313,24 @@ impl Application for TextApp {
             
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
+
+        // Standalone text app: global UI scale + calibration (prior ~20% → ~50% at default slider).
+        if !self.uses_parent_ui_scale {
+            let short_edge = width.min(height);
+            let base_u = (short_edge / 920.0).clamp(0.28, 1.0);
+            let coeff = state.ui_scale_coefficient();
+            let ios = if cfg!(target_os = "ios") { 1.1 } else { 1.0 };
+            let (base_px, text_cal) = if self.transparent_background {
+                (14.0_f32, 1.0)
+            } else {
+                (24.0_f32 * ios, 50.0 / 20.0)
+            };
+            let target_font = base_px * base_u * coeff * text_cal;
+            if (target_font - self.last_engine_scaled_font).abs() > 0.01 {
+                self.set_font_size(target_font);
+                self.last_engine_scaled_font = target_font;
+            }
+        }
         
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
 
