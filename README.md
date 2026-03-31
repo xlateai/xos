@@ -82,7 +82,7 @@ if __name__ == "__main__":
     BallLines().run()
 ```
 
-https://github.com/user-attachments/assets/e1a67953-888c-4658-86f6-65348be009c4
+https://github.com/user-attachments/assets/620e0532-1450-4cc0-b607-def32561eff1
 
 ## ✅ Getting Started
 
