@@ -2482,8 +2482,15 @@ impl Application for CoderApp {
                     if self.explorer_search_focused {
                         match ch {
                             '\u{1b}' => {
-                                self.explorer_popup_open = false;
                                 self.explorer_search_focused = false;
+                            }
+                            '\u{2191}' => {
+                                self.explorer_search_focused = false;
+                                self.explorer_move_selection(-1);
+                            }
+                            '\u{2193}' => {
+                                self.explorer_search_focused = false;
+                                self.explorer_move_selection(1);
                             }
                             '\u{8}' => {
                                 self.explorer_search_query.pop();
@@ -2936,6 +2943,7 @@ impl Application for CoderApp {
                 // Alt+E toggles explorer and always returns to files/code.
                 self.active_tab = Tab::Code;
                 self.explorer_popup_open = !self.explorer_popup_open;
+                self.explorer_search_query.clear();
                 self.explorer_search_focused = false;
                 if self.explorer_popup_open {
                     self.ensure_explorer_selection();
