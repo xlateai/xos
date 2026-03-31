@@ -19,6 +19,8 @@ const CODER_CHROME_SCALE: f32 = 1.3;
 const TASKBAR_TAB_SCALE: f32 = 1.1;
 /// Editor tab strip height and tab label fonts vs prior baseline (much bigger).
 const EDITOR_TAB_STRIP_SCALE: f32 = 2.0;
+/// File explorer panel, search bar, row heights, and list fonts vs prior baseline.
+const EXPLORER_UI_SCALE: f32 = 1.1;
 const MAX_OPEN_EDITOR_TABS: usize = 3;
 
 #[derive(Debug, Clone)]
@@ -296,8 +298,10 @@ impl CoderApp {
         let avail_bottom = task_bar_top;
         let avail_h = (avail_bottom - avail_top).max(120.0);
 
-        let panel_w = (width * 0.82).min(width - 32.0 * ui_scale.max(0.5));
-        let panel_h = (avail_h * 0.72).max(180.0).min(avail_h - 12.0);
+        let panel_w = (width * 0.82 * EXPLORER_UI_SCALE).min(width - 32.0 * ui_scale.max(0.5));
+        let panel_h = (avail_h * 0.72 * EXPLORER_UI_SCALE)
+            .max(180.0 * EXPLORER_UI_SCALE)
+            .min(avail_h - 12.0);
         let px = ((width - panel_w) * 0.5).max(8.0);
         let pt = (avail_top + (avail_h - panel_h) * 0.5).max(avail_top + 6.0);
         (px, pt, px + panel_w, pt + panel_h)
@@ -410,10 +414,13 @@ impl CoderApp {
         }
         self.editor_tab_close_label
             .set_font_size(20.0 * scale * tab_strip);
-        self.explorer_search_label.set_font_size(16.0 * scale * chrome_font);
-        self.explorer_search_text.set_font_size(20.0 * scale * chrome_font);
+        self.explorer_search_label
+            .set_font_size(16.0 * scale * chrome_font * EXPLORER_UI_SCALE);
+        self.explorer_search_text
+            .set_font_size(20.0 * scale * chrome_font * EXPLORER_UI_SCALE);
 
         let item_base = if cfg!(target_os = "ios") { 42.0 } else { 28.0 };
+        let item_base = item_base * EXPLORER_UI_SCALE;
         for (item, r) in self
             .explorer_items
             .iter()
@@ -577,16 +584,18 @@ impl CoderApp {
         let mut editor_tab_close_label =
             TextRasterizer::new(font.clone(), 20.0 * EDITOR_TAB_STRIP_SCALE);
         editor_tab_close_label.set_text("×".to_string());
-        let mut explorer_search_label = TextRasterizer::new(font.clone(), 16.0);
+        let mut explorer_search_label =
+            TextRasterizer::new(font.clone(), 16.0 * EXPLORER_UI_SCALE);
         explorer_search_label.set_text("search".to_string());
-        let explorer_search_text = TextRasterizer::new(font.clone(), 20.0);
+        let explorer_search_text = TextRasterizer::new(font.clone(), 20.0 * EXPLORER_UI_SCALE);
 
         // Build explorer rows (folders alphabetical with their files alphabetical underneath).
         let file_names: Vec<String> = python_files.iter().map(|f| f.name.clone()).collect();
         let explorer_items = build_explorer_items(&file_names);
 
         // Create text rasterizers for each explorer item (uniform sizing for readability)
-        let item_font_size = if cfg!(target_os = "ios") { 42.0 } else { 28.0 };
+        let item_font_size =
+            (if cfg!(target_os = "ios") { 42.0 } else { 28.0 }) * EXPLORER_UI_SCALE;
         let mut file_list_rasterizers = Vec::new();
         let expanded_folders = HashSet::new(); // All collapsed by default
         for item in &explorer_items {
@@ -1184,10 +1193,11 @@ builtins.print = __custom_print__
     }
 
     fn explorer_item_height(item: &ExplorerItem, scale: f32) -> f32 {
-        match item {
+        let h = match item {
             ExplorerItem::Folder(_) => Self::folder_item_height(scale),
             ExplorerItem::File(_) => Self::file_item_height(scale),
-        }
+        };
+        h * EXPLORER_UI_SCALE
     }
     
     /// Folder for a file (empty string = root level)
@@ -1255,7 +1265,7 @@ builtins.print = __custom_print__
 
     fn explorer_search_bar_height(scale: f32) -> f32 {
         let base = if cfg!(target_os = "ios") { 82.0 } else { 44.0 };
-        (base * scale).max(26.0)
+        (base * scale).max(26.0) * EXPLORER_UI_SCALE
     }
 
     fn explorer_search_bar_bounds(
