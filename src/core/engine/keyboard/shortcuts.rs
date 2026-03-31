@@ -16,38 +16,41 @@ pub enum ShortcutAction {
     SelectAll,
     Undo,
     Redo,
-    /// App-level tab management (handled outside `detect_shortcut`)
-    Tab1,
-    Tab2,
-    Tab3,
-    /// Close current editor tab (coder)
-    CloseTab,
-    /// Reopen last closed editor file tab (coder)
-    ReopenClosedTab,
-    /// Toggle file explorer popup (coder)
-    ToggleExplorer,
-    /// Switch active coder mode tab to Terminal
-    ShowTerminal,
-    /// Switch active coder mode tab to Viewport
-    ShowViewport,
-    /// Trigger Run button behavior (coder)
-    Run,
-    /// Stop current running viewport/script execution
-    StopExecution,
-    /// Terminate native app process
-    TerminateProgram,
-    /// Cycle bottom mode tabs left
-    PrevModeTab,
-    /// Cycle bottom mode tabs right
-    NextModeTab,
-    /// Cycle top editor tabs left
-    PrevEditorTab,
-    /// Cycle top editor tabs right
-    NextEditorTab,
-    /// Toggle viewport bottom task bar visibility
-    ToggleViewportTaskbar,
-    /// Open explorer and focus the search bar
-    FocusExplorerSearch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedSpecialKey {
+    Backspace,
+    Enter,
+    Escape,
+    Tab,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalSpecialKey {
+    Digit1,
+    Digit2,
+    Digit3,
+    KeyQ,
+    KeyW,
+    KeyE,
+    KeyF,
+    KeyR,
+    KeyT,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecialKeyEvent {
+    pub named_key: Option<NamedSpecialKey>,
+    pub physical_key: Option<PhysicalSpecialKey>,
+    pub character: Option<char>,
+    pub command_held: bool,
+    pub shift_held: bool,
+    pub alt_held: bool,
 }
 
 /// Detects if a keyboard shortcut action was triggered

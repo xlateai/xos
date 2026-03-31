@@ -24,7 +24,9 @@ use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
-use crate::engine::keyboard::shortcuts::{detect_shortcut, ShortcutAction};
+use crate::engine::keyboard::shortcuts::{
+    NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
+};
 use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -338,226 +340,73 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
-                    // Handle special keys
-                    match event.logical_key {
-                        Key::Named(NamedKey::F3) => {
-                            self.engine_state.f3_menu.toggle_visible();
+                    if matches!(event.logical_key, Key::Named(NamedKey::F3)) {
+                        self.engine_state.f3_menu.toggle_visible();
+                        return;
+                    }
+
+                    if self.alt_held
+                        && self.shift_held
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF))
+                    {
+                        self.toggle_borderless_fullscreen();
+                        return;
+                    }
+
+                    let named_key = match event.logical_key {
+                        Key::Named(NamedKey::Backspace) => Some(NamedSpecialKey::Backspace),
+                        Key::Named(NamedKey::Enter) => Some(NamedSpecialKey::Enter),
+                        Key::Named(NamedKey::Escape) => Some(NamedSpecialKey::Escape),
+                        Key::Named(NamedKey::Tab) => Some(NamedSpecialKey::Tab),
+                        Key::Named(NamedKey::ArrowLeft) => Some(NamedSpecialKey::ArrowLeft),
+                        Key::Named(NamedKey::ArrowRight) => Some(NamedSpecialKey::ArrowRight),
+                        Key::Named(NamedKey::ArrowUp) => Some(NamedSpecialKey::ArrowUp),
+                        Key::Named(NamedKey::ArrowDown) => Some(NamedSpecialKey::ArrowDown),
+                        _ => None,
+                    };
+
+                    let physical_key = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Digit1) => Some(PhysicalSpecialKey::Digit1),
+                        PhysicalKey::Code(KeyCode::Digit2) => Some(PhysicalSpecialKey::Digit2),
+                        PhysicalKey::Code(KeyCode::Digit3) => Some(PhysicalSpecialKey::Digit3),
+                        PhysicalKey::Code(KeyCode::KeyQ) => Some(PhysicalSpecialKey::KeyQ),
+                        PhysicalKey::Code(KeyCode::KeyW) => Some(PhysicalSpecialKey::KeyW),
+                        PhysicalKey::Code(KeyCode::KeyE) => Some(PhysicalSpecialKey::KeyE),
+                        PhysicalKey::Code(KeyCode::KeyF) => Some(PhysicalSpecialKey::KeyF),
+                        PhysicalKey::Code(KeyCode::KeyR) => Some(PhysicalSpecialKey::KeyR),
+                        PhysicalKey::Code(KeyCode::KeyT) => Some(PhysicalSpecialKey::KeyT),
+                        _ => None,
+                    };
+
+                    let character = if let Key::Character(ref s) = event.logical_key {
+                        let mut chars = s.chars();
+                        match (chars.next(), chars.next()) {
+                            (Some(ch), None) => Some(ch),
+                            _ => None,
                         }
-                        Key::Named(NamedKey::Backspace) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{8}');
-                        }
-                        Key::Named(NamedKey::Enter) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\n');
-                        }
-                        Key::Named(NamedKey::Escape) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{1b}');
-                        }
-                        Key::Named(NamedKey::Tab) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\t');
-                        }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            #[cfg(not(target_os = "ios"))]
-                            {
-                                if self.alt_held && !self.shift_held {
-                                    let _ = self.app.on_key_shortcut(
-                                        &mut self.engine_state,
-                                        ShortcutAction::PrevEditorTab,
-                                    );
-                                    return;
-                                }
-                                if self.alt_held && self.shift_held {
-                                    let _ = self.app.on_key_shortcut(
-                                        &mut self.engine_state,
-                                        ShortcutAction::PrevModeTab,
-                                    );
-                                    return;
-                                }
-                            }
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2190}'); // ←
-                        }
-                        Key::Named(NamedKey::ArrowRight) => {
-                            #[cfg(not(target_os = "ios"))]
-                            {
-                                if self.alt_held && !self.shift_held {
-                                    let _ = self.app.on_key_shortcut(
-                                        &mut self.engine_state,
-                                        ShortcutAction::NextEditorTab,
-                                    );
-                                    return;
-                                }
-                                if self.alt_held && self.shift_held {
-                                    let _ = self.app.on_key_shortcut(
-                                        &mut self.engine_state,
-                                        ShortcutAction::NextModeTab,
-                                    );
-                                    return;
-                                }
-                            }
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2192}'); // →
-                        }
-                        Key::Named(NamedKey::ArrowUp) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2191}'); // ↑
-                        }
-                        Key::Named(NamedKey::ArrowDown) => {
-                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{2193}'); // ↓
-                        }
-                        _ => {
-                            // Coder tab management shortcuts (Alt-based).
-                            #[cfg(not(target_os = "ios"))]
-                            {
-                                if self.alt_held && !self.shift_held {
-                                    let tab_shortcut = match event.physical_key {
-                                        PhysicalKey::Code(KeyCode::Digit1) => {
-                                            Some(ShortcutAction::Tab1)
-                                        }
-                                        PhysicalKey::Code(KeyCode::Digit2) => {
-                                            Some(ShortcutAction::Tab2)
-                                        }
-                                        PhysicalKey::Code(KeyCode::Digit3) => {
-                                            Some(ShortcutAction::Tab3)
-                                        }
-                                        _ => None,
-                                    };
-                                    if let Some(s) = tab_shortcut {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            s,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::CloseTab,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::Run,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyE)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::ToggleExplorer,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::ToggleViewportTaskbar,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyT)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::ShowTerminal,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyR)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::ShowViewport,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyE)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::FocusExplorerSearch,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
-                                        self.toggle_borderless_fullscreen();
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::StopExecution,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && self.shift_held {
-                                    if self.command_held
-                                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ))
-                                    {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::TerminateProgram,
-                                        );
-                                        return;
-                                    }
-                                }
-                                if self.alt_held && self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ)) {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            ShortcutAction::ReopenClosedTab,
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                            // Logical `Character` often carries Ctrl+... when
-                            // `event.text` is empty (common on Windows).
-                            #[cfg(not(target_os = "ios"))]
-                            if let Key::Character(ref s) = event.logical_key {
-                                if s.len() == 1 {
-                                    let ch = s.chars().next().unwrap();
-                                    if let Some(shortcut) =
-                                        detect_shortcut(ch, self.command_held, self.shift_held)
-                                    {
-                                        let _ = self.app.on_key_shortcut(
-                                            &mut self.engine_state,
-                                            shortcut,
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                            // Check if the event has text (for regular character input)
-                            // In winit 0.30, text input should come through IME, but we can also
-                            // check the text field as a fallback
-                            if let Some(text) = event.text.as_ref() {
-                                for ch in text.chars() {
-                                    // Check for keyboard shortcuts first (desktop only, not iOS)
-                                    #[cfg(not(target_os = "ios"))]
-                                    if let Some(shortcut) = detect_shortcut(ch, self.command_held, self.shift_held) {
-                                        self.app.on_key_shortcut(&mut self.engine_state, shortcut);
-                                        continue; // Don't process as regular character
-                                    }
-                                    
-                                    if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
-                                        let _ = self.app.on_key_char(&mut self.engine_state, ch);
-                                    }
-                                }
+                    } else {
+                        None
+                    };
+
+                    self.app.on_special_key(
+                        &mut self.engine_state,
+                        SpecialKeyEvent {
+                            named_key,
+                            physical_key,
+                            character,
+                            command_held: self.command_held,
+                            shift_held: self.shift_held,
+                            alt_held: self.alt_held,
+                        },
+                    );
+
+                    // Check if the event has text (for regular character input)
+                    // In winit 0.30, text input should come through IME, but we can also
+                    // check the text field as a fallback.
+                    if let Some(text) = event.text.as_ref() {
+                        for ch in text.chars() {
+                            if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
+                                let _ = self.app.on_key_char(&mut self.engine_state, ch);
                             }
                         }
                     }

@@ -256,6 +256,56 @@ pub trait Application {
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
     fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
     fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {}
+    fn on_special_key(
+        &mut self,
+        state: &mut EngineState,
+        special_key: crate::engine::keyboard::shortcuts::SpecialKeyEvent,
+    ) {
+        use crate::engine::keyboard::shortcuts::{detect_shortcut, NamedSpecialKey};
+
+        if let Some(named) = special_key.named_key {
+            match named {
+                NamedSpecialKey::Backspace => {
+                    self.on_key_char(state, '\u{8}');
+                    return;
+                }
+                NamedSpecialKey::Enter => {
+                    self.on_key_char(state, '\n');
+                    return;
+                }
+                NamedSpecialKey::Escape => {
+                    self.on_key_char(state, '\u{1b}');
+                    return;
+                }
+                NamedSpecialKey::Tab => {
+                    self.on_key_char(state, '\t');
+                    return;
+                }
+                NamedSpecialKey::ArrowLeft => {
+                    self.on_key_char(state, '\u{2190}');
+                    return;
+                }
+                NamedSpecialKey::ArrowRight => {
+                    self.on_key_char(state, '\u{2192}');
+                    return;
+                }
+                NamedSpecialKey::ArrowUp => {
+                    self.on_key_char(state, '\u{2191}');
+                    return;
+                }
+                NamedSpecialKey::ArrowDown => {
+                    self.on_key_char(state, '\u{2193}');
+                    return;
+                }
+            }
+        }
+
+        if let Some(ch) = special_key.character {
+            if let Some(shortcut) = detect_shortcut(ch, special_key.command_held, special_key.shift_held) {
+                self.on_key_shortcut(state, shortcut);
+            }
+        }
+    }
     fn on_key_shortcut(&mut self, _state: &mut EngineState, _shortcut: crate::engine::keyboard::shortcuts::ShortcutAction) {}
     fn on_screen_size_change(&mut self, _state: &mut EngineState, _width: u32, _height: u32) {}
 }

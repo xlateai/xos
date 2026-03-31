@@ -1247,25 +1247,6 @@ impl Application for TextApp {
             ShortcutAction::SelectAll => KeyType::SelectAll,
             ShortcutAction::Undo => KeyType::Undo,
             ShortcutAction::Redo => KeyType::Redo,
-            ShortcutAction::Tab1
-            | ShortcutAction::Tab2
-            | ShortcutAction::Tab3
-            | ShortcutAction::CloseTab
-            | ShortcutAction::ReopenClosedTab
-            | ShortcutAction::ToggleExplorer
-            | ShortcutAction::ShowTerminal
-            | ShortcutAction::ShowViewport
-            | ShortcutAction::Run
-            | ShortcutAction::StopExecution
-            | ShortcutAction::TerminateProgram
-            | ShortcutAction::PrevModeTab
-            | ShortcutAction::NextModeTab
-            | ShortcutAction::PrevEditorTab
-            | ShortcutAction::NextEditorTab
-            | ShortcutAction::ToggleViewportTaskbar
-            | ShortcutAction::FocusExplorerSearch => {
-                return;
-            }
         };
         self.handle_action_key(key_type, state);
     }

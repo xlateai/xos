@@ -1,4 +1,5 @@
-use crate::engine::keyboard::shortcuts::ShortcutAction;
+use crate::apps::coder::shortcuts::{detect_coder_shortcut, CoderShortcutAction};
+use crate::engine::keyboard::shortcuts::{ShortcutAction, SpecialKeyEvent};
 use crate::engine::{Application, EngineState};
 use crate::apps::coder::explorer::{build_explorer_items, fuzzy_score, split_folder_file, ExplorerItem};
 use crate::apps::text::text::TextApp;
@@ -2923,84 +2924,144 @@ impl Application for CoderApp {
         }
     }
 
-    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
-        match shortcut {
-            ShortcutAction::Tab1 => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = false;
-                self.switch_editor_tab_to(0);
-            }
-            ShortcutAction::Tab2 => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = false;
-                self.switch_editor_tab_to(1);
-            }
-            ShortcutAction::Tab3 => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = false;
-                self.switch_editor_tab_to(2);
-            }
-            ShortcutAction::CloseTab => {
-                if self.active_tab == Tab::Code {
-                    self.close_editor_tab_at(self.active_editor_tab);
+    fn on_special_key(&mut self, state: &mut EngineState, special_key: SpecialKeyEvent) {
+        #[cfg(not(target_os = "ios"))]
+        if let Some(shortcut) = detect_coder_shortcut(&special_key) {
+            match shortcut {
+                CoderShortcutAction::Tab1 => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = false;
+                    self.switch_editor_tab_to(0);
                 }
-            }
-            ShortcutAction::ReopenClosedTab => {
-                if self.active_tab == Tab::Code {
-                    self.reopen_last_closed_editor_file();
+                CoderShortcutAction::Tab2 => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = false;
+                    self.switch_editor_tab_to(1);
                 }
-            }
-            ShortcutAction::ToggleExplorer => {
-                // Alt+E toggles explorer and always returns to files/code.
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = !self.explorer_popup_open;
-                self.explorer_search_query.clear();
-                self.explorer_search_focused = false;
-                if self.explorer_popup_open {
+                CoderShortcutAction::Tab3 => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = false;
+                    self.switch_editor_tab_to(2);
+                }
+                CoderShortcutAction::CloseTab => {
+                    if self.active_tab == Tab::Code {
+                        self.close_editor_tab_at(self.active_editor_tab);
+                    }
+                }
+                CoderShortcutAction::ReopenClosedTab => {
+                    if self.active_tab == Tab::Code {
+                        self.reopen_last_closed_editor_file();
+                    }
+                }
+                CoderShortcutAction::ToggleExplorer => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = !self.explorer_popup_open;
+                    self.explorer_search_query.clear();
+                    self.explorer_search_focused = false;
+                    if self.explorer_popup_open {
+                        self.ensure_explorer_selection();
+                    }
+                }
+                CoderShortcutAction::FocusExplorerSearch => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = true;
+                    self.explorer_search_focused = true;
                     self.ensure_explorer_selection();
                 }
-            }
-            ShortcutAction::FocusExplorerSearch => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = true;
-                self.explorer_search_focused = true;
-                self.ensure_explorer_selection();
-            }
-            ShortcutAction::ShowTerminal => {
-                self.active_tab = Tab::Terminal;
-            }
-            ShortcutAction::ShowViewport => {
-                self.active_tab = Tab::Viewport;
-                self.viewport_taskbar_hidden = false;
-            }
-            ShortcutAction::Run => {
-                self.activate_run_button(state);
-            }
-            ShortcutAction::StopExecution => {
-                self.stop_running_execution();
-            }
-            ShortcutAction::TerminateProgram => {
-                #[cfg(not(target_arch = "wasm32"))]
-                crate::engine::native_engine::request_exit();
-            }
-            ShortcutAction::PrevModeTab => self.switch_mode_tab_by(-1),
-            ShortcutAction::NextModeTab => self.switch_mode_tab_by(1),
-            ShortcutAction::PrevEditorTab => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = false;
-                self.switch_editor_tab_by(-1);
-            }
-            ShortcutAction::NextEditorTab => {
-                self.active_tab = Tab::Code;
-                self.explorer_popup_open = false;
-                self.switch_editor_tab_by(1);
-            }
-            ShortcutAction::ToggleViewportTaskbar => {
-                if self.active_tab == Tab::Viewport {
-                    self.viewport_taskbar_hidden = !self.viewport_taskbar_hidden;
+                CoderShortcutAction::ShowTerminal => {
+                    self.active_tab = Tab::Terminal;
+                }
+                CoderShortcutAction::ShowViewport => {
+                    self.active_tab = Tab::Viewport;
+                    self.viewport_taskbar_hidden = false;
+                }
+                CoderShortcutAction::Run => {
+                    self.activate_run_button(state);
+                }
+                CoderShortcutAction::StopExecution => {
+                    self.stop_running_execution();
+                }
+                CoderShortcutAction::TerminateProgram => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    crate::engine::native_engine::request_exit();
+                }
+                CoderShortcutAction::PrevModeTab => self.switch_mode_tab_by(-1),
+                CoderShortcutAction::NextModeTab => self.switch_mode_tab_by(1),
+                CoderShortcutAction::PrevEditorTab => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = false;
+                    self.switch_editor_tab_by(-1);
+                }
+                CoderShortcutAction::NextEditorTab => {
+                    self.active_tab = Tab::Code;
+                    self.explorer_popup_open = false;
+                    self.switch_editor_tab_by(1);
+                }
+                CoderShortcutAction::ToggleViewportTaskbar => {
+                    if self.active_tab == Tab::Viewport {
+                        self.viewport_taskbar_hidden = !self.viewport_taskbar_hidden;
+                    }
+                }
+                CoderShortcutAction::ToggleBorderlessFullscreen => {
+                    // Handled by native engine host.
                 }
             }
-            _ => {}
+            return;
+        }
+
+        if let Some(named) = special_key.named_key {
+            match named {
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::Backspace => {
+                    self.on_key_char(state, '\u{8}');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::Enter => {
+                    self.on_key_char(state, '\n');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::Escape => {
+                    self.on_key_char(state, '\u{1b}');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::Tab => {
+                    self.on_key_char(state, '\t');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::ArrowLeft => {
+                    self.on_key_char(state, '\u{2190}');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::ArrowRight => {
+                    self.on_key_char(state, '\u{2192}');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::ArrowUp => {
+                    self.on_key_char(state, '\u{2191}');
+                    return;
+                }
+                crate::engine::keyboard::shortcuts::NamedSpecialKey::ArrowDown => {
+                    self.on_key_char(state, '\u{2193}');
+                    return;
+                }
+            }
+        }
+
+        if let Some(ch) = special_key.character {
+            if let Some(shortcut) = crate::engine::keyboard::shortcuts::detect_shortcut(
+                ch,
+                special_key.command_held,
+                special_key.shift_held,
+            ) {
+                self.on_key_shortcut(state, shortcut);
+            }
+        }
+    }
+
+    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
+        match self.active_tab {
+            Tab::Code => self.code_app.on_key_shortcut(state, shortcut),
+            Tab::Terminal => self.console_app.on_key_shortcut(state, shortcut),
+            Tab::Viewport => {}
         }
     }
 }
