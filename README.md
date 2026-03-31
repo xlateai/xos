@@ -133,6 +133,8 @@ xos app <app-name> --ios
 
 ### 📱 Using `--ios`
 
+Coming soon: RN/Expo-style builds.
+
 1. Connect device by USB and enable **Developer Mode**.
 2. Open `ios/xos.xcworkspace` once and configure code signing.
 3. Run `xos app <app-name> --ios`.
