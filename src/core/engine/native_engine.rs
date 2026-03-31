@@ -625,7 +625,6 @@ pub fn start_headless_native(
         app.tick(&mut engine_state);
         tick_f3_menu(&mut engine_state);
     }
-    println!("Headless engine stopped.");
     SHOULD_EXIT.store(false, Ordering::Relaxed);
     Ok(())
 }

@@ -221,8 +221,6 @@ fn build_ios() {
 
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
-    println!("🔨 Rebuilding xos...");
-
     let project_root = find_project_root();
     if !cargo_build_release_xos(&project_root) {
         eprintln!("❌ Build failed. Exiting.");
@@ -230,7 +228,7 @@ fn rebuild_and_reexecute(original_args: Vec<String>) {
     }
 
     let xos_bin = release_xos_executable(&project_root);
-    println!("✅ Build complete. Re-executing command...\n");
+    println!("✅ Build complete. Executing...\n");
 
     // Re-execute the original command with -n to skip the prompt
     let mut exec_cmd = Command::new(&xos_bin);

@@ -346,12 +346,6 @@ pub fn run_python_app(file_path: &PathBuf) {
                 .unwrap_or(false)
         });
 
-        if headless {
-            println!("🎮 Launching xos engine with Python app (headless mode)...");
-        } else {
-            println!("🎮 Launching xos engine with Python app...");
-        }
-
         let pyapp = PyApp::new(interpreter, app_instance);
         
         #[cfg(not(target_arch = "wasm32"))]

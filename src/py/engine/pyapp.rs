@@ -229,7 +229,6 @@ class Application:
         # Store self in builtins so Rust can find it from any scope
         import builtins
         builtins.__xos_app_instance__ = self
-        print("[xos] Application instance registered, engine will launch...")
 "#;
 
 /// PyApp wraps a Python Application instance and implements the Rust Application trait
@@ -311,7 +310,7 @@ impl Application for PyApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        if let Some(ref app_instance) = self.app_instance {
+        if let Some(app_instance) = self.app_instance.clone() {
             // Set the frame buffer context for the rasterizer
             let shape = state.frame.shape();
             let width = shape[1];
@@ -320,6 +319,7 @@ impl Application for PyApp {
             crate::python_api::rasterizer::set_frame_buffer_context(buffer, width, height);
 
             let tick_index = self.ticks_completed;
+            let mut tick_failed = false;
             
             self.interpreter.enter(|vm| {
                 // Update frame data before calling tick
@@ -342,14 +342,23 @@ impl Application for PyApp {
                     let _ = app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
                     // Call tick
-                    if let Err(e) = vm.call_method(app_instance, "tick", ()) {
+                    if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
                         eprintln!("Python tick error:\n{}", error_msg);
+                        tick_failed = true;
                     }
                 }
             });
 
-            self.ticks_completed = self.ticks_completed.saturating_add(1);
+            if tick_failed {
+                // Stop ticking this Python app after the first runtime error.
+                self.app_instance = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::engine::native_engine::request_exit();
+                eprintln!("Python app execution stopped after tick error.");
+            } else {
+                self.ticks_completed = self.ticks_completed.saturating_add(1);
+            }
             
             // Clear the frame buffer context after tick
             crate::python_api::rasterizer::clear_frame_buffer_context();
