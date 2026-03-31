@@ -11,6 +11,9 @@ use std::thread;
 // Embed the entire example-scripts/ directory at compile time
 static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/example-scripts");
 
+/// Task bar depth, chrome buttons, and related spacing/fonts vs prior baseline.
+const CODER_CHROME_SCALE: f32 = 1.3;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tab {
     Code,
@@ -110,8 +113,8 @@ impl CoderApp {
         let (bw, bh) = (280.0_f32, 105.0_f32);
         #[cfg(not(target_os = "ios"))]
         let (bw, bh) = (160.0_f32, 76.0_f32);
-        let w = (bw * scale).max(44.0).round() as u32;
-        let h = (bh * scale).max(36.0).round() as u32;
+        let w = (((bw * scale).max(44.0)) * CODER_CHROME_SCALE).round() as u32;
+        let h = (((bh * scale).max(36.0)) * CODER_CHROME_SCALE).round() as u32;
         (w, h)
     }
 
@@ -128,7 +131,7 @@ impl CoderApp {
     }
 
     fn padding_scaled(scale: f32) -> i32 {
-        (10.0_f32 * scale).max(4.0).round() as i32
+        ((10.0_f32 * scale).max(4.0) * CODER_CHROME_SCALE).round() as i32
     }
 
     fn apply_coder_ui_scale(&mut self, scale: f32) {
@@ -145,11 +148,12 @@ impl CoderApp {
         self.terminal_app.set_font_size(editor_base * scale);
         self.console_app.set_font_size(editor_base * scale);
 
-        self.code_tab_label.set_font_size(20.0 * scale);
-        self.terminal_tab_label.set_font_size(20.0 * scale);
-        self.viewport_tab_label.set_font_size(20.0 * scale);
-        self.clear_button_label.set_font_size(30.0 * scale);
-        self.run_button_label.set_font_size(20.0 * scale);
+        let chrome_font = CODER_CHROME_SCALE;
+        self.code_tab_label.set_font_size(20.0 * scale * chrome_font);
+        self.terminal_tab_label.set_font_size(20.0 * scale * chrome_font);
+        self.viewport_tab_label.set_font_size(20.0 * scale * chrome_font);
+        self.clear_button_label.set_font_size(30.0 * scale * chrome_font);
+        self.run_button_label.set_font_size(20.0 * scale * chrome_font);
 
         let file_base = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let folder_base = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
@@ -1230,9 +1234,9 @@ impl Application for CoderApp {
         let (_button_w, button_height) = Self::button_size_scaled(ui_scale);
         let padding = Self::padding_scaled(ui_scale);
         
-        // Bottom task bar (~5% height, at least tall enough for tab buttons); moves up with the keyboard.
-        let task_bar_height =
-            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+        // Bottom task bar (~6.5% height at 1.3×, at least tall enough for tab buttons); moves up with the keyboard.
+        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
+            .max(button_height as f32 + padding as f32);
         self.code_app.bottom_chrome_height_px = task_bar_height;
         self.terminal_app.bottom_chrome_height_px = task_bar_height;
         
@@ -1240,8 +1244,9 @@ impl Application for CoderApp {
         let task_bar_bottom = keyboard_top_px;
 
         // One shared height for tabs, run/stop/clear, and console input strip (fills task bar vertically).
-        let chrome_h =
-            (task_bar_height - 8.0_f32).max(button_height as f32).round() as u32;
+        let chrome_h = (task_bar_height - 8.0_f32 * CODER_CHROME_SCALE)
+            .max(button_height as f32)
+            .round() as u32;
         self.run_button.height = chrome_h;
         self.stop_button.height = chrome_h;
         self.stop_button.width = chrome_h;
@@ -1770,11 +1775,12 @@ impl Application for CoderApp {
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
         
-        let task_bar_height =
-            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
+            .max(button_height as f32 + padding as f32);
         let task_bar_top = keyboard_top_px - task_bar_height;
-        let chrome_h =
-            (task_bar_height - 8.0_f32).max(button_height as f32).round() as u32;
+        let chrome_h = (task_bar_height - 8.0_f32 * CODER_CHROME_SCALE)
+            .max(button_height as f32)
+            .round() as u32;
         let tab_top_y = (task_bar_top + (task_bar_height - chrome_h as f32) * 0.5).round() as i32;
         
         // Task bar chrome (tabs / run / stop) — always hit-test; matches visible task bar
@@ -1970,8 +1976,8 @@ impl Application for CoderApp {
                         let layout_scale = Self::layout_scale_from_state(state);
                         let padding = Self::padding_scaled(layout_scale);
                         let (_, button_height) = Self::button_size_scaled(layout_scale);
-                        let task_bar_height =
-                            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+                        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
+                            .max(button_height as f32 + padding as f32);
                         let task_bar_top = keyboard_top_px - task_bar_height;
 
                         if mouse_y >= safe_region_top_y && mouse_y < task_bar_top {
