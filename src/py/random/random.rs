@@ -430,12 +430,135 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(sentinel.into())
 }
 
+/// xos.random.randint(a, b) -> int in the inclusive range [a, b]
+fn randint(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "randint() takes exactly 2 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+
+    let low: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let high: i64 = args_vec[1].clone().try_into_value(vm)?;
+    if low > high {
+        return Err(vm.new_value_error("randint() low must be <= high".to_string()));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let span = (high - low + 1) as f64;
+        let value = low + (js_sys::Math::random() * span).floor() as i64;
+        return Ok(vm.ctx.new_int(value).into());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rand::Rng;
+        let mut rng = rand::rng();
+        let value: i64 = rng.random_range(low..=high);
+        Ok(vm.ctx.new_int(value).into())
+    }
+}
+
+/// xos.random.choice(seq, size=None)
+/// - choice(seq) returns one random element
+/// - choice(seq, size) returns a list with `size` random elements (with replacement)
+fn choice(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.is_empty() || args_vec.len() > 2 {
+        return Err(vm.new_type_error(format!(
+            "choice() takes 1 or 2 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+
+    let seq = &args_vec[0];
+    let size_opt: Option<usize> = if args_vec.len() == 2 {
+        let size_raw = args_vec[1].clone().try_into_value::<i64>(vm)?;
+        if size_raw < 0 {
+            return Err(vm.new_value_error("choice() size must be >= 0".to_string()));
+        }
+        Some(size_raw as usize)
+    } else {
+        None
+    };
+
+    // Support strings directly for ergonomic character sampling.
+    if let Ok(s) = seq.clone().try_into_value::<String>(vm) {
+        let chars: Vec<char> = s.chars().collect();
+        if chars.is_empty() {
+            return Err(vm.new_index_error("choice() cannot choose from an empty sequence".to_string()));
+        }
+
+        let sample_char = || -> char {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let idx = (js_sys::Math::random() * chars.len() as f64).floor() as usize;
+                chars[idx]
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rand::Rng;
+                let mut rng = rand::rng();
+                chars[rng.random_range(0..chars.len())]
+            }
+        };
+
+        if let Some(size) = size_opt {
+            let mut out = Vec::with_capacity(size);
+            for _ in 0..size {
+                out.push(vm.ctx.new_str(sample_char().to_string()).into());
+            }
+            return Ok(vm.ctx.new_list(out).into());
+        }
+
+        return Ok(vm.ctx.new_str(sample_char().to_string()).into());
+    }
+
+    // Generic sequence fallback using __len__ and __getitem__.
+    let len_obj = vm.call_method(seq, "__len__", ())?;
+    let len: i64 = len_obj.try_into_value(vm)?;
+    if len <= 0 {
+        return Err(vm.new_index_error("choice() cannot choose from an empty sequence".to_string()));
+    }
+
+    let pick_index = || -> i64 {
+        #[cfg(target_arch = "wasm32")]
+        {
+            (js_sys::Math::random() * len as f64).floor() as i64
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rand::Rng;
+            let mut rng = rand::rng();
+            rng.random_range(0..len)
+        }
+    };
+
+    if let Some(size) = size_opt {
+        let mut out = Vec::with_capacity(size);
+        for _ in 0..size {
+            let idx = pick_index();
+            let item = vm.call_method(seq, "__getitem__", (idx,))?;
+            out.push(item);
+        }
+        return Ok(vm.ctx.new_list(out).into());
+    }
+
+    let idx = pick_index();
+    vm.call_method(seq, "__getitem__", (idx,))
+}
+
 /// Create the random submodule
 pub fn make_random_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("random", vm.ctx.new_dict(), None);
     
     // Add uniform function
     module.set_attr("uniform", vm.new_function("uniform", uniform), vm).unwrap();
+    module.set_attr("randint", vm.new_function("randint", randint), vm).unwrap();
+    module.set_attr("choice", vm.new_function("choice", choice), vm).unwrap();
     
     // Add uniform_fill function (zero-copy direct fill)
     module.set_attr("uniform_fill", vm.new_function("uniform_fill", uniform_fill), vm).unwrap();

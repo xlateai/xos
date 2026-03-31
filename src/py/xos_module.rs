@@ -137,6 +137,20 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the random submodule
     let random_module = crate::python_api::random::random::make_random_module(vm);
     module.set_attr("random", random_module, vm).unwrap();
+
+    // Add a lightweight string constants submodule for Python compatibility.
+    let string_module = vm.new_module("xos.string", vm.ctx.new_dict(), None);
+    string_module
+        .set_attr(
+            "ascii_letters",
+            vm.ctx.new_str("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+            vm,
+        )
+        .unwrap();
+    string_module
+        .set_attr("digits", vm.ctx.new_str("0123456789"), vm)
+        .unwrap();
+    module.set_attr("string", string_module, vm).unwrap();
     
     // Add the rasterizer submodule
     let rasterizer_module = crate::python_api::rasterizer::make_rasterizer_module(vm);
