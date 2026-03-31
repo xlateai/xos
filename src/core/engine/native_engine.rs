@@ -472,7 +472,7 @@ impl ApplicationHandler for AppState {
                                     if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
-                                            ShortcutAction::TerminateProgram,
+                                            ShortcutAction::StopExecution,
                                         );
                                         return;
                                     }

@@ -1138,6 +1138,41 @@ builtins.print = __custom_print__
             self.execute_python_code(&code);
         }
     }
+
+    fn stop_running_execution(&mut self) {
+        let is_viewport_running = self.viewport_app.is_some();
+        let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
+
+        if !is_viewport_running && !is_background_running {
+            return;
+        }
+
+        // Stop viewport app if running.
+        if is_viewport_running {
+            self.viewport_app = None;
+            self.viewport_app_setup_done = false;
+            crate::python_api::audio::cleanup_all_audio();
+            self.terminal_app
+                .text_rasterizer
+                .text
+                .push_str("\n[xos] Viewport app stopped\n");
+        }
+
+        // Stop background thread if running.
+        if is_background_running {
+            if let Ok(mut gen) = self.python_thread_generation.lock() {
+                *gen += 1;
+            }
+            if let Ok(mut flag) = self.python_thread_running.lock() {
+                *flag = false;
+            }
+            self.python_thread_handle = None;
+            crate::python_api::audio::cleanup_all_audio();
+            if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                buffer.push_str("\n[xos] Script stopped by user\n");
+            }
+        }
+    }
     
     fn file_item_height(scale: f32) -> f32 {
         let base = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
@@ -2509,39 +2544,7 @@ impl Application for CoderApp {
             let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
             
             if (is_viewport_running || is_background_running) && self.stop_button.contains_point(mouse_x, mouse_y) {
-                // Stop viewport app if running
-                if is_viewport_running {
-                    self.viewport_app = None;
-                    self.viewport_app_setup_done = false;
-                    // Clean up all audio resources immediately
-                    crate::python_api::audio::cleanup_all_audio();
-                    self.terminal_app.text_rasterizer.text.push_str("\n[xos] Viewport app stopped\n");
-                }
-                
-                // Stop background thread if running
-                if is_background_running {
-                    // Increment generation counter - this orphans the old thread's output
-                    if let Ok(mut gen) = self.python_thread_generation.lock() {
-                        *gen += 1;
-                    }
-                    
-                    // Mark as not running
-                    if let Ok(mut flag) = self.python_thread_running.lock() {
-                        *flag = false;
-                    }
-                    
-                    // Drop the thread handle - let it finish in background
-                    self.python_thread_handle = None;
-                    
-                    // Clean up all audio resources immediately (CRITICAL FIX!)
-                    crate::python_api::audio::cleanup_all_audio();
-                    
-                    // Update terminal with final message
-                    if let Ok(mut buffer) = self.python_output_buffer.lock() {
-                        buffer.push_str("\n[xos] Script stopped by user\n");
-                    }
-                }
-                
+                self.stop_running_execution();
                 return;
             }
             
@@ -2737,6 +2740,9 @@ impl Application for CoderApp {
             }
             ShortcutAction::Run => {
                 self.activate_run_button(state);
+            }
+            ShortcutAction::StopExecution => {
+                self.stop_running_execution();
             }
             ShortcutAction::TerminateProgram => {
                 #[cfg(not(target_arch = "wasm32"))]

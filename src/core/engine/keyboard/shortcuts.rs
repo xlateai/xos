@@ -32,6 +32,8 @@ pub enum ShortcutAction {
     ShowViewport,
     /// Trigger Run button behavior (coder)
     Run,
+    /// Stop current running viewport/script execution
+    StopExecution,
     /// Terminate native app process
     TerminateProgram,
     /// Cycle bottom mode tabs left

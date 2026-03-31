@@ -1256,6 +1256,7 @@ impl Application for TextApp {
             | ShortcutAction::ShowTerminal
             | ShortcutAction::ShowViewport
             | ShortcutAction::Run
+            | ShortcutAction::StopExecution
             | ShortcutAction::TerminateProgram
             | ShortcutAction::PrevModeTab
             | ShortcutAction::NextModeTab
