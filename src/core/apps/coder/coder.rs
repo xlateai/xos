@@ -215,6 +215,29 @@ impl CoderApp {
         self.load_editor_from_active_tab();
     }
 
+    fn switch_editor_tab_by(&mut self, delta: i32) {
+        let n = self.open_editor_tabs.len();
+        if n == 0 {
+            return;
+        }
+        let cur = self.active_editor_tab as i32;
+        let next = (cur + delta).rem_euclid(n as i32) as usize;
+        self.switch_editor_tab_to(next);
+    }
+
+    fn switch_mode_tab_by(&mut self, delta: i32) {
+        let order = [Tab::Code, Tab::Viewport, Tab::Terminal];
+        let cur_idx = order
+            .iter()
+            .position(|t| *t == self.active_tab)
+            .unwrap_or(0) as i32;
+        let next = (cur_idx + delta).rem_euclid(order.len() as i32) as usize;
+        self.active_tab = order[next];
+        if self.active_tab != Tab::Code {
+            self.explorer_popup_open = false;
+        }
+    }
+
     fn close_editor_tab_at(&mut self, index: usize) {
         if index >= self.open_editor_tabs.len() {
             return;
@@ -2694,6 +2717,18 @@ impl Application for CoderApp {
             ShortcutAction::TerminateProgram => {
                 #[cfg(not(target_arch = "wasm32"))]
                 crate::engine::native_engine::request_exit();
+            }
+            ShortcutAction::PrevModeTab => self.switch_mode_tab_by(-1),
+            ShortcutAction::NextModeTab => self.switch_mode_tab_by(1),
+            ShortcutAction::PrevEditorTab => {
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = false;
+                self.switch_editor_tab_by(-1);
+            }
+            ShortcutAction::NextEditorTab => {
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = false;
+                self.switch_editor_tab_by(1);
             }
             _ => {}
         }

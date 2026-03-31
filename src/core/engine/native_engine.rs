@@ -344,9 +344,43 @@ impl ApplicationHandler for AppState {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\t');
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
+                            #[cfg(not(target_os = "ios"))]
+                            {
+                                if self.alt_held && self.shift_held {
+                                    let _ = self.app.on_key_shortcut(
+                                        &mut self.engine_state,
+                                        ShortcutAction::PrevEditorTab,
+                                    );
+                                    return;
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    let _ = self.app.on_key_shortcut(
+                                        &mut self.engine_state,
+                                        ShortcutAction::PrevModeTab,
+                                    );
+                                    return;
+                                }
+                            }
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{2190}'); // ←
                         }
                         Key::Named(NamedKey::ArrowRight) => {
+                            #[cfg(not(target_os = "ios"))]
+                            {
+                                if self.alt_held && self.shift_held {
+                                    let _ = self.app.on_key_shortcut(
+                                        &mut self.engine_state,
+                                        ShortcutAction::NextEditorTab,
+                                    );
+                                    return;
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    let _ = self.app.on_key_shortcut(
+                                        &mut self.engine_state,
+                                        ShortcutAction::NextModeTab,
+                                    );
+                                    return;
+                                }
+                            }
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{2192}'); // →
                         }
                         Key::Named(NamedKey::ArrowUp) => {

@@ -34,6 +34,14 @@ pub enum ShortcutAction {
     Run,
     /// Terminate native app process
     TerminateProgram,
+    /// Cycle bottom mode tabs left
+    PrevModeTab,
+    /// Cycle bottom mode tabs right
+    NextModeTab,
+    /// Cycle top editor tabs left
+    PrevEditorTab,
+    /// Cycle top editor tabs right
+    NextEditorTab,
 }
 
 /// Detects if a keyboard shortcut action was triggered
