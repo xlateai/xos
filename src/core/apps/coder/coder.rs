@@ -2338,6 +2338,9 @@ impl Application for CoderApp {
             Tab::Code => {
                 if self.explorer_popup_open {
                     match ch {
+                        'w' | 'W' => self.explorer_move_selection(-1),
+                        's' | 'S' => self.explorer_move_selection(1),
+                        'a' | 'A' => self.explorer_activate_selected(),
                         '\u{2190}' => self.explorer_activate_selected(), // ←
                         '\u{2191}' => self.explorer_move_selection(-1), // ↑
                         '\u{2193}' => self.explorer_move_selection(1),  // ↓
