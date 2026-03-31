@@ -123,6 +123,10 @@ pub struct TextApp {
     last_engine_scaled_font: f32,
     /// When true (e.g. [`CoderApp`] editors), skip global scale here — parent sets [`TextApp::set_font_size`].
     pub uses_parent_ui_scale: bool,
+    /// Pixels to subtract from the keyboard top line so text ends above parent chrome (e.g. coder task bar).
+    pub bottom_chrome_height_px: f32,
+    /// Pixels below the safe region top reserved for parent chrome (e.g. coder editor tab bar).
+    pub top_chrome_height_px: f32,
 }
 
 
@@ -198,7 +202,19 @@ impl TextApp {
             bound_color: BOUND_COLOR,
             last_engine_scaled_font: -1.0,
             uses_parent_ui_scale: false,
+            bottom_chrome_height_px: 0.0,
+            top_chrome_height_px: 0.0,
         }
+    }
+
+    #[inline]
+    fn layout_content_top(&self, safe_y1: f32, height: f32) -> f32 {
+        safe_y1 * height + self.top_chrome_height_px
+    }
+
+    #[inline]
+    fn effective_content_bottom_px(&self, height: f32, keyboard_top_y: f32) -> f32 {
+        keyboard_top_y * height - self.bottom_chrome_height_px
     }
 
     /// Same as [`TextApp::new`] but tuned for the small transparent overlay (`xos app overlay`).
@@ -267,7 +283,7 @@ impl Application for TextApp {
             let shape = state.frame.tensor.shape();
             let height = shape[0] as f32;
             let safe_region = &state.frame.safe_region_boundaries;
-            let content_top = safe_region.y1 * height;
+            let content_top = self.layout_content_top(safe_region.y1, height);
             let content_height = height - content_top;
             
             // Tick the engine once to calculate line positions
@@ -308,8 +324,8 @@ impl Application for TextApp {
             // Get keyboard top edge (whether visible or not)
             let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
             
-            let content_top = safe_region.y1 * height; // Top of safe region
-            let content_bottom = keyboard_top_y * height; // Top of keyboard area
+            let content_top = self.layout_content_top(safe_region.y1, height);
+            let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y); // Above keyboard / parent chrome
             
             let is_trackpad_mode = state.keyboard.onscreen.is_trackpad_mode();
             let is_keyboard_shown = state.keyboard.onscreen.is_shown();
@@ -722,9 +738,9 @@ impl Application for TextApp {
         let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let safe_region = &state.frame.safe_region_boundaries;
-        let content_top = safe_region.y1 * height;
+        let content_top = self.layout_content_top(safe_region.y1, height);
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-        let content_bottom = keyboard_top_y * height;
+        let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
         let content_height = content_bottom - content_top;
         
         match ch {
@@ -838,7 +854,7 @@ impl Application for TextApp {
             if state.keyboard.onscreen.check_temp_trackpad_activation(initial_x, initial_y, state.mouse.x, state.mouse.y) {
                 // Temp trackpad mode was activated - initialize laser at cursor position
                 let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = safe_region.y1 * height;
+                let content_top = self.layout_content_top(safe_region.y1, height);
                 self.initialize_laser_at_cursor(content_top);
                 
                 // Clear initial position tracking
@@ -857,7 +873,7 @@ impl Application for TextApp {
             // Initialize laser if not set (at current cursor position)
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = safe_region.y1 * height;
+                let content_top = self.layout_content_top(safe_region.y1, height);
                 self.initialize_laser_at_cursor(content_top);
             }
             
@@ -877,20 +893,20 @@ impl Application for TextApp {
                     // Move laser 2x with mouse movement (double speed)
                     let new_laser_x = (laser_x + mouse_dx * 2.0).max(0.0).min(width);
                     
-                    // Constrain laser to stay above keyboard
+                    // Constrain laser to stay above keyboard (and parent chrome e.g. coder task bar)
                     let safe_region = &state.frame.safe_region_boundaries;
-                    let content_top = safe_region.y1 * height;
+                    let content_top = self.layout_content_top(safe_region.y1, height);
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-                    let keyboard_top = keyboard_top_y * height;
+                    let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
                     
-                    let new_laser_y = (laser_y + mouse_dy * 2.0).max(content_top).min(keyboard_top);
+                    let new_laser_y = (laser_y + mouse_dy * 2.0).max(content_top).min(content_bottom);
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
                     
                     // Update cursor position based on laser
                     let safe_region = &state.frame.safe_region_boundaries;
-                    let content_top = safe_region.y1 * height;
+                    let content_top = self.layout_content_top(safe_region.y1, height);
                     let text_x = new_laser_x;
                     let text_y = new_laser_y - content_top + self.scroll_y;
                     
@@ -954,7 +970,7 @@ impl Application for TextApp {
                             self.selecting = true;
                             // Get character index at initial tap position for selection start
                             let safe_region = &state.frame.safe_region_boundaries;
-                            let content_top = safe_region.y1 * height;
+                            let content_top = self.layout_content_top(safe_region.y1, height);
                             let text_x = self.last_tap_x;
                             let text_y = self.last_tap_y - content_top + self.scroll_y;
                             let start_char_idx = self.find_nearest_char_index(text_x, text_y);
@@ -968,7 +984,7 @@ impl Application for TextApp {
                         if dx > dy {
                             self.selecting = true;
                             let safe_region = &state.frame.safe_region_boundaries;
-                            let content_top = safe_region.y1 * height;
+                            let content_top = self.layout_content_top(safe_region.y1, height);
                             let text_x = self.last_tap_x;
                             let text_y = self.last_tap_y - content_top + self.scroll_y;
                             let start_char_idx = self.find_nearest_char_index(text_x, text_y);
@@ -988,7 +1004,7 @@ impl Application for TextApp {
         // Handle text selection while dragging
         if self.selecting && state.mouse.is_left_clicking {
             let safe_region = &state.frame.safe_region_boundaries;
-            let content_top = safe_region.y1 * height;
+            let content_top = self.layout_content_top(safe_region.y1, height);
             
             // Convert mouse coordinates to text coordinates
             let text_x = state.mouse.x;
@@ -1059,7 +1075,7 @@ impl Application for TextApp {
                 // Initialize laser position at current cursor position
                 if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                     let safe_region = &state.frame.safe_region_boundaries;
-                    let content_top = safe_region.y1 * height;
+                    let content_top = self.layout_content_top(safe_region.y1, height);
                     self.initialize_laser_at_cursor(content_top);
                 }
                 
@@ -1179,7 +1195,7 @@ impl Application for TextApp {
                 let shape = state.frame.tensor.shape();
                 let height = shape[0] as f32;
                 let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = safe_region.y1 * height;
+                let content_top = self.layout_content_top(safe_region.y1, height);
                 
                 // Convert screen coordinates to text coordinates (use current scroll_y)
                 let text_x = tap_x;
@@ -1231,6 +1247,25 @@ impl Application for TextApp {
             ShortcutAction::SelectAll => KeyType::SelectAll,
             ShortcutAction::Undo => KeyType::Undo,
             ShortcutAction::Redo => KeyType::Redo,
+            ShortcutAction::Tab1
+            | ShortcutAction::Tab2
+            | ShortcutAction::Tab3
+            | ShortcutAction::CloseTab
+            | ShortcutAction::ReopenClosedTab
+            | ShortcutAction::ToggleExplorer
+            | ShortcutAction::ShowTerminal
+            | ShortcutAction::ShowViewport
+            | ShortcutAction::Run
+            | ShortcutAction::StopExecution
+            | ShortcutAction::TerminateProgram
+            | ShortcutAction::PrevModeTab
+            | ShortcutAction::NextModeTab
+            | ShortcutAction::PrevEditorTab
+            | ShortcutAction::NextEditorTab
+            | ShortcutAction::ToggleViewportTaskbar
+            | ShortcutAction::FocusExplorerSearch => {
+                return;
+            }
         };
         self.handle_action_key(key_type, state);
     }
@@ -1604,9 +1639,9 @@ impl TextApp {
         let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let safe_region = &state.frame.safe_region_boundaries;
-        let content_top = safe_region.y1 * height;
+        let content_top = self.layout_content_top(safe_region.y1, height);
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-        let content_bottom = keyboard_top_y * height;
+        let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
         let content_height = content_bottom - content_top;
         
         match action {

@@ -16,6 +16,38 @@ pub enum ShortcutAction {
     SelectAll,
     Undo,
     Redo,
+    /// App-level tab management (handled outside `detect_shortcut`)
+    Tab1,
+    Tab2,
+    Tab3,
+    /// Close current editor tab (coder)
+    CloseTab,
+    /// Reopen last closed editor file tab (coder)
+    ReopenClosedTab,
+    /// Toggle file explorer popup (coder)
+    ToggleExplorer,
+    /// Switch active coder mode tab to Terminal
+    ShowTerminal,
+    /// Switch active coder mode tab to Viewport
+    ShowViewport,
+    /// Trigger Run button behavior (coder)
+    Run,
+    /// Stop current running viewport/script execution
+    StopExecution,
+    /// Terminate native app process
+    TerminateProgram,
+    /// Cycle bottom mode tabs left
+    PrevModeTab,
+    /// Cycle bottom mode tabs right
+    NextModeTab,
+    /// Cycle top editor tabs left
+    PrevEditorTab,
+    /// Cycle top editor tabs right
+    NextEditorTab,
+    /// Toggle viewport bottom task bar visibility
+    ToggleViewportTaskbar,
+    /// Open explorer and focus the search bar
+    FocusExplorerSearch,
 }
 
 /// Detects if a keyboard shortcut action was triggered
