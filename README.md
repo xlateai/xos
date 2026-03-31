@@ -18,38 +18,68 @@ Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaP
 
 As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms. Check the `example-scripts` folder for more examples.
 
-- 🚀 `xos python ./example-scripts/ball.py`
+- 🚀 `xos python ./example-scripts/ball_lines.py`
 
 ```python
-# ball.py - example code for xos (`xos python code.py` in terminal to run)
+# ball_lines.py - example code for xos (`xos python code.py` in terminal to run)
 import xos
 
+# Ideal vectorized API sketch (1:1 behavior replacement, no per-ball Python loops).
 BALL_COLOR = (255, 50, 50, 255)
-BALL_RADIUS = 0.03
+LINE_COLOR = (10, 80, 80, 255)
+BALL_RADIUS = 0.003
+LINE_THICKNESS = 0.0008
+SPEED_PER_SEC = 0.28
 
-class BallDemo(xos.Application):
-    headless: bool = False  # optional flag to disable viewport display (helpful for ml/rl)
+
+class BallLines(xos.Application):
+    def __init__(self):
+        super().__init__()
+        self.num_balls = 512
 
     def setup(self):
-        self.x, self.y = 0.5, 0.5
-        self.vx, self.vy = 0.006, 0.004
+        n = self.num_balls
+        lo, hi = BALL_RADIUS, 1.0 - BALL_RADIUS
+        self.pos = xos.random.uniform(shape=(n, 2), low=lo, high=hi)
+        self.vel = xos.random.uniform(shape=(n, 2), low=-1.0, high=1.0) * SPEED_PER_SEC
+        self.rad = xos.full((n,), BALL_RADIUS)
+        idx = xos.arange(0, n, 2, dtype=xos.int32)
+        self.pair_idx = xos.stack([idx, idx + 1], axis=1)  # (n/2, 2)
+        xos.print(f"+{n} balls in {n // 2} pairs (vectorized)")
 
     def tick(self):
         self.frame.clear(xos.color.BLACK)
-        self.x += self.vx
-        self.y += self.vy
-        if self.x - BALL_RADIUS < 0 or self.x + BALL_RADIUS > 1:
-            self.vx *= -1
-            self.x = max(BALL_RADIUS, min(1 - BALL_RADIUS, self.x))
-        if self.y - BALL_RADIUS < 0 or self.y + BALL_RADIUS > 1:
-            self.vy *= -1
-            self.y = max(BALL_RADIUS, min(1 - BALL_RADIUS, self.y))
-        w, h = self.get_width(), self.get_height()
-        r = BALL_RADIUS * max(w, h)
-        xos.rasterizer.circles(self.frame, [(self.x * w, self.y * h)], [r], BALL_COLOR)
+
+        # Integrate positions
+        self.pos = self.pos + self.vel * self.dt
+
+        # Bounce: flip velocity for any axis that crosses bounds, then clamp
+        lo = self.rad[:, None]
+        hi = 1.0 - lo
+        hit_lo = self.pos < lo
+        hit_hi = self.pos > hi
+        bounce_mask = hit_lo | hit_hi
+        self.vel = xos.where(bounce_mask, -self.vel, self.vel)
+        self.pos = xos.clip(self.pos, lo, hi)
+
+        # Convert normalized space to pixels
+        w, h = float(self.get_width()), float(self.get_height())
+        wh = xos.tensor([w, h]).reshape((1, 2))
+        pix = self.pos * wh
+        s = max(w, h)
+
+        # Pair lines: gather endpoints from pair indices
+        p0 = pix[self.pair_idx[:, 0]]
+        p1 = pix[self.pair_idx[:, 1]]
+        t = xos.full((self.pair_idx.shape[0],), LINE_THICKNESS * s)
+        r = self.rad * s
+
+        xos.rasterizer.lines(self.frame, p0, p1, t, LINE_COLOR)
+        xos.rasterizer.circles(self.frame, pix, r, BALL_COLOR)
+
 
 if __name__ == "__main__":
-    BallDemo().run()
+    BallLines().run()
 ```
 
 ## ✅ Getting Started
@@ -61,22 +91,20 @@ Xos is in an experimental development phase, which means many features may be in
 ### Prerequisites
 
 - ✅ Rust toolchain ([rustup.rs](https://rustup.rs/))
-<details><summary>iOS extras</summary>
+
+iOS extras
 
 - macOS computer
 - Xcode
 - iOS device with Developer Mode enabled (Settings > Privacy & Security > Developer Mode)
 - Physical USB cable connection to iOS device
 
-</details>
-<details><summary>Linux extras</summary>
+Linux extras
 
 - Advanced Linux Sound Architecture library (audio):
   ```bash
   sudo apt-get update && sudo apt-get install -y libasound2-dev
   ```
-
-</details>
 
 ### ⚡ How to Install
 
