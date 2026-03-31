@@ -47,23 +47,23 @@ Xos is in an experimental development phase, which means many features may be in
 
 ### Prerequisites
 
-**Required:**
-
 - ✅ Rust toolchain ([rustup.rs](https://rustup.rs/))
-
-**Optional (iOS):**
+<details><summary>iOS extras</summary>
 
 - macOS computer
 - Xcode
 - iOS device with Developer Mode enabled (Settings > Privacy & Security > Developer Mode)
 - Physical USB cable connection to iOS device
 
-**Optional (Linux):**
+</details>
+<details><summary>Linux extras</summary>
 
-- Advanced Linux Sound Architecture library (for audio support):
+- Advanced Linux Sound Architecture library (audio):
   ```bash
   sudo apt-get update && sudo apt-get install -y libasound2-dev
   ```
+
+</details>
 
 ### ⚡ How to Install
 
