@@ -349,6 +349,9 @@ impl ApplicationHandler for AppState {
                         Key::Named(NamedKey::Enter) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\n');
                         }
+                        Key::Named(NamedKey::Escape) => {
+                            let _ = self.app.on_key_char(&mut self.engine_state, '\u{1b}');
+                        }
                         Key::Named(NamedKey::Tab) => {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\t');
                         }

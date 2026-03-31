@@ -1,5 +1,6 @@
 use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
+use crate::apps::coder::explorer::{build_explorer_items, split_folder_file, ExplorerItem};
 use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::ui::Button;
@@ -46,13 +47,6 @@ struct PythonFile {
     content: String,
     #[allow(dead_code)]
     path: String,
-}
-
-/// File explorer row: either a folder header or a file
-#[derive(Debug, Clone)]
-enum ExplorerItem {
-    Folder(String),
-    File(usize),
 }
 
 pub struct CoderApp {
@@ -286,20 +280,21 @@ impl CoderApp {
 
     fn explorer_panel_bounds(
         width: f32,
-        height: f32,
+        _height: f32,
         safe_top_y: f32,
         bar_h: f32,
         task_bar_top: f32,
         ui_scale: f32,
     ) -> (f32, f32, f32, f32) {
-        let panel_margin = 24.0_f32 * ui_scale.max(0.5);
-        let px = panel_margin;
-        let pw = width - 2.0 * panel_margin;
-        let pt = safe_top_y + bar_h + panel_margin;
-        let pb = (pt + height * 0.52_f32)
-            .min(task_bar_top - panel_margin)
-            .max(pt + 140.0);
-        (px, pt, px + pw, pb)
+        let avail_top = safe_top_y + bar_h;
+        let avail_bottom = task_bar_top;
+        let avail_h = (avail_bottom - avail_top).max(120.0);
+
+        let panel_w = (width * 0.82).min(width - 32.0 * ui_scale.max(0.5));
+        let panel_h = (avail_h * 0.72).max(180.0).min(avail_h - 12.0);
+        let px = ((width - panel_w) * 0.5).max(8.0);
+        let pt = (avail_top + (avail_h - panel_h) * 0.5).max(avail_top + 6.0);
+        (px, pt, px + panel_w, pt + panel_h)
     }
 
     fn editor_tab_bar_mouse_hit(
@@ -409,16 +404,14 @@ impl CoderApp {
         self.editor_tab_close_label
             .set_font_size(20.0 * scale * tab_strip);
 
-        let file_base = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
-        let folder_base = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
+        let item_base = if cfg!(target_os = "ios") { 42.0 } else { 28.0 };
         for (item, r) in self
             .explorer_items
             .iter()
             .zip(self.file_list_rasterizers.iter_mut())
         {
             let sz = match item {
-                ExplorerItem::Folder(_) => folder_base * scale,
-                ExplorerItem::File(_) => file_base * scale,
+                ExplorerItem::Folder(_) | ExplorerItem::File(_) => item_base * scale,
             };
             r.set_font_size(sz);
         }
@@ -476,22 +469,12 @@ impl CoderApp {
         
         collect_py_files(&PYTHON_DIR, "", &mut python_files);
         
-        // Sort by name for consistent ordering (groups files by folder)
-        python_files.sort_by(|a, b| a.name.cmp(&b.name));
-        
-        // Build explorer items with folder headers when folder changes
-        let mut explorer_items = Vec::new();
-        let mut last_folder = None;
-        for (i, file) in python_files.iter().enumerate() {
-            let folder = file.name.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-            if last_folder.as_ref() != Some(&folder) {
-                if !folder.is_empty() {
-                    explorer_items.push(ExplorerItem::Folder(folder.clone()));
-                }
-                last_folder = Some(folder);
-            }
-            explorer_items.push(ExplorerItem::File(i));
-        }
+        // Keep stable deterministic ordering by normalized folder/name.
+        python_files.sort_by(|a, b| {
+            let (af, an) = split_folder_file(&a.name);
+            let (bf, bn) = split_folder_file(&b.name);
+            af.cmp(&bf).then_with(|| an.cmp(&bn))
+        });
         
         // Ensure we have at least one file
         if python_files.is_empty() {
@@ -586,19 +569,19 @@ impl CoderApp {
             TextRasterizer::new(font.clone(), 20.0 * EDITOR_TAB_STRIP_SCALE);
         editor_tab_close_label.set_text("×".to_string());
 
-        // Create text rasterizers for each explorer item (folder headers + files)
-        let file_list_font_size = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
-        let folder_font_size = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
+        // Build explorer rows (folders alphabetical with their files alphabetical underneath).
+        let file_names: Vec<String> = python_files.iter().map(|f| f.name.clone()).collect();
+        let explorer_items = build_explorer_items(&file_names);
+
+        // Create text rasterizers for each explorer item (uniform sizing for readability)
+        let item_font_size = if cfg!(target_os = "ios") { 42.0 } else { 28.0 };
         let mut file_list_rasterizers = Vec::new();
         let expanded_folders = HashSet::new(); // All collapsed by default
         for item in &explorer_items {
-            let mut rasterizer = TextRasterizer::new(font.clone(), match item {
-                ExplorerItem::Folder(_) => folder_font_size,
-                ExplorerItem::File(_) => file_list_font_size,
-            });
+            let mut rasterizer = TextRasterizer::new(font.clone(), item_font_size);
             let text = match item {
                 ExplorerItem::Folder(name) => format!("  ▶  {}/", name), // ▶ = collapsed
-                ExplorerItem::File(i) => python_files[*i].name.clone(),
+                ExplorerItem::File(i) => split_folder_file(&python_files[*i].name).1,
             };
             rasterizer.set_text(text);
             file_list_rasterizers.push(rasterizer);
@@ -1175,12 +1158,12 @@ builtins.print = __custom_print__
     }
     
     fn file_item_height(scale: f32) -> f32 {
-        let base = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
+        let base = if cfg!(target_os = "ios") { 96.0 } else { 52.0 };
         (base * scale).max(24.0)
     }
 
     fn folder_item_height(scale: f32) -> f32 {
-        let base = if cfg!(target_os = "ios") { 52.0 } else { 36.0 };
+        let base = if cfg!(target_os = "ios") { 96.0 } else { 52.0 };
         (base * scale).max(20.0)
     }
 
@@ -1195,7 +1178,7 @@ builtins.print = __custom_print__
     fn folder_for_file(&self, file_idx: usize) -> String {
         self.python_files
             .get(file_idx)
-            .and_then(|f| f.name.rsplit_once('/').map(|(d, _)| d.to_string()))
+            .map(|f| split_folder_file(&f.name).0)
             .unwrap_or_default()
     }
     
@@ -1216,6 +1199,16 @@ builtins.print = __custom_print__
             .enumerate()
             .filter_map(|(i, item)| self.is_item_visible(item).then_some(i))
             .collect()
+    }
+
+    fn explorer_max_scroll_for_panel(&self, panel_top: f32, panel_bottom: f32, scale: f32) -> f32 {
+        let total_h = self
+            .explorer_items
+            .iter()
+            .filter(|i| self.is_item_visible(i))
+            .map(|i| CoderApp::explorer_item_height(i, scale))
+            .sum::<f32>();
+        (total_h - (panel_bottom - panel_top)).max(0.0)
     }
 
     fn ensure_explorer_selection(&mut self) {
@@ -2052,18 +2045,13 @@ impl Application for CoderApp {
                     pt as i32,
                     clip_x1,
                     pb as i32,
-                    (22, 22, 28, 0xff),
+                    (18, 18, 20, 0xff),
                 );
-                fill_rect_buffer(
-                    buffer,
-                    width as usize,
-                    height as usize,
-                    clip_x0,
-                    pt as i32,
-                    clip_x1,
-                    pt as i32 + 1,
-                    (80, 85, 95, 0xff),
-                );
+                // Panel border for clear edge contrast.
+                fill_rect_buffer(buffer, width as usize, height as usize, clip_x0, pt as i32, clip_x1, pt as i32 + 1, (92, 96, 106, 0xff));
+                fill_rect_buffer(buffer, width as usize, height as usize, clip_x0, pb as i32 - 1, clip_x1, pb as i32, (92, 96, 106, 0xff));
+                fill_rect_buffer(buffer, width as usize, height as usize, clip_x0, pt as i32, clip_x0 + 1, pb as i32, (92, 96, 106, 0xff));
+                fill_rect_buffer(buffer, width as usize, height as usize, clip_x1 - 1, pt as i32, clip_x1, pb as i32, (92, 96, 106, 0xff));
                 self.draw_file_explorer(
                     buffer,
                     width as u32,
@@ -2321,11 +2309,18 @@ impl Application for CoderApp {
                 if self.explorer_popup_open {
                     self.file_list_scroll_y += dy;
                     let scale = Self::layout_scale_from_state(state);
-                    let max_scroll = self.explorer_items.iter()
-                        .filter(|i| self.is_item_visible(i))
-                        .map(|i| CoderApp::explorer_item_height(i, scale))
-                        .sum::<f32>()
-                        .max(0.0);
+                    let shape = state.frame.tensor.shape();
+                    let width = shape[1] as f32;
+                    let height = shape[0] as f32;
+                    let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
+                    let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+                    let task_bar_top = keyboard_top_y * height
+                        - (height * 0.05_f32 * CODER_CHROME_SCALE)
+                            .max(Self::button_size_scaled(scale).1 as f32 + Self::padding_scaled(scale) as f32);
+                    let bar_h = Self::editor_tab_bar_height_px(scale);
+                    let (_, pt, _, pb) =
+                        Self::explorer_panel_bounds(width, height, safe_top_y, bar_h, task_bar_top, scale);
+                    let max_scroll = self.explorer_max_scroll_for_panel(pt, pb, scale);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                 } else {
                     self.code_app.on_scroll(state, dx, dy)
@@ -2346,6 +2341,7 @@ impl Application for CoderApp {
                         '\u{2191}' => self.explorer_move_selection(-1), // ↑
                         '\u{2193}' => self.explorer_move_selection(1),  // ↓
                         '\n' | '\r' => self.explorer_activate_selected(),
+                        '\u{1b}' => self.explorer_popup_open = false, // Esc
                         _ => {}
                     }
                     return;
@@ -2389,11 +2385,18 @@ impl Application for CoderApp {
                         let dy = state.mouse.y - self.file_explorer_last_mouse_y;
                         self.file_list_scroll_y -= dy;
                         let scale = Self::layout_scale_from_state(state);
-                        let max_scroll = self.explorer_items.iter()
-                            .filter(|i| self.is_item_visible(i))
-                            .map(|i| CoderApp::explorer_item_height(i, scale))
-                            .sum::<f32>()
-                            .max(0.0);
+                        let shape = state.frame.tensor.shape();
+                        let width = shape[1] as f32;
+                        let height = shape[0] as f32;
+                        let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
+                        let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+                        let task_bar_top = keyboard_top_y * height
+                            - (height * 0.05_f32 * CODER_CHROME_SCALE)
+                                .max(Self::button_size_scaled(scale).1 as f32 + Self::padding_scaled(scale) as f32);
+                        let bar_h = Self::editor_tab_bar_height_px(scale);
+                        let (_, pt, _, pb) =
+                            Self::explorer_panel_bounds(width, height, safe_top_y, bar_h, task_bar_top, scale);
+                        let max_scroll = self.explorer_max_scroll_for_panel(pt, pb, scale);
                         self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                         self.file_explorer_last_mouse_y = state.mouse.y;
                     }
@@ -2726,10 +2729,12 @@ impl Application for CoderApp {
                 }
             }
             ShortcutAction::ToggleExplorer => {
-                // Alt+E always returns to files/code and opens explorer.
+                // Alt+E toggles explorer and always returns to files/code.
                 self.active_tab = Tab::Code;
-                self.explorer_popup_open = true;
-                self.ensure_explorer_selection();
+                self.explorer_popup_open = !self.explorer_popup_open;
+                if self.explorer_popup_open {
+                    self.ensure_explorer_selection();
+                }
             }
             ShortcutAction::ShowTerminal => {
                 self.active_tab = Tab::Terminal;
