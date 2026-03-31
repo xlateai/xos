@@ -14,29 +14,42 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 
 Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
 
-## 📁 Code Example
+## 📁 Code Examples
 
-As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms.
+As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms. Check the `example-scripts` folder for more examples.
 
-- 🚀 `xos python ./code.py`
+- 🚀 `xos python ./example-scripts/ball.py`
 
 ```python
-# code.py - example viewport application code from xos (`xos python code.py` in terminal to run)
+# ball.py - example code for xos (`xos python code.py` in terminal to run)
 import xos
 
-class XOSExample(xos.Application):
-    headless: bool = False  # optional flag to disable viewport display
+BALL_COLOR = (255, 50, 50, 255)
+BALL_RADIUS = 0.03
+
+class BallDemo(xos.Application):
+    headless: bool = False  # optional flag to disable viewport display (helpful for ml/rl)
+
+    def setup(self):
+        self.x, self.y = 0.5, 0.5
+        self.vx, self.vy = 0.006, 0.004
+
     def tick(self):
         self.frame.clear(xos.color.BLACK)
-        text = "welcome to xos"
+        self.x += self.vx
+        self.y += self.vy
+        if self.x - BALL_RADIUS < 0 or self.x + BALL_RADIUS > 1:
+            self.vx *= -1
+            self.x = max(BALL_RADIUS, min(1 - BALL_RADIUS, self.x))
+        if self.y - BALL_RADIUS < 0 or self.y + BALL_RADIUS > 1:
+            self.vy *= -1
+            self.y = max(BALL_RADIUS, min(1 - BALL_RADIUS, self.y))
         w, h = self.get_width(), self.get_height()
-        size = 28.0
-        x = float((w - len(text) * size * 0.5) / 2)
-        y = float((h - size) / 2)
-        xos.rasterizer.text(text, x, y, size, (255, 255, 255), float(w))
+        r = BALL_RADIUS * max(w, h)
+        xos.rasterizer.circles(self.frame, [(self.x * w, self.y * h)], [r], BALL_COLOR)
 
 if __name__ == "__main__":
-    XOSExample().run()
+    BallDemo().run()
 ```
 
 ## ✅ Getting Started
