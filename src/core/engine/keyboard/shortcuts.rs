@@ -16,14 +16,16 @@ pub enum ShortcutAction {
     SelectAll,
     Undo,
     Redo,
-    /// Ctrl/Cmd+1 — coder editor tab 1
+    /// App-level tab management (handled outside `detect_shortcut`)
     Tab1,
     Tab2,
     Tab3,
-    /// Ctrl/Cmd+W — close current editor tab (coder)
+    /// Close current editor tab (coder)
     CloseTab,
-    /// Ctrl/Cmd+Shift+T — reopen last closed editor file tab (coder)
+    /// Reopen last closed editor file tab (coder)
     ReopenClosedTab,
+    /// Toggle file explorer popup (coder)
+    ToggleExplorer,
 }
 
 /// Detects if a keyboard shortcut action was triggered
@@ -51,11 +53,6 @@ pub fn detect_shortcut(ch: char, command_held: bool, shift_held: bool) -> Option
         ('z', false) => Some(ShortcutAction::Undo),
         ('z', true) => Some(ShortcutAction::Redo),  // Cmd+Shift+Z (Mac)
         ('y', false) => Some(ShortcutAction::Redo), // Ctrl+Y (Windows)
-        ('1', false) => Some(ShortcutAction::Tab1),
-        ('2', false) => Some(ShortcutAction::Tab2),
-        ('3', false) => Some(ShortcutAction::Tab3),
-        ('w', false) => Some(ShortcutAction::CloseTab),
-        ('t', true) => Some(ShortcutAction::ReopenClosedTab),
         _ => None,
     }
 }

@@ -351,11 +351,10 @@ impl ApplicationHandler for AppState {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{2193}'); // ↓
                         }
                         _ => {
-                            // Ctrl+1–3 / Ctrl+Shift+T: `NamedKey` paths (digits must not be handled
-                            // here when Ctrl is *not* held, or plain "1"/"2"/"3" typing breaks).
+                            // Coder tab management shortcuts (Alt-based).
                             #[cfg(not(target_os = "ios"))]
                             {
-                                if self.command_held && !self.shift_held {
+                                if self.alt_held && !self.shift_held {
                                     let tab_shortcut = match event.physical_key {
                                         PhysicalKey::Code(KeyCode::Digit1) => {
                                             Some(ShortcutAction::Tab1)
@@ -376,11 +375,26 @@ impl ApplicationHandler for AppState {
                                         return;
                                     }
                                 }
-                                if self.command_held && self.shift_held {
-                                    if matches!(
-                                        event.physical_key,
-                                        PhysicalKey::Code(KeyCode::KeyT)
-                                    ) {
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::CloseTab,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyE)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::ToggleExplorer,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
                                             ShortcutAction::ReopenClosedTab,
@@ -389,7 +403,7 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                             }
-                            // Logical `Character` often carries Ctrl+digit / Ctrl+Shift+letter when
+                            // Logical `Character` often carries Ctrl+... when
                             // `event.text` is empty (common on Windows).
                             #[cfg(not(target_os = "ios"))]
                             if let Key::Character(ref s) = event.logical_key {

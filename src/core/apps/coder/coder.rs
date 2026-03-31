@@ -14,8 +14,10 @@ static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/example-scri
 
 /// Task bar depth, chrome buttons, and related spacing/fonts vs prior baseline.
 const CODER_CHROME_SCALE: f32 = 1.3;
-/// Editor tab strip height and tab label fonts vs prior baseline (+10%).
-const EDITOR_TAB_STRIP_SCALE: f32 = 1.1;
+/// Bottom task-bar tab button width + label size (+10%).
+const TASKBAR_TAB_SCALE: f32 = 1.1;
+/// Editor tab strip height and tab label fonts vs prior baseline (+30%).
+const EDITOR_TAB_STRIP_SCALE: f32 = 1.3;
 const MAX_OPEN_EDITOR_TABS: usize = 3;
 
 #[derive(Debug, Clone)]
@@ -335,11 +337,11 @@ impl CoderApp {
         let (button_width, _) = Self::button_size_scaled(scale);
         #[cfg(target_os = "ios")]
         {
-            (button_width as f32 * 0.8).round() as u32
+            (button_width as f32 * 0.8 * TASKBAR_TAB_SCALE).round() as u32
         }
         #[cfg(not(target_os = "ios"))]
         {
-            button_width
+            (button_width as f32 * TASKBAR_TAB_SCALE).round() as u32
         }
     }
 
@@ -362,9 +364,12 @@ impl CoderApp {
         self.console_app.set_font_size(editor_base * scale);
 
         let chrome_font = CODER_CHROME_SCALE;
-        self.code_tab_label.set_font_size(20.0 * scale * chrome_font);
-        self.terminal_tab_label.set_font_size(20.0 * scale * chrome_font);
-        self.viewport_tab_label.set_font_size(20.0 * scale * chrome_font);
+        let task_tab_font = chrome_font * TASKBAR_TAB_SCALE;
+        self.code_tab_label.set_font_size(20.0 * scale * task_tab_font);
+        self.terminal_tab_label
+            .set_font_size(20.0 * scale * task_tab_font);
+        self.viewport_tab_label
+            .set_font_size(20.0 * scale * task_tab_font);
         self.clear_button_label.set_font_size(30.0 * scale * chrome_font);
         self.run_button_label.set_font_size(20.0 * scale * chrome_font);
         let tab_strip = chrome_font * EDITOR_TAB_STRIP_SCALE;
@@ -524,16 +529,16 @@ impl CoderApp {
         ).expect("Failed to load font");
         
         // Create text rasterizers for tab labels
-        let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0);
+        let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
         code_tab_label.set_text("files".to_string());
 
         let mut run_button_label = TextRasterizer::new(font.clone(), 20.0);
         run_button_label.set_text(String::new());
         
-        let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
+        let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
         terminal_tab_label.set_text("terminal".to_string());
         
-        let mut viewport_tab_label = TextRasterizer::new(font.clone(), 20.0);
+        let mut viewport_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
         viewport_tab_label.set_text("viewport".to_string());
         
         // Create text rasterizer for clear button "x" label
@@ -2513,6 +2518,9 @@ impl Application for CoderApp {
             }
             ShortcutAction::ReopenClosedTab => {
                 self.reopen_last_closed_editor_file();
+            }
+            ShortcutAction::ToggleExplorer => {
+                self.explorer_popup_open = !self.explorer_popup_open;
             }
             _ => {}
         }
