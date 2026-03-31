@@ -1028,6 +1028,54 @@ builtins.print = __custom_print__
         // The button will just show as a colored rectangle
     }
 
+    /// Frosted gray strip between content and keyboard; alpha-blends with pixels already in the buffer.
+    fn draw_glassy_task_bar(
+        buffer: &mut [u8],
+        canvas_width: u32,
+        canvas_height: u32,
+        task_bar_top: f32,
+        task_bar_bottom: f32,
+    ) {
+        let y0 = task_bar_top.round().clamp(0.0, canvas_height as f32 - 1.0) as i32;
+        let y1 = task_bar_bottom.round().clamp(y0 as f32 + 1.0, canvas_height as f32) as i32;
+        if y0 >= y1 {
+            return;
+        }
+        // Slightly cool gray, semi-transparent — reads as glass over code / viewport
+        let (r, g, b, a) = (152u8, 156u8, 164u8, 210u8);
+        let af = a as f32 / 255.0;
+        for y in y0..y1 {
+            let row = (y as u32 * canvas_width) as usize * 4;
+            for x in 0..canvas_width as usize {
+                let i = row + x * 4;
+                if i + 3 >= buffer.len() {
+                    break;
+                }
+                let inv = 1.0 - af;
+                buffer[i + 0] = (r as f32 * af + buffer[i + 0] as f32 * inv) as u8;
+                buffer[i + 1] = (g as f32 * af + buffer[i + 1] as f32 * inv) as u8;
+                buffer[i + 2] = (b as f32 * af + buffer[i + 2] as f32 * inv) as u8;
+                buffer[i + 3] = 0xff;
+            }
+        }
+        // Thin top highlight
+        let hl = (236u8, 238u8, 242u8, 90u8);
+        let haf = hl.3 as f32 / 255.0;
+        let yh = y0.max(0);
+        if yh < canvas_height as i32 {
+            let row = (yh as u32 * canvas_width) as usize * 4;
+            for x in 0..canvas_width as usize {
+                let i = row + x * 4;
+                if i + 3 >= buffer.len() {
+                    break;
+                }
+                let inv = 1.0 - haf;
+                buffer[i + 0] = (hl.0 as f32 * haf + buffer[i + 0] as f32 * inv) as u8;
+                buffer[i + 1] = (hl.1 as f32 * haf + buffer[i + 1] as f32 * inv) as u8;
+                buffer[i + 2] = (hl.2 as f32 * haf + buffer[i + 2] as f32 * inv) as u8;
+            }
+        }
+    }
 }
 
 impl Drop for CoderApp {
@@ -1124,24 +1172,29 @@ impl Application for CoderApp {
         let (_button_w, button_height) = Self::button_size_scaled(ui_scale);
         let padding = Self::padding_scaled(ui_scale);
         
+        // Bottom task bar (~5% height, at least tall enough for tab buttons); moves up with the keyboard.
+        let task_bar_height =
+            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+        self.code_app.bottom_chrome_height_px = task_bar_height;
+        self.terminal_app.bottom_chrome_height_px = task_bar_height;
+        
+        let task_bar_top = keyboard_top_px - task_bar_height;
+        let task_bar_bottom = keyboard_top_px;
+        
         // Console is only shown on terminal tab
         let show_console = self.active_tab == Tab::Terminal;
         let console_height = button_height;
         
-        // Calculate positions from bottom up:
-        // 1. Keyboard at keyboard_top_px
-        // 2. Tabs/button above keyboard (or above console if shown)
-        // 3. Console above tabs/button (only if shown on terminal tab)
-        
-        let tabs_bottom_y = keyboard_top_px - padding as f32;
-        let tabs_top_y = tabs_bottom_y - button_height as f32;
-        
+        // Console sits above the task bar when on terminal tab
         let console_bottom_y = if show_console {
-            tabs_top_y - padding as f32
+            task_bar_top - padding as f32
         } else {
-            tabs_bottom_y // Not shown, but calculate for consistency
+            task_bar_bottom
         };
         let console_top_y = console_bottom_y - console_height as f32;
+        
+        // Tabs/buttons are vertically centered inside the task bar
+        let tab_top_y = (task_bar_top + (task_bar_height - button_height as f32) * 0.5).round() as i32;
         
         // Delegate to active text app (but not console - it gets special handling)
         match self.active_tab {
@@ -1261,16 +1314,16 @@ impl Application for CoderApp {
         
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
 
-        // Console + tab chrome layout only when the on-screen keyboard is up (nothing to draw otherwise).
         if keyboard_is_shown {
             self.console_app
                 .text_rasterizer
                 .tick(width, console_height as f32);
-            self.code_tab_label.tick(width, height);
-            self.terminal_tab_label.tick(width, height);
-            self.viewport_tab_label.tick(width, height);
             self.clear_button_label.tick(width, height);
         }
+        // Task bar labels tick every frame (task bar is always visible).
+        self.code_tab_label.tick(width, height);
+        self.terminal_tab_label.tick(width, height);
+        self.viewport_tab_label.tick(width, height);
 
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
             for rasterizer in &mut self.file_list_rasterizers {
@@ -1286,8 +1339,8 @@ impl Application for CoderApp {
         
         // Draw file explorer if in file explorer mode on code tab
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
-            // Calculate the viewport height (everything above the tabs)
-            let viewport_height = tabs_top_y;
+            // Viewport ends at the top of the task bar (code text uses the same boundary via bottom_chrome_height_px).
+            let viewport_height = task_bar_top;
             
             self.draw_file_explorer(
                 buffer,
@@ -1299,13 +1352,17 @@ impl Application for CoderApp {
             );
         }
         
-        // Only draw keyboard accessories when keyboard is shown
-        if !keyboard_is_shown {
-            return;
-        }
+        // Glassy task bar strip (always — moves up when the keyboard opens)
+        Self::draw_glassy_task_bar(
+            buffer,
+            width as u32,
+            height as u32,
+            task_bar_top,
+            task_bar_bottom,
+        );
         
-        // Draw console above tabs (only when on terminal tab)
-        if show_console {
+        // Console above task bar (only when keyboard is up and on terminal tab)
+        if keyboard_is_shown && show_console {
             let fw = width as usize;
             let fh = height as usize;
             let w_i = width as i32;
@@ -1402,8 +1459,6 @@ impl Application for CoderApp {
             );
         }
         
-        // Draw tabs at tabs_top_y position (narrower on iOS)
-        let tab_top_y = tabs_top_y as i32;
         let tab_width = Self::tab_width_scaled(ui_scale);
         let tab_height = button_height;
         
@@ -1442,7 +1497,7 @@ impl Application for CoderApp {
         
         // Determine button behavior and color based on console state
         let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
-        let should_execute_console = show_console && console_has_text;
+        let should_execute_console = keyboard_is_shown && show_console && console_has_text;
         
         // Check if mouse is hovering over run button
         let is_run_hovered = self.run_button.contains_point(mouse_x, mouse_y);
@@ -1457,7 +1512,7 @@ impl Application for CoderApp {
         }
         
         // Position and draw clear "×" (only when console is shown and has text)
-        if show_console && console_has_text {
+        if keyboard_is_shown && show_console && console_has_text {
             // Position clear button on right side of console, vertically centered in console area
             self.clear_button.x = self.run_button.x + (self.run_button.width as i32 - self.clear_button.width as i32);
             let console_center_y = (console_top_y + console_bottom_y) / 2.0;
@@ -1617,32 +1672,31 @@ impl Application for CoderApp {
         
         crate::print(&format!("Mouse down at ({}, {})", mouse_x, mouse_y));
         
-        // Check if keyboard is shown - only handle keyboard accessories if keyboard is visible
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
         
         // Tab dimensions (must match tick())
         let layout_scale = Self::layout_scale_from_state(state);
-        let (_, tab_height) = Self::button_size_scaled(layout_scale);
+        let (_, button_height) = Self::button_size_scaled(layout_scale);
+        let tab_height = button_height;
         let tab_width = Self::tab_width_scaled(layout_scale);
         let padding = Self::padding_scaled(layout_scale);
         
-        // Calculate tab position (same as in tick)
         let shape = state.frame.tensor.shape();
         let height = shape[0] as f32;
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
         
-        // Tabs are always at keyboard edge now (console is above them)
-        let tabs_bottom_y = keyboard_top_px - padding as f32;
-        let tabs_top_y = tabs_bottom_y - tab_height as f32;
-        let tab_top_y = tabs_top_y as i32;
+        let task_bar_height =
+            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+        let task_bar_top = keyboard_top_px - task_bar_height;
+        let tab_top_y = (task_bar_top + (task_bar_height - tab_height as f32) * 0.5).round() as i32;
         
         crate::print(&format!("Button position - x: {}, y: {}, width: {}, height: {}", 
                  self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height));
         crate::print(&format!("Tab position - y: {}, height: {}", tab_top_y, tab_height));
         
-        // Only handle clicks on keyboard accessories when keyboard is shown
-        if keyboard_is_shown {
+        // Task bar chrome (tabs / run / stop) — always hit-test; matches visible task bar
+        {
             // Check if click is on code.py tab
             if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
                 crate::print("Code tab clicked");
@@ -1682,9 +1736,9 @@ impl Application for CoderApp {
                 return;
             }
             
-            // Check if click is on clear button (only visible when console has text)
+            // Clear button only when keyboard is up and console strip is visible
             let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
-            if self.active_tab == Tab::Terminal && console_has_text {
+            if keyboard_is_shown && self.active_tab == Tab::Terminal && console_has_text {
                 if self.clear_button.contains_point(mouse_x, mouse_y) {
                     println!("Clear button clicked");
                     // Clear the console input
@@ -1748,7 +1802,7 @@ impl Application for CoderApp {
                 let show_console = self.active_tab == Tab::Terminal;
                 let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
                 
-                if show_console && console_has_text {
+                if keyboard_is_shown && show_console && console_has_text {
                     // Execute console command and clear it
                     println!("Executing console command");
                     let command = self.console_app.text_rasterizer.text.clone();
@@ -1770,7 +1824,7 @@ impl Application for CoderApp {
             }
             
             println!("Click not on any button, checking file explorer or delegating to text app");
-        } // End keyboard_is_shown check
+        }
         
         // Check if we're in file explorer mode - track tap position for dragging
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
@@ -1853,10 +1907,11 @@ impl Application for CoderApp {
                         let layout_scale = Self::layout_scale_from_state(state);
                         let padding = Self::padding_scaled(layout_scale);
                         let (_, button_height) = Self::button_size_scaled(layout_scale);
-                        let tabs_bottom_y = keyboard_top_px - padding as f32;
-                        let tabs_top_y = tabs_bottom_y - button_height as f32;
+                        let task_bar_height =
+                            (height * 0.05_f32).max(button_height as f32 + padding as f32);
+                        let task_bar_top = keyboard_top_px - task_bar_height;
 
-                        if mouse_y >= safe_region_top_y && mouse_y < tabs_top_y {
+                        if mouse_y >= safe_region_top_y && mouse_y < task_bar_top {
                             let click_y_in_list = mouse_y - safe_region_top_y + self.file_list_scroll_y;
                             let mut y = 0.0f32;
                             for (idx, item) in self.explorer_items.iter().enumerate() {
