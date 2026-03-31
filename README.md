@@ -4,16 +4,11 @@ One python file, cross-platform (+ios📱), built-in viewports, audio drivers, a
 
 ## ℹ️ Details
 
-Xos is a cross-platform application framework with a game-engine core in Rust, designed to be built entirely in Python. Write hardware-accelerated apps once and run them everywhere—iOS, Windows, macOS, Linux, and beyond. From device drivers to viewports, rasterization, and acceleration primitives, everything is exposed through the xos runtime—no glue code, no friction.
+Xos is a cross-platform application framework with a game-engine core in rust with python bindings that feel like numpy/torch, and make graphics pythonic and seamless with scientific computing. Write once and run everywhere—iOS, Windows, macOS, Linux, and beyond.
 
-- Custom IDE that deploys to your mobile devices so you can code on-the-go
 - All apps write directly to tensorized viewports
 - Designed to be an alternative to React-Native
 - ❌ no JavaScript, no HTML, no CSS ❌
-
-## ⚠️ Experimental Notice
-
-Xos is in an experimental development phase, which means many features may be incomplete. Expect missing tensor operations where expected, quirks on different hardware platforms, and potential breaking changes as we mature towards v1.0.
 
 ## 🤝 Help Wanted!
 
@@ -45,6 +40,9 @@ if __name__ == "__main__":
 ```
 
 ## ✅ Getting Started
+
+### ⚠️ Experimental Notice
+Xos is in an experimental development phase, which means many features may be incomplete. Expect missing tensor operations where expected, quirks on different hardware platforms, and potential breaking changes as we mature towards v1.0.
 
 ### Prerequisites
 
