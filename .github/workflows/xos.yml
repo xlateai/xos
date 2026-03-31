@@ -1,0 +1,85 @@
+name: xos pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - ".github/workflows/xos.yml"
+  workflow_dispatch:
+
+jobs:
+  detect-version-bump:
+    name: Detect Cargo version bump
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      bumped: ${{ steps.check.outputs.bumped }}
+      current_version: ${{ steps.check.outputs.current_version }}
+      previous_version: ${{ steps.check.outputs.previous_version }}
+      crate_name: ${{ steps.check.outputs.crate_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
+
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            previous_version=$(git show HEAD^:Cargo.toml | grep '^version =' | head -n1 | cut -d '"' -f2 || true)
+          else
+            previous_version=""
+          fi
+
+          changed=false
+          bumped=false
+
+          if [ -n "${previous_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
+            changed=true
+            highest=$(printf "%s\n%s\n" "${previous_version}" "${current_version}" | sort -V | tail -n1)
+            if [ "${highest}" = "${current_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
+              bumped=true
+            fi
+          fi
+
+          echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
+          echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
+          echo "previous_version=${previous_version}" >> "$GITHUB_OUTPUT"
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+          echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
+
+  publish-rust:
+    name: Publish Rust crate
+    runs-on: ubuntu-latest
+    needs: [detect-version-bump]
+    if: needs.detect-version-bump.outputs.bumped == 'true'
+    outputs:
+      published: ${{ steps.set-output.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - id: version-check
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_name="${{ needs.detect-version-bump.outputs.crate_name }}"
+          version="${{ needs.detect-version-bump.outputs.current_version }}"
+          echo "Checking if ${crate_name}@${version} exists on crates.io..."
+          if cargo search "$crate_name" --limit 100 | grep -E "^$crate_name = \"$version\""; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        if: steps.version-check.outputs.exists != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --no-verify
+      - id: set-output
+        if: steps.version-check.outputs.exists != 'true'
+        run: echo "published=true" >> "$GITHUB_OUTPUT"

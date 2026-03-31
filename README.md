@@ -1,96 +1,153 @@
-# xos
+# 🐍 xos
 
-A cross-platform application framework with a game-engine core in Rust, designed to be built entirely in Python. Write hardware-accelerated apps once and run them everywhere—iOS, Windows, macOS, Linux, and beyond. From device drivers to viewports, rasterization, and acceleration primitives, everything is exposed through the xos runtime—no glue code, no friction.
+One python file, cross-platform (+ios📱), built-in viewports, audio drivers, ai/ml/sci compute library, graphics, text rasterization, and more on the way. Everything is tensorized and accelerator ready. Let's see what you can build!
 
-A true alternative to React Native: pure Python, zero JavaScript, no HTML or CSS. Build, run, and even edit your apps directly on-device, wherever you are.
+## ℹ️ Details
 
-## Progress
-- [x] Headless mode for applications without viewports.
-- [x] iOS audio drivers.
-- [ ] iOS haptics drivers.
-- [x] Python runtime and scripting.
-- [ ] Networking.
-- [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
-- [ ] Locally inferenced chat models.
-- [ ] Locally inferenced audio transcription models.
-- [ ] Re-enable WASM/Web support.
-- [ ] Build for iOS without xcode on the developer's machine.
-- [ ] Tests + performance checks
+Xos is a cross-platform application framework with a game-engine core in rust with python bindings that feel like numpy/torch, and make graphics pythonic and seamless with scientific computing. Write once and run everywhere—iOS, Windows, macOS, Linux, and beyond.
 
-## Prerequisites
+- All apps write directly to tensorized viewports
+- Designed to be an alternative to React-Native
+- ❌ no JavaScript, no HTML, no CSS ❌
 
-**Required:**
+## 🤝 Help Wanted!
+
+Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
+
+## 📁 Code Examples
+
+As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms. Check the `example-scripts` folder for more examples.
+
+- 🚀 `xos python ./example-scripts/ball_lines.py`
+
+```python
+# ball_lines.py - example code for xos (`xos python code.py` in terminal to run)
+import xos
+
+# Ideal vectorized API sketch (1:1 behavior replacement, no per-ball Python loops).
+BALL_COLOR = (255, 50, 50, 255)
+LINE_COLOR = (10, 80, 80, 255)
+BALL_RADIUS = 0.003
+LINE_THICKNESS = 0.0008
+SPEED_PER_SEC = 0.28
+
+
+class BallLines(xos.Application):
+    def __init__(self):
+        super().__init__()
+        self.num_balls = 512
+
+    def setup(self):
+        n = self.num_balls
+        lo, hi = BALL_RADIUS, 1.0 - BALL_RADIUS
+        self.pos = xos.random.uniform(shape=(n, 2), low=lo, high=hi)
+        self.vel = xos.random.uniform(shape=(n, 2), low=-1.0, high=1.0) * SPEED_PER_SEC
+        self.rad = xos.full((n,), BALL_RADIUS)
+        idx = xos.arange(0, n, 2, dtype=xos.int32)
+        self.pair_idx = xos.stack([idx, idx + 1], axis=1)  # (n/2, 2)
+        xos.print(f"+{n} balls in {n // 2} pairs (vectorized)")
+
+    def tick(self):
+        self.frame.clear(xos.color.BLACK)
+
+        # Integrate positions
+        self.pos = self.pos + self.vel * self.dt
+
+        # Bounce: flip velocity for any axis that crosses bounds, then clamp
+        lo = self.rad[:, None]
+        hi = 1.0 - lo
+        hit_lo = self.pos < lo
+        hit_hi = self.pos > hi
+        bounce_mask = hit_lo | hit_hi
+        self.vel = xos.where(bounce_mask, -self.vel, self.vel)
+        self.pos = xos.clip(self.pos, lo, hi)
+
+        # Convert normalized space to pixels
+        w, h = float(self.get_width()), float(self.get_height())
+        wh = xos.tensor([w, h]).reshape((1, 2))
+        pix = self.pos * wh
+        s = max(w, h)
+
+        # Pair lines: gather endpoints from pair indices
+        p0 = pix[self.pair_idx[:, 0]]
+        p1 = pix[self.pair_idx[:, 1]]
+        t = xos.full((self.pair_idx.shape[0],), LINE_THICKNESS * s)
+        r = self.rad * s
+
+        xos.rasterizer.lines(self.frame, p0, p1, t, LINE_COLOR)
+        xos.rasterizer.circles(self.frame, pix, r, BALL_COLOR)
+
+
+if __name__ == "__main__":
+    BallLines().run()
+```
+
+https://github.com/user-attachments/assets/620e0532-1450-4cc0-b607-def32561eff1
+
+## ✅ Getting Started
+
+### 🚧 Experimental
+
+Xos is in an experimental development phase, which means many features may be incomplete. Expect missing tensor operations where expected, quirks on different hardware platforms, and potential breaking changes as we mature towards v1.0.
+
+### Prerequisites
+
 - ✅ Rust toolchain ([rustup.rs](https://rustup.rs/))
 
-**Optional (iOS):**
+iOS extras
+
 - macOS computer
 - Xcode
 - iOS device with Developer Mode enabled (Settings > Privacy & Security > Developer Mode)
 - Physical USB cable connection to iOS device
 
-**Optional (Linux):**
-- Advanced Linux Sound Architecture library (for audio support):
+Linux extras
+
+- Advanced Linux Sound Architecture library (audio):
   ```bash
   sudo apt-get update && sudo apt-get install -y libasound2-dev
   ```
 
-## Getting Started
-When getting started in xos, you only need to run the cargo commands listed below once. After you've installed xos using cargo, each subsequent change you make to xos can be updated by simply running `xos build` which will automatically rebuild your Rust changes. This is usually unnecessary however, as when attempting to run an application or Python script using xos, it will prompt the user with a Y/n question for if they would like to rebuild Rust or not. Only select Y (default) if you have made changes to Rust. If you haven't, you can decline (selecting 'n').
+### ⚡ How to Install
 
-### Installing xos
-
-Run these once (when first installing xos):
+Run once:
 
 ```bash
 cargo build --release
 cargo install --path .
 ```
 
-### Explore the `xos` CLI
+Then run apps anywhere with `xos python code.py`.
+
+### 🧰 Common Commands
 
 ```bash
-xos --help                # List top-level commands available
-
-xos app                   # List available Rust-written xos-driven applications
-xos app <app-name>        # Run on your current platform
-xos app <app-name> --ios  # Run on connected iOS device
-
-xos python                # Open the Rust python interpreter
-xos python <file-path>    # Run a Python file from the xos interpreter (path/to/file.py)
+xos --help
+xos python
+xos python <file-path>
+xos app
+xos app <app-name>
+xos app <app-name> --ios
 ```
 
-### Debugging the CLI
+### 📱 Using `--ios`
 
-If you run into any weird quirks of the CLI, such as not being able to find a path or seemingly outdated versions of the code being executed when relying on the `xos build` or `xos app {...}` commands for execution, then please `cd` into the xos code directory and run `cargo install --path .`. That should reinstall the CLI and all of the driver code which should fix any issues with `xos build` and or `xos app {...}`. If not, make sure there are no duplicate versions of `xos` running, and be mindful of the path for the executable (`xos path` might help find it).
+1. Connect device by USB and enable **Developer Mode**.
+2. Open `ios/xos.xcworkspace` once and configure code signing.
+3. Run `xos app <app-name> --ios`.
 
-### The --ios Flag
+`xos` handles Rust target install/build and launches on device.
 
-For launching applications onto your iOS devices:
+### 🔁 Rebuild + CLI Fixes
 
-1. Ensure your iOS device is connected via USB and in **Developer Mode**
-2. First-time setup: Open `ios/xos.xcworkspace` in Xcode and configure code signing (Signing & Capabilities tab)
-3. Run `xos app <app-name> --ios` - the CLI will build the Rust library (if needed), compile the Swift iOS app, and install/launch on your device
+- Use `xos build` after Rust changes.
+- On launch prompts, pick `Y` only if Rust changed.
+- If CLI behavior looks stale, run `cargo install --path .`.
+- Use `xos path` to verify which executable is running.
 
-## `xos build`
+## 🚧 Package Limitations
 
-**Build for your current platform:**
-```bash
-xos build
-```
+- `xos` uses its own runtime APIs, not standard desktop-heavy Python stacks.
+- Nearly all third-party packages will be unavailable or incompatible (we'll rebuild it, don't worry).
+- Always run scripts via `xos python ./path/to/code.py` (not system Python).
 
-**Build for iOS:**
-```bash
-xos build --ios
-```
-This installs the `aarch64-apple-ios` target if needed, compiles the Rust library as a static library (`.a` file), and outputs to `ios/libs/libxos.a` for linking with Swift code.
-
-## Development Philosophy
-
-xos applications are designed to be:
-- **Standalone** - Each app is independent and self-contained
-- **Portable** - Write once, run on any supported platform
-- **Performant** - Built with Rust for speed and reliability
-- **Scientific computing friendly** - Optimized for data visualization, sensor processing, and computational workloads
-- **Game engine-like** - Rich rendering capabilities with clean, efficient UI primitives
-
-We're building toward a future where xos applications can be easily modified, extended, and composed together, with a unified home screen and application launcher that makes the entire ecosystem feel cohesive and powerful.

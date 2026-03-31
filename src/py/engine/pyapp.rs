@@ -79,8 +79,61 @@ class _ArrayWrapper:
         if isinstance(key, slice) and key == slice(None, None, None):
             # Return the underlying data dict for full slice access
             return self._data
+        if isinstance(key, tuple) and len(key) == 2:
+            a, b = key
+            shape = tuple(self.shape)
+            flat = self._data["_data"]
+            if isinstance(a, slice) and a.start is None and a.stop is None and a.step is None and b is None:
+                if len(shape) == 1:
+                    n = shape[0]
+                    return self._wrap_vals((n, 1), flat)
+                if len(shape) == 2:
+                    r, c = shape[0], shape[1]
+                    return self._wrap_vals((r, c, 1), flat)
+            if isinstance(a, slice) and a.start is None and a.stop is None and a.step is None and isinstance(b, int):
+                if len(shape) == 2:
+                    rows, cols = shape[0], shape[1]
+                    col = b
+                    out = [flat[i * cols + col] for i in range(rows)]
+                    return self._wrap_vals((rows,), out)
+        if isinstance(key, _ArrayWrapper):
+            return self._gather_rows(key)
         return self._data[key]
-    
+
+    def _wrap_vals(self, shape, values):
+        return _ArrayWrapper({
+            "shape": tuple(shape),
+            "dtype": self.dtype,
+            "device": self._data.get("device", "cpu"),
+            "_data": values,
+        })
+
+    def reshape(self, new_shape):
+        flat = self._data["_data"]
+        prod = 1
+        for d in new_shape:
+            prod *= d
+        if prod != len(flat):
+            raise ValueError("reshape size mismatch")
+        return self._wrap_vals(tuple(new_shape), flat)
+
+    def _gather_rows(self, idx_tensor):
+        idx_flat = idx_tensor._data["_data"]
+        shape = tuple(self.shape)
+        flat = self._data["_data"]
+        if len(shape) != 2:
+            raise NotImplementedError("gather only supports 2D tensors")
+        r, c = shape[0], shape[1]
+        out = []
+        for ii in idx_flat:
+            i = int(ii)
+            if i < 0 or i >= r:
+                raise IndexError("index out of range")
+            base = i * c
+            for j in range(c):
+                out.append(flat[base + j])
+        return self._wrap_vals((len(idx_flat), c), out)
+
     def __setitem__(self, key, value):
         if isinstance(key, slice) and key == slice(None, None, None):
             # Full slice assignment
@@ -93,6 +146,105 @@ class _ArrayWrapper:
             xos.rasterizer._fill_buffer(self._data, value)
         else:
             self._data[key] = value
+
+    def _wrap_like_self(self, values):
+        return _ArrayWrapper({
+            "shape": self.shape,
+            "dtype": self.dtype,
+            "device": self._data.get("device", "cpu"),
+            "_data": values,
+        })
+
+    def _binary_op(self, other, op):
+        left = self._data.get("_data", [])
+        lshape = tuple(self.shape)
+        if isinstance(other, _ArrayWrapper):
+            right = other._data.get("_data", [])
+            rshape = tuple(other.shape)
+            if isinstance(right, list):
+                if len(lshape) == 2 and len(rshape) == 2 and lshape[1] == 2 and rshape[0] == 1 and rshape[1] == 2 and len(right) == 2:
+                    w0, w1 = right[0], right[1]
+                    n = lshape[0]
+                    out = []
+                    for i in range(n):
+                        out.append(op(left[2 * i], w0))
+                        out.append(op(left[2 * i + 1], w1))
+                    return self._wrap_vals(lshape, out)
+                if len(left) != len(right):
+                    raise ValueError(f"shape mismatch for op: {len(left)} vs {len(right)} elements")
+                out = [op(a, b) for a, b in zip(left, right)]
+                return self._wrap_like_self(out)
+        elif isinstance(other, dict) and "_data" in other:
+            right = other["_data"]
+        else:
+            right = other
+
+        if isinstance(right, list):
+            if len(left) != len(right):
+                raise ValueError(f"shape mismatch for op: {len(left)} vs {len(right)} elements")
+            out = [op(a, b) for a, b in zip(left, right)]
+        else:
+            out = [op(a, right) for a in left]
+        return self._wrap_like_self(out)
+
+    def _cmp_broadcast(self, other, cmp_fn):
+        left = self._data["_data"]
+        lshape = tuple(self.shape)
+        if isinstance(other, _ArrayWrapper):
+            right = other._data["_data"]
+            rshape = tuple(other.shape)
+            if lshape == rshape:
+                return self._wrap_vals(lshape, [cmp_fn(a, b) for a, b in zip(left, right)])
+            if len(lshape) == 2 and len(rshape) == 2 and lshape[0] == rshape[0] and lshape[1] == 2 and rshape[1] == 1:
+                n = lshape[0]
+                out = []
+                for i in range(n):
+                    rv = right[i]
+                    out.append(cmp_fn(left[2 * i], rv))
+                    out.append(cmp_fn(left[2 * i + 1], rv))
+                return self._wrap_vals(lshape, out)
+        if isinstance(other, (int, float)):
+            return self._wrap_vals(lshape, [cmp_fn(a, other) for a in left])
+        raise TypeError("unsupported comparison operand")
+
+    def __lt__(self, other):
+        return self._cmp_broadcast(other, lambda a, b: 1.0 if a < b else 0.0)
+
+    def __gt__(self, other):
+        return self._cmp_broadcast(other, lambda a, b: 1.0 if a > b else 0.0)
+
+    def __or__(self, other):
+        if isinstance(other, _ArrayWrapper):
+            la = self._data["_data"]
+            lb = other._data["_data"]
+            if len(la) != len(lb):
+                raise ValueError("or shape mismatch")
+            return self._wrap_vals(self.shape, [1.0 if (a != 0.0 or b != 0.0) else 0.0 for a, b in zip(la, lb)])
+        raise TypeError("unsupported or operand")
+
+    def __neg__(self):
+        return self._wrap_vals(self.shape, [-a for a in self._data["_data"]])
+
+    def __add__(self, other):
+        return self._binary_op(other, lambda a, b: a + b)
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        return self._binary_op(other, lambda a, b: a - b)
+
+    def __rsub__(self, other):
+        if isinstance(other, _ArrayWrapper):
+            return other.__sub__(self)
+        left = self._data.get("_data", [])
+        return self._wrap_like_self([other - a for a in left])
+
+    def __mul__(self, other):
+        return self._binary_op(other, lambda a, b: a * b)
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
     
     @property
     def shape(self):
@@ -188,6 +340,7 @@ class Application:
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
+        self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
         self.scale = 0.5
@@ -201,8 +354,8 @@ class Application:
         return self.frame.get_height()
     
     def setup(self):
-        """Called once when the application starts. Override this method."""
-        raise NotImplementedError("Subclasses must implement setup()")
+        """Called once when the application starts. Override if needed (optional)."""
+        pass
     
     def tick(self):
         """Called every frame. Override this method."""
@@ -229,7 +382,6 @@ class Application:
         # Store self in builtins so Rust can find it from any scope
         import builtins
         builtins.__xos_app_instance__ = self
-        print("[xos] Application instance registered, engine will launch...")
 "#;
 
 /// PyApp wraps a Python Application instance and implements the Rust Application trait
@@ -289,6 +441,8 @@ impl Application for PyApp {
 
                 // Seed timing field so Python can read it in setup/tick.
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm)
+                    .map_err(|e| format!("Failed to set dt attribute: {:?}", e))?;
                 app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
                 app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
@@ -311,7 +465,7 @@ impl Application for PyApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        if let Some(ref app_instance) = self.app_instance {
+        if let Some(app_instance) = self.app_instance.clone() {
             // Set the frame buffer context for the rasterizer
             let shape = state.frame.shape();
             let width = shape[1];
@@ -320,6 +474,7 @@ impl Application for PyApp {
             crate::python_api::rasterizer::set_frame_buffer_context(buffer, width, height);
 
             let tick_index = self.ticks_completed;
+            let mut tick_failed = false;
             
             self.interpreter.enter(|vm| {
                 // Update frame data before calling tick
@@ -333,8 +488,9 @@ impl Application for PyApp {
                     let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
                     let _ = app_instance.set_attr("mouse", mouse_dict, vm);
 
-                    // Expose engine FPS directly to Python app.
+                    // Expose timestep and FPS directly to Python app.
                     let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                    let _ = app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm);
                     let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
 
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
@@ -342,14 +498,23 @@ impl Application for PyApp {
                     let _ = app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
                     // Call tick
-                    if let Err(e) = vm.call_method(app_instance, "tick", ()) {
+                    if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
                         eprintln!("Python tick error:\n{}", error_msg);
+                        tick_failed = true;
                     }
                 }
             });
 
-            self.ticks_completed = self.ticks_completed.saturating_add(1);
+            if tick_failed {
+                // Stop ticking this Python app after the first runtime error.
+                self.app_instance = None;
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::engine::native_engine::request_exit();
+                eprintln!("Python app execution stopped after tick error.");
+            } else {
+                self.ticks_completed = self.ticks_completed.saturating_add(1);
+            }
             
             // Clear the frame buffer context after tick
             crate::python_api::rasterizer::clear_frame_buffer_context();
