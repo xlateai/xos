@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
 ## ✅ Getting Started
 
-### ⚠️ Experimental Notice
+### 🚧 Experimental
 
 Xos is in an experimental development phase, which means many features may be incomplete. Expect missing tensor operations where expected, quirks on different hardware platforms, and potential breaking changes as we mature towards v1.0.
 
