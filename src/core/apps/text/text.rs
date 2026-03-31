@@ -1255,7 +1255,8 @@ impl Application for TextApp {
             | ShortcutAction::ToggleExplorer
             | ShortcutAction::ShowTerminal
             | ShortcutAction::ShowViewport
-            | ShortcutAction::Run => {
+            | ShortcutAction::Run
+            | ShortcutAction::TerminateProgram => {
                 return;
             }
         };

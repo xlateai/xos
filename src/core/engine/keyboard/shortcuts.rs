@@ -32,6 +32,8 @@ pub enum ShortcutAction {
     ShowViewport,
     /// Trigger Run button behavior (coder)
     Run,
+    /// Terminate native app process
+    TerminateProgram,
 }
 
 /// Detects if a keyboard shortcut action was triggered

@@ -30,6 +30,11 @@ use crate::rasterizer::RasterCache;
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn request_exit() {
+    SHOULD_EXIT.store(true, Ordering::Relaxed);
+}
+
 /// How the native host creates the winit window: a normal windowed app vs floating overlay.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
@@ -422,6 +427,15 @@ impl ApplicationHandler for AppState {
                                 }
                                 if self.alt_held && self.shift_held {
                                     if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::TerminateProgram,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ)) {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
                                             ShortcutAction::ReopenClosedTab,

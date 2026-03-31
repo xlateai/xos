@@ -16,8 +16,8 @@ static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/example-scri
 const CODER_CHROME_SCALE: f32 = 1.3;
 /// Bottom task-bar tab button width + label size (+10%).
 const TASKBAR_TAB_SCALE: f32 = 1.1;
-/// Editor tab strip height and tab label fonts vs prior baseline (+30%).
-const EDITOR_TAB_STRIP_SCALE: f32 = 1.3;
+/// Editor tab strip height and tab label fonts vs prior baseline (much bigger).
+const EDITOR_TAB_STRIP_SCALE: f32 = 2.0;
 const MAX_OPEN_EDITOR_TABS: usize = 3;
 
 #[derive(Debug, Clone)]
@@ -86,6 +86,8 @@ pub struct CoderApp {
     explorer_popup_open: bool,
     /// Last closed / LRU-displaced editor file indices (most recent last) for Ctrl+Shift+T.
     closed_editor_history: Vec<usize>,
+    /// Keyboard selection cursor in the explorer popup (index into `explorer_items`).
+    explorer_selected_item: Option<usize>,
     /// Labels for the top editor tab strip (paths).
     editor_tab_labels: Vec<TextRasterizer>,
     editor_tab_close_label: TextRasterizer,
@@ -599,6 +601,7 @@ impl CoderApp {
             explorer_access_counter: 0,
             explorer_popup_open: false,
             closed_editor_history: Vec::new(),
+            explorer_selected_item: None,
             editor_tab_labels,
             editor_tab_close_label,
             python_files,
@@ -1141,6 +1144,85 @@ builtins.print = __custom_print__
             }
         }
     }
+
+    fn explorer_visible_indices(&self) -> Vec<usize> {
+        self.explorer_items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| self.is_item_visible(item).then_some(i))
+            .collect()
+    }
+
+    fn ensure_explorer_selection(&mut self) {
+        let visible = self.explorer_visible_indices();
+        if visible.is_empty() {
+            self.explorer_selected_item = None;
+            return;
+        }
+
+        if let Some(sel) = self.explorer_selected_item {
+            if visible.contains(&sel) {
+                return;
+            }
+        }
+
+        // Prefer the currently open file if any.
+        if let Some(active_fi) = self.active_file_index() {
+            if let Some(idx) = self.explorer_items.iter().enumerate().find_map(|(i, it)| {
+                matches!(it, ExplorerItem::File(fi) if *fi == active_fi).then_some(i)
+            }) {
+                if visible.contains(&idx) {
+                    self.explorer_selected_item = Some(idx);
+                    return;
+                }
+            }
+        }
+
+        self.explorer_selected_item = Some(visible[0]);
+    }
+
+    fn explorer_move_selection(&mut self, delta: i32) {
+        let visible = self.explorer_visible_indices();
+        if visible.is_empty() {
+            self.explorer_selected_item = None;
+            return;
+        }
+        self.ensure_explorer_selection();
+        let Some(sel) = self.explorer_selected_item else {
+            self.explorer_selected_item = Some(visible[0]);
+            return;
+        };
+        let Some(pos) = visible.iter().position(|i| *i == sel) else {
+            self.explorer_selected_item = Some(visible[0]);
+            return;
+        };
+        let n = visible.len() as i32;
+        let next = (pos as i32 + delta).clamp(0, n - 1) as usize;
+        self.explorer_selected_item = Some(visible[next]);
+    }
+
+    fn explorer_activate_selected(&mut self) {
+        self.ensure_explorer_selection();
+        let Some(sel) = self.explorer_selected_item else {
+            return;
+        };
+        match self.explorer_items.get(sel) {
+            Some(ExplorerItem::Folder(name)) => {
+                if self.expanded_folders.contains(name) {
+                    self.expanded_folders.remove(name);
+                    self.file_list_rasterizers[sel].set_text(format!("  ▶  {}/", name));
+                } else {
+                    self.expanded_folders.insert(name.clone());
+                    self.file_list_rasterizers[sel].set_text(format!("  ▼  {}/", name));
+                }
+                self.ensure_explorer_selection();
+            }
+            Some(ExplorerItem::File(file_index)) => {
+                self.open_or_select_file_from_explorer(*file_index);
+            }
+            None => {}
+        }
+    }
     
     fn draw_file_explorer(
         &self,
@@ -1191,10 +1273,12 @@ builtins.print = __custom_print__
             }
             
             let is_current = matches!(item, ExplorerItem::File(idx) if Some(*idx) == active_fi);
+            let is_selected = self.explorer_selected_item == Some(_i);
             
             // Draw item background - folder headers get darker, files get highlight when selected
             let item_bg_color = match item {
                 ExplorerItem::Folder(_) => (8, 8, 12), // Dark blue-tint for folder headers
+                _ if is_selected => (42, 42, 54),
                 ExplorerItem::File(_) if is_current => (30, 30, 30),
                 _ => (15, 15, 15),
             };
@@ -2177,6 +2261,12 @@ impl Application for CoderApp {
         match self.active_tab {
             Tab::Code => {
                 if self.explorer_popup_open {
+                    match ch {
+                        '\u{2191}' => self.explorer_move_selection(-1), // ↑
+                        '\u{2193}' => self.explorer_move_selection(1),  // ↓
+                        '\n' | '\r' => self.explorer_activate_selected(),
+                        _ => {}
+                    }
                     return;
                 }
                 self.code_app.on_key_char(state, ch);
@@ -2559,9 +2649,21 @@ impl Application for CoderApp {
 
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
         match shortcut {
-            ShortcutAction::Tab1 => self.switch_editor_tab_to(0),
-            ShortcutAction::Tab2 => self.switch_editor_tab_to(1),
-            ShortcutAction::Tab3 => self.switch_editor_tab_to(2),
+            ShortcutAction::Tab1 => {
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = false;
+                self.switch_editor_tab_to(0);
+            }
+            ShortcutAction::Tab2 => {
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = false;
+                self.switch_editor_tab_to(1);
+            }
+            ShortcutAction::Tab3 => {
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = false;
+                self.switch_editor_tab_to(2);
+            }
             ShortcutAction::CloseTab => {
                 if self.active_tab == Tab::Code {
                     self.close_editor_tab_at(self.active_editor_tab);
@@ -2575,6 +2677,9 @@ impl Application for CoderApp {
             ShortcutAction::ToggleExplorer => {
                 if self.active_tab == Tab::Code {
                     self.explorer_popup_open = !self.explorer_popup_open;
+                    if self.explorer_popup_open {
+                        self.ensure_explorer_selection();
+                    }
                 }
             }
             ShortcutAction::ShowTerminal => {
@@ -2585,6 +2690,10 @@ impl Application for CoderApp {
             }
             ShortcutAction::Run => {
                 self.activate_run_button(state);
+            }
+            ShortcutAction::TerminateProgram => {
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::engine::native_engine::request_exit();
             }
             _ => {}
         }
