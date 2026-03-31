@@ -93,6 +93,52 @@ class _ArrayWrapper:
             xos.rasterizer._fill_buffer(self._data, value)
         else:
             self._data[key] = value
+
+    def _wrap_like_self(self, values):
+        return _ArrayWrapper({
+            "shape": self.shape,
+            "dtype": self.dtype,
+            "device": self._data.get("device", "cpu"),
+            "_data": values,
+        })
+
+    def _binary_op(self, other, op):
+        left = self._data.get("_data", [])
+        if isinstance(other, _ArrayWrapper):
+            right = other._data.get("_data", [])
+        elif isinstance(other, dict) and "_data" in other:
+            right = other["_data"]
+        else:
+            right = other
+
+        if isinstance(right, list):
+            if len(left) != len(right):
+                raise ValueError(f"shape mismatch for op: {len(left)} vs {len(right)} elements")
+            out = [op(a, b) for a, b in zip(left, right)]
+        else:
+            out = [op(a, right) for a in left]
+        return self._wrap_like_self(out)
+
+    def __add__(self, other):
+        return self._binary_op(other, lambda a, b: a + b)
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        return self._binary_op(other, lambda a, b: a - b)
+
+    def __rsub__(self, other):
+        if isinstance(other, _ArrayWrapper):
+            return other.__sub__(self)
+        left = self._data.get("_data", [])
+        return self._wrap_like_self([other - a for a in left])
+
+    def __mul__(self, other):
+        return self._binary_op(other, lambda a, b: a * b)
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
     
     @property
     def shape(self):
