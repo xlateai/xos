@@ -516,6 +516,8 @@ impl ApplicationHandler for AppStateWrapper {
 
             if let Err(e) = self.app.setup(&mut engine_state) {
                 eprintln!("Failed to setup app: {}", e);
+                SHOULD_EXIT.store(true, Ordering::Relaxed);
+                event_loop.exit();
                 return;
             }
 
