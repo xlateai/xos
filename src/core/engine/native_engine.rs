@@ -481,6 +481,15 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                                 if self.alt_held && self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyE)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::FocusExplorerSearch,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && self.shift_held {
                                     if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
                                         self.toggle_borderless_fullscreen();
                                         return;

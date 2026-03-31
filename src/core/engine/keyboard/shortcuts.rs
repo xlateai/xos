@@ -46,6 +46,8 @@ pub enum ShortcutAction {
     NextEditorTab,
     /// Toggle viewport bottom task bar visibility
     ToggleViewportTaskbar,
+    /// Open explorer and focus the search bar
+    FocusExplorerSearch,
 }
 
 /// Detects if a keyboard shortcut action was triggered
