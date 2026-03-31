@@ -1,6 +1,6 @@
 # 🐍 xos
 
-One python file, cross-platform (+ios), built-in viewports, audio drivers, ai/ml/sci compute library, graphics, and text rasterization, and more to come. Everything is tensorized and accelerator ready. Let's see what you can build!
+One python file, cross-platform (+ios📱), built-in viewports, audio drivers, ai/ml/sci compute library, graphics, and text rasterization, and more to come. Everything is tensorized and accelerator ready. Let's see what you can build!
 
 ## ℹ️ Details
 
