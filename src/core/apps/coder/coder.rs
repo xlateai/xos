@@ -52,6 +52,8 @@ pub struct CoderApp {
     pub code_tab_label: TextRasterizer,
     pub terminal_tab_label: TextRasterizer,
     pub viewport_tab_label: TextRasterizer,
+    /// Current file name only (no path), shown on the run button.
+    run_button_label: TextRasterizer,
     persistent_scope: Option<rustpython_vm::scope::Scope>,
     // Python app instance for viewport rendering
     viewport_app: Option<rustpython_vm::PyObjectRef>,
@@ -83,6 +85,10 @@ pub struct CoderApp {
 }
 
 impl CoderApp {
+    fn file_basename(path: &str) -> String {
+        path.rsplit('/').next().unwrap_or(path).to_string()
+    }
+
     /// Scale chrome and editor text from the shorter window edge (design reference ~920px).
     fn ui_scale(short_edge: f32) -> f32 {
         const REF: f32 = 920.0;
@@ -103,9 +109,9 @@ impl CoderApp {
         #[cfg(target_os = "ios")]
         let (bw, bh) = (280.0_f32, 105.0_f32);
         #[cfg(not(target_os = "ios"))]
-        let (bw, bh) = (160.0_f32, 60.0_f32);
+        let (bw, bh) = (160.0_f32, 76.0_f32);
         let w = (bw * scale).max(44.0).round() as u32;
-        let h = (bh * scale).max(28.0).round() as u32;
+        let h = (bh * scale).max(36.0).round() as u32;
         (w, h)
     }
 
@@ -143,6 +149,7 @@ impl CoderApp {
         self.terminal_tab_label.set_font_size(20.0 * scale);
         self.viewport_tab_label.set_font_size(20.0 * scale);
         self.clear_button_label.set_font_size(30.0 * scale);
+        self.run_button_label.set_font_size(20.0 * scale);
 
         let file_base = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let folder_base = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
@@ -295,7 +302,10 @@ impl CoderApp {
         
         // Create text rasterizers for tab labels
         let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0);
-        code_tab_label.set_text(python_files[0].name.clone());
+        code_tab_label.set_text("files".to_string());
+
+        let mut run_button_label = TextRasterizer::new(font.clone(), 20.0);
+        run_button_label.set_text(Self::file_basename(&python_files[0].name));
         
         let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
         terminal_tab_label.set_text("terminal".to_string());
@@ -338,6 +348,7 @@ impl CoderApp {
             code_tab_label,
             terminal_tab_label,
             viewport_tab_label,
+            run_button_label,
             persistent_scope,
             viewport_app: None,
             viewport_app_setup_done: false,
@@ -829,8 +840,8 @@ builtins.print = __custom_print__
             self.code_app.clear_wheel_scroll_accel();
             self.code_view_mode = CodeViewMode::Editor;
             
-            // Update the tab label to show the current file name
-            self.code_tab_label.set_text(self.python_files[file_index].name.clone());
+            self.run_button_label
+                .set_text(Self::file_basename(&self.python_files[file_index].name));
         }
     }
     
@@ -1028,6 +1039,53 @@ builtins.print = __custom_print__
         // The button will just show as a colored rectangle
     }
 
+    fn draw_run_button_label(&self, buffer: &mut [u8], canvas_width: u32, canvas_height: u32) {
+        let text_color = (255, 255, 255);
+        let text_width = self
+            .run_button_label
+            .characters
+            .iter()
+            .map(|c| c.metrics.advance_width)
+            .sum::<f32>();
+        let text_offset_x = (self.run_button.width as f32 - text_width).max(0.0) / 2.0;
+        let text_offset_y =
+            (self.run_button.height as f32 - self.run_button_label.font_size) / 2.0;
+        for character in &self.run_button_label.characters {
+            let char_x = self.run_button.x as f32 + character.x + text_offset_x;
+            let char_y = self.run_button.y as f32 + character.y + text_offset_y;
+            let cw = character.width as usize;
+            if cw == 0 {
+                continue;
+            }
+            for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
+                for (bitmap_x, &alpha) in row.iter().enumerate() {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let px = (char_x + bitmap_x as f32) as i32;
+                    let py = (char_y + bitmap_y as f32) as i32;
+                    if px >= 0
+                        && px < canvas_width as i32
+                        && py >= 0
+                        && py < canvas_height as i32
+                    {
+                        let idx = ((py as u32 * canvas_width + px as u32) * 4) as usize;
+                        let alpha_f = alpha as f32 / 255.0;
+                        buffer[idx + 0] = ((text_color.0 as f32 * alpha_f)
+                            + (buffer[idx + 0] as f32 * (1.0 - alpha_f)))
+                            as u8;
+                        buffer[idx + 1] = ((text_color.1 as f32 * alpha_f)
+                            + (buffer[idx + 1] as f32 * (1.0 - alpha_f)))
+                            as u8;
+                        buffer[idx + 2] = ((text_color.2 as f32 * alpha_f)
+                            + (buffer[idx + 2] as f32 * (1.0 - alpha_f)))
+                            as u8;
+                    }
+                }
+            }
+        }
+    }
+
     /// Frosted gray strip between content and keyboard; alpha-blends with pixels already in the buffer.
     fn draw_glassy_task_bar(
         buffer: &mut [u8],
@@ -1041,8 +1099,8 @@ builtins.print = __custom_print__
         if y0 >= y1 {
             return;
         }
-        // Slightly cool gray, semi-transparent — reads as glass over code / viewport
-        let (r, g, b, a) = (152u8, 156u8, 164u8, 210u8);
+        // Dark frosted strip — reads as glass over code / viewport
+        let (r, g, b, a) = (68u8, 72u8, 80u8, 235u8);
         let af = a as f32 / 255.0;
         for y in y0..y1 {
             let row = (y as u32 * canvas_width) as usize * 4;
@@ -1059,7 +1117,7 @@ builtins.print = __custom_print__
             }
         }
         // Thin top highlight
-        let hl = (236u8, 238u8, 242u8, 90u8);
+        let hl = (130u8, 135u8, 145u8, 100u8);
         let haf = hl.3 as f32 / 255.0;
         let yh = y0.max(0);
         if yh < canvas_height as i32 {
@@ -1180,10 +1238,19 @@ impl Application for CoderApp {
         
         let task_bar_top = keyboard_top_px - task_bar_height;
         let task_bar_bottom = keyboard_top_px;
+
+        // One shared height for tabs, run/stop/clear, and console input strip (fills task bar vertically).
+        let chrome_h =
+            (task_bar_height - 8.0_f32).max(button_height as f32).round() as u32;
+        self.run_button.height = chrome_h;
+        self.stop_button.height = chrome_h;
+        self.stop_button.width = chrome_h;
+        self.clear_button.height = chrome_h;
+        self.clear_button.width = chrome_h;
         
         // Console is only shown on terminal tab
         let show_console = self.active_tab == Tab::Terminal;
-        let console_height = button_height;
+        let console_height = chrome_h;
         
         // Console sits above the task bar when on terminal tab
         let console_bottom_y = if show_console {
@@ -1194,7 +1261,8 @@ impl Application for CoderApp {
         let console_top_y = console_bottom_y - console_height as f32;
         
         // Tabs/buttons are vertically centered inside the task bar
-        let tab_top_y = (task_bar_top + (task_bar_height - button_height as f32) * 0.5).round() as i32;
+        let tab_top_y =
+            (task_bar_top + (task_bar_height - chrome_h as f32) * 0.5).round() as i32;
         
         // Delegate to active text app (but not console - it gets special handling)
         match self.active_tab {
@@ -1324,6 +1392,24 @@ impl Application for CoderApp {
         self.code_tab_label.tick(width, height);
         self.terminal_tab_label.tick(width, height);
         self.viewport_tab_label.tick(width, height);
+
+        if self.current_file_index < self.python_files.len() {
+            let fname = Self::file_basename(&self.python_files[self.current_file_index].name);
+            if self.run_button_label.text != fname {
+                self.run_button_label.set_text(fname);
+            }
+        }
+        self.run_button_label.tick(width, height);
+        let (bw_base, _) = Self::button_size_scaled(ui_scale);
+        let text_w: f32 = self
+            .run_button_label
+            .characters
+            .iter()
+            .map(|c| c.metrics.advance_width)
+            .sum();
+        self.run_button.width = ((text_w + 36.0)
+            .max(bw_base as f32)
+            .min(width * 0.55_f32)) as u32;
 
         if self.active_tab == Tab::Code && self.code_view_mode == CodeViewMode::FileExplorer {
             for rasterizer in &mut self.file_list_rasterizers {
@@ -1460,7 +1546,7 @@ impl Application for CoderApp {
         }
         
         let tab_width = Self::tab_width_scaled(ui_scale);
-        let tab_height = button_height;
+        let tab_height = chrome_h;
         
         // Draw code.py tab on the left
         self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, &self.code_tab_label, self.active_tab == Tab::Code);
@@ -1510,7 +1596,8 @@ impl Application for CoderApp {
             // Green color for running code
             self.run_button.draw(buffer, width as u32, height as u32, is_run_hovered);
         }
-        
+        self.draw_run_button_label(buffer, width as u32, height as u32);
+
         // Position and draw clear "×" (only when console is shown and has text)
         if keyboard_is_shown && show_console && console_has_text {
             // Position clear button on right side of console, vertically centered in console area
@@ -1670,14 +1757,11 @@ impl Application for CoderApp {
         let mouse_x = state.mouse.x;
         let mouse_y = state.mouse.y;
         
-        crate::print(&format!("Mouse down at ({}, {})", mouse_x, mouse_y));
-        
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
         
         // Tab dimensions (must match tick())
         let layout_scale = Self::layout_scale_from_state(state);
         let (_, button_height) = Self::button_size_scaled(layout_scale);
-        let tab_height = button_height;
         let tab_width = Self::tab_width_scaled(layout_scale);
         let padding = Self::padding_scaled(layout_scale);
         
@@ -1689,17 +1773,14 @@ impl Application for CoderApp {
         let task_bar_height =
             (height * 0.05_f32).max(button_height as f32 + padding as f32);
         let task_bar_top = keyboard_top_px - task_bar_height;
-        let tab_top_y = (task_bar_top + (task_bar_height - tab_height as f32) * 0.5).round() as i32;
-        
-        crate::print(&format!("Button position - x: {}, y: {}, width: {}, height: {}", 
-                 self.run_button.x, self.run_button.y, self.run_button.width, self.run_button.height));
-        crate::print(&format!("Tab position - y: {}, height: {}", tab_top_y, tab_height));
+        let chrome_h =
+            (task_bar_height - 8.0_f32).max(button_height as f32).round() as u32;
+        let tab_top_y = (task_bar_top + (task_bar_height - chrome_h as f32) * 0.5).round() as i32;
         
         // Task bar chrome (tabs / run / stop) — always hit-test; matches visible task bar
         {
             // Check if click is on code.py tab
-            if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, tab_height) {
-                crate::print("Code tab clicked");
+            if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, chrome_h) {
                 if self.active_tab == Tab::Code {
                     // Already on code tab - toggle file explorer
                     match self.code_view_mode {
@@ -1707,11 +1788,9 @@ impl Application for CoderApp {
                             // Save current file before switching to explorer
                             self.save_current_file();
                             self.code_view_mode = CodeViewMode::FileExplorer;
-                            crate::print("Switched to file explorer");
                         }
                         CodeViewMode::FileExplorer => {
                             self.code_view_mode = CodeViewMode::Editor;
-                            crate::print("Switched to editor");
                         }
                     }
                 } else {
@@ -1723,15 +1802,13 @@ impl Application for CoderApp {
             }
             
             // Check if click is on terminal tab
-            if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, tab_height) {
-                crate::print("Terminal tab clicked");
+            if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, chrome_h) {
                 self.active_tab = Tab::Terminal;
                 return;
             }
             
             // Check if click is on viewport tab
-            if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height) {
-                crate::print("Viewport tab clicked");
+            if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, chrome_h) {
                 self.active_tab = Tab::Viewport;
                 return;
             }
@@ -1740,7 +1817,6 @@ impl Application for CoderApp {
             let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
             if keyboard_is_shown && self.active_tab == Tab::Terminal && console_has_text {
                 if self.clear_button.contains_point(mouse_x, mouse_y) {
-                    println!("Clear button clicked");
                     // Clear the console input
                     self.console_app.text_rasterizer.text.clear();
                     self.console_app.cursor_position = 0;
@@ -1753,11 +1829,8 @@ impl Application for CoderApp {
             let is_background_running = self.python_thread_running.lock().map(|f| *f).unwrap_or(false);
             
             if (is_viewport_running || is_background_running) && self.stop_button.contains_point(mouse_x, mouse_y) {
-                println!("Stop button clicked");
-                
                 // Stop viewport app if running
                 if is_viewport_running {
-                    println!("  - Stopping viewport app");
                     self.viewport_app = None;
                     self.viewport_app_setup_done = false;
                     // Clean up all audio resources immediately
@@ -1767,8 +1840,6 @@ impl Application for CoderApp {
                 
                 // Stop background thread if running
                 if is_background_running {
-                    println!("  - Stopping background thread");
-                    
                     // Increment generation counter - this orphans the old thread's output
                     if let Ok(mut gen) = self.python_thread_generation.lock() {
                         *gen += 1;
@@ -1796,15 +1867,12 @@ impl Application for CoderApp {
             
             // Check if click is on the run button
             if self.run_button.contains_point(mouse_x, mouse_y) {
-                println!("Run button clicked at ({}, {})", mouse_x, mouse_y);
-                
                 // Determine if we should execute console command or run code
                 let show_console = self.active_tab == Tab::Terminal;
                 let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
                 
                 if keyboard_is_shown && show_console && console_has_text {
                     // Execute console command and clear it
-                    println!("Executing console command");
                     let command = self.console_app.text_rasterizer.text.clone();
                     self.execute_console_command(&command);
                     // Clear the console input after execution
@@ -1813,17 +1881,12 @@ impl Application for CoderApp {
                 } else {
                     // Execute the Python code from code tab
                     let code = self.code_app.text_rasterizer.text.clone();
-                    println!("Code to execute: {}", code);
                     if !code.trim().is_empty() {
                         self.execute_python_code(&code);
-                    } else {
-                        println!("Code was empty!");
                     }
                 }
                 return;
             }
-            
-            println!("Click not on any button, checking file explorer or delegating to text app");
         }
         
         // Check if we're in file explorer mode - track tap position for dragging
@@ -1931,7 +1994,6 @@ impl Application for CoderApp {
                                             }
                                         }
                                         ExplorerItem::File(file_index) => {
-                                            println!("Selected file: {}", self.python_files[*file_index].name);
                                             self.load_file(*file_index);
                                         }
                                     }
