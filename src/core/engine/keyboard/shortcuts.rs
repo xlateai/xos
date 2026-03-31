@@ -22,6 +22,8 @@ pub enum ShortcutAction {
     Tab3,
     /// Ctrl/Cmd+W — close current editor tab (coder)
     CloseTab,
+    /// Ctrl/Cmd+Shift+T — reopen last closed editor file tab (coder)
+    ReopenClosedTab,
 }
 
 /// Detects if a keyboard shortcut action was triggered
@@ -53,6 +55,7 @@ pub fn detect_shortcut(ch: char, command_held: bool, shift_held: bool) -> Option
         ('2', false) => Some(ShortcutAction::Tab2),
         ('3', false) => Some(ShortcutAction::Tab3),
         ('w', false) => Some(ShortcutAction::CloseTab),
+        ('t', true) => Some(ShortcutAction::ReopenClosedTab),
         _ => None,
     }
 }

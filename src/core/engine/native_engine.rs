@@ -6,7 +6,7 @@ use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{Key, NamedKey},
+    keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel},
 };
 #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
@@ -24,7 +24,7 @@ use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
-use crate::engine::keyboard::shortcuts::detect_shortcut;
+use crate::engine::keyboard::shortcuts::{detect_shortcut, ShortcutAction};
 use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -351,6 +351,61 @@ impl ApplicationHandler for AppState {
                             let _ = self.app.on_key_char(&mut self.engine_state, '\u{2193}'); // ↓
                         }
                         _ => {
+                            // Ctrl+1–3 / Ctrl+Shift+T: `NamedKey` paths (digits must not be handled
+                            // here when Ctrl is *not* held, or plain "1"/"2"/"3" typing breaks).
+                            #[cfg(not(target_os = "ios"))]
+                            {
+                                if self.command_held && !self.shift_held {
+                                    let tab_shortcut = match event.physical_key {
+                                        PhysicalKey::Code(KeyCode::Digit1) => {
+                                            Some(ShortcutAction::Tab1)
+                                        }
+                                        PhysicalKey::Code(KeyCode::Digit2) => {
+                                            Some(ShortcutAction::Tab2)
+                                        }
+                                        PhysicalKey::Code(KeyCode::Digit3) => {
+                                            Some(ShortcutAction::Tab3)
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(s) = tab_shortcut {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            s,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.command_held && self.shift_held {
+                                    if matches!(
+                                        event.physical_key,
+                                        PhysicalKey::Code(KeyCode::KeyT)
+                                    ) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::ReopenClosedTab,
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            // Logical `Character` often carries Ctrl+digit / Ctrl+Shift+letter when
+                            // `event.text` is empty (common on Windows).
+                            #[cfg(not(target_os = "ios"))]
+                            if let Key::Character(ref s) = event.logical_key {
+                                if s.len() == 1 {
+                                    let ch = s.chars().next().unwrap();
+                                    if let Some(shortcut) =
+                                        detect_shortcut(ch, self.command_held, self.shift_held)
+                                    {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            shortcut,
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
                             // Check if the event has text (for regular character input)
                             // In winit 0.30, text input should come through IME, but we can also
                             // check the text field as a fallback

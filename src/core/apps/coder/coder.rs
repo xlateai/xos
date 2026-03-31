@@ -14,6 +14,8 @@ static PYTHON_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/example-scri
 
 /// Task bar depth, chrome buttons, and related spacing/fonts vs prior baseline.
 const CODER_CHROME_SCALE: f32 = 1.3;
+/// Editor tab strip height and tab label fonts vs prior baseline (+10%).
+const EDITOR_TAB_STRIP_SCALE: f32 = 1.1;
 const MAX_OPEN_EDITOR_TABS: usize = 3;
 
 #[derive(Debug, Clone)]
@@ -80,6 +82,8 @@ pub struct CoderApp {
     explorer_access_counter: u64,
     /// Modal file picker over the editor (opened from the "files" task bar tab).
     explorer_popup_open: bool,
+    /// Last closed / LRU-displaced editor file indices (most recent last) for Ctrl+Shift+T.
+    closed_editor_history: Vec<usize>,
     /// Labels for the top editor tab strip (paths).
     editor_tab_labels: Vec<TextRasterizer>,
     editor_tab_close_label: TextRasterizer,
@@ -108,11 +112,13 @@ impl CoderApp {
     }
 
     fn editor_tab_bar_height_px(ui_scale: f32) -> f32 {
-        (40.0_f32 * ui_scale * CODER_CHROME_SCALE).max(32.0)
+        (40.0_f32 * ui_scale * CODER_CHROME_SCALE * EDITOR_TAB_STRIP_SCALE).max(32.0)
     }
 
-    fn active_file_index(&self) -> usize {
-        self.open_editor_tabs[self.active_editor_tab].file_index
+    fn active_file_index(&self) -> Option<usize> {
+        self.open_editor_tabs
+            .get(self.active_editor_tab)
+            .map(|t| t.file_index)
     }
 
     fn sync_editor_buffer_to_active_tab(&mut self) {
@@ -180,6 +186,8 @@ impl CoderApp {
             self.active_editor_tab = self.open_editor_tabs.len() - 1;
         } else {
             let replace_idx = self.lru_editor_tab_index();
+            let displaced = self.open_editor_tabs[replace_idx].file_index;
+            self.closed_editor_history.push(displaced);
             self.explorer_access_counter = self.explorer_access_counter.saturating_add(1);
             let stamp = self.explorer_access_counter;
             self.open_editor_tabs[replace_idx] = OpenEditorTab {
@@ -204,9 +212,25 @@ impl CoderApp {
     }
 
     fn close_editor_tab_at(&mut self, index: usize) {
-        if self.open_editor_tabs.len() <= 1 || index >= self.open_editor_tabs.len() {
+        if index >= self.open_editor_tabs.len() {
             return;
         }
+        self.sync_editor_buffer_to_active_tab();
+        let closed_fi = self.open_editor_tabs[index].file_index;
+        self.closed_editor_history.push(closed_fi);
+
+        if self.open_editor_tabs.len() == 1 {
+            self.open_editor_tabs.clear();
+            self.active_editor_tab = 0;
+            self.code_app.text_rasterizer.text.clear();
+            self.code_app.cursor_position = 0;
+            self.code_app.scroll_y = 0.0;
+            self.code_app.scroll_target = 0.0;
+            self.code_app.clear_wheel_scroll_accel();
+            self.run_button_label.set_text(String::new());
+            return;
+        }
+
         let was_active = index == self.active_editor_tab;
         self.open_editor_tabs.remove(index);
         if self.active_editor_tab >= self.open_editor_tabs.len() {
@@ -216,6 +240,15 @@ impl CoderApp {
         }
         if was_active {
             self.load_editor_from_active_tab();
+        }
+    }
+
+    fn reopen_last_closed_editor_file(&mut self) {
+        while let Some(fi) = self.closed_editor_history.pop() {
+            if fi < self.python_files.len() {
+                self.open_or_select_file_from_explorer(fi);
+                return;
+            }
         }
     }
 
@@ -252,7 +285,11 @@ impl CoderApp {
         }
         let n = self.open_editor_tabs.len().max(1);
         let inner_w = width - 2.0 * padding as f32;
-        let tab_w = inner_w / n as f32;
+        let tab_w = if self.open_editor_tabs.is_empty() {
+            inner_w
+        } else {
+            inner_w / n as f32
+        };
         let close_reserve = (30.0_f32 * CODER_CHROME_SCALE * ui_scale.max(0.4)).max(22.0);
         for (i, _) in self.open_editor_tabs.iter().enumerate() {
             let x0 = padding as f32 + i as f32 * tab_w;
@@ -330,11 +367,12 @@ impl CoderApp {
         self.viewport_tab_label.set_font_size(20.0 * scale * chrome_font);
         self.clear_button_label.set_font_size(30.0 * scale * chrome_font);
         self.run_button_label.set_font_size(20.0 * scale * chrome_font);
+        let tab_strip = chrome_font * EDITOR_TAB_STRIP_SCALE;
         for r in &mut self.editor_tab_labels {
-            r.set_font_size(16.0 * scale * chrome_font);
+            r.set_font_size(16.0 * scale * tab_strip);
         }
         self.editor_tab_close_label
-            .set_font_size(20.0 * scale * chrome_font);
+            .set_font_size(20.0 * scale * tab_strip);
 
         let file_base = if cfg!(target_os = "ios") { 42.0 } else { 24.0 };
         let folder_base = if cfg!(target_os = "ios") { 32.0 } else { 18.0 };
@@ -429,10 +467,10 @@ impl CoderApp {
             });
         }
         
-        // Create the code editor text app with default code from ball.py
+        // Create the code editor text app (no file open until the user picks one).
         let mut code_app = TextApp::new();
         code_app.uses_parent_ui_scale = true;
-        code_app.text_rasterizer.text = python_files[0].content.clone();
+        code_app.text_rasterizer.text = String::new();
         code_app.show_debug_visuals = false; // Hide debug visuals in code editor
         // On iOS, start at top like terminal. On macOS, start at top too.
         code_app.scroll_y = 0.0;
@@ -490,7 +528,7 @@ impl CoderApp {
         code_tab_label.set_text("files".to_string());
 
         let mut run_button_label = TextRasterizer::new(font.clone(), 20.0);
-        run_button_label.set_text(Self::file_basename(&python_files[0].name));
+        run_button_label.set_text(String::new());
         
         let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0);
         terminal_tab_label.set_text("terminal".to_string());
@@ -504,9 +542,13 @@ impl CoderApp {
 
         let mut editor_tab_labels = Vec::new();
         for _ in 0..MAX_OPEN_EDITOR_TABS {
-            editor_tab_labels.push(TextRasterizer::new(font.clone(), 14.0));
+            editor_tab_labels.push(TextRasterizer::new(
+                font.clone(),
+                14.0 * EDITOR_TAB_STRIP_SCALE,
+            ));
         }
-        let mut editor_tab_close_label = TextRasterizer::new(font.clone(), 20.0);
+        let mut editor_tab_close_label =
+            TextRasterizer::new(font.clone(), 20.0 * EDITOR_TAB_STRIP_SCALE);
         editor_tab_close_label.set_text("×".to_string());
 
         // Create text rasterizers for each explorer item (folder headers + files)
@@ -547,14 +589,11 @@ impl CoderApp {
             viewport_last_tap_time: None,
             viewport_last_tap_x: 0.0,
             viewport_last_tap_y: 0.0,
-            open_editor_tabs: vec![OpenEditorTab {
-                file_index: 0,
-                text: python_files[0].content.clone(),
-                last_accessed_stamp: 1,
-            }],
+            open_editor_tabs: Vec::new(),
             active_editor_tab: 0,
-            explorer_access_counter: 1,
+            explorer_access_counter: 0,
             explorer_popup_open: false,
+            closed_editor_history: Vec::new(),
             editor_tab_labels,
             editor_tab_close_label,
             python_files,
@@ -1032,7 +1071,9 @@ builtins.print = __custom_print__
 
     fn save_current_file(&mut self) {
         self.sync_editor_buffer_to_active_tab();
-        let fi = self.active_file_index();
+        let Some(fi) = self.active_file_index() else {
+            return;
+        };
         if fi < self.python_files.len() {
             self.python_files[fi].content = self.open_editor_tabs[self.active_editor_tab]
                 .text
@@ -1108,7 +1149,12 @@ builtins.print = __custom_print__
         let mut y_offset = top_y - self.file_list_scroll_y;
         let active_fi = self.active_file_index();
 
-        for (_i, (item, rasterizer)) in self.explorer_items.iter().zip(self.file_list_rasterizers.iter()).enumerate() {
+        for (_i, (item, rasterizer)) in self
+            .explorer_items
+            .iter()
+            .zip(self.file_list_rasterizers.iter())
+            .enumerate()
+        {
             if !self.is_item_visible(item) {
                 continue; // Skip collapsed files
             }
@@ -1119,7 +1165,7 @@ builtins.print = __custom_print__
                 continue;
             }
             
-            let is_current = matches!(item, ExplorerItem::File(idx) if *idx == active_fi);
+            let is_current = matches!(item, ExplorerItem::File(idx) if Some(*idx) == active_fi);
             
             // Draw item background - folder headers get darker, files get highlight when selected
             let item_bg_color = match item {
@@ -1247,7 +1293,7 @@ builtins.print = __custom_print__
             y0,
             canvas_width as i32,
             y1,
-            (24, 25, 30, 0xff),
+            (10, 10, 12, 0xff),
         );
         let n = self.open_editor_tabs.len().max(1);
         let inner_w = canvas_width as f32 - 2.0 * padding as f32;
@@ -1258,12 +1304,12 @@ builtins.print = __custom_print__
             let x1 = (padding as f32 + (i + 1) as f32 * tab_w) as i32;
             let active = i == self.active_editor_tab;
             let bg = if active {
-                (42, 45, 52)
+                (26, 27, 32)
             } else {
-                (32, 34, 40)
+                (16, 17, 21)
             };
             fill_rect_buffer(buffer, cw, ch, x0, y0, x1, y1, (bg.0, bg.1, bg.2, 0xff));
-            fill_rect_buffer(buffer, cw, ch, x1 - 1, y0, x1, y1, (18, 18, 22, 0xff));
+            fill_rect_buffer(buffer, cw, ch, x1 - 1, y0, x1, y1, (8, 8, 10, 0xff));
 
             if i >= self.editor_tab_labels.len() {
                 continue;
@@ -1440,8 +1486,8 @@ builtins.print = __custom_print__
         if y0 >= y1 {
             return;
         }
-        // Dark frosted strip — reads as glass over code / viewport
-        let (r, g, b, a) = (68u8, 72u8, 80u8, 235u8);
+        // Dark frosted strip — slightly above pitch black
+        let (r, g, b, a) = (22u8, 22u8, 24u8, 245u8);
         let af = a as f32 / 255.0;
         for y in y0..y1 {
             let row = (y as u32 * canvas_width) as usize * 4;
@@ -1458,7 +1504,7 @@ builtins.print = __custom_print__
             }
         }
         // Thin top highlight
-        let hl = (130u8, 135u8, 145u8, 100u8);
+        let hl = (48u8, 48u8, 52u8, 90u8);
         let haf = hl.3 as f32 / 255.0;
         let yh = y0.max(0);
         if yh < canvas_height as i32 {
@@ -1738,12 +1784,15 @@ impl Application for CoderApp {
         self.terminal_tab_label.tick(width, height);
         self.viewport_tab_label.tick(width, height);
 
-        let afi = self.active_file_index();
-        if afi < self.python_files.len() {
-            let fname = Self::file_basename(&self.python_files[afi].name);
-            if self.run_button_label.text != fname {
-                self.run_button_label.set_text(fname);
+        if let Some(afi) = self.active_file_index() {
+            if afi < self.python_files.len() {
+                let fname = Self::file_basename(&self.python_files[afi].name);
+                if self.run_button_label.text != fname {
+                    self.run_button_label.set_text(fname);
+                }
             }
+        } else if !self.run_button_label.text.is_empty() {
+            self.run_button_label.set_text(String::new());
         }
         self.run_button_label.tick(width, height);
         let (bw_base, _) = Self::button_size_scaled(ui_scale);
@@ -2460,8 +2509,10 @@ impl Application for CoderApp {
             ShortcutAction::Tab2 => self.switch_editor_tab_to(1),
             ShortcutAction::Tab3 => self.switch_editor_tab_to(2),
             ShortcutAction::CloseTab => {
-                self.sync_editor_buffer_to_active_tab();
                 self.close_editor_tab_at(self.active_editor_tab);
+            }
+            ShortcutAction::ReopenClosedTab => {
+                self.reopen_last_closed_editor_file();
             }
             _ => {}
         }
