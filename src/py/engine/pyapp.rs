@@ -188,6 +188,7 @@ class Application:
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
+        self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
         self.scale = 0.5
@@ -288,6 +289,8 @@ impl Application for PyApp {
 
                 // Seed timing field so Python can read it in setup/tick.
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm)
+                    .map_err(|e| format!("Failed to set dt attribute: {:?}", e))?;
                 app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
                 app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
@@ -333,8 +336,9 @@ impl Application for PyApp {
                     let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
                     let _ = app_instance.set_attr("mouse", mouse_dict, vm);
 
-                    // Expose engine FPS directly to Python app.
+                    // Expose timestep and FPS directly to Python app.
                     let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                    let _ = app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm);
                     let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
 
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
