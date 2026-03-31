@@ -1,6 +1,9 @@
 # 🐍 xos
 
-One python file, cross-platform (+ios📱), built-in viewports, audio drivers, ai/ml/sci compute library, graphics, text rasterization, and more on the way. Everything is tensorized and accelerator ready. Let's see what you can build!
+Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
+
+
+YouTube [@xlateai](https://youtube.com/@xlateai) • X/Twitter [@xlateai](https://x.com/xlateai) • Discord [xlateai](https://discord.gg/WvPaPG7DYh)
 
 ## ℹ️ Details
 
@@ -81,8 +84,6 @@ class BallLines(xos.Application):
 if __name__ == "__main__":
     BallLines().run()
 ```
-
-https://github.com/user-attachments/assets/620e0532-1450-4cc0-b607-def32561eff1
 
 ## ✅ Getting Started
 
