@@ -233,6 +233,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("full", tensors_module.get_attr("full", vm).unwrap(), vm).unwrap();
     module.set_attr("arange", tensors_module.get_attr("arange", vm).unwrap(), vm).unwrap();
     module.set_attr("stack", tensors_module.get_attr("stack", vm).unwrap(), vm).unwrap();
+    module.set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm).unwrap();
+    module.set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm).unwrap();
     
     // Add the data submodule
     let data_module = crate::python_api::data::make_data_module(vm);

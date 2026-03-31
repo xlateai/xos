@@ -1,5 +1,6 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{PyResult, VirtualMachine, builtins::PyList, builtins::PyModule, PyRef, function::FuncArgs};
 use std::sync::Mutex;
+use crate::python_api::tensors::{tensor_flat_data_list, tensor_shape_tuple};
 use crate::rasterizer::shapes::lines::draw_line_direct;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
@@ -82,46 +83,54 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let a: i32 = color_vec[3].clone().try_into_value(vm)?;
     let color = (r as u8, g as u8, b as u8, a as u8);
     
-    // Get positions list
-    let positions = positions_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("positions must be a list".to_string()))?;
-    
-    // Get radii list
-    let radii = radii_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("radii must be a list".to_string()))?;
-    
-    // Collect all circle data first before drawing
-    let positions_vec = positions.borrow_vec();
-    let radii_vec = radii.borrow_vec();
-    
     let mut circles_to_draw = Vec::new();
-    
-    for (i, pos_obj) in positions_vec.iter().enumerate() {
-        // Parse position tuple
-        let pos_tuple = pos_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
-            .ok_or_else(|| vm.new_type_error("position must be a tuple".to_string()))?;
-        let pos_vec = pos_tuple.as_slice();
-        if pos_vec.len() != 2 {
-            return Err(vm.new_type_error("position must be (x, y)".to_string()));
+
+    if let Some(positions) = positions_list.downcast_ref::<PyList>() {
+        let radii = radii_list
+            .downcast_ref::<PyList>()
+            .ok_or_else(|| vm.new_type_error("radii must be a list".to_string()))?;
+        let positions_vec = positions.borrow_vec();
+        let radii_vec = radii.borrow_vec();
+        for (i, pos_obj) in positions_vec.iter().enumerate() {
+            let pos_tuple = pos_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("position must be a tuple".to_string()))?;
+            let pos_vec = pos_tuple.as_slice();
+            if pos_vec.len() != 2 {
+                return Err(vm.new_type_error("position must be (x, y)".to_string()));
+            }
+            let cx: f64 = pos_vec[0].clone().try_into_value(vm)?;
+            let cy: f64 = pos_vec[1].clone().try_into_value(vm)?;
+            let radius: f64 = if i < radii_vec.len() {
+                radii_vec[i].clone().try_into_value(vm)?
+            } else if !radii_vec.is_empty() {
+                radii_vec[0].clone().try_into_value(vm)?
+            } else {
+                return Err(vm.new_type_error("radii list is empty".to_string()));
+            };
+            circles_to_draw.push((cx as f32, cy as f32, radius as f32));
         }
-        let cx: f64 = pos_vec[0].clone().try_into_value(vm)?;
-        let cy: f64 = pos_vec[1].clone().try_into_value(vm)?;
-        
-        // Get radius (either from list or use first one for all)
-        let radius: f64 = if i < radii_vec.len() {
-            radii_vec[i].clone().try_into_value(vm)?
-        } else if !radii_vec.is_empty() {
-            radii_vec[0].clone().try_into_value(vm)?
-        } else {
-            return Err(vm.new_type_error("radii list is empty".to_string()));
-        };
-        
-        circles_to_draw.push((cx as f32, cy as f32, radius as f32));
+    } else {
+        let pos_flat = tensor_flat_data_list(positions_list, vm)?;
+        let rad_flat = tensor_flat_data_list(radii_list, vm)?;
+        let pos_shape = tensor_shape_tuple(positions_list, vm)?;
+        if pos_shape.len() != 2 || pos_shape[1] != 2 {
+            return Err(vm.new_type_error("positions tensor must be shape (N, 2)".to_string()));
+        }
+        let n = pos_shape[0];
+        if rad_flat.len() != n && rad_flat.len() != 1 {
+            return Err(vm.new_type_error("radii tensor must be length N or 1".to_string()));
+        }
+        for i in 0..n {
+            let cx = pos_flat[2 * i] as f64;
+            let cy = pos_flat[2 * i + 1] as f64;
+            let radius: f64 = if rad_flat.len() == n {
+                rad_flat[i] as f64
+            } else {
+                rad_flat[0] as f64
+            };
+            circles_to_draw.push((cx as f32, cy as f32, radius as f32));
+        }
     }
-    
-    // Drop borrows before drawing
-    drop(positions_vec);
-    drop(radii_vec);
     
     // Get mutable buffer slice
     let buffer_len = width * height * 4;
@@ -300,62 +309,74 @@ fn lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let a: i32 = color_vec[3].clone().try_into_value(vm)?;
     let color = (r as u8, g as u8, b as u8, a as u8);
     
-    // Get lists
-    let start_points = start_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("start_points must be a list".to_string()))?;
-    let end_points = end_points_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("end_points must be a list".to_string()))?;
-    let thicknesses = thicknesses_list.downcast_ref::<rustpython_vm::builtins::PyList>()
-        .ok_or_else(|| vm.new_type_error("thicknesses must be a list".to_string()))?;
-    
-    // Collect all line data first before drawing
-    let start_points_vec = start_points.borrow_vec();
-    let end_points_vec = end_points.borrow_vec();
-    let thicknesses_vec = thicknesses.borrow_vec();
-    
     let mut lines_to_draw = Vec::new();
-    
-    for (i, start_obj) in start_points_vec.iter().enumerate() {
-        if i >= end_points_vec.len() {
-            break;
+
+    if let Some(start_points) = start_points_list.downcast_ref::<PyList>() {
+        let end_points = end_points_list
+            .downcast_ref::<PyList>()
+            .ok_or_else(|| vm.new_type_error("end_points must be a list".to_string()))?;
+        let thicknesses = thicknesses_list
+            .downcast_ref::<PyList>()
+            .ok_or_else(|| vm.new_type_error("thicknesses must be a list".to_string()))?;
+        let start_points_vec = start_points.borrow_vec();
+        let end_points_vec = end_points.borrow_vec();
+        let thicknesses_vec = thicknesses.borrow_vec();
+        for (i, start_obj) in start_points_vec.iter().enumerate() {
+            if i >= end_points_vec.len() {
+                break;
+            }
+            let start_tuple = start_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("start point must be a tuple".to_string()))?;
+            let start_vec = start_tuple.as_slice();
+            if start_vec.len() != 2 {
+                return Err(vm.new_type_error("start point must be (x, y)".to_string()));
+            }
+            let x1: f64 = start_vec[0].clone().try_into_value(vm)?;
+            let y1: f64 = start_vec[1].clone().try_into_value(vm)?;
+            let end_tuple = end_points_vec[i].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| vm.new_type_error("end point must be a tuple".to_string()))?;
+            let end_vec = end_tuple.as_slice();
+            if end_vec.len() != 2 {
+                return Err(vm.new_type_error("end point must be (x, y)".to_string()));
+            }
+            let x2: f64 = end_vec[0].clone().try_into_value(vm)?;
+            let y2: f64 = end_vec[1].clone().try_into_value(vm)?;
+            let thickness: f64 = if i < thicknesses_vec.len() {
+                thicknesses_vec[i].clone().try_into_value(vm)?
+            } else if !thicknesses_vec.is_empty() {
+                thicknesses_vec[0].clone().try_into_value(vm)?
+            } else {
+                return Err(vm.new_type_error("thicknesses list is empty".to_string()));
+            };
+            lines_to_draw.push((x1 as f32, y1 as f32, x2 as f32, y2 as f32, thickness as f32));
         }
-        
-        // Parse start point tuple
-        let start_tuple = start_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
-            .ok_or_else(|| vm.new_type_error("start point must be a tuple".to_string()))?;
-        let start_vec = start_tuple.as_slice();
-        if start_vec.len() != 2 {
-            return Err(vm.new_type_error("start point must be (x, y)".to_string()));
+    } else {
+        let sflat = tensor_flat_data_list(start_points_list, vm)?;
+        let eflat = tensor_flat_data_list(end_points_list, vm)?;
+        let tflat = tensor_flat_data_list(thicknesses_list, vm)?;
+        let sshape = tensor_shape_tuple(start_points_list, vm)?;
+        if sshape.len() != 2 || sshape[1] != 2 {
+            return Err(vm.new_type_error("start_points tensor must be shape (N, 2)".to_string()));
         }
-        let x1: f64 = start_vec[0].clone().try_into_value(vm)?;
-        let y1: f64 = start_vec[1].clone().try_into_value(vm)?;
-        
-        // Parse end point tuple
-        let end_tuple = end_points_vec[i].downcast_ref::<rustpython_vm::builtins::PyTuple>()
-            .ok_or_else(|| vm.new_type_error("end point must be a tuple".to_string()))?;
-        let end_vec = end_tuple.as_slice();
-        if end_vec.len() != 2 {
-            return Err(vm.new_type_error("end point must be (x, y)".to_string()));
+        let n = sshape[0];
+        if sflat.len() != eflat.len() {
+            return Err(vm.new_type_error("start/end tensor size mismatch".to_string()));
         }
-        let x2: f64 = end_vec[0].clone().try_into_value(vm)?;
-        let y2: f64 = end_vec[1].clone().try_into_value(vm)?;
-        
-        // Get thickness
-        let thickness: f64 = if i < thicknesses_vec.len() {
-            thicknesses_vec[i].clone().try_into_value(vm)?
-        } else if !thicknesses_vec.is_empty() {
-            thicknesses_vec[0].clone().try_into_value(vm)?
-        } else {
-            return Err(vm.new_type_error("thicknesses list is empty".to_string()));
-        };
-        
-        lines_to_draw.push((x1 as f32, y1 as f32, x2 as f32, y2 as f32, thickness as f32));
+        for i in 0..n {
+            let x1 = sflat[2 * i] as f64;
+            let y1 = sflat[2 * i + 1] as f64;
+            let x2 = eflat[2 * i] as f64;
+            let y2 = eflat[2 * i + 1] as f64;
+            let thickness: f64 = if tflat.len() == n {
+                tflat[i] as f64
+            } else if !tflat.is_empty() {
+                tflat[0] as f64
+            } else {
+                return Err(vm.new_type_error("thicknesses tensor is empty".to_string()));
+            };
+            lines_to_draw.push((x1 as f32, y1 as f32, x2 as f32, y2 as f32, thickness as f32));
+        }
     }
-    
-    // Drop borrows before drawing
-    drop(start_points_vec);
-    drop(end_points_vec);
-    drop(thicknesses_vec);
     
     // Get mutable buffer slice
     let buffer_len = width * height * 4;

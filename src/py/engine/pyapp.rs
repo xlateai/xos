@@ -79,8 +79,61 @@ class _ArrayWrapper:
         if isinstance(key, slice) and key == slice(None, None, None):
             # Return the underlying data dict for full slice access
             return self._data
+        if isinstance(key, tuple) and len(key) == 2:
+            a, b = key
+            shape = tuple(self.shape)
+            flat = self._data["_data"]
+            if isinstance(a, slice) and a.start is None and a.stop is None and a.step is None and b is None:
+                if len(shape) == 1:
+                    n = shape[0]
+                    return self._wrap_vals((n, 1), flat)
+                if len(shape) == 2:
+                    r, c = shape[0], shape[1]
+                    return self._wrap_vals((r, c, 1), flat)
+            if isinstance(a, slice) and a.start is None and a.stop is None and a.step is None and isinstance(b, int):
+                if len(shape) == 2:
+                    rows, cols = shape[0], shape[1]
+                    col = b
+                    out = [flat[i * cols + col] for i in range(rows)]
+                    return self._wrap_vals((rows,), out)
+        if isinstance(key, _ArrayWrapper):
+            return self._gather_rows(key)
         return self._data[key]
-    
+
+    def _wrap_vals(self, shape, values):
+        return _ArrayWrapper({
+            "shape": tuple(shape),
+            "dtype": self.dtype,
+            "device": self._data.get("device", "cpu"),
+            "_data": values,
+        })
+
+    def reshape(self, new_shape):
+        flat = self._data["_data"]
+        prod = 1
+        for d in new_shape:
+            prod *= d
+        if prod != len(flat):
+            raise ValueError("reshape size mismatch")
+        return self._wrap_vals(tuple(new_shape), flat)
+
+    def _gather_rows(self, idx_tensor):
+        idx_flat = idx_tensor._data["_data"]
+        shape = tuple(self.shape)
+        flat = self._data["_data"]
+        if len(shape) != 2:
+            raise NotImplementedError("gather only supports 2D tensors")
+        r, c = shape[0], shape[1]
+        out = []
+        for ii in idx_flat:
+            i = int(ii)
+            if i < 0 or i >= r:
+                raise IndexError("index out of range")
+            base = i * c
+            for j in range(c):
+                out.append(flat[base + j])
+        return self._wrap_vals((len(idx_flat), c), out)
+
     def __setitem__(self, key, value):
         if isinstance(key, slice) and key == slice(None, None, None):
             # Full slice assignment
@@ -104,8 +157,23 @@ class _ArrayWrapper:
 
     def _binary_op(self, other, op):
         left = self._data.get("_data", [])
+        lshape = tuple(self.shape)
         if isinstance(other, _ArrayWrapper):
             right = other._data.get("_data", [])
+            rshape = tuple(other.shape)
+            if isinstance(right, list):
+                if len(lshape) == 2 and len(rshape) == 2 and lshape[1] == 2 and rshape[0] == 1 and rshape[1] == 2 and len(right) == 2:
+                    w0, w1 = right[0], right[1]
+                    n = lshape[0]
+                    out = []
+                    for i in range(n):
+                        out.append(op(left[2 * i], w0))
+                        out.append(op(left[2 * i + 1], w1))
+                    return self._wrap_vals(lshape, out)
+                if len(left) != len(right):
+                    raise ValueError(f"shape mismatch for op: {len(left)} vs {len(right)} elements")
+                out = [op(a, b) for a, b in zip(left, right)]
+                return self._wrap_like_self(out)
         elif isinstance(other, dict) and "_data" in other:
             right = other["_data"]
         else:
@@ -118,6 +186,44 @@ class _ArrayWrapper:
         else:
             out = [op(a, right) for a in left]
         return self._wrap_like_self(out)
+
+    def _cmp_broadcast(self, other, cmp_fn):
+        left = self._data["_data"]
+        lshape = tuple(self.shape)
+        if isinstance(other, _ArrayWrapper):
+            right = other._data["_data"]
+            rshape = tuple(other.shape)
+            if lshape == rshape:
+                return self._wrap_vals(lshape, [cmp_fn(a, b) for a, b in zip(left, right)])
+            if len(lshape) == 2 and len(rshape) == 2 and lshape[0] == rshape[0] and lshape[1] == 2 and rshape[1] == 1:
+                n = lshape[0]
+                out = []
+                for i in range(n):
+                    rv = right[i]
+                    out.append(cmp_fn(left[2 * i], rv))
+                    out.append(cmp_fn(left[2 * i + 1], rv))
+                return self._wrap_vals(lshape, out)
+        if isinstance(other, (int, float)):
+            return self._wrap_vals(lshape, [cmp_fn(a, other) for a in left])
+        raise TypeError("unsupported comparison operand")
+
+    def __lt__(self, other):
+        return self._cmp_broadcast(other, lambda a, b: 1.0 if a < b else 0.0)
+
+    def __gt__(self, other):
+        return self._cmp_broadcast(other, lambda a, b: 1.0 if a > b else 0.0)
+
+    def __or__(self, other):
+        if isinstance(other, _ArrayWrapper):
+            la = self._data["_data"]
+            lb = other._data["_data"]
+            if len(la) != len(lb):
+                raise ValueError("or shape mismatch")
+            return self._wrap_vals(self.shape, [1.0 if (a != 0.0 or b != 0.0) else 0.0 for a, b in zip(la, lb)])
+        raise TypeError("unsupported or operand")
+
+    def __neg__(self):
+        return self._wrap_vals(self.shape, [-a for a in self._data["_data"]])
 
     def __add__(self, other):
         return self._binary_op(other, lambda a, b: a + b)

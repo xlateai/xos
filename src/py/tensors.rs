@@ -1,8 +1,8 @@
 //! xos.tensor - Burn-backed tensors exposed to Python with same API as xos.array
 
 use rustpython_vm::{
-    PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyModule, PyRef,
-    function::FuncArgs, PyObjectRef,
+    PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyModule, builtins::PyTuple,
+    PyRef, function::FuncArgs, PyObjectRef,
 };
 use crate::python_api::dtypes::DType;
 use std::sync::{Arc, Mutex};
@@ -74,7 +74,7 @@ fn py_number_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 }
 
 /// Resolve raw tensor dict, `_ArrayWrapper`, or nested `_data` to the flat `PyList` of values.
-fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
+pub(crate) fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
     let mut cur = obj.clone();
     for _ in 0..8 {
         if let Some(list) = cur.downcast_ref::<PyList>() {
@@ -97,6 +97,104 @@ fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec
         break;
     }
     Err(vm.new_type_error("tensor missing _data list".to_string()))
+}
+
+pub(crate) fn tensor_shape_tuple(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<usize>> {
+    let mut cur = obj.clone();
+    for _ in 0..8 {
+        if let Some(dict) = cur.downcast_ref::<PyDict>() {
+            if let Ok(shape_obj) = dict.get_item("shape", vm) {
+                if let Some(tup) = shape_obj.downcast_ref::<PyTuple>() {
+                    return tup
+                        .as_slice()
+                        .iter()
+                        .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
+                        .collect::<Result<Vec<_>, _>>();
+                }
+            }
+        }
+        if let Ok(Some(attr)) = vm.get_attribute_opt(cur.clone(), "shape") {
+            cur = attr;
+            if let Some(tup) = cur.downcast_ref::<PyTuple>() {
+                return tup
+                    .as_slice()
+                    .iter()
+                    .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
+                    .collect::<Result<Vec<_>, _>>();
+            }
+        }
+        break;
+    }
+    Err(vm.new_type_error("tensor missing shape".to_string()))
+}
+
+fn where_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 3 {
+        return Err(vm.new_type_error("where() requires cond, x, y".to_string()));
+    }
+    let c = tensor_flat_data_list(&args_vec[0], vm)?;
+    let x = tensor_flat_data_list(&args_vec[1], vm)?;
+    let y = tensor_flat_data_list(&args_vec[2], vm)?;
+    if c.len() != x.len() || x.len() != y.len() {
+        return Err(vm.new_value_error("where(): shape mismatch".to_string()));
+    }
+    let shape = tensor_shape_tuple(&args_vec[1], vm)?;
+    let out: Vec<f32> = c
+        .iter()
+        .zip(x.iter())
+        .zip(y.iter())
+        .map(|((&cv, &xv), &yv)| if cv != 0.0 { xv } else { yv })
+        .collect();
+    let dtype = DType::Float32;
+    let py_tensor = create_tensor_from_data(out, shape, dtype);
+    let dict = py_tensor.to_py_dict(vm, dtype)?;
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    Ok(dict)
+}
+
+fn clip_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 3 {
+        return Err(vm.new_type_error("clip() requires x, min, max".to_string()));
+    }
+    let a = tensor_flat_data_list(&args_vec[0], vm)?;
+    let lo = tensor_flat_data_list(&args_vec[1], vm)?;
+    let hi = tensor_flat_data_list(&args_vec[2], vm)?;
+    let shape = tensor_shape_tuple(&args_vec[0], vm)?;
+    let n = a.len();
+    let out = if lo.len() == n && hi.len() == n {
+        a.iter()
+            .zip(lo.iter())
+            .zip(hi.iter())
+            .map(|((&x, &l), &h)| x.max(l).min(h))
+            .collect()
+    } else if n % 2 == 0 && lo.len() * 2 == n && hi.len() * 2 == n {
+        let rows = n / 2;
+        let mut v = Vec::with_capacity(n);
+        for i in 0..rows {
+            let l = lo[i];
+            let h = hi[i];
+            v.push(a[2 * i].max(l).min(h));
+            v.push(a[2 * i + 1].max(l).min(h));
+        }
+        v
+    } else {
+        return Err(vm.new_value_error("clip(): incompatible shapes".to_string()));
+    };
+    let dtype = DType::Float32;
+    let py_tensor = create_tensor_from_data(out, shape, dtype);
+    let dict = py_tensor.to_py_dict(vm, dtype)?;
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    Ok(dict)
 }
 
 /// Create Burn tensor from flat f32 data and shape, return as PyTensor
@@ -427,5 +525,7 @@ pub fn make_tensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("full", vm.new_function("full", full_fn), vm).unwrap();
     module.set_attr("arange", vm.new_function("arange", arange_fn), vm).unwrap();
     module.set_attr("stack", vm.new_function("stack", stack_fn), vm).unwrap();
+    module.set_attr("where", vm.new_function("where", where_fn), vm).unwrap();
+    module.set_attr("clip", vm.new_function("clip", clip_fn), vm).unwrap();
     module
 }
