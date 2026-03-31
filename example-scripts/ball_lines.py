@@ -25,10 +25,9 @@ class BallLines(xos.Application):
 
     def tick(self):
         self.frame.clear(xos.color.BLACK)
-        dt = self.dt
 
         # Integrate positions
-        self.pos = self.pos + self.vel * dt
+        self.pos = self.pos + self.vel * self.dt
 
         # Bounce: flip velocity for any axis that crosses bounds, then clamp
         lo = self.rad[:, None]
