@@ -8,7 +8,7 @@ LINE_THICKNESS = 0.0008
 SPEED_PER_SEC = 0.28
 
 
-class BallPairsGame(xos.Application):
+class BallLines(xos.Application):
     def __init__(self):
         super().__init__()
         self.num_balls = 512
@@ -56,5 +56,5 @@ class BallPairsGame(xos.Application):
 
 
 if __name__ == "__main__":
-    BallPairsGame().run()
+    BallLines().run()
 
