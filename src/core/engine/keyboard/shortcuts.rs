@@ -42,6 +42,8 @@ pub enum ShortcutAction {
     PrevEditorTab,
     /// Cycle top editor tabs right
     NextEditorTab,
+    /// Toggle viewport bottom task bar visibility
+    ToggleViewportTaskbar,
 }
 
 /// Detects if a keyboard shortcut action was triggered

@@ -78,6 +78,7 @@ pub struct CoderApp {
     viewport_last_tap_time: Option<std::time::Instant>,
     viewport_last_tap_x: f32,
     viewport_last_tap_y: f32,
+    viewport_taskbar_hidden: bool,
     /// Up to [`MAX_OPEN_EDITOR_TABS`] buffers; active index is [`Self::active_editor_tab`].
     open_editor_tabs: Vec<OpenEditorTab>,
     active_editor_tab: usize,
@@ -233,6 +234,10 @@ impl CoderApp {
             .unwrap_or(0) as i32;
         let next = (cur_idx + delta).rem_euclid(order.len() as i32) as usize;
         self.active_tab = order[next];
+        if self.active_tab == Tab::Viewport {
+            // Entering viewport always restores the task bar.
+            self.viewport_taskbar_hidden = false;
+        }
         if self.active_tab != Tab::Code {
             self.explorer_popup_open = false;
         }
@@ -619,6 +624,7 @@ impl CoderApp {
             viewport_last_tap_time: None,
             viewport_last_tap_x: 0.0,
             viewport_last_tap_y: 0.0,
+            viewport_taskbar_hidden: false,
             open_editor_tabs: Vec::new(),
             active_editor_tab: 0,
             explorer_access_counter: 0,
@@ -767,6 +773,7 @@ xos.print = __custom_print__
                     // Terminal will show accumulated output from the buffer
                     if self.active_tab == Tab::Code {
                         self.active_tab = Tab::Viewport;
+                        self.viewport_taskbar_hidden = false;
                     }
                 } else {
                     self.terminal_app.text_rasterizer.text = if !current_output.is_empty() { current_output } else { "(no output)".to_string() };
@@ -1301,7 +1308,7 @@ builtins.print = __custom_print__
             // Draw item background - folder headers get darker, files get highlight when selected
             let item_bg_color = match item {
                 ExplorerItem::Folder(_) => (8, 8, 12), // Dark blue-tint for folder headers
-                _ if is_selected => (42, 42, 54),
+                _ if is_selected => (78, 82, 112),
                 ExplorerItem::File(_) if is_current => (30, 30, 30),
                 _ => (15, 15, 15),
             };
@@ -1318,6 +1325,12 @@ builtins.print = __custom_print__
                 row_y1.min(bottom_y as i32),
                 (item_bg_color.0, item_bg_color.1, item_bg_color.2, 0xff),
             );
+            if is_selected {
+                let y0 = row_y0.max(top_y as i32);
+                let y1 = row_y1.min(bottom_y as i32);
+                fill_rect_buffer(buffer, cw, ch, clip_x0, y0, clip_x1, y0 + 1, (200, 210, 255, 0xff));
+                fill_rect_buffer(buffer, cw, ch, clip_x0, y1 - 1, clip_x1, y1, (200, 210, 255, 0xff));
+            }
             
             // Draw text using TextRasterizer
             let text_color = match item {
@@ -1748,10 +1761,15 @@ impl Application for CoderApp {
 
         let (_button_w, button_height) = Self::button_size_scaled(ui_scale);
         let padding = Self::padding_scaled(ui_scale);
+        let hide_task_bar = self.active_tab == Tab::Viewport && self.viewport_taskbar_hidden;
         
         // Bottom task bar (~6.5% height at 1.3×, at least tall enough for tab buttons); moves up with the keyboard.
-        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
-            .max(button_height as f32 + padding as f32);
+        let task_bar_height = if hide_task_bar {
+            0.0
+        } else {
+            (height * 0.05_f32 * CODER_CHROME_SCALE)
+                .max(button_height as f32 + padding as f32)
+        };
         self.code_app.bottom_chrome_height_px = task_bar_height;
         self.terminal_app.bottom_chrome_height_px = task_bar_height;
         
@@ -2024,17 +2042,19 @@ impl Application for CoderApp {
             }
         }
         
-        // Glassy task bar strip (always — moves up when the keyboard opens)
-        Self::draw_glassy_task_bar(
-            buffer,
-            width as u32,
-            height as u32,
-            task_bar_top,
-            task_bar_bottom,
-        );
+        // Glassy task bar strip
+        if !hide_task_bar {
+            Self::draw_glassy_task_bar(
+                buffer,
+                width as u32,
+                height as u32,
+                task_bar_top,
+                task_bar_bottom,
+            );
+        }
         
         // Console above task bar (only when keyboard is up and on terminal tab)
-        if keyboard_is_shown && show_console {
+        if !hide_task_bar && keyboard_is_shown && show_console {
             let fw = width as usize;
             let fh = height as usize;
             let w_i = width as i32;
@@ -2133,6 +2153,9 @@ impl Application for CoderApp {
         
         let tab_width = Self::tab_width_scaled(ui_scale);
         let tab_height = chrome_h;
+        if hide_task_bar {
+            return;
+        }
         
         // Draw files tab on the left
         self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, &self.code_tab_label, self.active_tab == Tab::Code);
@@ -2382,6 +2405,7 @@ impl Application for CoderApp {
             .max(button_height as f32)
             .round() as u32;
         let tab_top_y = (task_bar_top + (task_bar_height - chrome_h as f32) * 0.5).round() as i32;
+        let hide_task_bar = self.active_tab == Tab::Viewport && self.viewport_taskbar_hidden;
 
         if self.active_tab == Tab::Code {
             let bar_h = Self::editor_tab_bar_height_px(layout_scale);
@@ -2430,8 +2454,8 @@ impl Application for CoderApp {
             }
         }
         
-        // Task bar chrome (tabs / run / stop) — always hit-test; matches visible task bar
-        {
+        // Task bar chrome (tabs / run / stop) — only hit-test when visible.
+        if !hide_task_bar {
             if self.tab_contains_point(mouse_x, mouse_y, padding, tab_top_y, tab_width, chrome_h) {
                 if self.active_tab == Tab::Code {
                     self.save_current_file();
@@ -2452,6 +2476,7 @@ impl Application for CoderApp {
                 chrome_h,
             ) {
                 self.active_tab = Tab::Viewport;
+                self.viewport_taskbar_hidden = false;
                 return;
             }
             
@@ -2698,18 +2723,17 @@ impl Application for CoderApp {
                 }
             }
             ShortcutAction::ToggleExplorer => {
-                if self.active_tab == Tab::Code {
-                    self.explorer_popup_open = !self.explorer_popup_open;
-                    if self.explorer_popup_open {
-                        self.ensure_explorer_selection();
-                    }
-                }
+                // Alt+E always returns to files/code and opens explorer.
+                self.active_tab = Tab::Code;
+                self.explorer_popup_open = true;
+                self.ensure_explorer_selection();
             }
             ShortcutAction::ShowTerminal => {
                 self.active_tab = Tab::Terminal;
             }
             ShortcutAction::ShowViewport => {
                 self.active_tab = Tab::Viewport;
+                self.viewport_taskbar_hidden = false;
             }
             ShortcutAction::Run => {
                 self.activate_run_button(state);
@@ -2729,6 +2753,11 @@ impl Application for CoderApp {
                 self.active_tab = Tab::Code;
                 self.explorer_popup_open = false;
                 self.switch_editor_tab_by(1);
+            }
+            ShortcutAction::ToggleViewportTaskbar => {
+                if self.active_tab == Tab::Viewport {
+                    self.viewport_taskbar_hidden = !self.viewport_taskbar_hidden;
+                }
             }
             _ => {}
         }

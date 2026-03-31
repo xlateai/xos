@@ -346,14 +346,14 @@ impl ApplicationHandler for AppState {
                         Key::Named(NamedKey::ArrowLeft) => {
                             #[cfg(not(target_os = "ios"))]
                             {
-                                if self.alt_held && self.shift_held {
+                                if self.alt_held && !self.shift_held {
                                     let _ = self.app.on_key_shortcut(
                                         &mut self.engine_state,
                                         ShortcutAction::PrevEditorTab,
                                     );
                                     return;
                                 }
-                                if self.alt_held && !self.shift_held {
+                                if self.alt_held && self.shift_held {
                                     let _ = self.app.on_key_shortcut(
                                         &mut self.engine_state,
                                         ShortcutAction::PrevModeTab,
@@ -366,14 +366,14 @@ impl ApplicationHandler for AppState {
                         Key::Named(NamedKey::ArrowRight) => {
                             #[cfg(not(target_os = "ios"))]
                             {
-                                if self.alt_held && self.shift_held {
+                                if self.alt_held && !self.shift_held {
                                     let _ = self.app.on_key_shortcut(
                                         &mut self.engine_state,
                                         ShortcutAction::NextEditorTab,
                                     );
                                     return;
                                 }
-                                if self.alt_held && !self.shift_held {
+                                if self.alt_held && self.shift_held {
                                     let _ = self.app.on_key_shortcut(
                                         &mut self.engine_state,
                                         ShortcutAction::NextModeTab,
@@ -437,6 +437,15 @@ impl ApplicationHandler for AppState {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
                                             ShortcutAction::ToggleExplorer,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::ToggleViewportTaskbar,
                                         );
                                         return;
                                     }

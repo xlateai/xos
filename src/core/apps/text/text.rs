@@ -1260,7 +1260,8 @@ impl Application for TextApp {
             | ShortcutAction::PrevModeTab
             | ShortcutAction::NextModeTab
             | ShortcutAction::PrevEditorTab
-            | ShortcutAction::NextEditorTab => {
+            | ShortcutAction::NextEditorTab
+            | ShortcutAction::ToggleViewportTaskbar => {
                 return;
             }
         };
