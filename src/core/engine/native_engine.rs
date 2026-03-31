@@ -7,7 +7,7 @@ use winit::{
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
-    window::{CursorIcon, Window, WindowAttributes, WindowId, WindowLevel},
+    window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
 };
 #[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
 use winit::platform::windows::WindowExtWindows;
@@ -109,6 +109,15 @@ struct AppState {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl AppState {
+    fn toggle_borderless_fullscreen(&self) {
+        if self.window.fullscreen().is_some() {
+            self.window.set_fullscreen(None);
+        } else {
+            self.window
+                .set_fullscreen(Some(Fullscreen::Borderless(self.window.current_monitor())));
+        }
+    }
+
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
         self.pixels.render_with(|encoder, render_target, context| {
             crate::rasterizer::render_pending_gpu_passes(
@@ -465,6 +474,12 @@ impl ApplicationHandler for AppState {
                                             &mut self.engine_state,
                                             ShortcutAction::ShowViewport,
                                         );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyF)) {
+                                        self.toggle_borderless_fullscreen();
                                         return;
                                     }
                                 }
