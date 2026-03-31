@@ -1085,6 +1085,26 @@ builtins.print = __custom_print__
                 .clone();
         }
     }
+
+    fn activate_run_button(&mut self, state: &mut EngineState) {
+        // Mirror the run-button click behavior.
+        let keyboard_is_shown = state.keyboard.onscreen.is_shown();
+        let show_console = self.active_tab == Tab::Terminal;
+        let console_has_text = !self.console_app.text_rasterizer.text.trim().is_empty();
+
+        if keyboard_is_shown && show_console && console_has_text {
+            let command = self.console_app.text_rasterizer.text.clone();
+            self.execute_console_command(&command);
+            self.console_app.text_rasterizer.text.clear();
+            self.console_app.cursor_position = 0;
+            return;
+        }
+
+        let code = self.code_app.text_rasterizer.text.clone();
+        if !code.trim().is_empty() {
+            self.execute_python_code(&code);
+        }
+    }
     
     fn file_item_height(scale: f32) -> f32 {
         let base = if cfg!(target_os = "ios") { 117.0 } else { 60.0 };
@@ -2007,14 +2027,32 @@ impl Application for CoderApp {
         let tab_width = Self::tab_width_scaled(ui_scale);
         let tab_height = chrome_h;
         
-        // Draw code.py tab on the left
+        // Draw files tab on the left
         self.draw_tab(buffer, width as u32, height as u32, padding, tab_top_y, tab_width, tab_height, &self.code_tab_label, self.active_tab == Tab::Code);
         
-        // Draw terminal tab next to it
-        self.draw_tab(buffer, width as u32, height as u32, padding + tab_width as i32, tab_top_y, tab_width, tab_height, &self.terminal_tab_label, self.active_tab == Tab::Terminal);
-        
-        // Draw viewport tab next to terminal
-        self.draw_tab(buffer, width as u32, height as u32, padding + (tab_width * 2) as i32, tab_top_y, tab_width, tab_height, &self.viewport_tab_label, self.active_tab == Tab::Viewport);
+        // Viewport in the middle, terminal on the right
+        self.draw_tab(
+            buffer,
+            width as u32,
+            height as u32,
+            padding + tab_width as i32,
+            tab_top_y,
+            tab_width,
+            tab_height,
+            &self.viewport_tab_label,
+            self.active_tab == Tab::Viewport,
+        );
+        self.draw_tab(
+            buffer,
+            width as u32,
+            height as u32,
+            padding + (tab_width * 2) as i32,
+            tab_top_y,
+            tab_width,
+            tab_height,
+            &self.terminal_tab_label,
+            self.active_tab == Tab::Terminal,
+        );
         
         // Check if viewport app or background thread is running
         let is_viewport_app_running = self.viewport_app.is_some();
@@ -2291,15 +2329,29 @@ impl Application for CoderApp {
                 return;
             }
             
-            // Check if click is on terminal tab
-            if self.tab_contains_point(mouse_x, mouse_y, padding + tab_width as i32, tab_top_y, tab_width, chrome_h) {
-                self.active_tab = Tab::Terminal;
+            // Check if click is on viewport tab (middle)
+            if self.tab_contains_point(
+                mouse_x,
+                mouse_y,
+                padding + tab_width as i32,
+                tab_top_y,
+                tab_width,
+                chrome_h,
+            ) {
+                self.active_tab = Tab::Viewport;
                 return;
             }
             
-            // Check if click is on viewport tab
-            if self.tab_contains_point(mouse_x, mouse_y, padding + (tab_width * 2) as i32, tab_top_y, tab_width, chrome_h) {
-                self.active_tab = Tab::Viewport;
+            // Check if click is on terminal tab (right)
+            if self.tab_contains_point(
+                mouse_x,
+                mouse_y,
+                padding + (tab_width * 2) as i32,
+                tab_top_y,
+                tab_width,
+                chrome_h,
+            ) {
+                self.active_tab = Tab::Terminal;
                 return;
             }
             
@@ -2505,22 +2557,34 @@ impl Application for CoderApp {
         }
     }
 
-    fn on_key_shortcut(&mut self, _state: &mut EngineState, shortcut: ShortcutAction) {
-        if self.active_tab != Tab::Code {
-            return;
-        }
+    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
         match shortcut {
             ShortcutAction::Tab1 => self.switch_editor_tab_to(0),
             ShortcutAction::Tab2 => self.switch_editor_tab_to(1),
             ShortcutAction::Tab3 => self.switch_editor_tab_to(2),
             ShortcutAction::CloseTab => {
-                self.close_editor_tab_at(self.active_editor_tab);
+                if self.active_tab == Tab::Code {
+                    self.close_editor_tab_at(self.active_editor_tab);
+                }
             }
             ShortcutAction::ReopenClosedTab => {
-                self.reopen_last_closed_editor_file();
+                if self.active_tab == Tab::Code {
+                    self.reopen_last_closed_editor_file();
+                }
             }
             ShortcutAction::ToggleExplorer => {
-                self.explorer_popup_open = !self.explorer_popup_open;
+                if self.active_tab == Tab::Code {
+                    self.explorer_popup_open = !self.explorer_popup_open;
+                }
+            }
+            ShortcutAction::ShowTerminal => {
+                self.active_tab = Tab::Terminal;
+            }
+            ShortcutAction::ShowViewport => {
+                self.active_tab = Tab::Viewport;
+            }
+            ShortcutAction::Run => {
+                self.activate_run_button(state);
             }
             _ => {}
         }

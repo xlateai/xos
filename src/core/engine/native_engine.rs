@@ -376,10 +376,19 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                                 if self.alt_held && !self.shift_held {
-                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyQ)) {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
                                             ShortcutAction::CloseTab,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyW)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::Run,
                                         );
                                         return;
                                     }
@@ -389,6 +398,24 @@ impl ApplicationHandler for AppState {
                                         let _ = self.app.on_key_shortcut(
                                             &mut self.engine_state,
                                             ShortcutAction::ToggleExplorer,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyT)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::ShowTerminal,
+                                        );
+                                        return;
+                                    }
+                                }
+                                if self.alt_held && !self.shift_held {
+                                    if matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyR)) {
+                                        let _ = self.app.on_key_shortcut(
+                                            &mut self.engine_state,
+                                            ShortcutAction::ShowViewport,
                                         );
                                         return;
                                     }

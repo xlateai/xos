@@ -1252,7 +1252,10 @@ impl Application for TextApp {
             | ShortcutAction::Tab3
             | ShortcutAction::CloseTab
             | ShortcutAction::ReopenClosedTab
-            | ShortcutAction::ToggleExplorer => {
+            | ShortcutAction::ToggleExplorer
+            | ShortcutAction::ShowTerminal
+            | ShortcutAction::ShowViewport
+            | ShortcutAction::Run => {
                 return;
             }
         };

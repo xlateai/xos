@@ -26,6 +26,12 @@ pub enum ShortcutAction {
     ReopenClosedTab,
     /// Toggle file explorer popup (coder)
     ToggleExplorer,
+    /// Switch active coder mode tab to Terminal
+    ShowTerminal,
+    /// Switch active coder mode tab to Viewport
+    ShowViewport,
+    /// Trigger Run button behavior (coder)
+    Run,
 }
 
 /// Detects if a keyboard shortcut action was triggered
