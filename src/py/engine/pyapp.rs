@@ -201,8 +201,8 @@ class Application:
         return self.frame.get_height()
     
     def setup(self):
-        """Called once when the application starts. Override this method."""
-        raise NotImplementedError("Subclasses must implement setup()")
+        """Called once when the application starts. Override if needed (optional)."""
+        pass
     
     def tick(self):
         """Called every frame. Override this method."""
