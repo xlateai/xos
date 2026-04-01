@@ -33,7 +33,7 @@ Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaP
 
 ## 📁 Code Examples
 
-As of `v0.3.x`, apps are single-file Python scripts run with **`xpy`** (same as **`xos python`** — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
+As of `v0.3.x`, apps are single-file Python scripts run with **`xpy`** (same as **`xos py`** — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
 
 - 🚀 `xpy ./example-scripts/ball_lines.py`
 
@@ -132,7 +132,7 @@ cargo build --release
 cargo install --path .
 ```
 
-Then run apps anywhere with `xpy path/to/code.py` (same as `xos python path/to/code.py`).
+That installs **`xos`**, **`xpy`**, and **`xrs`** on your `PATH`. Then run Python scripts with `xpy path/to/code.py` (same as `xos py path/to/code.py`), and Rust apps with `xrs whiteboard` (same as `xos rs whiteboard`).
 
 ### 🧰 Common Commands
 
@@ -141,16 +141,20 @@ xos --help
 xos -v
 xpy
 xpy <file-path>
-xos app
-xos app <app-name>
-xos app <app-name> --ios
+xrs
+xrs <app-name>
+xos rs
+xos rs <app-name>
+xos rs <app-name> --ios
 xos compile
 xos build
 xos path
 xos path --exe
 ```
 
-`xpy` / `xpy <file>` is the same as `xos python` / `xos python <file>` (alias only).
+- **`xpy`** / **`xpy <file>`** is the same as **`xos py`** / **`xos py <file>`** (shorter binary; same CLI).
+- **`xrs`** / **`xrs <app-name>`** is the same as **`xos rs`** / **`xos rs <app-name>`** (shorter binary for Rust apps).
+- Subcommand aliases: **`xos rust`** / **`xos app`** → **`xos rs`**; **`xos python`** → **`xos py`**.
 
 ### 📱 Using `--ios`
 
@@ -158,7 +162,7 @@ Coming soon: RN/Expo-style builds.
 
 1. Connect device by USB and enable **Developer Mode**.
 2. Open `ios/xos.xcworkspace` once and configure code signing.
-3. Run `xos app <app-name> --ios`.
+3. Run `xos rs <app-name> --ios`.
 
 `xos` handles Rust target install/build and launches on device.
 
@@ -167,11 +171,11 @@ Coming soon: RN/Expo-style builds.
 - After you change **Rust**, run **`xos compile`** (or **`xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
 - If CLI behavior looks stale, run `cargo install --path .`.
 - Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
-- **`xos -v`** (or **`xpy -v`**) prints `xos v<semver>` / `xpy v<semver>` on the first line, then a second line: full git commit hash, with **`(uncommitted changes)`** in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
+- **`xos -v`** (or **`xpy -v`**, **`xrs -v`**) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with **`(uncommitted changes)`** in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
 
 ## 🚧 Package Limitations
 
 - `xos` uses its own runtime APIs, not standard desktop-heavy Python stacks.
 - Nearly all third-party packages will be unavailable or incompatible (we'll rebuild it, don't worry).
-- Always run scripts via `xpy ./path/to/code.py` or `xos python ./path/to/code.py` (not system Python).
+- Always run scripts via `xpy ./path/to/code.py` or `xos py ./path/to/code.py` (not system Python).
 
