@@ -99,6 +99,10 @@ path = "src/main.rs"
 name = "xpy"
 path = "src/main.rs"
 
+[[bin]]
+name = "xrs"
+path = "src/main.rs"
+
 [workspace]
 members = [".", "src/core/crates/xos-java"]
 resolver = "2"

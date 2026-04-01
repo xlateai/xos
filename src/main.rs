@@ -21,9 +21,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run/view rust applications.
-    #[command(subcommand_required = true)]
-    App {
+    /// Run/view Rust applications (`xrs` is a shortcut for this command).
+    #[command(name = "rs", visible_aliases = ["rust", "app"], subcommand_required = true)]
+    Rs {
         #[command(subcommand)]
         app: AppCommands,
     },
@@ -34,14 +34,15 @@ enum Commands {
         #[arg(long)]
         ios: bool,
     },
-    /// Execute python scripts (xpy). You can also use `xpy` instead of `xos python`.
-    Python {
+    /// Execute Python scripts (`xpy` is a shortcut for this command).
+    #[command(name = "py", visible_alias = "python")]
+    Py {
         /// Python file to execute (if not provided, starts interactive console)
         file: Option<PathBuf>,
     },
     /// Print the xos repo root (directory that contains `src/`, for `xos compile`), or `--exe` for this binary
     Path {
-        /// Print the path of this running `xos` / `xpy` executable instead of the repo root
+        /// Print the path of this running `xos` / `xpy` / `xrs` executable instead of the repo root
         #[arg(long)]
         exe: bool,
     },
@@ -115,22 +116,33 @@ fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
 fn main() {
     let mut original_args: Vec<String> = std::env::args().collect();
 
-    let invoked_as_xpy = std::env::current_exe()
+    let exe_stem = std::env::current_exe()
         .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-        .map(|stem| stem.eq_ignore_ascii_case("xpy"))
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
+
+    let invoked_as_xpy = exe_stem
+        .as_ref()
+        .map(|s| s.eq_ignore_ascii_case("xpy"))
         .unwrap_or(false);
+    let invoked_as_xrs = exe_stem
+        .as_ref()
+        .map(|s| s.eq_ignore_ascii_case("xrs"))
+        .unwrap_or(false);
+
     if invoked_as_xpy {
         if original_args.len() == 1 {
-            original_args.push("python".to_string());
+            original_args.push("py".to_string());
         } else {
             let first = original_args[1].as_str();
-            let should_insert_python = !matches!(
+            let should_insert_py = !matches!(
                 first,
-                "python"
+                "py"
+                    | "python"
+                    | "rs"
+                    | "rust"
+                    | "app"
                     | "compile"
                     | "build"
-                    | "app"
                     | "code"
                     | "path"
                     | "-h"
@@ -138,22 +150,55 @@ fn main() {
                     | "-v"
                     | "--version"
             );
-            if should_insert_python {
-                original_args.insert(1, "python".to_string());
+            if should_insert_py {
+                original_args.insert(1, "py".to_string());
             }
         }
     }
 
-    // `xos code` → `xos app coder` (same flags as `xos app coder`, e.g. `--web`, `--ios`).
+    if invoked_as_xrs {
+        if original_args.len() == 1 {
+            original_args.push("rs".to_string());
+        } else {
+            let first = original_args[1].as_str();
+            let should_insert_rs = !matches!(
+                first,
+                "rs"
+                    | "rust"
+                    | "app"
+                    | "py"
+                    | "python"
+                    | "compile"
+                    | "build"
+                    | "code"
+                    | "path"
+                    | "-h"
+                    | "--help"
+                    | "-v"
+                    | "--version"
+            );
+            if should_insert_rs {
+                original_args.insert(1, "rs".to_string());
+            }
+        }
+    }
+
+    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--web`, `--ios`).
     if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
-        original_args[1] = "app".to_string();
+        original_args[1] = "rs".to_string();
         original_args.insert(2, "coder".to_string());
     }
 
     let cli = Cli::parse_from(original_args);
 
     if cli.print_version {
-        let bin_name = if invoked_as_xpy { "xpy" } else { "xos" };
+        let bin_name = if invoked_as_xpy {
+            "xpy"
+        } else if invoked_as_xrs {
+            "xrs"
+        } else {
+            "xos"
+        };
         println!("{} v{}", bin_name, env!("CARGO_PKG_VERSION"));
         println!(
             "{}",
@@ -163,7 +208,7 @@ fn main() {
     }
 
     let resolved_python_file = match &cli.command {
-        Some(Commands::Python { file: Some(file) }) => {
+        Some(Commands::Py { file: Some(file) }) => {
             match resolve_python_file_path(file.as_path()) {
                 Some(path) => Some(path),
                 None => {
@@ -203,10 +248,10 @@ fn main() {
                 }
             }
         }
-        Some(Commands::App { app }) => {
+        Some(Commands::Rs { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Python { file }) => {
+        Some(Commands::Py { file }) => {
             if let Some(file_path) = file {
                 let path_to_run = resolved_python_file.unwrap_or(file_path);
                 run_python_app(&path_to_run);
