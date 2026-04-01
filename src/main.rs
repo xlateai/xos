@@ -2,6 +2,7 @@ mod compile;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
 use xos::python_api::{run_python_app, run_python_interactive};
 
@@ -9,7 +10,7 @@ use xos::python_api::{run_python_app, run_python_interactive};
 #[command(name = "xos")]
 #[command(about = "Experimental OS Window Manager", disable_version_flag = true)]
 struct Cli {
-    /// Print version (semver only)
+    /// Print version (semver), then a line of git info or `git tree not available`
     #[arg(short = 'v', visible_short_alias = 'V', long = "version", global = true)]
     print_version: bool,
 
@@ -43,6 +44,49 @@ enum Commands {
         #[arg(long)]
         exe: bool,
     },
+}
+
+/// Second line for `xos -v`: full commit hash, optional dirty suffix, or a fixed message if no git tree.
+fn version_git_second_line() -> String {
+    let root = match xos::find_xos_project_root().ok().or_else(|| {
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.exists().then_some(p)
+    }) {
+        Some(p) => p,
+        None => return "git tree not available".to_string(),
+    };
+
+    let rev = Command::new("git")
+        .current_dir(&root)
+        .args(["rev-parse", "HEAD"])
+        .output();
+
+    let Ok(out) = rev else {
+        return "git tree not available".to_string();
+    };
+    if !out.status.success() {
+        return "git tree not available".to_string();
+    }
+    let hash = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if hash.is_empty() {
+        return "git tree not available".to_string();
+    }
+
+    let porcelain = Command::new("git")
+        .current_dir(&root)
+        .args(["status", "--porcelain"])
+        .output();
+
+    let dirty = match porcelain {
+        Ok(p) if p.status.success() => !p.stdout.is_empty(),
+        _ => false,
+    };
+
+    if dirty {
+        format!("{hash} (uncommitted changes)")
+    } else {
+        hash
+    }
 }
 
 fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
@@ -100,7 +144,8 @@ fn main() {
     let cli = Cli::parse_from(original_args);
 
     if cli.print_version {
-        println!(env!("CARGO_PKG_VERSION"));
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        println!("{}", version_git_second_line());
         return;
     }
 

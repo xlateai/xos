@@ -164,7 +164,7 @@ Coming soon: RN/Expo-style builds.
 - After Rust changes, run **`xos compile`** (or **`xos build`** — same command, alias only).
 - If CLI behavior looks stale, run `cargo install --path .`.
 - Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
-- **`xos -v`** prints the semver only (e.g. `0.3.6`).
+- **`xos -v`** prints the semver on the first line, then a second line: full git commit hash (with `(uncommitted changes)` when the tree is dirty), or `git tree not available` if there is no usable git checkout.
 
 ## 🚧 Package Limitations
 
