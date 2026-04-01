@@ -38,10 +38,12 @@ pub struct UiText {
 pub struct UiTextRenderState {
     /// Character count per wrapped line.
     pub lines: Vec<u32>,
-    /// Per rendered character: [x1, y1, x2, y2] normalized to [0, 1].
-    pub hitboxes: Vec<[f32; 4]>,
-    /// Per line baseline segment: [x1, y1, x2, y2] normalized to [0, 1].
-    pub baselines: Vec<[f32; 4]>,
+    /// Per character, normalized axis-aligned box: `[[x1,y1],[x2,y2]]` (top-left, bottom-right) in [0,1]².
+    /// Matches tensor layout `(N, 2, 2)` with N = number of rendered glyphs.
+    pub hitboxes: Vec<[[f32; 2]; 2]>,
+    /// Per wrapped line, baseline segment in normalized coords: `[[x1,y1],[x2,y2]]` (segment endpoints).
+    /// Matches tensor layout `(L, 2, 2)` with L = number of lines.
+    pub baselines: Vec<[[f32; 2]; 2]>,
 }
 
 impl UiText {
@@ -79,10 +81,14 @@ impl UiText {
                 let by = y1 + line.baseline_y.round() as i32;
                 let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
                 state.baselines.push([
-                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
-                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
+                    [
+                        (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
+                    [
+                        (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
                 ]);
                 if by >= y1 && by < y2 {
                     fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
@@ -93,10 +99,14 @@ impl UiText {
                 let by = y1 + line.baseline_y.round() as i32;
                 let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
                 state.baselines.push([
-                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
-                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
+                    [
+                        (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
+                    [
+                        (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
                 ]);
             }
         }
@@ -109,10 +119,14 @@ impl UiText {
             let gx2 = px + character.metrics.width as i32;
             let gy2 = py + character.metrics.height as i32;
             state.hitboxes.push([
-                (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
-                (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                [
+                    (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                ],
+                [
+                    (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                ],
             ]);
             if py >= y2 {
                 continue;
