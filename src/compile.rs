@@ -207,7 +207,7 @@ fn run_release_compile_and_update_cargo_bin(project_root: &Path, quiet: bool) ->
     let path_str = project_root.display().to_string();
 
     if !quiet {
-        println!("📁 `cargo build --release -p xos` in {}...", path_str);
+        println!("📁 Compiling xos in {}...", path_str);
     }
 
     let compile_ok = if quiet {

@@ -32,13 +32,17 @@ enum Commands {
         #[arg(long)]
         ios: bool,
     },
-    /// Run Python code
+    /// Execute python scripts (xpy). You can also use `xpy` instead of `xos python`.
     Python {
         /// Python file to execute (if not provided, starts interactive console)
         file: Option<PathBuf>,
     },
-    /// Print the filesystem path of this running xos executable
-    Path,
+    /// Print the xos repo root (directory that contains `src/`, for `xos compile`), or `--exe` for this binary
+    Path {
+        /// Print the path of this running `xos` / `xpy` executable instead of the repo root
+        #[arg(long)]
+        exe: bool,
+    },
 }
 
 fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
@@ -122,13 +126,25 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Path) => match std::env::current_exe() {
-            Ok(path) => println!("{}", path.display()),
-            Err(e) => {
-                eprintln!("❌ Could not resolve path of running executable: {e}");
-                std::process::exit(1);
+        Some(Commands::Path { exe }) => {
+            if exe {
+                match std::env::current_exe() {
+                    Ok(path) => println!("{}", path.display()),
+                    Err(e) => {
+                        eprintln!("❌ Could not resolve path of running executable: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match xos::find_xos_project_root() {
+                    Ok(root) => println!("{}", root.display()),
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
-        },
+        }
         Some(Commands::App { app }) => {
             run_app_command(app);
         }

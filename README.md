@@ -145,6 +145,8 @@ xos app <app-name>
 xos app <app-name> --ios
 xos compile
 xos build
+xos path
+xos path --exe
 ```
 
 ### 📱 Using `--ios`
@@ -161,7 +163,7 @@ Coming soon: RN/Expo-style builds.
 
 - After Rust changes, run **`xos compile`** (or **`xos build`** — same command, alias only).
 - If CLI behavior looks stale, run `cargo install --path .`.
-- Use `xos path` to verify which executable is running.
+- Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
 - **`xos -v`** prints the semver only (e.g. `0.3.6`).
 
 ## 🚧 Package Limitations
