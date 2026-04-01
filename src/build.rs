@@ -1,4 +1,4 @@
-//! CLI build helpers: `xos build` (release + copy to Cargo bin), autorebuild (`cargo build` + re-exec),
+//! CLI build helpers: `xos build` and autorebuild share one pipeline (release build + Cargo `bin` sync),
 //! iOS scripts.
 
 use dialoguer::{theme::ColorfulTheme, Select};
@@ -133,52 +133,33 @@ fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::R
     Ok(())
 }
 
-/// `xos build`: `cargo build --release -p xos`, then copy artifacts into Cargo `bin`.
-/// Uses **one** compile. Returns `None` if compile failed; `Some(true)` if PATH copy ok; `Some(false)` if
-/// build ok but copy failed (after rename fallback on Windows).
-fn cargo_build_verbose_and_update_path(project_root: &Path) -> Option<bool> {
-    println!(
-        "📁 `cargo build --release -p xos` in {}...",
-        project_root.display()
+fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
+    eprintln!();
+    eprintln!("⚠️  Release build succeeded, but could not overwrite PATH binaries: {err}");
+    eprintln!(
+        "   Fresh binaries: {}",
+        project_root.join("target/release").display()
     );
+    eprintln!("   Fix: close every running `xos` / `xpy` (and shells that started them), then run:");
+    eprintln!("   xos build");
+    eprintln!("   Or: cargo install --path {}", project_root.display());
+}
+
+fn run_cargo_build_verbose_inherit(project_root: &Path) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(project_root);
     cmd.args(["build", "--release", "-p", "xos"]);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
-    if !cmd.status().map(|s| s.success()).unwrap_or(false) {
-        return None;
-    }
-
-    let dest = PathBuf::from(cargo_bin_dir_hint());
-    println!(
-        "📁 Copying xos/xpy → {} ...",
-        dest.display()
-    );
-    match copy_release_bins_to_cargo_bin(project_root, &dest) {
-        Ok(()) => Some(true),
-        Err(e) => {
-            eprintln!();
-            eprintln!("⚠️  Release build succeeded, but could not overwrite PATH binaries: {e}");
-            eprintln!(
-                "   Fresh binaries: {}",
-                project_root.join("target/release").display()
-            );
-            eprintln!("   Fix: close every running `xos` / `xpy` (and shells that started them), then run:");
-            eprintln!("   xos build");
-            eprintln!("   Or: cargo install --path {}", project_root.display());
-            Some(false)
-        }
-    }
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// Autorebuild / `-y`: build only (re-exec uses `target/release`, not Cargo bin).
-fn cargo_build_release_xos(project_root: &Path) -> bool {
+/// `cargo build --release -p xos` with no compiler output — spinner line only.
+fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
     let path_str = project_root.display().to_string();
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
     cargo_cmd.args(["build", "--release", "-p", "xos"]);
-
     cargo_cmd.stdout(Stdio::null());
     cargo_cmd.stderr(Stdio::piped());
 
@@ -250,6 +231,46 @@ fn cargo_build_release_xos(project_root: &Path) -> bool {
     }
 }
 
+/// Shared by `xos build` and autorebuild (`Y` / `-y`): compile release, then sync `target/release`
+/// → Cargo `bin` (same as `xos build`).
+///
+/// - `quiet == false`: show `cargo` and copy status on stdout (verbose CLI).
+/// - `quiet == true`: spinner only during compile; no copy banner; PATH warnings only if copy fails.
+///
+/// `None` = `cargo build` failed. `Some(true)` = copy ok. `Some(false)` = built ok, copy failed.
+fn run_release_build_and_update_cargo_bin(project_root: &Path, quiet: bool) -> Option<bool> {
+    let path_str = project_root.display().to_string();
+
+    if !quiet {
+        println!("📁 `cargo build --release -p xos` in {}...", path_str);
+    }
+
+    let compile_ok = if quiet {
+        run_cargo_build_quiet_spinner(project_root)
+    } else {
+        run_cargo_build_verbose_inherit(project_root)
+    };
+    if !compile_ok {
+        return None;
+    }
+
+    if !quiet {
+        println!(
+            "📁 Copying xos/xpy → {} ...",
+            cargo_bin_dir_hint()
+        );
+    }
+
+    let dest = PathBuf::from(cargo_bin_dir_hint());
+    match copy_release_bins_to_cargo_bin(project_root, &dest) {
+        Ok(()) => Some(true),
+        Err(e) => {
+            warn_path_copy_failed(project_root, &e);
+            Some(false)
+        }
+    }
+}
+
 fn prompt_rebuild() -> bool {
     print!("Would you like to rebuild Rust? (Y/n): ");
     io::stdout().flush().unwrap();
@@ -272,21 +293,21 @@ pub fn find_project_root() -> PathBuf {
     }
 }
 
-/// - **`verbose == true` (`xos build`)**: `cargo build --release -p xos`, then copy into Cargo `bin`.
-/// - **`verbose == false`** (autorebuild / `-y`): `cargo build --release -p xos` only (spinner);
-///   re-exec uses `target/release`, not Cargo bin.
+/// **`xos build`** (`verbose`) and **autorebuild** (`!verbose`) share the same steps: release compile,
+/// then copy into Cargo `bin` (same as `xos build`). Quiet mode uses the spinner and hides cargo/copy
+/// banners; verbose shows full `cargo` output.
 pub fn xos_build_command(verbose: bool) -> bool {
     let project_root = find_project_root();
     if verbose {
         println!("🔨 Building xos CLI (release) and updating Cargo bin...");
     }
-    if verbose {
-        match cargo_build_verbose_and_update_path(&project_root) {
-            None => {
-                eprintln!("❌ Build failed. Exiting.");
-                return false;
-            }
-            Some(path_updated) => {
+    match run_release_build_and_update_cargo_bin(&project_root, !verbose) {
+        None => {
+            eprintln!("❌ Build failed. Exiting.");
+            false
+        }
+        Some(path_updated) => {
+            if verbose {
                 let out = release_xos_executable(&project_root);
                 if path_updated {
                     println!(
@@ -301,12 +322,9 @@ pub fn xos_build_command(verbose: bool) -> bool {
                     );
                 }
             }
+            true
         }
-    } else if !cargo_build_release_xos(&project_root) {
-        eprintln!("❌ Build failed. Exiting.");
-        return false;
     }
-    true
 }
 
 /// `Would you like to rebuild Rust? (Y/n)` — returns whether the user chose to rebuild (default **Y**).
