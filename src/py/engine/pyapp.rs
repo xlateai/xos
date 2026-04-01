@@ -74,11 +74,53 @@ class _ArrayWrapper:
     """Wrapper for array dict that supports slice assignment"""
     def __init__(self, data):
         self._data = data
+
+    def _getitem_int_index(self, key):
+        """Row-major integer indexing: ``t[i]``, ``t[i,j]``, … partial views or a scalar."""
+        shape = tuple(self.shape)
+        flat = self._data["_data"]
+        if isinstance(key, int):
+            indices = (key,)
+        else:
+            indices = key
+        offset = 0
+        dim = 0
+        for k in indices:
+            if dim >= len(shape):
+                raise IndexError("too many indices for tensor")
+            kk = int(k)
+            if kk < 0:
+                kk += shape[dim]
+            if kk < 0 or kk >= shape[dim]:
+                raise IndexError("tensor index out of range")
+            stride = 1
+            for s in shape[dim + 1 :]:
+                stride *= s
+            offset += kk * stride
+            dim += 1
+        remaining = shape[dim:]
+        n = 1
+        for s in remaining:
+            n *= s
+        subflat = flat[offset : offset + n]
+        if len(remaining) == 0:
+            return subflat[0]
+        return self._wrap_vals(remaining, subflat)
     
     def __getitem__(self, key):
         if isinstance(key, slice) and key == slice(None, None, None):
             # Return the underlying data dict for full slice access
             return self._data
+        # N-dimensional integer indexing (e.g. y[0], y[0, 0], y[0, 0, 1])
+        if "_data" in self._data and isinstance(self._data["_data"], list):
+            if type(key) is int:
+                return self._getitem_int_index(key)
+            if (
+                isinstance(key, tuple)
+                and len(key) > 0
+                and all(type(x) is int for x in key)
+            ):
+                return self._getitem_int_index(key)
         if isinstance(key, tuple) and len(key) == 2:
             a, b = key
             shape = tuple(self.shape)
