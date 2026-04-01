@@ -2,6 +2,18 @@ use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, functio
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_WIDTH, CURRENT_FRAME_HEIGHT};
 use crate::ui::{Button, UiText};
 
+fn py_number_to_f64(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f64> {
+    if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
+        return Ok(v);
+    }
+    if let Ok(v) = value.clone().try_into_value::<i64>(vm) {
+        return Ok(v as f64);
+    }
+    Err(vm.new_type_error(format!(
+        "{name} must be int or float"
+    )))
+}
+
 /// xos.ui.button() - create and draw a button
 /// 
 /// Usage: xos.ui.button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
@@ -138,10 +150,10 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     let text: String = args_vec[0].clone().try_into_value(vm)?;
-    let x1: f64 = args_vec[1].clone().try_into_value(vm)?;
-    let y1: f64 = args_vec[2].clone().try_into_value(vm)?;
-    let x2: f64 = args_vec[3].clone().try_into_value(vm)?;
-    let y2: f64 = args_vec[4].clone().try_into_value(vm)?;
+    let x1 = py_number_to_f64(args_vec[1].clone(), vm, "x1")?;
+    let y1 = py_number_to_f64(args_vec[2].clone(), vm, "y1")?;
+    let x2 = py_number_to_f64(args_vec[3].clone(), vm, "x2")?;
+    let y2 = py_number_to_f64(args_vec[4].clone(), vm, "y2")?;
 
     let color_tuple = args_vec[5]
         .downcast_ref::<rustpython_vm::builtins::PyTuple>()
@@ -168,10 +180,10 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
 
     let font_size_px: f32 = if args_vec.len() > 7 {
-        let fs: f64 = args_vec[7].clone().try_into_value(vm)?;
+        let fs = py_number_to_f64(args_vec[7].clone(), vm, "font_size")?;
         fs as f32
     } else if let Some(v) = args.kwargs.get("font_size") {
-        let fs: f64 = v.clone().try_into_value(vm)?;
+        let fs = py_number_to_f64(v.clone(), vm, "font_size")?;
         fs as f32
     } else {
         24.0
