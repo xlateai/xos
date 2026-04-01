@@ -1,45 +1,11 @@
-//! CLI build helpers: `xos build` and autorebuild share one pipeline (release build + Cargo `bin` sync),
-//! iOS scripts.
+//! CLI build helpers: `xos build`, copying release binaries into Cargo `bin`, and iOS scripts.
 
-use dialoguer::{theme::ColorfulTheme, Select};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
-
-#[derive(Debug, Clone, Copy)]
-pub enum RebuildOption {
-    NoRebuild,
-    RebuildAll,
-    RustOnly,
-    SwiftOnly,
-}
-
-pub fn prompt_rebuild_ios() -> RebuildOption {
-    let options = vec![
-        "rebuild-all",
-        "swift-only",
-        "rust-only",
-        "no-rebuild",
-    ];
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select rebuild option (use arrow keys)")
-        .items(&options)
-        .default(0)
-        .interact()
-        .unwrap();
-
-    match selection {
-        0 => RebuildOption::RebuildAll,
-        1 => RebuildOption::SwiftOnly,
-        2 => RebuildOption::RustOnly,
-        3 => RebuildOption::NoRebuild,
-        _ => RebuildOption::NoRebuild,
-    }
-}
 
 /// Release artifact for the `xos` binary (`target/release/xos` or `xos.exe`).
 pub fn release_xos_executable(project_root: &Path) -> PathBuf {
@@ -231,8 +197,7 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
     }
 }
 
-/// Shared by `xos build` and autorebuild (`Y` / `-y`): compile release, then sync `target/release`
-/// → Cargo `bin` (same as `xos build`).
+/// Compile release, then sync `target/release` → Cargo `bin` (what `xos build` does).
 ///
 /// - `quiet == false`: show `cargo` and copy status on stdout (verbose CLI).
 /// - `quiet == true`: spinner only during compile; no copy banner; PATH warnings only if copy fails.
@@ -271,17 +236,6 @@ fn run_release_build_and_update_cargo_bin(project_root: &Path, quiet: bool) -> O
     }
 }
 
-fn prompt_rebuild() -> bool {
-    print!("Would you like to rebuild Rust? (Y/n): ");
-    io::stdout().flush().unwrap();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    let input = input.trim().to_lowercase();
-
-    input.is_empty() || (!input.starts_with('n'))
-}
-
 pub fn find_project_root() -> PathBuf {
     match xos::find_xos_project_root() {
         Ok(p) => p,
@@ -293,9 +247,7 @@ pub fn find_project_root() -> PathBuf {
     }
 }
 
-/// **`xos build`** (`verbose`) and **autorebuild** (`!verbose`) share the same steps: release compile,
-/// then copy into Cargo `bin` (same as `xos build`). Quiet mode uses the spinner and hides cargo/copy
-/// banners; verbose shows full `cargo` output.
+/// Release compile then copy into Cargo `bin`. `verbose`: full `cargo` output; `!verbose`: spinner only.
 pub fn xos_build_command(verbose: bool) -> bool {
     let project_root = find_project_root();
     if verbose {
@@ -327,11 +279,6 @@ pub fn xos_build_command(verbose: bool) -> bool {
     }
 }
 
-/// `Would you like to rebuild Rust? (Y/n)` — returns whether the user chose to rebuild (default **Y**).
-pub fn xos_autobuild_precommand() -> bool {
-    prompt_rebuild()
-}
-
 pub fn build_ios_rust() {
     println!("🦀 Building Rust library for iOS...");
 
@@ -360,6 +307,8 @@ pub fn build_ios_rust() {
     println!("✅ Rust library built successfully.");
 }
 
+/// CocoaPods step for the iOS app; used by [`build_ios`].
+#[allow(dead_code)]
 pub fn build_ios_swift() {
     println!("📦 Running pod install...");
 
@@ -401,6 +350,8 @@ pub fn build_ios_swift() {
     }
 }
 
+/// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`build_ios_rust`].
+#[allow(dead_code)]
 pub fn build_ios() {
     build_ios_rust();
     build_ios_swift();
@@ -409,30 +360,4 @@ pub fn build_ios() {
     println!("   1. Open xos.xcworkspace in Xcode (or use: xed src/ios/)");
     println!("   2. Configure code signing in Xcode");
     println!("   3. Build and run on device or simulator");
-}
-
-pub fn rebuild_and_reexecute(original_args: Vec<String>) {
-    if !xos_build_command(false) {
-        std::process::exit(1);
-    }
-
-    let project_root = find_project_root();
-    let xos_bin = release_xos_executable(&project_root);
-    println!("✅ Build complete. Executing...");
-
-    let mut exec_cmd = Command::new(&xos_bin);
-    let mut new_args: Vec<String> = original_args[1..]
-        .iter()
-        .filter(|arg| arg != &"-y" && arg != &"--yes" && arg != &"-n" && arg != &"--no")
-        .cloned()
-        .collect();
-
-    new_args.insert(0, "-n".to_string());
-
-    exec_cmd.args(&new_args);
-    exec_cmd.stdout(Stdio::inherit());
-    exec_cmd.stderr(Stdio::inherit());
-
-    let status = exec_cmd.status().expect("Failed to re-execute command");
-    std::process::exit(status.code().unwrap_or(1));
 }

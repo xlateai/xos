@@ -557,7 +557,7 @@ fn run_native_event_loop(
 
     event_loop.run_app(&mut wrapper)?;
 
-    println!("Event loop exited cleanly");
+    // println!("Event loop exited cleanly");
     Ok(())
 }
 
