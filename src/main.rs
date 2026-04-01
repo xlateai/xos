@@ -136,12 +136,18 @@ fn main() {
             let first = original_args[1].as_str();
             let should_insert_python = !matches!(
                 first,
-                "python" | "build" | "app" | "path" | "-h" | "--help" | "-V" | "--version"
+                "python" | "build" | "app" | "code" | "path" | "-h" | "--help" | "-V" | "--version"
             );
             if should_insert_python {
                 original_args.insert(1, "python".to_string());
             }
         }
+    }
+
+    // `xos code` → `xos app coder` (same flags as `xos app coder`, e.g. `--web`, `--ios`).
+    if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
+        original_args[1] = "app".to_string();
+        original_args.insert(2, "coder".to_string());
     }
 
     let cli = Cli::parse_from(original_args.clone());
