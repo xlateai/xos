@@ -9,7 +9,7 @@ class TextDemo(xos.Application):
             1.0, 1.0,  # bottom right (normalized viweport coordinates)
             color=xos.color.WHITE,
             hitboxes=True,
-            baselines=False,
+            baselines=True,
         )
 
 
