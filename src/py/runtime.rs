@@ -84,6 +84,20 @@ pub fn execute_python_code(
             let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
             new_scope
         };
+
+        // Make imports resolve relative to the executed file path, not process CWD.
+        if !filename.starts_with('<') {
+            let script_path = PathBuf::from(filename);
+            if let Some(dir) = script_path.parent() {
+                let dir_str = dir.to_string_lossy().to_string();
+                let _ = scope
+                    .globals
+                    .set_item("__xos_script_dir__", vm.ctx.new_str(dir_str.as_str()).into(), vm);
+            }
+            let _ = scope
+                .globals
+                .set_item("__file__", vm.ctx.new_str(filename).into(), vm);
+        }
         
         // Set up print capture
         let buffer_for_capture = Arc::clone(&output_buffer_clone);
@@ -114,8 +128,48 @@ pub fn execute_python_code(
         // Override print to capture output
         let setup_code = r#"
 import builtins
+import sys
 import xos
 __original_print__ = builtins.print
+__original_import__ = builtins.__import__
+
+try:
+    __xos_script_dir__
+except NameError:
+    __xos_script_dir__ = None
+
+if __xos_script_dir__:
+    # Make sibling imports (e.g. `from data import Data`) work when
+    # running `xpy path/to/train.py` from any current working directory.
+    if __xos_script_dir__ not in sys.path:
+        sys.path.insert(0, __xos_script_dir__)
+
+def __xos_load_local_module__(module_name):
+    if not __xos_script_dir__:
+        raise ModuleNotFoundError(f"No module named '{module_name}'")
+    source_path = __xos_script_dir__.rstrip("/\\") + "/" + module_name + ".py"
+    source_path = source_path.replace("\\", "/")
+    try:
+        with open(source_path, "r", encoding="utf-8") as f:
+            source = f.read()
+    except Exception:
+        raise ModuleNotFoundError(f"No module named '{module_name}'")
+    module = type(sys)(module_name)
+    module.__file__ = source_path
+    module.__name__ = module_name
+    module.__package__ = None
+    sys.modules[module_name] = module
+    exec(compile(source, source_path, "exec"), module.__dict__)
+    return module
+
+def __xos_import__(name, globals=None, locals=None, fromlist=(), level=0):
+    try:
+        return __original_import__(name, globals, locals, fromlist, level)
+    except ModuleNotFoundError:
+        # Fallback only for top-level local modules like `from data import Data`.
+        if level == 0 and "." not in name and __xos_script_dir__:
+            return __xos_load_local_module__(name)
+        raise
 
 def __custom_print__(*args, sep=' ', end='\n', **kwargs):
     output = sep.join(str(arg) for arg in args) + end
@@ -123,6 +177,7 @@ def __custom_print__(*args, sep=' ', end='\n', **kwargs):
 
 builtins.print = __custom_print__
 xos.print = __custom_print__
+builtins.__import__ = __xos_import__
 "#;
         
         if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
@@ -136,6 +191,7 @@ xos.print = __custom_print__
         let restore_code = r#"
 builtins.print = __original_print__
 xos.print = __original_print__
+builtins.__import__ = __original_import__
 "#;
         vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
         
@@ -161,11 +217,14 @@ xos.print = __original_print__
 
 /// Run a Python file (CLI mode)
 pub fn run_python_file(file_path: &PathBuf) {
+    let resolved_file_path = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.clone());
     // Read the Python file
-    let code = match fs::read_to_string(file_path) {
+    let code = match fs::read_to_string(&resolved_file_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading file {}: {}", file_path.display(), e);
+            eprintln!("❌ Error reading file {}: {}", resolved_file_path.display(), e);
             std::process::exit(1);
         }
     };
@@ -179,7 +238,7 @@ pub fn run_python_file(file_path: &PathBuf) {
     let (result, output, _, _) = execute_python_code(
         &interpreter,
         &code,
-        &file_path.to_string_lossy(),
+        &resolved_file_path.to_string_lossy(),
         None,
         None,
     );
@@ -302,12 +361,15 @@ pub fn run_python_interactive() {
 /// Run a Python application with the xos engine
 pub fn run_python_app(file_path: &PathBuf) {
     use crate::python_api::engine::pyapp::PyApp;
+    let resolved_file_path = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.clone());
     
     // Read the Python file
-    let code = match fs::read_to_string(file_path) {
+    let code = match fs::read_to_string(&resolved_file_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading file {}: {}", file_path.display(), e);
+            eprintln!("❌ Error reading file {}: {}", resolved_file_path.display(), e);
             std::process::exit(1);
         }
     };
@@ -321,7 +383,7 @@ pub fn run_python_app(file_path: &PathBuf) {
     let (result, output, app_instance, _) = execute_python_code(
         &interpreter,
         &code,
-        &file_path.to_string_lossy(),
+        &resolved_file_path.to_string_lossy(),
         None,
         None,
     );
