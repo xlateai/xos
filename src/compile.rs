@@ -251,7 +251,7 @@ pub fn find_project_root() -> PathBuf {
 pub fn xos_compile_command(verbose: bool) -> bool {
     let project_root = find_project_root();
     if verbose {
-        println!("🔨 Compiling xos CLI (release) and updating Cargo bin...");
+        // println!("🔨 Compiling xos CLI (release) and updating Cargo bin...");
     }
     match run_release_compile_and_update_cargo_bin(&project_root, !verbose) {
         None => {

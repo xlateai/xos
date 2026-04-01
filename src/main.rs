@@ -19,13 +19,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run an application (`xos app <name>` matches `src/core/apps/<name>.rs`, e.g. `overlay`, `ball`)
+    /// Run/view rust applications.
     #[command(subcommand_required = true)]
     App {
         #[command(subcommand)]
         app: AppCommands,
     },
-    /// Compile xos (`cargo build --release` and sync Cargo `bin`). Run after Rust changes. `xos build` is a pure alias.
+    /// Compile rust changes.
     #[command(name = "compile", visible_alias = "build")]
     Compile {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
