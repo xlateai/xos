@@ -21,8 +21,6 @@ class MagnetoBalls(xos.Application):
         self.mag_buffer_z = []
         self.buffer_index = 0
     
-    def setup(self):
-        """Initialize the game and magnetometer"""
         # Initialize magnetometer
         self.magnetometer = xos.sensors.magnetometer()
         

@@ -29,7 +29,6 @@ class AudioRelay(xos.Application):
         self.mic_device_id = None
         self.speaker_device_id = None
         
-    def setup(self):
         """Initialize audio devices"""
         xos.print("🎤 AudioRelay - Initializing...")
         

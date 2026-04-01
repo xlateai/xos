@@ -2,7 +2,8 @@ import xos
 
 
 class TextDemo(xos.Application):
-    def setup(self):
+    def __init__(self):
+        super().__init__()
         self.text = xos.ui.text(
             "hello world",
             0, 0,  # top left

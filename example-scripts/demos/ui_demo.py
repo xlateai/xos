@@ -16,9 +16,6 @@ class UIDemo(xos.Application):
         super().__init__()
         self.button_clicked = False
         self.click_count = 0
-        
-    def setup(self):
-        """Initialize the demo"""
         xos.print("🎨 UI Demo - Starting...")
         xos.print("Click the button to see interactions!")
     

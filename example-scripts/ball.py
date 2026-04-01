@@ -9,7 +9,8 @@ SPEED_Y = 0.79
 class BallDemo(xos.Application):
     headless: bool = False  # optional flag to disable viewport display (helpful for ml/rl)
 
-    def setup(self):
+    def __init__(self):
+        super().__init__()
         self.x, self.y = 0.5, 0.5
         self.vx, self.vy = 1.0, 1.0  # sign only; magnitude comes from SPEED_* and self.dt
 

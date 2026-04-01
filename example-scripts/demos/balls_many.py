@@ -12,9 +12,6 @@ class BallGame(xos.Application):
         self.positions = None  # Will be Rust-backed array
         self.radii = None  # Will be Rust-backed array
         self.num_balls = 512
-    
-    def setup(self):
-        """Initialize the game"""
         # Pre-allocate Rust-backed arrays for positions (Nx2) and radii (N)
         initial_positions = []
         initial_radii = []

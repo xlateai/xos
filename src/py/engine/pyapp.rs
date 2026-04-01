@@ -334,9 +334,10 @@ class _FrameWrapper:
         xos.rasterizer.fill(self, rgba)
 
 class Application:
-    """Base class for xos applications. Extend this class and implement setup() and tick()."""
+    """Base class for xos applications. Extend this class and implement __init__() and tick()."""
     
     def __init__(self):
+        self._xos_initialized = True
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
@@ -352,10 +353,6 @@ class Application:
     def get_height(self):
         """Get the current frame height"""
         return self.frame.get_height()
-    
-    def setup(self):
-        """Called once when the application starts. Override if needed (optional)."""
-        pass
     
     def tick(self):
         """Called every frame. Override this method."""
@@ -450,14 +447,7 @@ impl Application for PyApp {
                 app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
                     .map_err(|e| format!("Failed to set scale attribute: {:?}", e))?;
                 
-                // Call setup
-                match vm.call_method(app_instance, "setup", ()) {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        let error_msg = format_python_exception(vm, &e);
-                        Err(format!("Python setup error:\n{}", error_msg))
-                    }
-                }
+                Ok(())
             })
         } else {
             Err("No Python app instance".to_string())
@@ -477,6 +467,20 @@ impl Application for PyApp {
             let mut tick_failed = false;
             
             self.interpreter.enter(|vm| {
+                // Require subclasses to call super().__init__() so base fields exist.
+                let initialized_ok = match vm.get_attribute_opt(app_instance.clone(), "_xos_initialized") {
+                    Ok(Some(flag_obj)) => flag_obj.clone().try_into_value::<bool>(vm).unwrap_or(false),
+                    Ok(None) | Err(_) => false,
+                };
+                if !initialized_ok {
+                    eprintln!(
+                        "Python app init error:\nRuntimeError: xos.Application.__init__() was not called. \
+Call super().__init__() in your app __init__ before using tick()."
+                    );
+                    tick_failed = true;
+                    return;
+                }
+
                 // Update frame data before calling tick
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
                     let _ = crate::python_api::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);

@@ -13,7 +13,6 @@ class BallLines(xos.Application):
         super().__init__()
         self.num_balls = 512
 
-    def setup(self):
         n = self.num_balls
         lo, hi = BALL_RADIUS, 1.0 - BALL_RADIUS
         self.pos = xos.random.uniform(shape=(n, 2), low=lo, high=hi)
