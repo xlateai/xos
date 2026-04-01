@@ -18,7 +18,7 @@ class TextDemo(xos.Application):
 
         self.frame.clear(xos.color.BLACK)
 
-        text_state = self.text.render(
+        ts = self.text.render(
             self.frame,
             # color=xos.color.WHITE,
             # hitboxes=True,
@@ -26,9 +26,9 @@ class TextDemo(xos.Application):
         )
 
         print(self.fps)
-        print(text_state.lines.shape)
-        print(text_state.hitboxes.shape)
-        print(text_state.baselines.shape)
+        print(ts.lines.shape)
+        print(ts.hitboxes.shape)
+        print(ts.baselines.shape)
 
     # TODO: general event handling
     # def on_events(self, state: xos.EngineState):
