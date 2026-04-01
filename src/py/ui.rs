@@ -1,6 +1,6 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_WIDTH, CURRENT_FRAME_HEIGHT};
-use crate::ui::Button;
+use crate::ui::{Button, UiText};
 
 /// xos.ui.button() - create and draw a button
 /// 
@@ -126,10 +126,150 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_bool(contains).into())
 }
 
+/// Internal render hook for xos.ui.Text.render(...)
+/// Usage: _text_render(text, x1, y1, x2, y2, color, hitboxes=False, font_size=24.0)
+fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 6 {
+        return Err(vm.new_type_error(format!(
+            "_text_render() takes at least 6 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+
+    let text: String = args_vec[0].clone().try_into_value(vm)?;
+    let x1: f64 = args_vec[1].clone().try_into_value(vm)?;
+    let y1: f64 = args_vec[2].clone().try_into_value(vm)?;
+    let x2: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let y2: f64 = args_vec[4].clone().try_into_value(vm)?;
+
+    let color_tuple = args_vec[5]
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_items = color_tuple.as_slice();
+    if color_items.len() != 3 && color_items.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b) or (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_items[0].clone().try_into_value(vm)?;
+    let g: i32 = color_items[1].clone().try_into_value(vm)?;
+    let b: i32 = color_items[2].clone().try_into_value(vm)?;
+    let a: i32 = if color_items.len() == 4 {
+        color_items[3].clone().try_into_value(vm)?
+    } else {
+        255
+    };
+
+    let hitboxes = if args_vec.len() > 6 {
+        args_vec[6].clone().try_into_value(vm)?
+    } else if let Some(v) = args.kwargs.get("hitboxes") {
+        v.clone().try_into_value(vm)?
+    } else {
+        false
+    };
+
+    let font_size_px: f32 = if args_vec.len() > 7 {
+        let fs: f64 = args_vec[7].clone().try_into_value(vm)?;
+        fs as f32
+    } else if let Some(v) = args.kwargs.get("font_size") {
+        let fs: f64 = v.clone().try_into_value(vm)?;
+        fs as f32
+    } else {
+        24.0
+    };
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. UI must be called during tick().".to_string())
+    })?;
+
+    if !(0.0..=1.0).contains(&(x1 as f32))
+        || !(0.0..=1.0).contains(&(y1 as f32))
+        || !(0.0..=1.0).contains(&(x2 as f32))
+        || !(0.0..=1.0).contains(&(y2 as f32))
+    {
+        return Err(vm.new_value_error(
+            "x1, y1, x2, y2 must be normalized coordinates in [0.0, 1.0]".to_string(),
+        ));
+    }
+    if x2 <= x1 || y2 <= y1 {
+        return Err(vm.new_value_error(
+            "bottom-right must be greater than top-left (x2 > x1 and y2 > y1)".to_string(),
+        ));
+    }
+
+    let text_ui = UiText {
+        text,
+        x1_norm: x1 as f32,
+        y1_norm: y1 as f32,
+        x2_norm: x2 as f32,
+        y2_norm: y2 as f32,
+        color: (
+            r.clamp(0, 255) as u8,
+            g.clamp(0, 255) as u8,
+            b.clamp(0, 255) as u8,
+            a.clamp(0, 255) as u8,
+        ),
+        hitboxes,
+        font_size_px,
+    };
+
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
+    text_ui
+        .render(buffer, canvas_width, canvas_height)
+        .map_err(|e| vm.new_runtime_error(e))?;
+
+    Ok(vm.ctx.none())
+}
+
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module.set_attr("button", vm.new_function("button", button), vm).unwrap();
     module.set_attr("button_contains", vm.new_function("button_contains", button_contains), vm).unwrap();
+    module
+        .set_attr("_text_render", vm.new_function("_text_render", text_render), vm)
+        .unwrap();
+
+    let scope = vm.new_scope_with_builtins();
+    let text_render_fn = module.get_attr("_text_render", vm).unwrap();
+    scope.globals.set_item("_text_render", text_render_fn, vm).unwrap();
+    let py_text_code = r#"
+class Text:
+    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, font_size=24.0):
+        self.text = text
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+        self.color = color
+        self.hitboxes = hitboxes
+        self.font_size = font_size
+
+    def render(self, _frame=None):
+        _text_render(
+            self.text,
+            self.x1,
+            self.y1,
+            self.x2,
+            self.y2,
+            self.color,
+            self.hitboxes,
+            self.font_size,
+        )
+
+def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, font_size=24.0):
+    return Text(text, x1, y1, x2, y2, color=color, hitboxes=hitboxes, font_size=font_size)
+"#;
+    let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());
+    if let Ok(text_class) = scope.globals.get_item("Text", vm) {
+        module.set_attr("Text", text_class, vm).unwrap();
+    }
+    if let Ok(text_fn) = scope.globals.get_item("text", vm) {
+        module.set_attr("text", text_fn, vm).unwrap();
+    }
+
     module
 }
 
