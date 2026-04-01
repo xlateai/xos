@@ -35,6 +35,7 @@ struct StandalonePreviewApp {
     frame_rgba: Vec<u8>,
     should_close: bool,
     f3_engine_state: Option<crate::engine::EngineState>,
+    last_tick_instant: Option<std::time::Instant>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -47,6 +48,7 @@ impl StandalonePreviewApp {
             frame_rgba: Vec::new(),
             should_close: false,
             f3_engine_state: None,
+            last_tick_instant: None,
         }
     }
 }
@@ -159,6 +161,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                         let frame = es.frame.buffer_mut();
                         if frame.len() == self.frame_rgba.len() {
                             frame.copy_from_slice(&self.frame_rgba);
+                            crate::engine::tick_frame_delta(es, &mut self.last_tick_instant);
                             crate::engine::tick_f3_menu(es);
                             self.frame_rgba.copy_from_slice(es.frame.buffer_mut());
                         }

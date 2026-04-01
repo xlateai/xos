@@ -348,6 +348,8 @@ class Application:
         self.scale = 0.5
         self._xos_standalone_width = 800
         self._xos_standalone_height = 600
+        self._xos_last_tick_time = None
+        self._xos_ticks_completed = 0
         if headless is not None:
             self.headless = bool(headless)
 
@@ -368,7 +370,7 @@ class Application:
         cls.tick = _wrapped_tick
 
     def _xos_pre_tick(self):
-        import xos
+        import xos, time
         if not getattr(self, "_xos_initialized", False):
             raise RuntimeError("xos.Application.__init__() was not called. Call super().__init__() first.")
 
@@ -376,6 +378,18 @@ class Application:
         if getattr(self, "_xos_engine_bound", False):
             self.pre_tick()
             return
+
+        # Standalone timing (manual Python-driven tick loop).
+        now = time.perf_counter()
+        last = getattr(self, "_xos_last_tick_time", None)
+        if last is None:
+            dt = 1.0 / 60.0
+        else:
+            dt = max(1e-5, now - last)
+        self._xos_last_tick_time = now
+        self.dt = dt
+        self.fps = 1.0 / dt
+        self.t = int(getattr(self, "_xos_ticks_completed", 0))
 
         # Standalone mode (manual Python-driven tick loop): create temporary frame context.
         frame_dict = xos.frame._begin_standalone(
@@ -395,6 +409,7 @@ class Application:
                 if not bool(getattr(self, "headless", False)):
                     xos.frame._present_standalone()
                 xos.frame._end_standalone()
+                self._xos_ticks_completed = int(getattr(self, "_xos_ticks_completed", 0)) + 1
     
     def get_width(self):
         """Get the current frame width"""
