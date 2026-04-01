@@ -345,13 +345,18 @@ class Application:
         self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
-        self.scale = 0.5
+        # Exposed as read-only `scale` property below.
+        self._xos_scale = 0.5
         self._xos_standalone_width = 800
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
         self._xos_ticks_completed = 0
         if headless is not None:
             self.headless = bool(headless)
+
+    @property
+    def scale(self):
+        return float(getattr(self, "_xos_scale", 0.5))
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -378,6 +383,15 @@ class Application:
         if getattr(self, "_xos_engine_bound", False):
             self.pre_tick()
             return
+
+        # In standalone preview mode, follow live preview window size so frame
+        # shape and raster target stay in sync across window resizes.
+        if not bool(getattr(self, "headless", False)):
+            ws = xos.frame._standalone_window_size()
+            if ws is not None:
+                w, h = ws
+                self._xos_standalone_width = int(max(1, w))
+                self._xos_standalone_height = int(max(1, h))
 
         # Standalone timing (manual Python-driven tick loop).
         now = time.perf_counter()
@@ -519,8 +533,8 @@ impl Application for PyApp {
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
                 app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
-                app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
-                    .map_err(|e| format!("Failed to set scale attribute: {:?}", e))?;
+                app_instance.set_attr("_xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
+                    .map_err(|e| format!("Failed to set _xos_scale attribute: {:?}", e))?;
                 
                 Ok(())
             })
@@ -574,7 +588,7 @@ Call super().__init__() in your app __init__ before using tick()."
 
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
-                    let _ = app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                    let _ = app_instance.set_attr("_xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
                     // Call tick
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {

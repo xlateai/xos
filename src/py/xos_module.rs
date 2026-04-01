@@ -373,6 +373,31 @@ fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame._standalone_window_size() -> (width, height) | None
+/// Returns the current standalone preview window size when available.
+fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.none())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let maybe_size = STANDALONE_PREVIEW_HOST.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|host| host.app.state.as_ref().map(|s| (s.size.width, s.size.height)))
+        });
+        if let Some((w, h)) = maybe_size {
+            Ok(vm
+                .ctx
+                .new_tuple(vec![vm.ctx.new_int(w as usize).into(), vm.ctx.new_int(h as usize).into()])
+                .into())
+        } else {
+            Ok(vm.ctx.none())
+        }
+    }
+}
+
 /// xos.frame._present_standalone() - presents standalone buffer in a non-blocking native window.
 fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -466,6 +491,13 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     frame_module
         .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_window_size",
+            vm.new_function("_standalone_window_size", frame_standalone_window_size),
+            vm,
+        )
         .unwrap();
     frame_module
         .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
