@@ -25,6 +25,7 @@ class TextDemo(xos.Application):
             # baselines=True,
         )
 
+        print(self.fps)
         print(text_state.lines.shape)
         print(text_state.hitboxes.shape)
         print(text_state.baselines.shape)

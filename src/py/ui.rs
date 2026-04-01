@@ -238,11 +238,55 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
 
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
-    text_ui
+    let render_state = text_ui
         .render(buffer, canvas_width, canvas_height)
         .map_err(|e| vm.new_runtime_error(e))?;
 
-    Ok(vm.ctx.none())
+    let lines_py = vm.ctx.new_list(
+        render_state
+            .lines
+            .iter()
+            .map(|v| vm.ctx.new_int(*v).into())
+            .collect(),
+    );
+    let hitboxes_py = vm.ctx.new_list(
+        render_state
+            .hitboxes
+            .iter()
+            .map(|hb| {
+                vm.ctx
+                    .new_list(vec![
+                        vm.ctx.new_float(hb[0] as f64).into(),
+                        vm.ctx.new_float(hb[1] as f64).into(),
+                        vm.ctx.new_float(hb[2] as f64).into(),
+                        vm.ctx.new_float(hb[3] as f64).into(),
+                    ])
+                    .into()
+            })
+            .collect(),
+    );
+    let baselines_py = vm.ctx.new_list(
+        render_state
+            .baselines
+            .iter()
+            .map(|b| {
+                vm.ctx
+                    .new_list(vec![
+                        vm.ctx.new_float(b[0] as f64).into(),
+                        vm.ctx.new_float(b[1] as f64).into(),
+                        vm.ctx.new_float(b[2] as f64).into(),
+                        vm.ctx.new_float(b[3] as f64).into(),
+                    ])
+                    .into()
+            })
+            .collect(),
+    );
+
+    let state = vm.ctx.new_dict();
+    state.set_item("lines", lines_py.into(), vm)?;
+    state.set_item("hitboxes", hitboxes_py.into(), vm)?;
+    state.set_item("baselines", baselines_py.into(), vm)?;
+    Ok(state.into())
 }
 
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
@@ -274,7 +318,7 @@ class Text:
         resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.baselines if baselines is None else baselines
         resolved_font_size = self.font_size if font_size is None else font_size
-        _text_render(
+        state = _text_render(
             self.text,
             self.x1,
             self.y1,
@@ -285,6 +329,14 @@ class Text:
             resolved_baselines,
             resolved_font_size,
         )
+        return TextRenderState(state)
+
+class TextRenderState:
+    def __init__(self, state_dict):
+        import xos
+        self.lines = xos.tensor(state_dict["lines"], dtype=xos.int32)
+        self.hitboxes = xos.tensor(state_dict["hitboxes"], dtype=xos.float32)
+        self.baselines = xos.tensor(state_dict["baselines"], dtype=xos.float32)
 
 def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
     return Text(
@@ -302,6 +354,9 @@ def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=
     let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());
     if let Ok(text_class) = scope.globals.get_item("Text", vm) {
         module.set_attr("Text", text_class, vm).unwrap();
+    }
+    if let Ok(state_class) = scope.globals.get_item("TextRenderState", vm) {
+        module.set_attr("TextRenderState", state_class, vm).unwrap();
     }
     if let Ok(text_fn) = scope.globals.get_item("text", vm) {
         module.set_attr("text", text_fn, vm).unwrap();

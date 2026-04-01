@@ -34,10 +34,21 @@ pub struct UiText {
     pub font_size_px: f32,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct UiTextRenderState {
+    /// Character count per wrapped line.
+    pub lines: Vec<u32>,
+    /// Per rendered character: [x1, y1, x2, y2] normalized to [0, 1].
+    pub hitboxes: Vec<[f32; 4]>,
+    /// Per line baseline segment: [x1, y1, x2, y2] normalized to [0, 1].
+    pub baselines: Vec<[f32; 4]>,
+}
+
 impl UiText {
-    pub fn render(&self, buffer: &mut [u8], frame_width: usize, frame_height: usize) -> Result<(), String> {
+    pub fn render(&self, buffer: &mut [u8], frame_width: usize, frame_height: usize) -> Result<UiTextRenderState, String> {
+        let mut state = UiTextRenderState::default();
         if frame_width == 0 || frame_height == 0 {
-            return Ok(());
+            return Ok(state);
         }
 
         let x1 = (self.x1_norm.clamp(0.0, 1.0) * frame_width as f32).round() as i32;
@@ -46,7 +57,7 @@ impl UiText {
         let y2 = (self.y2_norm.clamp(0.0, 1.0) * frame_height as f32).round() as i32;
 
         if x2 <= x1 || y2 <= y1 {
-            return Ok(());
+            return Ok(state);
         }
 
         let box_width = (x2 - x1) as f32;
@@ -57,19 +68,52 @@ impl UiText {
         rasterizer.set_text(self.text.clone());
         rasterizer.tick(box_width, box_height);
 
+        // Count characters per wrapped line.
+        for line in &rasterizer.lines {
+            state.lines.push((line.end_index.saturating_sub(line.start_index)) as u32);
+        }
+
         if self.baselines {
             let baseline_color = (100, 100, 100, 255);
             for line in &rasterizer.lines {
                 let by = y1 + line.baseline_y.round() as i32;
+                let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
+                state.baselines.push([
+                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                ]);
                 if by >= y1 && by < y2 {
                     fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
                 }
+            }
+        } else {
+            for line in &rasterizer.lines {
+                let by = y1 + line.baseline_y.round() as i32;
+                let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
+                state.baselines.push([
+                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                ]);
             }
         }
 
         for character in &rasterizer.characters {
             let px = x1 + character.x.round() as i32;
             let py = y1 + character.y.round() as i32;
+            let gx1 = px;
+            let gy1 = py;
+            let gx2 = px + character.metrics.width as i32;
+            let gy2 = py + character.metrics.height as i32;
+            state.hitboxes.push([
+                (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+            ]);
             if py >= y2 {
                 continue;
             }
@@ -99,10 +143,6 @@ impl UiText {
             }
 
             if self.hitboxes {
-                let gx1 = px;
-                let gy1 = py;
-                let gx2 = px + character.metrics.width as i32;
-                let gy2 = py + character.metrics.height as i32;
                 let hitbox_color = (255, 0, 0, 255);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx2, gy1 + 1, hitbox_color);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy2 - 1, gx2, gy2, hitbox_color);
@@ -111,6 +151,6 @@ impl UiText {
             }
         }
 
-        Ok(())
+        Ok(state)
     }
 }

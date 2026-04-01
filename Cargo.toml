@@ -95,6 +95,10 @@ crate-type = ["cdylib", "rlib"]
 name = "xos"
 path = "src/main.rs"
 
+[[bin]]
+name = "xpy"
+path = "src/main.rs"
+
 [workspace]
 members = [".", "src/core/crates/xos-java"]
 resolver = "2"
