@@ -22,6 +22,7 @@ Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaP
 - [x] iOS audio drivers.
 - [ ] iOS haptics drivers.
 - [x] Python runtime and scripting.
+- [x] Multi-file python.
 - [ ] Networking.
 - [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
 - [ ] Locally inferenced chat models.
@@ -32,12 +33,12 @@ Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaP
 
 ## 📁 Code Examples
 
-As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms. Check the `example-scripts` folder for more examples.
+As of `v0.3.x`, apps are single-file Python scripts run with **`xpy`** (same as **`xos python`** — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
 
-- 🚀 `xos python ./example-scripts/ball_lines.py`
+- 🚀 `xpy ./example-scripts/ball_lines.py`
 
 ```python
-# ball_lines.py - example code for xos (`xos python code.py` in terminal to run)
+# ball_lines.py - example code for xos (`xpy code.py` in terminal to run)
 import xos
 
 # Ideal vectorized API sketch (1:1 behavior replacement, no per-ball Python loops).
@@ -131,15 +132,15 @@ cargo build --release
 cargo install --path .
 ```
 
-Then run apps anywhere with `xos python code.py`.
+Then run apps anywhere with `xpy path/to/code.py` (same as `xos python path/to/code.py`).
 
 ### 🧰 Common Commands
 
 ```bash
 xos --help
 xos -v
-xos python
-xos python <file-path>
+xpy
+xpy <file-path>
 xos app
 xos app <app-name>
 xos app <app-name> --ios
@@ -148,6 +149,8 @@ xos build
 xos path
 xos path --exe
 ```
+
+`xpy` / `xpy <file>` is the same as `xos python` / `xos python <file>` (alias only).
 
 ### 📱 Using `--ios`
 
@@ -161,7 +164,7 @@ Coming soon: RN/Expo-style builds.
 
 ### 🔁 Recompile + CLI Fixes
 
-- After Rust changes, run **`xos compile`** (or **`xos build`** — same command, alias only).
+- After you change **Rust**, run **`xos compile`** (or **`xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
 - If CLI behavior looks stale, run `cargo install --path .`.
 - Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
 - **`xos -v`** (or **`xpy -v`**) prints `xos v<semver>` / `xpy v<semver>` on the first line, then a second line: full git commit hash, with **`(uncommitted changes)`** in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
@@ -170,5 +173,5 @@ Coming soon: RN/Expo-style builds.
 
 - `xos` uses its own runtime APIs, not standard desktop-heavy Python stacks.
 - Nearly all third-party packages will be unavailable or incompatible (we'll rebuild it, don't worry).
-- Always run scripts via `xos python ./path/to/code.py` (not system Python).
+- Always run scripts via `xpy ./path/to/code.py` or `xos python ./path/to/code.py` (not system Python).
 
