@@ -135,6 +135,55 @@ impl AppState {
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
     }
+
+    fn tick_and_render_frame(&mut self) {
+        let expected_len = (self.size.width * self.size.height * 4) as usize;
+        let mut mirror_ok = false;
+        {
+            let f = self.pixels.frame_mut();
+            if f.len() == expected_len {
+                unsafe {
+                    self.engine_state
+                        .frame
+                        .tensor
+                        .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
+                }
+                mirror_ok = true;
+            }
+        }
+
+        tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
+        let _ = self.app.tick(&mut self.engine_state);
+
+        {
+            let width = self.size.width;
+            let height = self.size.height;
+            let mouse_x = self.engine_state.mouse.x;
+            let mouse_y = self.engine_state.mouse.y;
+            let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
+            let (buffer, keyboard) = {
+                let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
+                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard =
+                    &mut self.engine_state.keyboard.onscreen;
+                (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+            };
+            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+        }
+
+        tick_f3_menu(&mut self.engine_state);
+
+        if mirror_ok {
+            self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
+            let _ = self.render_pixels();
+        } else {
+            let frame = self.pixels.frame_mut();
+            let buffer = self.engine_state.frame_buffer_mut();
+            if frame.len() == buffer.len() {
+                frame.copy_from_slice(buffer);
+                let _ = self.render_pixels();
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -165,74 +214,7 @@ impl ApplicationHandler for AppState {
                     // Notify app of screen size change
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
                 }
-
-                let expected_len = (self.size.width * self.size.height * 4) as usize;
-                let mut mirror_ok = false;
-                {
-                    let f = self.pixels.frame_mut();
-                    if f.len() == expected_len {
-                        unsafe {
-                            self.engine_state
-                                .frame
-                                .tensor
-                                .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
-                        }
-                        mirror_ok = true;
-                    }
-                }
-
-                tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
-                // Tick the app first
-                let _ = self.app.tick(&mut self.engine_state);
-
-                // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
-                {
-                    let width = self.size.width;
-                    let height = self.size.height;
-                    let mouse_x = self.engine_state.mouse.x;
-                    let mouse_y = self.engine_state.mouse.y;
-                    let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
-                    // Split borrows: get buffer and keyboard separately through engine_state
-                    let (buffer, keyboard) = {
-                        let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
-                        let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut self.engine_state.keyboard.onscreen;
-                        (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
-                    };
-                    keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
-                }
-
-                tick_f3_menu(&mut self.engine_state);
-
-                if mirror_ok {
-                    self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
-                    let _ = self.render_pixels();
-                } else {
-                    let frame = self.pixels.frame_mut();
-                    let buffer = self.engine_state.frame_buffer_mut();
-                    if frame.len() == buffer.len() {
-                        frame.copy_from_slice(buffer);
-                        let _ = self.render_pixels();
-                    } else {
-                        let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                        let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                        self.engine_state.resize_frame(self.size.width, self.size.height);
-                        let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
-                        let frame = self.pixels.frame_mut();
-                        let buffer = self.engine_state.frame_buffer_mut();
-                        if frame.len() == buffer.len() {
-                            frame.copy_from_slice(buffer);
-                            let _ = self.render_pixels();
-                        } else {
-                            eprintln!(
-                                "Buffer size mismatch: pixels {} vs engine {} ({}×{})",
-                                frame.len(),
-                                buffer.len(),
-                                self.size.width,
-                                self.size.height
-                            );
-                        }
-                    }
-                }
+                self.tick_and_render_frame();
             }
             WindowEvent::Resized(new_size) => {
                 if new_size.width == 0 || new_size.height == 0 {
@@ -243,6 +225,8 @@ impl ApplicationHandler for AppState {
                     let _ = self.pixels.resize_surface(self.size.width, self.size.height);
                     self.engine_state.resize_frame(self.size.width, self.size.height);
                     let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    // Keep simulation/render progressing during live drag-resize.
+                    self.tick_and_render_frame();
                     self.window.request_redraw();
                 }
             }

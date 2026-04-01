@@ -398,6 +398,31 @@ fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResul
     }
 }
 
+/// xos.frame._standalone_ui_scale() -> float | None
+/// Current F3 UI scale as `ui_scale_percent / 100` from the standalone preview (Python-driven tick).
+fn frame_standalone_ui_scale(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.none())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let v = STANDALONE_PREVIEW_HOST.with(|slot| {
+            slot.borrow().as_ref().and_then(|host| {
+                host.app
+                    .f3_engine_state
+                    .as_ref()
+                    .map(|es| es.ui_scale_percent as f64 / 100.0)
+            })
+        });
+        if let Some(s) = v {
+            Ok(vm.ctx.new_float(s).into())
+        } else {
+            Ok(vm.ctx.none())
+        }
+    }
+}
+
 /// xos.frame._present_standalone() - presents standalone buffer in a non-blocking native window.
 fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -433,7 +458,7 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 {
                     PumpStatus::Continue => {}
                     PumpStatus::Exit(_) => {
-                        *opt = None;
+                        // Keep EventLoop alive: many platforms allow only one per process.
                     }
                 }
             }
@@ -496,6 +521,13 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr(
             "_standalone_window_size",
             vm.new_function("_standalone_window_size", frame_standalone_window_size),
+            vm,
+        )
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_ui_scale",
+            vm.new_function("_standalone_ui_scale", frame_standalone_ui_scale),
             vm,
         )
         .unwrap();
