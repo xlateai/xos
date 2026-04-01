@@ -163,42 +163,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 
-    // Add color palette submodule (Minecraft 16 dye colors, RGB tuples)
-    let color_module = vm.new_module("xos.color", vm.ctx.new_dict(), None);
-    color_module.set_attr("white", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(255).into(), vm.ctx.new_int(254).into()]), vm).unwrap();
-    color_module.set_attr("orange", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(128).into(), vm.ctx.new_int(29).into()]), vm).unwrap();
-    color_module.set_attr("magenta", vm.ctx.new_tuple(vec![vm.ctx.new_int(199).into(), vm.ctx.new_int(78).into(), vm.ctx.new_int(189).into()]), vm).unwrap();
-    color_module.set_attr("light_blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(58).into(), vm.ctx.new_int(179).into(), vm.ctx.new_int(218).into()]), vm).unwrap();
-    color_module.set_attr("yellow", vm.ctx.new_tuple(vec![vm.ctx.new_int(254).into(), vm.ctx.new_int(216).into(), vm.ctx.new_int(61).into()]), vm).unwrap();
-    color_module.set_attr("lime", vm.ctx.new_tuple(vec![vm.ctx.new_int(128).into(), vm.ctx.new_int(199).into(), vm.ctx.new_int(31).into()]), vm).unwrap();
-    color_module.set_attr("pink", vm.ctx.new_tuple(vec![vm.ctx.new_int(243).into(), vm.ctx.new_int(139).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
-    color_module.set_attr("gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(71).into(), vm.ctx.new_int(79).into(), vm.ctx.new_int(82).into()]), vm).unwrap();
-    color_module.set_attr("light_gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(157).into(), vm.ctx.new_int(157).into(), vm.ctx.new_int(151).into()]), vm).unwrap();
-    color_module.set_attr("cyan", vm.ctx.new_tuple(vec![vm.ctx.new_int(22).into(), vm.ctx.new_int(156).into(), vm.ctx.new_int(156).into()]), vm).unwrap();
-    color_module.set_attr("purple", vm.ctx.new_tuple(vec![vm.ctx.new_int(137).into(), vm.ctx.new_int(50).into(), vm.ctx.new_int(184).into()]), vm).unwrap();
-    color_module.set_attr("blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(60).into(), vm.ctx.new_int(68).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
-    color_module.set_attr("brown", vm.ctx.new_tuple(vec![vm.ctx.new_int(131).into(), vm.ctx.new_int(84).into(), vm.ctx.new_int(50).into()]), vm).unwrap();
-    color_module.set_attr("green", vm.ctx.new_tuple(vec![vm.ctx.new_int(94).into(), vm.ctx.new_int(124).into(), vm.ctx.new_int(22).into()]), vm).unwrap();
-    color_module.set_attr("red", vm.ctx.new_tuple(vec![vm.ctx.new_int(176).into(), vm.ctx.new_int(46).into(), vm.ctx.new_int(38).into()]), vm).unwrap();
-    color_module.set_attr("black", vm.ctx.new_tuple(vec![vm.ctx.new_int(29).into(), vm.ctx.new_int(29).into(), vm.ctx.new_int(33).into()]), vm).unwrap();
-
-    // Uppercase aliases for ergonomics (e.g. xos.color.BLACK)
-    if let Ok(v) = color_module.get_attr("white", vm) { color_module.set_attr("WHITE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("orange", vm) { color_module.set_attr("ORANGE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("magenta", vm) { color_module.set_attr("MAGENTA", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("light_blue", vm) { color_module.set_attr("LIGHT_BLUE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("yellow", vm) { color_module.set_attr("YELLOW", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("lime", vm) { color_module.set_attr("LIME", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("pink", vm) { color_module.set_attr("PINK", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("gray", vm) { color_module.set_attr("GRAY", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("light_gray", vm) { color_module.set_attr("LIGHT_GRAY", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("cyan", vm) { color_module.set_attr("CYAN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("purple", vm) { color_module.set_attr("PURPLE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("blue", vm) { color_module.set_attr("BLUE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("brown", vm) { color_module.set_attr("BROWN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("green", vm) { color_module.set_attr("GREEN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("red", vm) { color_module.set_attr("RED", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("black", vm) { color_module.set_attr("BLACK", v, vm).unwrap(); }
+    // Add color palette submodule (single source of truth in py/colors.rs)
+    let color_module = crate::python_api::colors::make_color_module(vm);
     module.set_attr("color", color_module, vm).unwrap();
     
     // Add the sensors submodule
