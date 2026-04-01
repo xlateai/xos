@@ -71,6 +71,7 @@ pub struct CoderApp {
     // Python app instance for viewport rendering
     viewport_app: Option<rustpython_vm::PyObjectRef>,
     viewport_app_setup_done: bool,
+    viewport_ticks_completed: u64,
     // Viewport double-tap tracking
     viewport_last_tap_time: Option<std::time::Instant>,
     viewport_last_tap_x: f32,
@@ -621,6 +622,7 @@ impl CoderApp {
             persistent_scope,
             viewport_app: None,
             viewport_app_setup_done: false,
+            viewport_ticks_completed: 0,
             viewport_last_tap_time: None,
             viewport_last_tap_x: 0.0,
             viewport_last_tap_y: 0.0,
@@ -672,6 +674,7 @@ impl CoderApp {
         // Clear any previous viewport app before execution and clean up microphones
         self.viewport_app = None;
         self.viewport_app_setup_done = false;
+        self.viewport_ticks_completed = 0;
         crate::python_api::audio::cleanup_all_audio();
         
         // Detect if this is a viewport app (contains xos.Application)
@@ -772,6 +775,7 @@ xos.print = __custom_print__
                 if let Some(app_instance_obj) = app_instance {
                     self.viewport_app = Some(app_instance_obj);
                     self.viewport_app_setup_done = false;
+                    self.viewport_ticks_completed = 0;
                     
                     // Keep the output buffer active - it will be updated by setup/tick
                     // Terminal will show accumulated output from the buffer
@@ -1155,6 +1159,7 @@ builtins.print = __custom_print__
         if is_viewport_running {
             self.viewport_app = None;
             self.viewport_app_setup_done = false;
+            self.viewport_ticks_completed = 0;
             crate::python_api::audio::cleanup_all_audio();
             self.terminal_app
                 .text_rasterizer
@@ -2020,18 +2025,24 @@ impl Application for CoderApp {
                             app_instance.set_attr("mouse", mouse_dict, vm)
                                 .map_err(|e| { eprintln!("Failed to set mouse attribute: {:?}", e); () })?;
                             
-                            // Call setup
-                            if let Err(e) = vm.call_method(app_instance, "setup", ()) {
-                                let error_text = crate::python_api::runtime::format_python_exception(vm, &e);
-                                
-                                // Write error to output buffer
-                                if let Ok(mut buffer) = self.python_output_buffer.lock() {
-                                    buffer.push_str("\nPython setup error:\n");
-                                    buffer.push_str(&error_text);
-                                    buffer.push_str("\n");
-                                }
-                                return Err(());
-                            }
+                            // Match xpy runtime semantics: `xos.Application.__init__()` + `tick()`
+                            // is the contract; there is no required Python `setup()` method.
+                            app_instance
+                                .set_attr("_xos_engine_bound", vm.ctx.new_bool(true), vm)
+                                .map_err(|e| { eprintln!("Failed to set _xos_engine_bound: {:?}", e); () })?;
+                            let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                            app_instance
+                                .set_attr("dt", vm.ctx.new_float(timestep), vm)
+                                .map_err(|e| { eprintln!("Failed to set dt: {:?}", e); () })?;
+                            app_instance
+                                .set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
+                                .map_err(|e| { eprintln!("Failed to set fps: {:?}", e); () })?;
+                            app_instance
+                                .set_attr("t", vm.ctx.new_int(0usize), vm)
+                                .map_err(|e| { eprintln!("Failed to set t: {:?}", e); () })?;
+                            app_instance
+                                .set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
+                                .map_err(|e| { eprintln!("Failed to set xos_scale: {:?}", e); () })?;
                             
                             Ok(())
                         });
@@ -2061,6 +2072,11 @@ impl Application for CoderApp {
                                 let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
                                 let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
                                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+                                let timestep = state.delta_time_seconds.max(1e-5) as f64;
+                                let _ = app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm);
+                                let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
+                                let _ = app_instance.set_attr("t", vm.ctx.new_int(self.viewport_ticks_completed as usize), vm);
+                                let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                                 
                                 // Call tick
                                 if let Err(e) = vm.call_method(app_instance, "tick", ()) {
@@ -2078,6 +2094,7 @@ impl Application for CoderApp {
                         
                         // Clear the frame buffer context after tick
                         crate::python_api::rasterizer::clear_frame_buffer_context();
+                        self.viewport_ticks_completed = self.viewport_ticks_completed.saturating_add(1);
                     }
                 } else {
                     fill(&mut state.frame, (0, 0, 0, 0xff));

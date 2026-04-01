@@ -98,12 +98,14 @@ impl ApplicationHandler for StandalonePreviewApp {
         self.state = Some(StandalonePreviewState { window, pixels, size });
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         let Some(state) = self.state.as_mut() else { return; };
         match event {
             WindowEvent::CloseRequested => {
-                self.should_close = true;
-                event_loop.exit();
+                // Standalone preview is driven by user script loops (e.g. `while ...: app.tick()`).
+                // Closing the preview window should terminate immediately instead of letting the
+                // Python loop continue headless for an arbitrary amount of time.
+                std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
                 if new_size.width > 0 && new_size.height > 0 {
