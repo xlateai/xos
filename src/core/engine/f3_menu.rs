@@ -1,6 +1,8 @@
 //! Global F3 menu (top-right): FPS, UI scale slider, opaque backing for readability.
 
-use crate::engine::EngineState;
+use crate::engine::{
+    EngineState, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT,
+};
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 
@@ -32,7 +34,7 @@ impl F3Menu {
         let mut fps_rasterizer = TextRasterizer::new(font.clone(), BASE_FONT);
         fps_rasterizer.set_text("— FPS".to_string());
         let mut scale_rasterizer = TextRasterizer::new(font, BASE_FONT);
-        scale_rasterizer.set_text("Scale: 50%".to_string());
+        scale_rasterizer.set_text("Scale: 100%".to_string());
         Self {
             visible: false,
             fps_rasterizer,
@@ -100,15 +102,17 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32) -> PanelGe
 }
 
 /// Map mouse x to percent so the **knob center** follows the cursor (same geometry as drawing).
-fn percent_from_mouse_x(mx: f32, geom: &PanelGeom, knob_w: f32) -> u8 {
+fn percent_from_mouse_x(mx: f32, geom: &PanelGeom, knob_w: f32) -> u16 {
     let knob_w = knob_w.max(1.0);
     let track = (geom.slider_right - geom.slider_left).max(1.0);
     let inner = (track - knob_w).max(1.0);
     let half = knob_w * 0.5;
     let cx = mx.clamp(geom.slider_left + half, geom.slider_right - half);
     let t = (cx - geom.slider_left - half) / inner;
-    let p = (1.0 + t * 99.0).round() as i32;
-    p.clamp(1, 100) as u8
+    let lo = F3_UI_SCALE_MIN_PERCENT as f32;
+    let hi = F3_UI_SCALE_MAX_PERCENT as f32;
+    let p = (lo + t * (hi - lo)).round() as i32;
+    p.clamp(F3_UI_SCALE_MIN_PERCENT as i32, F3_UI_SCALE_MAX_PERCENT as i32) as u16
 }
 
 /// Match rasterized label widths to [`tick_f3_menu`] so hit-testing uses the same panel and slider as drawing.
@@ -258,7 +262,8 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     // Knob position from percent (same inner range as [`percent_from_mouse_x`])
     let knob_w_i = knob_w as i32;
     let inner = (geom.slider_right - geom.slider_left - knob_w).max(1.0);
-    let t = (state.ui_scale_percent.saturating_sub(1) as f32) / 99.0;
+    let range = (F3_UI_SCALE_MAX_PERCENT - F3_UI_SCALE_MIN_PERCENT) as f32;
+    let t = (state.ui_scale_percent.saturating_sub(F3_UI_SCALE_MIN_PERCENT) as f32) / range.max(1.0);
     let knob_left = geom.slider_left + t * inner;
     let knob_x1 = (knob_left + knob_w_i as f32).ceil() as i32;
     let knob_y0 = (geom.slider_top - 1.0).floor() as i32;

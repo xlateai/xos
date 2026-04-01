@@ -157,7 +157,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
         },
         f3_menu: F3Menu::new(),
-        ui_scale_percent: 50,
+        ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
     };
 

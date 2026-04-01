@@ -344,9 +344,9 @@ class Application:
         self.fps = 0.0  # Frames per second derived from timestep
         self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
-        # F3 scale as percent/100 (0.01..1.0); default 0.5 at 50%.
-        # Engine syncs `xos_scale` each tick (Rust `set_attr` uses this name, not `_xos_scale`).
-        self.xos_scale = 0.5
+        # F3 scale as percent/100 (0.25..5.0 for 25–500%); default 1.0 at 100%.
+        # Engine syncs `xos_scale` each tick.
+        self.xos_scale = 1.0
         self._xos_standalone_width = 800
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
@@ -356,8 +356,8 @@ class Application:
 
     @property
     def scale(self):
-        """F3 UI scale as fraction of 100% (50% slider → 0.5). Updated each tick."""
-        return float(getattr(self, "xos_scale", 0.5))
+        """F3 UI scale as percent/100 (100% → 1.0, 25–500% → 0.25–5.0). Updated each tick."""
+        return float(getattr(self, "xos_scale", 1.0))
 
     @classmethod
     def __init_subclass__(cls, **kwargs):

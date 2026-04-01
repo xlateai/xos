@@ -91,7 +91,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                 onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             f3_menu: crate::engine::F3Menu::new(),
-            ui_scale_percent: 50,
+            ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
         };
         self.f3_engine_state = Some(f3_engine_state);

@@ -349,15 +349,10 @@ impl CoderApp {
         (short_edge / REF).clamp(0.28, 1.0)
     }
 
-    /// Calibrate prior coder chrome (~75% vs text) to ~50% at default slider, with ~30% zoom-out.
-    /// F3 scale uses [`crate::engine::f3_ui_scale_multiplier`] (same curve as standalone text).
+    /// Window-relative size × F3 multiplier (`ui_scale_percent / 100`, 25–500% → 0.25–5.0).
     fn layout_scale_from_state(state: &EngineState) -> f32 {
-        // Global +7% visual zoom relative to the scale bar baseline.
-        const CODER_UI_CALIBRATION: f32 = (50.0 / 75.0) * 1.0;
         let shape = state.frame.tensor.shape();
-        Self::ui_scale((shape[1] as f32).min(shape[0] as f32))
-            * state.f3_ui_scale_multiplier()
-            * CODER_UI_CALIBRATION
+        Self::ui_scale((shape[1] as f32).min(shape[0] as f32)) * state.f3_ui_scale_multiplier()
     }
 
     fn button_size_scaled(scale: f32) -> (u32, u32) {
