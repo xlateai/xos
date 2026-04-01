@@ -9,13 +9,20 @@ class TextDemo(xos.Application):
             1.0, 1.0,  # bottom right (normalized viweport coordinates)
             color=xos.color.WHITE,
             hitboxes=True,
-            # baselines=True,  # TODO: add baselines rendering
+            baselines=False,
         )
 
 
     def tick(self):
+        # color = xos.color.WHITE if self.t % 2 == 0 else xos.color.RED
+
         self.frame.clear(xos.color.BLACK)
-        self.text.render(self.frame)
+        self.text.render(
+            self.frame,
+            # color=xos.color.WHITE,
+            # hitboxes=True,
+            # baselines=True,
+        )
 
     # TODO: general event handling
     # def on_events(self, state: xos.EngineState):

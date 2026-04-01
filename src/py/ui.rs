@@ -139,7 +139,7 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Internal render hook for xos.ui.Text.render(...)
-/// Usage: _text_render(text, x1, y1, x2, y2, color, hitboxes=False, font_size=24.0)
+/// Usage: _text_render(text, x1, y1, x2, y2, color, hitboxes=False, baselines=False, font_size=24.0)
 fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 {
@@ -179,8 +179,16 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         false
     };
 
-    let font_size_px: f32 = if args_vec.len() > 7 {
-        let fs = py_number_to_f64(args_vec[7].clone(), vm, "font_size")?;
+    let baselines = if args_vec.len() > 7 {
+        args_vec[7].clone().try_into_value(vm)?
+    } else if let Some(v) = args.kwargs.get("baselines") {
+        v.clone().try_into_value(vm)?
+    } else {
+        false
+    };
+
+    let font_size_px: f32 = if args_vec.len() > 8 {
+        let fs = py_number_to_f64(args_vec[8].clone(), vm, "font_size")?;
         fs as f32
     } else if let Some(v) = args.kwargs.get("font_size") {
         let fs = py_number_to_f64(v.clone(), vm, "font_size")?;
@@ -225,6 +233,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             a.clamp(0, 255) as u8,
         ),
         hitboxes,
+        baselines,
         font_size_px,
     };
 
@@ -249,7 +258,7 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope.globals.set_item("_text_render", text_render_fn, vm).unwrap();
     let py_text_code = r#"
 class Text:
-    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, font_size=24.0):
+    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
         self.text = text
         self.x1 = x1
         self.y1 = y1
@@ -257,22 +266,38 @@ class Text:
         self.y2 = y2
         self.color = color
         self.hitboxes = hitboxes
+        self.baselines = baselines
         self.font_size = font_size
 
-    def render(self, _frame=None):
+    def render(self, _frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
+        resolved_color = self.color if color is None else color
+        resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
+        resolved_baselines = self.baselines if baselines is None else baselines
+        resolved_font_size = self.font_size if font_size is None else font_size
         _text_render(
             self.text,
             self.x1,
             self.y1,
             self.x2,
             self.y2,
-            self.color,
-            self.hitboxes,
-            self.font_size,
+            resolved_color,
+            resolved_hitboxes,
+            resolved_baselines,
+            resolved_font_size,
         )
 
-def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, font_size=24.0):
-    return Text(text, x1, y1, x2, y2, color=color, hitboxes=hitboxes, font_size=font_size)
+def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
+    return Text(
+        text,
+        x1,
+        y1,
+        x2,
+        y2,
+        color=color,
+        hitboxes=hitboxes,
+        baselines=baselines,
+        font_size=font_size,
+    )
 "#;
     let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());
     if let Ok(text_class) = scope.globals.get_item("Text", vm) {

@@ -30,6 +30,7 @@ pub struct UiText {
     pub y2_norm: f32,
     pub color: (u8, u8, u8, u8),
     pub hitboxes: bool,
+    pub baselines: bool,
     pub font_size_px: f32,
 }
 
@@ -55,6 +56,16 @@ impl UiText {
         let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
         rasterizer.tick(box_width, box_height);
+
+        if self.baselines {
+            let baseline_color = (100, 100, 100, 255);
+            for line in &rasterizer.lines {
+                let by = y1 + line.baseline_y.round() as i32;
+                if by >= y1 && by < y2 {
+                    fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
+                }
+            }
+        }
 
         for character in &rasterizer.characters {
             let px = x1 + character.x.round() as i32;
