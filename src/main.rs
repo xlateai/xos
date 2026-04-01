@@ -1,4 +1,4 @@
-mod build;
+mod compile;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -7,8 +7,12 @@ use xos::python_api::{run_python_app, run_python_interactive};
 
 #[derive(Parser)]
 #[command(name = "xos")]
-#[command(about = "Experimental OS Window Manager", version)]
+#[command(about = "Experimental OS Window Manager", disable_version_flag = true)]
 struct Cli {
+    /// Print version (semver only)
+    #[arg(short = 'v', visible_short_alias = 'V', long = "version", global = true)]
+    print_version: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -21,9 +25,10 @@ enum Commands {
         #[command(subcommand)]
         app: AppCommands,
     },
-    /// Build xos (`cargo build --release` and sync Cargo `bin`). Run this after Rust changes.
-    Build {
-        /// Build Rust library for iOS
+    /// Compile xos (`cargo build --release` and sync Cargo `bin`). Run after Rust changes. `xos build` is a pure alias.
+    #[command(name = "compile", visible_alias = "build")]
+    Compile {
+        /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
     },
@@ -65,7 +70,16 @@ fn main() {
             let first = original_args[1].as_str();
             let should_insert_python = !matches!(
                 first,
-                "python" | "build" | "app" | "code" | "path" | "-h" | "--help" | "-V" | "--version"
+                "python"
+                    | "compile"
+                    | "build"
+                    | "app"
+                    | "code"
+                    | "path"
+                    | "-h"
+                    | "--help"
+                    | "-v"
+                    | "--version"
             );
             if should_insert_python {
                 original_args.insert(1, "python".to_string());
@@ -80,6 +94,11 @@ fn main() {
     }
 
     let cli = Cli::parse_from(original_args);
+
+    if cli.print_version {
+        println!(env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     let resolved_python_file = match &cli.command {
         Some(Commands::Python { file: Some(file) }) => {
@@ -96,10 +115,10 @@ fn main() {
     };
 
     match cli.command {
-        Some(Commands::Build { ios }) => {
+        Some(Commands::Compile { ios }) => {
             if ios {
-                build::build_ios_rust();
-            } else if !build::xos_build_command(true) {
+                compile::compile_ios_rust();
+            } else if !compile::xos_compile_command(true) {
                 std::process::exit(1);
             }
         }

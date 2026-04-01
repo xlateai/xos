@@ -1,4 +1,4 @@
-//! CLI build helpers: `xos build`, copying release binaries into Cargo `bin`, and iOS scripts.
+//! CLI compile helpers: `xos compile`, copying release binaries into Cargo `bin`, and iOS scripts.
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -79,7 +79,7 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy freshly built `target/release/{xos,xpy}` into the Cargo `bin` directory.
+/// Copy freshly compiled `target/release/{xos,xpy}` into the Cargo `bin` directory.
 fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::Result<()> {
     let release = project_root.join("target").join("release");
     fs::create_dir_all(dest_dir)?;
@@ -101,17 +101,17 @@ fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::R
 
 fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
     eprintln!();
-    eprintln!("⚠️  Release build succeeded, but could not overwrite PATH binaries: {err}");
+    eprintln!("⚠️  Release compile succeeded, but could not overwrite PATH binaries: {err}");
     eprintln!(
         "   Fresh binaries: {}",
         project_root.join("target/release").display()
     );
     eprintln!("   Fix: close every running `xos` / `xpy` (and shells that started them), then run:");
-    eprintln!("   xos build");
+    eprintln!("   xos compile");
     eprintln!("   Or: cargo install --path {}", project_root.display());
 }
 
-fn run_cargo_build_verbose_inherit(project_root: &Path) -> bool {
+fn run_cargo_release_verbose(project_root: &Path) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(project_root);
     cmd.args(["build", "--release", "-p", "xos"]);
@@ -121,7 +121,7 @@ fn run_cargo_build_verbose_inherit(project_root: &Path) -> bool {
 }
 
 /// `cargo build --release -p xos` with no compiler output — spinner line only.
-fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
+fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
     let path_str = project_root.display().to_string();
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
@@ -132,7 +132,7 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
     let mut child = match cargo_cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to spawn cargo build: {e}");
+            eprintln!("Failed to spawn cargo: {e}");
             return false;
         }
     };
@@ -140,7 +140,7 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
     let stderr = match child.stderr.take() {
         Some(s) => s,
         None => {
-            eprintln!("cargo build: stderr not piped");
+            eprintln!("cargo: stderr not piped");
             return false;
         }
     };
@@ -169,7 +169,7 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
                 let stderr_text = reader.join().unwrap_or_default();
                 if status.success() {
                     print!(
-                        "\r📁 Building xos in {}... ✓{}\n",
+                        "\r📁 Compiling xos in {}... ✓{}\n",
                         path_str,
                         " ".repeat(8)
                     );
@@ -183,13 +183,13 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
             }
             Ok(None) => {
                 let ch = SPINNER[frame % SPINNER.len()];
-                print!("\r📁 Building xos in {}... {}", path_str, ch);
+                print!("\r📁 Compiling xos in {}... {}", path_str, ch);
                 let _ = io::stdout().flush();
                 frame += 1;
                 thread::sleep(Duration::from_millis(80));
             }
             Err(e) => {
-                eprintln!("Failed to wait for cargo build: {e}");
+                eprintln!("Failed to wait for cargo: {e}");
                 let _ = reader.join();
                 return false;
             }
@@ -197,13 +197,13 @@ fn run_cargo_build_quiet_spinner(project_root: &Path) -> bool {
     }
 }
 
-/// Compile release, then sync `target/release` → Cargo `bin` (what `xos build` does).
+/// Compile release, then sync `target/release` → Cargo `bin` (what `xos compile` does).
 ///
 /// - `quiet == false`: show `cargo` and copy status on stdout (verbose CLI).
 /// - `quiet == true`: spinner only during compile; no copy banner; PATH warnings only if copy fails.
 ///
-/// `None` = `cargo build` failed. `Some(true)` = copy ok. `Some(false)` = built ok, copy failed.
-fn run_release_build_and_update_cargo_bin(project_root: &Path, quiet: bool) -> Option<bool> {
+/// `None` = `cargo build` failed. `Some(true)` = copy ok. `Some(false)` = compile ok, copy failed.
+fn run_release_compile_and_update_cargo_bin(project_root: &Path, quiet: bool) -> Option<bool> {
     let path_str = project_root.display().to_string();
 
     if !quiet {
@@ -211,9 +211,9 @@ fn run_release_build_and_update_cargo_bin(project_root: &Path, quiet: bool) -> O
     }
 
     let compile_ok = if quiet {
-        run_cargo_build_quiet_spinner(project_root)
+        run_cargo_release_quiet_spinner(project_root)
     } else {
-        run_cargo_build_verbose_inherit(project_root)
+        run_cargo_release_verbose(project_root)
     };
     if !compile_ok {
         return None;
@@ -248,14 +248,14 @@ pub fn find_project_root() -> PathBuf {
 }
 
 /// Release compile then copy into Cargo `bin`. `verbose`: full `cargo` output; `!verbose`: spinner only.
-pub fn xos_build_command(verbose: bool) -> bool {
+pub fn xos_compile_command(verbose: bool) -> bool {
     let project_root = find_project_root();
     if verbose {
-        println!("🔨 Building xos CLI (release) and updating Cargo bin...");
+        println!("🔨 Compiling xos CLI (release) and updating Cargo bin...");
     }
-    match run_release_build_and_update_cargo_bin(&project_root, !verbose) {
+    match run_release_compile_and_update_cargo_bin(&project_root, !verbose) {
         None => {
-            eprintln!("❌ Build failed. Exiting.");
+            eprintln!("❌ Compile failed. Exiting.");
             false
         }
         Some(path_updated) => {
@@ -269,7 +269,7 @@ pub fn xos_build_command(verbose: bool) -> bool {
                     );
                 } else {
                     println!(
-                        "✅ Release build OK: {} (see warning above about PATH)",
+                        "✅ Release compile OK: {} (see warning above about PATH)",
                         out.display()
                     );
                 }
@@ -279,8 +279,8 @@ pub fn xos_build_command(verbose: bool) -> bool {
     }
 }
 
-pub fn build_ios_rust() {
-    println!("🦀 Building Rust library for iOS...");
+pub fn compile_ios_rust() {
+    println!("🦀 Compiling Rust library for iOS...");
 
     let project_root = find_project_root();
     let script_path = project_root.join("src").join("ios").join("build-ios.sh");
@@ -290,26 +290,26 @@ pub fn build_ios_rust() {
         std::process::exit(1);
     }
 
-    let mut build_cmd = Command::new("bash");
-    build_cmd.arg(&script_path);
-    build_cmd.current_dir(&project_root);
-    build_cmd.stdout(Stdio::inherit());
-    build_cmd.stderr(Stdio::inherit());
+    let mut compile_cmd = Command::new("bash");
+    compile_cmd.arg(&script_path);
+    compile_cmd.current_dir(&project_root);
+    compile_cmd.stdout(Stdio::inherit());
+    compile_cmd.stderr(Stdio::inherit());
 
-    let status = build_cmd
+    let status = compile_cmd
         .status()
         .expect("Failed to run src/ios/build-ios.sh");
     if !status.success() {
-        eprintln!("❌ iOS build failed. Exiting.");
+        eprintln!("❌ iOS compile failed. Exiting.");
         std::process::exit(1);
     }
 
-    println!("✅ Rust library built successfully.");
+    println!("✅ Rust library compiled successfully.");
 }
 
-/// CocoaPods step for the iOS app; used by [`build_ios`].
+/// CocoaPods step for the iOS app; used by [`compile_ios`].
 #[allow(dead_code)]
-pub fn build_ios_swift() {
+pub fn compile_ios_swift() {
     println!("📦 Running pod install...");
 
     let project_root = find_project_root();
@@ -350,11 +350,11 @@ pub fn build_ios_swift() {
     }
 }
 
-/// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`build_ios_rust`].
+/// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`compile_ios_rust`].
 #[allow(dead_code)]
-pub fn build_ios() {
-    build_ios_rust();
-    build_ios_swift();
+pub fn compile_ios() {
+    compile_ios_rust();
+    compile_ios_swift();
 
     println!("📱 Next steps:");
     println!("   1. Open xos.xcworkspace in Xcode (or use: xed src/ios/)");

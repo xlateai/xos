@@ -137,11 +137,14 @@ Then run apps anywhere with `xos python code.py`.
 
 ```bash
 xos --help
+xos -v
 xos python
 xos python <file-path>
 xos app
 xos app <app-name>
 xos app <app-name> --ios
+xos compile
+xos build
 ```
 
 ### 📱 Using `--ios`
@@ -154,12 +157,12 @@ Coming soon: RN/Expo-style builds.
 
 `xos` handles Rust target install/build and launches on device.
 
-### 🔁 Rebuild + CLI Fixes
+### 🔁 Recompile + CLI Fixes
 
-- Use `xos build` after Rust changes.
-- On launch prompts, pick `Y` only if Rust changed.
+- After Rust changes, run **`xos compile`** (or **`xos build`** — same command, alias only).
 - If CLI behavior looks stale, run `cargo install --path .`.
 - Use `xos path` to verify which executable is running.
+- **`xos -v`** prints the semver only (e.g. `0.3.6`).
 
 ## 🚧 Package Limitations
 
