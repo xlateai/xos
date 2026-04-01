@@ -1,4 +1,128 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use std::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::time::Duration;
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use winit::{
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
+    platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
+    window::{Window, WindowAttributes, WindowId},
+};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::cell::RefCell;
+
+static STANDALONE_FRAME_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewState {
+    window: Window,
+    pixels: Pixels<'static>,
+    size: PhysicalSize<u32>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewApp {
+    state: Option<StandalonePreviewState>,
+    width: u32,
+    height: u32,
+    frame_rgba: Vec<u8>,
+    should_close: bool,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+impl StandalonePreviewApp {
+    fn new() -> Self {
+        Self {
+            state: None,
+            width: 800,
+            height: 600,
+            frame_rgba: Vec::new(),
+            should_close: false,
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+impl ApplicationHandler for StandalonePreviewApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+        let attrs = WindowAttributes::default()
+            .with_title("xos standalone preview")
+            .with_inner_size(PhysicalSize::new(self.width, self.height));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        let size = window.inner_size();
+        let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+        let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
+            .enable_vsync(false)
+            .build()
+        {
+            Ok(p) => unsafe { std::mem::transmute(p) },
+            Err(_) => return,
+        };
+        self.state = Some(StandalonePreviewState { window, pixels, size });
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        let Some(state) = self.state.as_mut() else { return; };
+        match event {
+            WindowEvent::CloseRequested => {
+                self.should_close = true;
+                event_loop.exit();
+            }
+            WindowEvent::Resized(new_size) => {
+                if new_size.width > 0 && new_size.height > 0 {
+                    state.size = new_size;
+                    let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
+                    let _ = state.pixels.resize_surface(new_size.width, new_size.height);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let expected = (state.size.width as usize)
+                    .saturating_mul(state.size.height as usize)
+                    .saturating_mul(4);
+                if self.frame_rgba.len() == expected {
+                    state.pixels.frame_mut().copy_from_slice(&self.frame_rgba);
+                    let _ = state.pixels.render();
+                } else {
+                    let _ = state.pixels.render();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.should_close {
+            event_loop.exit();
+            return;
+        }
+        if let Some(state) = self.state.as_ref() {
+            state.window.request_redraw();
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewHost {
+    event_loop: EventLoop<()>,
+    app: StandalonePreviewApp,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+thread_local! {
+    static STANDALONE_PREVIEW_HOST: RefCell<Option<StandalonePreviewHost>> = const { RefCell::new(None) };
+}
 
 /// The xos.hello() function
 fn hello(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -118,6 +242,108 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame._begin_standalone(width=800, height=600) -> frame dict
+/// Initializes a temporary framebuffer context so `app.tick()` can be called directly from Python.
+fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    let width: usize = if !args_vec.is_empty() {
+        let w: i32 = args_vec[0].clone().try_into_value(vm)?;
+        w.max(1) as usize
+    } else {
+        800
+    };
+    let height: usize = if args_vec.len() > 1 {
+        let h: i32 = args_vec[1].clone().try_into_value(vm)?;
+        h.max(1) as usize
+    } else {
+        600
+    };
+
+    {
+        let mut buf = STANDALONE_FRAME_BUFFER
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?;
+        let required = width.saturating_mul(height).saturating_mul(4);
+        if buf.len() != required {
+            buf.resize(required, 0);
+        }
+        crate::python_api::rasterizer::set_frame_buffer_context(buf.as_mut_slice(), width, height);
+    }
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(4).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
+    tensor_dict.set_item("size", vm.ctx.new_int(width * height * 4).into(), vm)?;
+
+    let frame_dict = vm.ctx.new_dict();
+    frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
+    frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
+    frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
+    Ok(frame_dict.into())
+}
+
+/// xos.frame._end_standalone() - clears temporary standalone framebuffer context.
+fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    crate::python_api::rasterizer::clear_frame_buffer_context();
+    Ok(vm.ctx.none())
+}
+
+/// xos.frame._present_standalone() - presents standalone buffer in a non-blocking native window.
+fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        return Ok(vm.ctx.none());
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap() as u32;
+        let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap() as u32;
+        let frame = STANDALONE_FRAME_BUFFER
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
+            .clone();
+
+        STANDALONE_PREVIEW_HOST.with(|slot| {
+            let mut opt = slot.borrow_mut();
+            if opt.is_none() {
+                let event_loop = EventLoop::new()
+                    .map_err(|e| vm.new_runtime_error(format!("failed to create preview event loop: {e}")))?;
+                *opt = Some(StandalonePreviewHost {
+                    event_loop,
+                    app: StandalonePreviewApp::new(),
+                });
+            }
+            if let Some(host) = opt.as_mut() {
+                host.app.width = width.max(1);
+                host.app.height = height.max(1);
+                host.app.frame_rgba = frame;
+                match host
+                    .event_loop
+                    .pump_app_events(Some(Duration::ZERO), &mut host.app)
+                {
+                    PumpStatus::Continue => {}
+                    PumpStatus::Exit(_) => {
+                        *opt = None;
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(vm.ctx.none())
+    }
+}
+
 /// Create the xos module with Application base class
 pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos", vm.ctx.new_dict(), None);
@@ -160,6 +386,15 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let frame_module = vm.new_module("xos.frame", vm.ctx.new_dict(), None);
     frame_module
         .set_attr("clear", vm.new_function("clear", frame_clear), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_begin_standalone", vm.new_function("_begin_standalone", frame_begin_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 

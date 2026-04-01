@@ -338,6 +338,7 @@ class Application:
     
     def __init__(self, headless=None):
         self._xos_initialized = True
+        self._xos_engine_bound = False
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
@@ -345,8 +346,55 @@ class Application:
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
         self.scale = 0.5
+        self._xos_standalone_width = 800
+        self._xos_standalone_height = 600
         if headless is not None:
             self.headless = bool(headless)
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        user_tick = cls.__dict__.get("tick")
+        if user_tick is None:
+            return
+
+        def _wrapped_tick(self, *args, **kw):
+            self._xos_pre_tick()
+            try:
+                return user_tick(self, *args, **kw)
+            finally:
+                self._xos_post_tick()
+
+        cls.tick = _wrapped_tick
+
+    def _xos_pre_tick(self):
+        import xos
+        if not getattr(self, "_xos_initialized", False):
+            raise RuntimeError("xos.Application.__init__() was not called. Call super().__init__() first.")
+
+        # Engine-driven mode (normal app.run lifecycle): engine owns frame context.
+        if getattr(self, "_xos_engine_bound", False):
+            self.pre_tick()
+            return
+
+        # Standalone mode (manual Python-driven tick loop): create temporary frame context.
+        frame_dict = xos.frame._begin_standalone(
+            int(getattr(self, "_xos_standalone_width", 800)),
+            int(getattr(self, "_xos_standalone_height", 600)),
+        )
+        self.frame = _FrameWrapper(frame_dict)
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        self.pre_tick()
+
+    def _xos_post_tick(self):
+        import xos
+        try:
+            self.post_tick()
+        finally:
+            if not getattr(self, "_xos_engine_bound", False):
+                if not bool(getattr(self, "headless", False)):
+                    xos.frame._present_standalone()
+                xos.frame._end_standalone()
     
     def get_width(self):
         """Get the current frame width"""
@@ -359,6 +407,14 @@ class Application:
     def tick(self):
         """Called every frame. Override this method."""
         raise NotImplementedError("Subclasses must implement tick()")
+
+    def pre_tick(self):
+        """Called before each tick() in both run() and standalone tick() modes."""
+        pass
+
+    def post_tick(self):
+        """Called after each tick() in both run() and standalone tick() modes."""
+        pass
     
     def on_mouse_down(self, x, y):
         """Called when mouse is clicked. Override this method (optional)."""
@@ -437,6 +493,8 @@ impl Application for PyApp {
                 
                 app_instance.set_attr("mouse", mouse_dict, vm)
                     .map_err(|e| format!("Failed to set mouse attribute: {:?}", e))?;
+                app_instance.set_attr("_xos_engine_bound", vm.ctx.new_bool(true), vm)
+                    .map_err(|e| format!("Failed to set _xos_engine_bound attribute: {:?}", e))?;
 
                 // Seed timing field so Python can read it in setup/tick.
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
