@@ -1,6 +1,7 @@
 mod compile;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
@@ -46,8 +47,12 @@ enum Commands {
     },
 }
 
-/// Second line for `xos -v`: full commit hash, optional dirty suffix, or a fixed message if no git tree.
-fn version_git_second_line() -> String {
+/// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
+const ORANGE_UNCOMMITTED: &str = "\x1b[38;5;208m";
+const ANSI_RESET: &str = "\x1b[0m";
+
+/// Second line for `xos -v` / `xpy -v`: full commit hash, optional colored dirty suffix, or a fixed message if no git tree.
+fn version_git_second_line(color_uncommitted: bool) -> String {
     let root = match xos::find_xos_project_root().ok().or_else(|| {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         p.exists().then_some(p)
@@ -83,7 +88,11 @@ fn version_git_second_line() -> String {
     };
 
     if dirty {
-        format!("{hash} (uncommitted changes)")
+        if color_uncommitted {
+            format!("{hash} {ORANGE_UNCOMMITTED}(uncommitted changes){ANSI_RESET}")
+        } else {
+            format!("{hash} (uncommitted changes)")
+        }
     } else {
         hash
     }
@@ -144,8 +153,12 @@ fn main() {
     let cli = Cli::parse_from(original_args);
 
     if cli.print_version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
-        println!("{}", version_git_second_line());
+        let bin_name = if invoked_as_xpy { "xpy" } else { "xos" };
+        println!("{} v{}", bin_name, env!("CARGO_PKG_VERSION"));
+        println!(
+            "{}",
+            version_git_second_line(io::stdout().is_terminal())
+        );
         return;
     }
 
