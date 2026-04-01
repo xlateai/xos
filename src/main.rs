@@ -126,6 +126,22 @@ fn find_project_root() -> PathBuf {
     }
 }
 
+fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
+    if file.exists() {
+        return Some(file.to_path_buf());
+    }
+
+    // Fallback: if user passes a repo-relative path while running elsewhere,
+    // try resolving from the xos project root too.
+    let project_root = xos::find_xos_project_root().ok()?;
+    let repo_relative = project_root.join(file);
+    if repo_relative.exists() {
+        Some(repo_relative)
+    } else {
+        None
+    }
+}
+
 fn build() {
     println!("🔨 Building xos...");
 
@@ -341,6 +357,27 @@ fn main() {
     
     // Parse CLI to check for -y/-n flags
     let cli = Cli::parse_from(original_args.clone());
+
+    // For `xos python <file>`, validate/resolve the script path before rebuild prompts
+    // so we fail fast instead of compiling first and erroring later.
+    let resolved_python_file = match &cli.command {
+        Some(Commands::Python { file: Some(file) }) => {
+            match resolve_python_file_path(file.as_path()) {
+                Some(path) => Some(path),
+                None => {
+                    eprintln!(
+                        "❌ Python file not found: {}",
+                        file.display()
+                    );
+                    eprintln!(
+                        "   Checked current directory and xos project root."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => None,
+    };
     
     // Handle Build command separately - skip rebuild prompt since user explicitly wants to build
     // Note: build() already uses find_project_root() so it works from anywhere
@@ -476,7 +513,8 @@ fn main() {
         }
         Some(Commands::Python { file }) => {
             if let Some(file_path) = file {
-                run_python_app(&file_path);
+                let path_to_run = resolved_python_file.unwrap_or(file_path);
+                run_python_app(&path_to_run);
             } else {
                 run_python_interactive();
             }
