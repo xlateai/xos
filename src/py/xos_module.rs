@@ -9,8 +9,9 @@ use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::WindowEvent,
+    event::{ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{Key, NamedKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
     window::{Window, WindowAttributes, WindowId},
 };
@@ -33,6 +34,7 @@ struct StandalonePreviewApp {
     height: u32,
     frame_rgba: Vec<u8>,
     should_close: bool,
+    f3_engine_state: Option<crate::engine::EngineState>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -44,6 +46,7 @@ impl StandalonePreviewApp {
             height: 600,
             frame_rgba: Vec::new(),
             should_close: false,
+            f3_engine_state: None,
         }
     }
 }
@@ -70,6 +73,26 @@ impl ApplicationHandler for StandalonePreviewApp {
             Ok(p) => unsafe { std::mem::transmute(p) },
             Err(_) => return,
         };
+        let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
+        let f3_engine_state = crate::engine::EngineState {
+            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+            mouse: crate::engine::MouseState {
+                x: 0.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 0.0,
+                is_left_clicking: false,
+                is_right_clicking: false,
+                style: crate::engine::CursorStyleSetter::new(),
+            },
+            keyboard: crate::engine::KeyboardState {
+                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+            },
+            f3_menu: crate::engine::F3Menu::new(),
+            ui_scale_percent: 50,
+            delta_time_seconds: 1.0 / 60.0,
+        };
+        self.f3_engine_state = Some(f3_engine_state);
         self.state = Some(StandalonePreviewState { window, pixels, size });
     }
 
@@ -85,6 +108,46 @@ impl ApplicationHandler for StandalonePreviewApp {
                     state.size = new_size;
                     let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
                     let _ = state.pixels.resize_surface(new_size.width, new_size.height);
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        es.resize_frame(new_size.width, new_size.height);
+                        let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(es) = self.f3_engine_state.as_mut() {
+                    es.mouse.dx = position.x as f32 - es.mouse.x;
+                    es.mouse.dy = position.y as f32 - es.mouse.y;
+                    es.mouse.x = position.x as f32;
+                    es.mouse.y = position.y as f32;
+                    let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(es) = self.f3_engine_state.as_mut() {
+                    match button_state {
+                        ElementState::Pressed => {
+                            es.mouse.is_left_clicking = true;
+                            let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                        }
+                        ElementState::Released => {
+                            es.mouse.is_left_clicking = false;
+                            let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                        }
+                    }
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed
+                    && matches!(event.logical_key, Key::Named(NamedKey::F3))
+                {
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        es.f3_menu.toggle_visible();
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -92,6 +155,14 @@ impl ApplicationHandler for StandalonePreviewApp {
                     .saturating_mul(state.size.height as usize)
                     .saturating_mul(4);
                 if self.frame_rgba.len() == expected {
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        let frame = es.frame.buffer_mut();
+                        if frame.len() == self.frame_rgba.len() {
+                            frame.copy_from_slice(&self.frame_rgba);
+                            crate::engine::tick_f3_menu(es);
+                            self.frame_rgba.copy_from_slice(es.frame.buffer_mut());
+                        }
+                    }
                     state.pixels.frame_mut().copy_from_slice(&self.frame_rgba);
                     let _ = state.pixels.render();
                 } else {

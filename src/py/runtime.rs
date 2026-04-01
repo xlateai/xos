@@ -234,22 +234,25 @@ pub fn run_python_file(file_path: &PathBuf) {
         vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
     });
     
+    let print_cb: PrintCallback = Arc::new(|s: &str| {
+        print!("{}", s);
+        let _ = io::stdout().flush();
+    });
+
     // Execute the code
     let (result, output, _, _) = execute_python_code(
         &interpreter,
         &code,
         &resolved_file_path.to_string_lossy(),
         None,
-        None,
+        Some(print_cb),
     );
-    
-    // Print output
-    if !output.is_empty() {
-        print!("{}", output);
-    }
     
     // Handle errors
     if let Err(error_msg) = result {
+        if !output.is_empty() {
+            let _ = io::stdout().flush();
+        }
         eprintln!("{}", error_msg);
         std::process::exit(1);
     }
@@ -379,22 +382,25 @@ pub fn run_python_app(file_path: &PathBuf) {
         vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
     });
     
+    let print_cb: PrintCallback = Arc::new(|s: &str| {
+        print!("{}", s);
+        let _ = io::stdout().flush();
+    });
+
     // Execute the code
     let (result, output, app_instance, _) = execute_python_code(
         &interpreter,
         &code,
         &resolved_file_path.to_string_lossy(),
         None,
-        None,
+        Some(print_cb),
     );
-    
-    // Print output
-    if !output.is_empty() {
-        print!("{}", output);
-    }
     
     // Handle errors
     if let Err(error_msg) = result {
+        if !output.is_empty() {
+            let _ = io::stdout().flush();
+        }
         eprintln!("{}", error_msg);
         std::process::exit(1);
     }
