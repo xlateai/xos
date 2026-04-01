@@ -25,10 +25,11 @@ class TextDemo(xos.Application):
             # baselines=True,
         )
 
-        print(self.fps)
-        print(ts.lines.shape)
-        print(ts.hitboxes.shape)
-        print(ts.baselines.shape)
+        if self.t % 300 == 0:
+            print("fps:", self.fps)
+            print("lines:", ts.lines.shape)
+            print("hitboxes:", ts.hitboxes.shape)
+            print("baselines:", ts.baselines.shape)
 
     # TODO: general event handling
     # def on_events(self, state: xos.EngineState):
