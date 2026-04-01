@@ -313,10 +313,34 @@ fn reexecute_through_fresher_release_if_needed(original_args: &[String]) {
 
 
 fn main() {
-    let original_args: Vec<String> = std::env::args().collect();
+    let mut original_args: Vec<String> = std::env::args().collect();
+
+    // `xpy` is an alias for `xos python`.
+    // Examples:
+    // - `xpy file.py` => `xos python file.py`
+    // - `xpy`         => `xos python`
+    let invoked_as_xpy = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .map(|stem| stem.eq_ignore_ascii_case("xpy"))
+        .unwrap_or(false);
+    if invoked_as_xpy {
+        if original_args.len() == 1 {
+            original_args.push("python".to_string());
+        } else {
+            let first = original_args[1].as_str();
+            let should_insert_python = !matches!(
+                first,
+                "python" | "build" | "app" | "path" | "-h" | "--help" | "-V" | "--version"
+            );
+            if should_insert_python {
+                original_args.insert(1, "python".to_string());
+            }
+        }
+    }
     
     // Parse CLI to check for -y/-n flags
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(original_args.clone());
     
     // Handle Build command separately - skip rebuild prompt since user explicitly wants to build
     // Note: build() already uses find_project_root() so it works from anywhere

@@ -1,4 +1,202 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use std::sync::Mutex;
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::time::Duration;
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use winit::{
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::{ElementState, MouseButton, WindowEvent},
+    event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{Key, NamedKey},
+    platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
+    window::{Window, WindowAttributes, WindowId},
+};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::cell::RefCell;
+
+static STANDALONE_FRAME_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewState {
+    window: Window,
+    pixels: Pixels<'static>,
+    size: PhysicalSize<u32>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewApp {
+    state: Option<StandalonePreviewState>,
+    width: u32,
+    height: u32,
+    frame_rgba: Vec<u8>,
+    should_close: bool,
+    f3_engine_state: Option<crate::engine::EngineState>,
+    last_tick_instant: Option<std::time::Instant>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+impl StandalonePreviewApp {
+    fn new() -> Self {
+        Self {
+            state: None,
+            width: 800,
+            height: 600,
+            frame_rgba: Vec::new(),
+            should_close: false,
+            f3_engine_state: None,
+            last_tick_instant: None,
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+impl ApplicationHandler for StandalonePreviewApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+        let attrs = WindowAttributes::default()
+            .with_title("xos standalone preview")
+            .with_inner_size(PhysicalSize::new(self.width, self.height));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        let size = window.inner_size();
+        let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+        let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
+            .enable_vsync(false)
+            .build()
+        {
+            Ok(p) => unsafe { std::mem::transmute(p) },
+            Err(_) => return,
+        };
+        let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
+        let f3_engine_state = crate::engine::EngineState {
+            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+            mouse: crate::engine::MouseState {
+                x: 0.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 0.0,
+                is_left_clicking: false,
+                is_right_clicking: false,
+                style: crate::engine::CursorStyleSetter::new(),
+            },
+            keyboard: crate::engine::KeyboardState {
+                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+            },
+            f3_menu: crate::engine::F3Menu::new(),
+            ui_scale_percent: 50,
+            delta_time_seconds: 1.0 / 60.0,
+        };
+        self.f3_engine_state = Some(f3_engine_state);
+        self.state = Some(StandalonePreviewState { window, pixels, size });
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        let Some(state) = self.state.as_mut() else { return; };
+        match event {
+            WindowEvent::CloseRequested => {
+                self.should_close = true;
+                event_loop.exit();
+            }
+            WindowEvent::Resized(new_size) => {
+                if new_size.width > 0 && new_size.height > 0 {
+                    state.size = new_size;
+                    let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
+                    let _ = state.pixels.resize_surface(new_size.width, new_size.height);
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        es.resize_frame(new_size.width, new_size.height);
+                        let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(es) = self.f3_engine_state.as_mut() {
+                    es.mouse.dx = position.x as f32 - es.mouse.x;
+                    es.mouse.dy = position.y as f32 - es.mouse.y;
+                    es.mouse.x = position.x as f32;
+                    es.mouse.y = position.y as f32;
+                    let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(es) = self.f3_engine_state.as_mut() {
+                    match button_state {
+                        ElementState::Pressed => {
+                            es.mouse.is_left_clicking = true;
+                            let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                        }
+                        ElementState::Released => {
+                            es.mouse.is_left_clicking = false;
+                            let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                        }
+                    }
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed
+                    && matches!(event.logical_key, Key::Named(NamedKey::F3))
+                {
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        es.f3_menu.toggle_visible();
+                    }
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let expected = (state.size.width as usize)
+                    .saturating_mul(state.size.height as usize)
+                    .saturating_mul(4);
+                if self.frame_rgba.len() == expected {
+                    if let Some(es) = self.f3_engine_state.as_mut() {
+                        let frame = es.frame.buffer_mut();
+                        if frame.len() == self.frame_rgba.len() {
+                            frame.copy_from_slice(&self.frame_rgba);
+                            crate::engine::tick_frame_delta(es, &mut self.last_tick_instant);
+                            crate::engine::tick_f3_menu(es);
+                            self.frame_rgba.copy_from_slice(es.frame.buffer_mut());
+                        }
+                    }
+                    state.pixels.frame_mut().copy_from_slice(&self.frame_rgba);
+                    let _ = state.pixels.render();
+                } else {
+                    let _ = state.pixels.render();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.should_close {
+            event_loop.exit();
+            return;
+        }
+        if let Some(state) = self.state.as_ref() {
+            state.window.request_redraw();
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewHost {
+    event_loop: EventLoop<()>,
+    app: StandalonePreviewApp,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+thread_local! {
+    static STANDALONE_PREVIEW_HOST: RefCell<Option<StandalonePreviewHost>> = const { RefCell::new(None) };
+}
 
 /// The xos.hello() function
 fn hello(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -118,6 +316,108 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame._begin_standalone(width=800, height=600) -> frame dict
+/// Initializes a temporary framebuffer context so `app.tick()` can be called directly from Python.
+fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    let width: usize = if !args_vec.is_empty() {
+        let w: i32 = args_vec[0].clone().try_into_value(vm)?;
+        w.max(1) as usize
+    } else {
+        800
+    };
+    let height: usize = if args_vec.len() > 1 {
+        let h: i32 = args_vec[1].clone().try_into_value(vm)?;
+        h.max(1) as usize
+    } else {
+        600
+    };
+
+    {
+        let mut buf = STANDALONE_FRAME_BUFFER
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?;
+        let required = width.saturating_mul(height).saturating_mul(4);
+        if buf.len() != required {
+            buf.resize(required, 0);
+        }
+        crate::python_api::rasterizer::set_frame_buffer_context(buf.as_mut_slice(), width, height);
+    }
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(4).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
+    tensor_dict.set_item("size", vm.ctx.new_int(width * height * 4).into(), vm)?;
+
+    let frame_dict = vm.ctx.new_dict();
+    frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
+    frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
+    frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
+    Ok(frame_dict.into())
+}
+
+/// xos.frame._end_standalone() - clears temporary standalone framebuffer context.
+fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    crate::python_api::rasterizer::clear_frame_buffer_context();
+    Ok(vm.ctx.none())
+}
+
+/// xos.frame._present_standalone() - presents standalone buffer in a non-blocking native window.
+fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        return Ok(vm.ctx.none());
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap() as u32;
+        let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap() as u32;
+        let frame = STANDALONE_FRAME_BUFFER
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
+            .clone();
+
+        STANDALONE_PREVIEW_HOST.with(|slot| {
+            let mut opt = slot.borrow_mut();
+            if opt.is_none() {
+                let event_loop = EventLoop::new()
+                    .map_err(|e| vm.new_runtime_error(format!("failed to create preview event loop: {e}")))?;
+                *opt = Some(StandalonePreviewHost {
+                    event_loop,
+                    app: StandalonePreviewApp::new(),
+                });
+            }
+            if let Some(host) = opt.as_mut() {
+                host.app.width = width.max(1);
+                host.app.height = height.max(1);
+                host.app.frame_rgba = frame;
+                match host
+                    .event_loop
+                    .pump_app_events(Some(Duration::ZERO), &mut host.app)
+                {
+                    PumpStatus::Continue => {}
+                    PumpStatus::Exit(_) => {
+                        *opt = None;
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(vm.ctx.none())
+    }
+}
+
 /// Create the xos module with Application base class
 pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos", vm.ctx.new_dict(), None);
@@ -161,44 +461,19 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     frame_module
         .set_attr("clear", vm.new_function("clear", frame_clear), vm)
         .unwrap();
+    frame_module
+        .set_attr("_begin_standalone", vm.new_function("_begin_standalone", frame_begin_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
+        .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 
-    // Add color palette submodule (Minecraft 16 dye colors, RGB tuples)
-    let color_module = vm.new_module("xos.color", vm.ctx.new_dict(), None);
-    color_module.set_attr("white", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(255).into(), vm.ctx.new_int(254).into()]), vm).unwrap();
-    color_module.set_attr("orange", vm.ctx.new_tuple(vec![vm.ctx.new_int(249).into(), vm.ctx.new_int(128).into(), vm.ctx.new_int(29).into()]), vm).unwrap();
-    color_module.set_attr("magenta", vm.ctx.new_tuple(vec![vm.ctx.new_int(199).into(), vm.ctx.new_int(78).into(), vm.ctx.new_int(189).into()]), vm).unwrap();
-    color_module.set_attr("light_blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(58).into(), vm.ctx.new_int(179).into(), vm.ctx.new_int(218).into()]), vm).unwrap();
-    color_module.set_attr("yellow", vm.ctx.new_tuple(vec![vm.ctx.new_int(254).into(), vm.ctx.new_int(216).into(), vm.ctx.new_int(61).into()]), vm).unwrap();
-    color_module.set_attr("lime", vm.ctx.new_tuple(vec![vm.ctx.new_int(128).into(), vm.ctx.new_int(199).into(), vm.ctx.new_int(31).into()]), vm).unwrap();
-    color_module.set_attr("pink", vm.ctx.new_tuple(vec![vm.ctx.new_int(243).into(), vm.ctx.new_int(139).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
-    color_module.set_attr("gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(71).into(), vm.ctx.new_int(79).into(), vm.ctx.new_int(82).into()]), vm).unwrap();
-    color_module.set_attr("light_gray", vm.ctx.new_tuple(vec![vm.ctx.new_int(157).into(), vm.ctx.new_int(157).into(), vm.ctx.new_int(151).into()]), vm).unwrap();
-    color_module.set_attr("cyan", vm.ctx.new_tuple(vec![vm.ctx.new_int(22).into(), vm.ctx.new_int(156).into(), vm.ctx.new_int(156).into()]), vm).unwrap();
-    color_module.set_attr("purple", vm.ctx.new_tuple(vec![vm.ctx.new_int(137).into(), vm.ctx.new_int(50).into(), vm.ctx.new_int(184).into()]), vm).unwrap();
-    color_module.set_attr("blue", vm.ctx.new_tuple(vec![vm.ctx.new_int(60).into(), vm.ctx.new_int(68).into(), vm.ctx.new_int(170).into()]), vm).unwrap();
-    color_module.set_attr("brown", vm.ctx.new_tuple(vec![vm.ctx.new_int(131).into(), vm.ctx.new_int(84).into(), vm.ctx.new_int(50).into()]), vm).unwrap();
-    color_module.set_attr("green", vm.ctx.new_tuple(vec![vm.ctx.new_int(94).into(), vm.ctx.new_int(124).into(), vm.ctx.new_int(22).into()]), vm).unwrap();
-    color_module.set_attr("red", vm.ctx.new_tuple(vec![vm.ctx.new_int(176).into(), vm.ctx.new_int(46).into(), vm.ctx.new_int(38).into()]), vm).unwrap();
-    color_module.set_attr("black", vm.ctx.new_tuple(vec![vm.ctx.new_int(29).into(), vm.ctx.new_int(29).into(), vm.ctx.new_int(33).into()]), vm).unwrap();
-
-    // Uppercase aliases for ergonomics (e.g. xos.color.BLACK)
-    if let Ok(v) = color_module.get_attr("white", vm) { color_module.set_attr("WHITE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("orange", vm) { color_module.set_attr("ORANGE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("magenta", vm) { color_module.set_attr("MAGENTA", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("light_blue", vm) { color_module.set_attr("LIGHT_BLUE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("yellow", vm) { color_module.set_attr("YELLOW", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("lime", vm) { color_module.set_attr("LIME", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("pink", vm) { color_module.set_attr("PINK", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("gray", vm) { color_module.set_attr("GRAY", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("light_gray", vm) { color_module.set_attr("LIGHT_GRAY", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("cyan", vm) { color_module.set_attr("CYAN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("purple", vm) { color_module.set_attr("PURPLE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("blue", vm) { color_module.set_attr("BLUE", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("brown", vm) { color_module.set_attr("BROWN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("green", vm) { color_module.set_attr("GREEN", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("red", vm) { color_module.set_attr("RED", v, vm).unwrap(); }
-    if let Ok(v) = color_module.get_attr("black", vm) { color_module.set_attr("BLACK", v, vm).unwrap(); }
+    // Add color palette submodule (single source of truth in py/colors.rs)
+    let color_module = crate::python_api::colors::make_color_module(vm);
     module.set_attr("color", color_module, vm).unwrap();
     
     // Add the sensors submodule

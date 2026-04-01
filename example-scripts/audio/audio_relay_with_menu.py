@@ -44,7 +44,6 @@ class AudioRelayWithMenu(xos.Application):
         self.show_menu = False
         self.mouse_down_time = None
         
-    def setup(self):
         """Initialize audio devices"""
         xos.print("🎤 AudioRelay with Menu - Initializing...")
         

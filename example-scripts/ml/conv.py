@@ -12,9 +12,6 @@ class Convolution(xos.Application):
         super().__init__()
         self.kernel = None
         self.needs_init = True
-    
-    def setup(self):
-        """Initialize random 3x3x3 kernel (once)"""
         xos.print("Convolution Demo initialized")
         kernel_size = 3
         self.kernel = xos.random.uniform(-1.0, 1.0, shape=(kernel_size, kernel_size, 3), dtype=xos.float32)

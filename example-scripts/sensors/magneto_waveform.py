@@ -55,8 +55,6 @@ class MagnetometerWaveform(xos.Application):
         # Adaptive normalization state
         self.env_min = None
         self.env_max = None
-
-    def setup(self):
         self.magnetometer = xos.sensors.magnetometer()
         xos.print("🧲⚡ Magnetometer Waveform — adaptive normalized")
 

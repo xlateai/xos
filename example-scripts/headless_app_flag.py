@@ -5,8 +5,8 @@ class HeadlessFlagExample(xos.Application):
     # *does* have a viewport, but it doesn't get rendered.
     headless: bool = True
 
-    def setup(self):
-        pass
+    def __init__(self):
+        super().__init__()
 
     def tick(self):
         self.frame.clear(xos.color.BLACK)

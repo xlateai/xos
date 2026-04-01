@@ -21,7 +21,6 @@ class MicrophoneWaveform(xos.Application):
         self.color_buffer = [(128, 128, 128, 255)] * NUM_LINES
         self.buffer_index = 0
 
-    def setup(self):
         devices = xos.audio.get_input_devices()
         if not devices:
             raise RuntimeError("No audio input devices available")

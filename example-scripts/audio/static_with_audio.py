@@ -14,9 +14,6 @@ class StaticWithAudio(xos.Application):
         self.speaker = None
         self.image_generated = False
         self.tick_count = 0
-    
-    def setup(self):
-        """Initialize the application"""
         xos.print("Static with Audio Generator initialized")
         xos.print("Preparing continuous static video and audio stream...")
         

@@ -17,6 +17,19 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 
 Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
 
+## Progress
+- [x] Headless mode for applications without viewports.
+- [x] iOS audio drivers.
+- [ ] iOS haptics drivers.
+- [x] Python runtime and scripting.
+- [ ] Networking.
+- [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
+- [ ] Locally inferenced chat models.
+- [ ] Locally inferenced audio transcription models.
+- [ ] Re-enable WASM/Web support.
+- [ ] Build for iOS without xcode on the developer's machine.
+- [ ] Tests + performance checks
+
 ## 📁 Code Examples
 
 As of `v0.3.x`, all applications in xos are single-file python scripts launched using the `xos` command line line. It's crucial to use the xos.python runtime since it's what provides all of the convenience drivers across platforms. Check the `example-scripts` folder for more examples.

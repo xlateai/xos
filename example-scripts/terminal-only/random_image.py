@@ -4,9 +4,6 @@ class RandomImage(xos.Application):
     def __init__(self):
         super().__init__()
         self.image_generated = False
-    
-    def setup(self):
-        """Initialize the application"""
         xos.print("Random Image Generator initialized")
         xos.print("Generating static random image...")
     

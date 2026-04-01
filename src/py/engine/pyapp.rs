@@ -334,9 +334,11 @@ class _FrameWrapper:
         xos.rasterizer.fill(self, rgba)
 
 class Application:
-    """Base class for xos applications. Extend this class and implement setup() and tick()."""
+    """Base class for xos applications. Extend this class and implement __init__() and tick()."""
     
-    def __init__(self):
+    def __init__(self, headless=None):
+        self._xos_initialized = True
+        self._xos_engine_bound = False
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
         self.fps = 0.0  # Frames per second derived from timestep
@@ -344,6 +346,70 @@ class Application:
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
         self.scale = 0.5
+        self._xos_standalone_width = 800
+        self._xos_standalone_height = 600
+        self._xos_last_tick_time = None
+        self._xos_ticks_completed = 0
+        if headless is not None:
+            self.headless = bool(headless)
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        user_tick = cls.__dict__.get("tick")
+        if user_tick is None:
+            return
+
+        def _wrapped_tick(self, *args, **kw):
+            self._xos_pre_tick()
+            try:
+                return user_tick(self, *args, **kw)
+            finally:
+                self._xos_post_tick()
+
+        cls.tick = _wrapped_tick
+
+    def _xos_pre_tick(self):
+        import xos, time
+        if not getattr(self, "_xos_initialized", False):
+            raise RuntimeError("xos.Application.__init__() was not called. Call super().__init__() first.")
+
+        # Engine-driven mode (normal app.run lifecycle): engine owns frame context.
+        if getattr(self, "_xos_engine_bound", False):
+            self.pre_tick()
+            return
+
+        # Standalone timing (manual Python-driven tick loop).
+        now = time.perf_counter()
+        last = getattr(self, "_xos_last_tick_time", None)
+        if last is None:
+            dt = 1.0 / 60.0
+        else:
+            dt = max(1e-5, now - last)
+        self._xos_last_tick_time = now
+        self.dt = dt
+        self.fps = 1.0 / dt
+        self.t = int(getattr(self, "_xos_ticks_completed", 0))
+
+        # Standalone mode (manual Python-driven tick loop): create temporary frame context.
+        frame_dict = xos.frame._begin_standalone(
+            int(getattr(self, "_xos_standalone_width", 800)),
+            int(getattr(self, "_xos_standalone_height", 600)),
+        )
+        self.frame = _FrameWrapper(frame_dict)
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        self.pre_tick()
+
+    def _xos_post_tick(self):
+        import xos
+        try:
+            self.post_tick()
+        finally:
+            if not getattr(self, "_xos_engine_bound", False):
+                if not bool(getattr(self, "headless", False)):
+                    xos.frame._present_standalone()
+                xos.frame._end_standalone()
+                self._xos_ticks_completed = int(getattr(self, "_xos_ticks_completed", 0)) + 1
     
     def get_width(self):
         """Get the current frame width"""
@@ -353,13 +419,17 @@ class Application:
         """Get the current frame height"""
         return self.frame.get_height()
     
-    def setup(self):
-        """Called once when the application starts. Override if needed (optional)."""
-        pass
-    
     def tick(self):
         """Called every frame. Override this method."""
         raise NotImplementedError("Subclasses must implement tick()")
+
+    def pre_tick(self):
+        """Called before each tick() in both run() and standalone tick() modes."""
+        pass
+
+    def post_tick(self):
+        """Called after each tick() in both run() and standalone tick() modes."""
+        pass
     
     def on_mouse_down(self, x, y):
         """Called when mouse is clicked. Override this method (optional)."""
@@ -438,6 +508,8 @@ impl Application for PyApp {
                 
                 app_instance.set_attr("mouse", mouse_dict, vm)
                     .map_err(|e| format!("Failed to set mouse attribute: {:?}", e))?;
+                app_instance.set_attr("_xos_engine_bound", vm.ctx.new_bool(true), vm)
+                    .map_err(|e| format!("Failed to set _xos_engine_bound attribute: {:?}", e))?;
 
                 // Seed timing field so Python can read it in setup/tick.
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
@@ -450,14 +522,7 @@ impl Application for PyApp {
                 app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
                     .map_err(|e| format!("Failed to set scale attribute: {:?}", e))?;
                 
-                // Call setup
-                match vm.call_method(app_instance, "setup", ()) {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        let error_msg = format_python_exception(vm, &e);
-                        Err(format!("Python setup error:\n{}", error_msg))
-                    }
-                }
+                Ok(())
             })
         } else {
             Err("No Python app instance".to_string())
@@ -477,6 +542,20 @@ impl Application for PyApp {
             let mut tick_failed = false;
             
             self.interpreter.enter(|vm| {
+                // Require subclasses to call super().__init__() so base fields exist.
+                let initialized_ok = match vm.get_attribute_opt(app_instance.clone(), "_xos_initialized") {
+                    Ok(Some(flag_obj)) => flag_obj.clone().try_into_value::<bool>(vm).unwrap_or(false),
+                    Ok(None) | Err(_) => false,
+                };
+                if !initialized_ok {
+                    eprintln!(
+                        "Python app init error:\nRuntimeError: xos.Application.__init__() was not called. \
+Call super().__init__() in your app __init__ before using tick()."
+                    );
+                    tick_failed = true;
+                    return;
+                }
+
                 // Update frame data before calling tick
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
                     let _ = crate::python_api::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);

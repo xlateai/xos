@@ -29,9 +29,6 @@ class MagnetometerWaterfall(xos.Application):
         self.tick_count = 0
         self.first_fft_done = False
         
-    def setup(self):
-        pass  # Magnetometer doesn't require setup
-    
     def apply_window(self, samples):
         """Apply Hamming window"""
         N = len(samples)

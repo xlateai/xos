@@ -24,8 +24,7 @@ class MicrophoneWaterfall(xos.Application):
         # Debug
         self.fft_count = 0
         self.tick_count = 0
-        
-    def setup(self):
+
         devices = xos.audio.get_input_devices()
         if not devices:
             raise RuntimeError("No audio input devices available")

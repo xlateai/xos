@@ -10,6 +10,7 @@ pub mod system;
 pub mod dialoguer;
 pub mod math;
 pub mod ops;
+pub mod colors;
 pub mod dtypes;
 pub mod data;
 pub mod ui;
