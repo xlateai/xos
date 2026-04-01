@@ -304,7 +304,7 @@ class Speaker:
         Queue audio samples for playback.
         
         Args:
-            samples: xos.Array of audio samples (floats in range -1.0 to 1.0)
+            samples: xos.Tensor of audio samples (floats in range -1.0 to 1.0)
                      Shape: (time_steps,) for mono or (time_steps, channels) for multi-channel
             gain: Amplification factor (default 1.0 = no change, 3.0 = 3x louder)
         """
@@ -327,7 +327,7 @@ class Speaker:
         Get a view of the current unplayed samples buffer.
         
         Returns:
-            xos.Array: Current buffer state with shape (buffer_size, channels)
+            xos.Tensor: Current buffer state with shape (buffer_size, channels)
         """
         import xos
         return xos.audio._speaker_get_buffer(self._player_ptr)
@@ -395,7 +395,7 @@ pub fn speaker_play_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Convert pointer back to reference
     let player = unsafe { &*(player_ptr as *const AudioPlayer) };
     
-    // FAST PATH: Extract samples efficiently from xos.Array
+    // FAST PATH: Extract samples efficiently from xos.Tensor
     let mut samples = extract_samples_from_array_fast(samples_obj, vm)?;
     
     if samples.is_empty() {
@@ -456,8 +456,8 @@ pub fn speaker_get_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(buffer_size as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
-    // Wrap in _ArrayWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    // Wrap in _TensorWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -525,7 +525,7 @@ pub fn cleanup_all_speakers_rust() {
     crate::print("[xos.audio] Speaker cleanup complete");
 }
 
-/// Extract f32 samples from xos.Array - NO fallbacks, crashes if wrong format
+/// Extract f32 samples from xos.Tensor - NO fallbacks, crashes if wrong format
 fn extract_samples_from_array_fast(obj: PyObjectRef, vm: &VirtualMachine) -> Result<Vec<f32>, rustpython_vm::builtins::PyBaseExceptionRef> {
     // Helper to convert a Python object to f32 (handles both int and float)
     fn to_f32(item: &PyObjectRef, vm: &VirtualMachine) -> Result<f32, rustpython_vm::builtins::PyBaseExceptionRef> {
@@ -540,7 +540,7 @@ fn extract_samples_from_array_fast(obj: PyObjectRef, vm: &VirtualMachine) -> Res
         Err(vm.new_type_error(format!("Expected numeric type, got {:?}", item.class().name())))
     }
     
-    // Try .get_attr("_data") first - handles _ArrayWrapper
+    // Try .get_attr("_data") first - handles _TensorWrapper
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
         // Check if _data is a dict (wrapped case where wrapper stores the dict)
         if let Ok(inner_dict) = data_attr.clone().downcast::<rustpython_vm::builtins::PyDict>() {
@@ -571,7 +571,7 @@ fn extract_samples_from_array_fast(obj: PyObjectRef, vm: &VirtualMachine) -> Res
             }
             return Ok(samples);
         } else {
-            return Err(vm.new_type_error(format!("xos.Array._data must be a list, got {}", class_name)));
+            return Err(vm.new_type_error(format!("xos.Tensor._data must be a list, got {}", class_name)));
         }
     }
     
@@ -589,15 +589,15 @@ fn extract_samples_from_array_fast(obj: PyObjectRef, vm: &VirtualMachine) -> Res
                 }
                 return Ok(samples);
             } else {
-                return Err(vm.new_type_error(format!("xos.Array._data must be a list, got {}", class_name)));
+                return Err(vm.new_type_error(format!("xos.Tensor._data must be a list, got {}", class_name)));
             }
         } else {
-            return Err(vm.new_type_error("Dict missing '_data' key - not a valid xos.Array".to_string()));
+            return Err(vm.new_type_error("Dict missing '_data' key - not a valid xos.Tensor".to_string()));
         }
     }
     
-    // NO FALLBACKS - crash if it's not an xos.Array
-    Err(vm.new_type_error(format!("Expected xos.Array, got {:?}. Audio functions ONLY accept xos.Array objects.", obj.clone().class().name())))
+    // NO FALLBACKS - crash if it's not an xos.Tensor
+    Err(vm.new_type_error(format!("Expected xos.Tensor, got {:?}. Audio functions ONLY accept xos.Tensor objects.", obj.clone().class().name())))
 }
 
 // FFI declarations for iOS audio player functions

@@ -17,12 +17,12 @@ pub fn shift(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Get the _data array from the dict
     let data_obj = array.get_attr("_data", vm)?;
     let data_list = data_obj.downcast::<rustpython_vm::builtins::PyList>()
-        .map_err(|_| vm.new_type_error("Array _data must be a list".to_string()))?;
+        .map_err(|_| vm.new_type_error("Tensor _data must be a list".to_string()))?;
     
     // Get shape
     let shape_obj = array.get_attr("shape", vm)?;
     let shape_tuple = shape_obj.downcast::<rustpython_vm::builtins::PyTuple>()
-        .map_err(|_| vm.new_type_error("Array shape must be a tuple".to_string()))?;
+        .map_err(|_| vm.new_type_error("Tensor shape must be a tuple".to_string()))?;
     
     let shape: Vec<i64> = {
         let mut result = Vec::new();

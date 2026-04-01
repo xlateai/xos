@@ -73,7 +73,7 @@ fn py_number_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
     Err(vm.new_type_error("Expected a number (int or float)".to_string()))
 }
 
-/// Resolve raw tensor dict, `_ArrayWrapper`, or nested `_data` to the flat `PyList` of values.
+/// Resolve raw tensor dict, `_TensorWrapper`, or nested `_data` to the flat `PyList` of values.
 pub(crate) fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
     let mut cur = obj.clone();
     for _ in 0..8 {
@@ -149,7 +149,7 @@ fn where_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let dtype = DType::Float32;
     let py_tensor = create_tensor_from_data(out, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -189,7 +189,7 @@ fn clip_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let dtype = DType::Float32;
     let py_tensor = create_tensor_from_data(out, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -278,7 +278,7 @@ fn tensor_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let py_tensor = create_tensor_from_data(casted_data, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -315,7 +315,7 @@ fn zeros_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let py_tensor = create_tensor_from_data(data, shape_arg, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -352,7 +352,7 @@ fn ones_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let py_tensor = create_tensor_from_data(data, shape_arg, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -390,7 +390,7 @@ fn full_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let py_tensor = create_tensor_from_data(data, shape_arg, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -448,7 +448,7 @@ fn arange_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let shape = vec![data.len()];
     let py_tensor = create_tensor_from_data(data, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -509,7 +509,7 @@ fn stack_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let dtype = DType::Float32;
     let py_tensor = create_tensor_from_data(flat, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

@@ -1,9 +1,9 @@
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
 use crate::tensor::conv::{conv2d, depthwise_conv2d};
 
-/// Extract the underlying data list from an array/tensor (handles _ArrayWrapper, dict, or list)
+/// Extract the underlying data list from an array/tensor (handles _TensorWrapper, dict, or list)
 fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Option<PyObjectRef>> {
-    // _ArrayWrapper: get_attr("_data") returns the inner dict; dict["_data"] is the list
+    // _TensorWrapper: get_attr("_data") returns the inner dict; dict["_data"] is the list
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
         if let Ok(inner_dict) = data_attr.clone().downcast::<rustpython_vm::builtins::PyDict>() {
             if let Ok(list_obj) = inner_dict.get_item("_data", vm) {
@@ -177,15 +177,15 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     }
     
-    // Return output as Python list wrapped in _ArrayResult
+    // Return output as Python list wrapped in _TensorResult
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
         .map(|&b| vm.ctx.new_int(b).into())
         .collect();
     
     let list_obj = vm.ctx.new_list(py_list);
     
-    // Try to wrap in _ArrayResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayResult", vm) {
+    // Try to wrap in _TensorResult if available
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
         let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
             vm.ctx.new_int(height).into(),
             vm.ctx.new_int(width).into(),
@@ -332,8 +332,8 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let list_obj = vm.ctx.new_list(py_list);
     
-    // Try to wrap in _ArrayResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayResult", vm) {
+    // Try to wrap in _TensorResult if available
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
         let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
             vm.ctx.new_int(height).into(),
             vm.ctx.new_int(width).into(),

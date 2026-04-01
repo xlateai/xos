@@ -122,7 +122,7 @@ class Microphone:
             batch_size: Number of samples to get. If None (default), gets ALL samples.
             
         Returns:
-            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+            xos.Tensor: Batch of samples (mono channel, floats in range -1.0 to 1.0)
         """
         import xos
         if batch_size is None:
@@ -142,7 +142,7 @@ class Microphone:
             batch_size: Number of samples to read. If None, reads ALL available samples.
             
         Returns:
-            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+            xos.Tensor: Batch of samples (mono channel, floats in range -1.0 to 1.0)
         """
         import xos
         if batch_size is None:
@@ -197,7 +197,7 @@ class Microphone:
             batch_size: Number of samples per batch (default: 1024)
             
         Yields:
-            xos.Array: Batch of samples (mono channel, floats in range -1.0 to 1.0)
+            xos.Tensor: Batch of samples (mono channel, floats in range -1.0 to 1.0)
         """
         import xos
         while True:
@@ -310,14 +310,14 @@ pub fn microphone_get_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let py_list = vm.ctx.new_list(batch);
     
-    // Create xos.Array dict
+    // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
     dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
-    // Wrap in _ArrayWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    // Wrap in _TensorWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -363,14 +363,14 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     // NOTE: We do NOT drain the buffer here! This is peek mode for visualization.
     
-    // Create xos.Array dict
+    // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
     dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(actual_size as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
-    // Wrap in _ArrayWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    // Wrap in _TensorWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -416,14 +416,14 @@ pub fn microphone_read_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let py_list = vm.ctx.new_list(batch);
     
-    // Create xos.Array dict
+    // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
     dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
-    // Wrap in _ArrayWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    // Wrap in _TensorWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -466,14 +466,14 @@ pub fn microphone_read_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     let py_list = vm.ctx.new_list(batch);
     
-    // Create xos.Array dict
+    // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
     dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
-    // Wrap in _ArrayWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+    // Wrap in _TensorWrapper for nice display
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

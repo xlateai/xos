@@ -267,8 +267,8 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let py_tensor = PyTensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::Float32)?;
         
-        // Wrap in _ArrayWrapper for nice display and compatibility
-        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        // Wrap in _TensorWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }
@@ -309,8 +309,8 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let py_tensor = PyTensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::UInt8)?;
         
-        // Wrap in _ArrayWrapper for nice display and compatibility
-        if let Ok(wrapper_class) = vm.builtins.get_attr("_ArrayWrapper", vm) {
+        // Wrap in _TensorWrapper for nice display and compatibility
+        if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }
