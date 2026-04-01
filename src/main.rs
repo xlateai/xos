@@ -1,8 +1,10 @@
 use clap::{Parser, Subcommand};
 use clap::CommandFactory;
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 use dialoguer::{Select, theme::ColorfulTheme};
 use xos::apps::{AppCommands, run_app_command};
 use xos::python_api::{run_python_app, run_python_interactive};
@@ -90,17 +92,97 @@ fn release_xos_executable(project_root: &Path) -> PathBuf {
 /// Build the CLI with `cargo build --release` (does not replace a running `xos` in `PATH`).
 /// Use this instead of `cargo install` when the user may be executing `xos` from `~/.cargo/bin`
 /// — on Windows the install step fails with "Access is denied" while the binary is in use.
-fn cargo_build_release_xos(project_root: &Path) -> bool {
-    println!("📁 Building xos in {}", project_root.display());
+///
+/// - `verbose`: full cargo output (used by `xos build`).
+/// - non-verbose: no cargo logs; a Braille spinner runs on the same line as `📁 Building…` until
+///   the build finishes, then that line is replaced with a checkmark. On failure, full stderr is
+///   printed.
+fn cargo_build_release_xos(project_root: &Path, verbose: bool) -> bool {
+    let path_str = project_root.display().to_string();
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
     cargo_cmd.args(["build", "--release", "-p", "xos"]);
-    cargo_cmd.stdout(Stdio::inherit());
-    cargo_cmd.stderr(Stdio::inherit());
-    let status = cargo_cmd
-        .status()
-        .expect("Failed to run cargo build");
-    status.success()
+
+    if verbose {
+        println!("📁 Building xos in {}...", path_str);
+        cargo_cmd.stdout(Stdio::inherit());
+        cargo_cmd.stderr(Stdio::inherit());
+        let status = cargo_cmd
+            .status()
+            .expect("Failed to run cargo build");
+        return status.success();
+    }
+
+    cargo_cmd.stdout(Stdio::null());
+    cargo_cmd.stderr(Stdio::piped());
+
+    let mut child = match cargo_cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to spawn cargo build: {e}");
+            return false;
+        }
+    };
+
+    let stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => {
+            eprintln!("cargo build: stderr not piped");
+            return false;
+        }
+    };
+
+    let reader = thread::spawn(move || {
+        let mut full = String::new();
+        let mut r = BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match r.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => full.push_str(&line),
+                Err(_) => break,
+            }
+        }
+        full
+    });
+
+    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let mut frame = 0usize;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stderr_text = reader.join().unwrap_or_default();
+                if status.success() {
+                    // Pad so the spinner glyphs are overwritten (Braille is wide).
+                    print!(
+                        "\r📁 Building xos in {}... ✓{}\n",
+                        path_str,
+                        " ".repeat(8)
+                    );
+                    let _ = io::stdout().flush();
+                    return true;
+                }
+                if !stderr_text.is_empty() {
+                    eprint!("{stderr_text}");
+                }
+                return false;
+            }
+            Ok(None) => {
+                let ch = SPINNER[frame % SPINNER.len()];
+                print!("\r📁 Building xos in {}... {}", path_str, ch);
+                let _ = io::stdout().flush();
+                frame += 1;
+                thread::sleep(Duration::from_millis(80));
+            }
+            Err(e) => {
+                eprintln!("Failed to wait for cargo build: {e}");
+                let _ = reader.join();
+                return false;
+            }
+        }
+    }
 }
 
 fn prompt_rebuild() -> bool {
@@ -146,7 +228,7 @@ fn build() {
     println!("🔨 Building xos...");
 
     let project_root = find_project_root();
-    if !cargo_build_release_xos(&project_root) {
+    if !cargo_build_release_xos(&project_root, true) {
         eprintln!("❌ Build failed. Exiting.");
         std::process::exit(1);
     }
@@ -238,13 +320,13 @@ fn build_ios() {
 
 fn rebuild_and_reexecute(original_args: Vec<String>) {
     let project_root = find_project_root();
-    if !cargo_build_release_xos(&project_root) {
+    if !cargo_build_release_xos(&project_root, false) {
         eprintln!("❌ Build failed. Exiting.");
         std::process::exit(1);
     }
 
     let xos_bin = release_xos_executable(&project_root);
-    println!("✅ Build complete. Executing...\n");
+    println!("✅ Build complete. Executing...");
 
     // Re-execute the original command with -n to skip the prompt
     let mut exec_cmd = Command::new(&xos_bin);
@@ -420,7 +502,7 @@ fn main() {
                 RebuildOption::RebuildAll => {
                     println!("🔨 Rebuilding Rust CLI...");
                     let project_root = find_project_root();
-                    if !cargo_build_release_xos(&project_root) {
+                    if !cargo_build_release_xos(&project_root, false) {
                         eprintln!("❌ CLI build failed. Exiting.");
                         std::process::exit(1);
                     }
