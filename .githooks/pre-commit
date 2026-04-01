@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "pre-commit: cargo not found; skipping Cargo.lock refresh"
+  exit 0
+fi
+
+echo "pre-commit: refreshing Cargo.lock"
+cargo generate-lockfile
+
+if ! git diff --quiet -- Cargo.lock; then
+  echo "pre-commit: Cargo.lock changed, staging update"
+  git add Cargo.lock
+fi
