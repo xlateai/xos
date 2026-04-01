@@ -435,7 +435,7 @@ pub fn run_python_app(file_path: &PathBuf) {
             std::process::exit(1);
         }
     } else {
-        eprintln!("ℹ️  Python script completed (no xos app launched)");
+        // eprintln!("ℹ️  Python script completed (no xos app launched)");
     }
 }
 
