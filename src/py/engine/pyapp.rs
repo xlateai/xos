@@ -336,7 +336,7 @@ class _FrameWrapper:
 class Application:
     """Base class for xos applications. Extend this class and implement __init__() and tick()."""
     
-    def __init__(self):
+    def __init__(self, headless=None):
         self._xos_initialized = True
         self.frame = None  # Will be set by the engine
         self.mouse = None  # Will be set by the engine
@@ -345,6 +345,8 @@ class Application:
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
         # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
         self.scale = 0.5
+        if headless is not None:
+            self.headless = bool(headless)
     
     def get_width(self):
         """Get the current frame width"""
