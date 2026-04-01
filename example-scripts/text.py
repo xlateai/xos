@@ -17,12 +17,17 @@ class TextDemo(xos.Application):
         # color = xos.color.WHITE if self.t % 2 == 0 else xos.color.RED
 
         self.frame.clear(xos.color.BLACK)
-        self.text.render(
+
+        text_state = self.text.render(
             self.frame,
             # color=xos.color.WHITE,
             # hitboxes=True,
             # baselines=True,
         )
+
+        print(text_state.lines.shape)
+        print(text_state.hitboxes.shape)
+        print(text_state.baselines.shape)
 
     # TODO: general event handling
     # def on_events(self, state: xos.EngineState):
