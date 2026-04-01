@@ -130,7 +130,7 @@ class AudioRelay(xos.Application):
             # Get samples from microphone (auto-clears buffer after reading)
             audio_batch = self.microphone.read()
             
-            # Pass xos.Array directly to speaker with gain
+            # Pass xos.Tensor directly to speaker with gain
             self.speaker.play_samples(audio_batch, gain=GAIN)
     
     def draw_button(self):

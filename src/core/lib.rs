@@ -307,7 +307,7 @@ pub fn run_game(game: &str, web: bool, react_native: bool) {
         thread::spawn(start_web_server);
         launch_expo();
     } else {
-        println!("🖥️  Launching '{game}' in native mode...");
+        // println!("🖥️  Launching '{game}' in native mode...");
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -435,7 +435,7 @@ pub fn run<T: engine::Application + 'static>(app: T) {
             thread::spawn(start_web_server);
             launch_expo();
         } else {
-            println!("🖥️  Launching app in native mode...");
+            // println!("🖥️  Launching app in native mode...");
             engine::start_native(Box::new(app)).unwrap();
         }
     }

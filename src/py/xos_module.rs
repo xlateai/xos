@@ -91,19 +91,21 @@ impl ApplicationHandler for StandalonePreviewApp {
                 onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             },
             f3_menu: crate::engine::F3Menu::new(),
-            ui_scale_percent: 50,
+            ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
         };
         self.f3_engine_state = Some(f3_engine_state);
         self.state = Some(StandalonePreviewState { window, pixels, size });
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         let Some(state) = self.state.as_mut() else { return; };
         match event {
             WindowEvent::CloseRequested => {
-                self.should_close = true;
-                event_loop.exit();
+                // Standalone preview is driven by user script loops (e.g. `while ...: app.tick()`).
+                // Closing the preview window should terminate immediately instead of letting the
+                // Python loop continue headless for an arbitrary amount of time.
+                std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
                 if new_size.width > 0 && new_size.height > 0 {
@@ -373,6 +375,56 @@ fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame._standalone_window_size() -> (width, height) | None
+/// Returns the current standalone preview window size when available.
+fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.none())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let maybe_size = STANDALONE_PREVIEW_HOST.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .and_then(|host| host.app.state.as_ref().map(|s| (s.size.width, s.size.height)))
+        });
+        if let Some((w, h)) = maybe_size {
+            Ok(vm
+                .ctx
+                .new_tuple(vec![vm.ctx.new_int(w as usize).into(), vm.ctx.new_int(h as usize).into()])
+                .into())
+        } else {
+            Ok(vm.ctx.none())
+        }
+    }
+}
+
+/// xos.frame._standalone_ui_scale() -> float | None
+/// Current F3 UI scale as `ui_scale_percent / 100` from the standalone preview (Python-driven tick).
+fn frame_standalone_ui_scale(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.none())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let v = STANDALONE_PREVIEW_HOST.with(|slot| {
+            slot.borrow().as_ref().and_then(|host| {
+                host.app
+                    .f3_engine_state
+                    .as_ref()
+                    .map(|es| es.ui_scale_percent as f64 / 100.0)
+            })
+        });
+        if let Some(s) = v {
+            Ok(vm.ctx.new_float(s).into())
+        } else {
+            Ok(vm.ctx.none())
+        }
+    }
+}
+
 /// xos.frame._present_standalone() - presents standalone buffer in a non-blocking native window.
 fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -408,7 +460,7 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 {
                     PumpStatus::Continue => {}
                     PumpStatus::Exit(_) => {
-                        *opt = None;
+                        // Keep EventLoop alive: many platforms allow only one per process.
                     }
                 }
             }
@@ -466,6 +518,20 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     frame_module
         .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_window_size",
+            vm.new_function("_standalone_window_size", frame_standalone_window_size),
+            vm,
+        )
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_ui_scale",
+            vm.new_function("_standalone_ui_scale", frame_standalone_ui_scale),
+            vm,
+        )
         .unwrap();
     frame_module
         .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
@@ -570,12 +636,15 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         eprintln!("Failed to create Application class: {:?}", e);
     }
     
-    // Add _ArrayWrapper and _ArrayResult to builtins so they're globally available
-    if let Ok(array_wrapper) = scope.globals.get_item("_ArrayWrapper", vm) {
-        vm.builtins.set_attr("_ArrayWrapper", array_wrapper, vm).ok();
+    // Add _TensorWrapper and _TensorResult to builtins so they're globally available
+    if let Ok(tensor_wrapper) = scope.globals.get_item("_TensorWrapper", vm) {
+        vm.builtins
+            .set_attr("_TensorWrapper", tensor_wrapper.clone(), vm)
+            .ok();
+        module.set_attr("Tensor", tensor_wrapper, vm).ok();
     }
-    if let Ok(array_result) = scope.globals.get_item("_ArrayResult", vm) {
-        vm.builtins.set_attr("_ArrayResult", array_result, vm).ok();
+    if let Ok(tensor_result) = scope.globals.get_item("_TensorResult", vm) {
+        vm.builtins.set_attr("_TensorResult", tensor_result, vm).ok();
     }
     
     // Get the Application class and _FrameWrapper from the scope and add them to the module

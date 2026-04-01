@@ -43,7 +43,33 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
 }
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
-class _ArrayResult:
+def _tensor_unflatten(flat, shape):
+    """Row-major flat list -> nested list for the given ``shape``."""
+    shape = tuple(shape)
+    if len(shape) == 0:
+        if len(flat) != 1:
+            raise ValueError("scalar tensor expects one element")
+        return flat[0]
+    if len(shape) == 1:
+        n = shape[0]
+        if len(flat) != n:
+            raise ValueError("tensor list(): length mismatch with shape")
+        return list(flat)
+    d0 = shape[0]
+    rest = shape[1:]
+    chunk = 1
+    for s in rest:
+        chunk *= s
+    if len(flat) != d0 * chunk:
+        raise ValueError("tensor list(): length mismatch with shape")
+    return [_tensor_unflatten(flat[i * chunk : (i + 1) * chunk], rest) for i in range(d0)]
+
+def _nested_list_to_tuple(nested):
+    if isinstance(nested, list):
+        return tuple(_nested_list_to_tuple(x) for x in nested)
+    return nested
+
+class _TensorResult:
     """Wrapper for list results that provides nice string representation"""
     def __init__(self, data, shape=None):
         self._data = data
@@ -57,28 +83,77 @@ class _ArrayResult:
     
     def __getitem__(self, idx):
         return self._data[idx]
+
+    def list(self):
+        sh = self._shape if self._shape is not None else (len(self._data),)
+        return _tensor_unflatten(self._data, sh)
+
+    def tuple(self):
+        return _nested_list_to_tuple(self.list())
     
     def __str__(self):
         if not self._data:
-            return "xos.Array(empty)"
+            return "xos.Tensor(empty)"
         min_val = min(self._data)
         max_val = max(self._data)
         mean_val = sum(self._data) / len(self._data)
         shape_str = f"shape={self._shape}" if self._shape else f"len={len(self._data)}"
-        return f"xos.Array({shape_str}, min={min_val:.1f}, mean={mean_val:.1f}, max={max_val:.1f})"
+        return f"xos.Tensor({shape_str}, min={min_val:.1f}, mean={mean_val:.1f}, max={max_val:.1f})"
     
     def __repr__(self):
         return self.__str__()
 
-class _ArrayWrapper:
+class _TensorWrapper:
     """Wrapper for array dict that supports slice assignment"""
     def __init__(self, data):
         self._data = data
+
+    def _getitem_int_index(self, key):
+        """Row-major integer indexing: ``t[i]``, ``t[i,j]``, … partial views or a scalar."""
+        shape = tuple(self.shape)
+        flat = self._data["_data"]
+        if isinstance(key, int):
+            indices = (key,)
+        else:
+            indices = key
+        offset = 0
+        dim = 0
+        for k in indices:
+            if dim >= len(shape):
+                raise IndexError("too many indices for tensor")
+            kk = int(k)
+            if kk < 0:
+                kk += shape[dim]
+            if kk < 0 or kk >= shape[dim]:
+                raise IndexError("tensor index out of range")
+            stride = 1
+            for s in shape[dim + 1 :]:
+                stride *= s
+            offset += kk * stride
+            dim += 1
+        remaining = shape[dim:]
+        n = 1
+        for s in remaining:
+            n *= s
+        subflat = flat[offset : offset + n]
+        if len(remaining) == 0:
+            return subflat[0]
+        return self._wrap_vals(remaining, subflat)
     
     def __getitem__(self, key):
         if isinstance(key, slice) and key == slice(None, None, None):
             # Return the underlying data dict for full slice access
             return self._data
+        # N-dimensional integer indexing (e.g. y[0], y[0, 0], y[0, 0, 1])
+        if "_data" in self._data and isinstance(self._data["_data"], list):
+            if type(key) is int:
+                return self._getitem_int_index(key)
+            if (
+                isinstance(key, tuple)
+                and len(key) > 0
+                and all(type(x) is int for x in key)
+            ):
+                return self._getitem_int_index(key)
         if isinstance(key, tuple) and len(key) == 2:
             a, b = key
             shape = tuple(self.shape)
@@ -96,12 +171,12 @@ class _ArrayWrapper:
                     col = b
                     out = [flat[i * cols + col] for i in range(rows)]
                     return self._wrap_vals((rows,), out)
-        if isinstance(key, _ArrayWrapper):
+        if isinstance(key, _TensorWrapper):
             return self._gather_rows(key)
         return self._data[key]
 
     def _wrap_vals(self, shape, values):
-        return _ArrayWrapper({
+        return _TensorWrapper({
             "shape": tuple(shape),
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -141,14 +216,14 @@ class _ArrayWrapper:
             if isinstance(value, dict) and value.get('_direct_fill', False):
                 # Data already written directly to buffer by Rust - ZERO COPY! Do nothing.
                 return
-            # Call Rust function to fill buffer (handles lists and _ArrayResult)
+            # Call Rust function to fill buffer (handles lists and _TensorResult)
             import xos
             xos.rasterizer._fill_buffer(self._data, value)
         else:
             self._data[key] = value
 
     def _wrap_like_self(self, values):
-        return _ArrayWrapper({
+        return _TensorWrapper({
             "shape": self.shape,
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -158,7 +233,7 @@ class _ArrayWrapper:
     def _binary_op(self, other, op):
         left = self._data.get("_data", [])
         lshape = tuple(self.shape)
-        if isinstance(other, _ArrayWrapper):
+        if isinstance(other, _TensorWrapper):
             right = other._data.get("_data", [])
             rshape = tuple(other.shape)
             if isinstance(right, list):
@@ -190,7 +265,7 @@ class _ArrayWrapper:
     def _cmp_broadcast(self, other, cmp_fn):
         left = self._data["_data"]
         lshape = tuple(self.shape)
-        if isinstance(other, _ArrayWrapper):
+        if isinstance(other, _TensorWrapper):
             right = other._data["_data"]
             rshape = tuple(other.shape)
             if lshape == rshape:
@@ -214,7 +289,7 @@ class _ArrayWrapper:
         return self._cmp_broadcast(other, lambda a, b: 1.0 if a > b else 0.0)
 
     def __or__(self, other):
-        if isinstance(other, _ArrayWrapper):
+        if isinstance(other, _TensorWrapper):
             la = self._data["_data"]
             lb = other._data["_data"]
             if len(la) != len(lb):
@@ -235,7 +310,7 @@ class _ArrayWrapper:
         return self._binary_op(other, lambda a, b: a - b)
 
     def __rsub__(self, other):
-        if isinstance(other, _ArrayWrapper):
+        if isinstance(other, _TensorWrapper):
             return other.__sub__(self)
         left = self._data.get("_data", [])
         return self._wrap_like_self([other - a for a in left])
@@ -263,19 +338,31 @@ class _ArrayWrapper:
         for dim in shape:
             size *= dim
         return size
+
+    def list(self):
+        """Nested Python lists with the same structure as ``shape`` (row-major)."""
+        if "_data" not in self._data:
+            raise TypeError("tensor has no element data for list()")
+        flat = self._data["_data"]
+        shape = tuple(self.shape)
+        return _tensor_unflatten(flat, shape)
+
+    def tuple(self):
+        """Same as ``list()`` but with tuples at each nesting level."""
+        return _nested_list_to_tuple(self.list())
     
     def __str__(self):
-        # For regular arrays (not frame arrays), compute statistics
+        # For regular tensors (not frame tensors), compute statistics
         if '_data' in self._data:
             data_list = self._data['_data']
             if data_list and len(data_list) > 0:
                 min_val = min(data_list)
                 max_val = max(data_list)
                 mean_val = sum(data_list) / len(data_list)
-                return f"xos.Array(shape={self.shape}, dtype={self.dtype}, min={min_val:.3f}, max={max_val:.3f}, mean={mean_val:.3f})"
-            return f"xos.Array(shape={self.shape}, dtype={self.dtype}, empty)"
-        # For frame arrays (no _data field)
-        return f"xos.Array(shape={self.shape}, dtype=u8)"
+                return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, min={min_val:.3f}, max={max_val:.3f}, mean={mean_val:.3f})"
+            return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, empty)"
+        # For frame tensors (no _data field)
+        return f"xos.Tensor(shape={self.shape}, dtype=u8)"
     
     def __repr__(self):
         return self.__str__()
@@ -284,7 +371,7 @@ class _FrameWrapper:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
         self._data = data
-        self._tensor_wrapper = _ArrayWrapper(data.get('tensor', {}))
+        self._tensor_wrapper = _TensorWrapper(data.get('tensor', {}))
     
     @property
     def tensor(self):
@@ -344,14 +431,20 @@ class Application:
         self.fps = 0.0  # Frames per second derived from timestep
         self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
-        # F3 "Scale" slider as 0.01..1.0 (1%..100%); default 0.5 at 50%.
-        self.scale = 0.5
+        # F3 scale as percent/100 (0.25..5.0 for 25–500%); default 1.0 at 100%.
+        # Engine syncs `xos_scale` each tick.
+        self.xos_scale = 1.0
         self._xos_standalone_width = 800
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
         self._xos_ticks_completed = 0
         if headless is not None:
             self.headless = bool(headless)
+
+    @property
+    def scale(self):
+        """F3 UI scale as percent/100 (100% → 1.0, 25–500% → 0.25–5.0). Updated each tick."""
+        return float(getattr(self, "xos_scale", 1.0))
 
     @classmethod
     def __init_subclass__(cls, **kwargs):
@@ -378,6 +471,17 @@ class Application:
         if getattr(self, "_xos_engine_bound", False):
             self.pre_tick()
             return
+
+        # In standalone preview mode, follow live preview window size and F3 scale.
+        if not bool(getattr(self, "headless", False)):
+            ws = xos.frame._standalone_window_size()
+            if ws is not None:
+                w, h = ws
+                self._xos_standalone_width = int(max(1, w))
+                self._xos_standalone_height = int(max(1, h))
+            sp = xos.frame._standalone_ui_scale()
+            if sp is not None:
+                self.xos_scale = float(sp)
 
         # Standalone timing (manual Python-driven tick loop).
         now = time.perf_counter()
@@ -519,8 +623,8 @@ impl Application for PyApp {
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
                 app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
-                app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
-                    .map_err(|e| format!("Failed to set scale attribute: {:?}", e))?;
+                app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
+                    .map_err(|e| format!("Failed to set xos_scale attribute: {:?}", e))?;
                 
                 Ok(())
             })
@@ -574,7 +678,7 @@ Call super().__init__() in your app __init__ before using tick()."
 
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
-                    let _ = app_instance.set_attr("scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                    let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
                     // Call tick
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {

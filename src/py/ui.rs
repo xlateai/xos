@@ -254,13 +254,16 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             .hitboxes
             .iter()
             .map(|hb| {
+                let top_left = vm.ctx.new_list(vec![
+                    vm.ctx.new_float(hb[0][0] as f64).into(),
+                    vm.ctx.new_float(hb[0][1] as f64).into(),
+                ]);
+                let bottom_right = vm.ctx.new_list(vec![
+                    vm.ctx.new_float(hb[1][0] as f64).into(),
+                    vm.ctx.new_float(hb[1][1] as f64).into(),
+                ]);
                 vm.ctx
-                    .new_list(vec![
-                        vm.ctx.new_float(hb[0] as f64).into(),
-                        vm.ctx.new_float(hb[1] as f64).into(),
-                        vm.ctx.new_float(hb[2] as f64).into(),
-                        vm.ctx.new_float(hb[3] as f64).into(),
-                    ])
+                    .new_list(vec![top_left.into(), bottom_right.into()])
                     .into()
             })
             .collect(),
@@ -270,13 +273,16 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             .baselines
             .iter()
             .map(|b| {
+                let p0 = vm.ctx.new_list(vec![
+                    vm.ctx.new_float(b[0][0] as f64).into(),
+                    vm.ctx.new_float(b[0][1] as f64).into(),
+                ]);
+                let p1 = vm.ctx.new_list(vec![
+                    vm.ctx.new_float(b[1][0] as f64).into(),
+                    vm.ctx.new_float(b[1][1] as f64).into(),
+                ]);
                 vm.ctx
-                    .new_list(vec![
-                        vm.ctx.new_float(b[0] as f64).into(),
-                        vm.ctx.new_float(b[1] as f64).into(),
-                        vm.ctx.new_float(b[2] as f64).into(),
-                        vm.ctx.new_float(b[3] as f64).into(),
-                    ])
+                    .new_list(vec![p0.into(), p1.into()])
                     .into()
             })
             .collect(),
@@ -335,8 +341,12 @@ class TextRenderState:
     def __init__(self, state_dict):
         import xos
         self.lines = xos.tensor(state_dict["lines"], dtype=xos.int32)
-        self.hitboxes = xos.tensor(state_dict["hitboxes"], dtype=xos.float32)
-        self.baselines = xos.tensor(state_dict["baselines"], dtype=xos.float32)
+        hb = state_dict["hitboxes"]
+        bl = state_dict["baselines"]
+        n_hb = len(hb)
+        n_bl = len(bl)
+        self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
+        self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
 def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
     return Text(

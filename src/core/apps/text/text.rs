@@ -333,7 +333,7 @@ impl Application for TextApp {
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
 
-        // Standalone text app: same F3 curve as coder ([`EngineState::f3_ui_scale_multiplier`]) + calibration.
+        // Standalone text app: F3 multiplier is `ui_scale_percent / 100` (25–500% → 0.25–5.0), same as coder.
         if !self.uses_parent_ui_scale {
             let short_edge = width.min(height);
             let base_u = (short_edge / 920.0).clamp(0.28, 1.0);

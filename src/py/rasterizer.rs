@@ -583,7 +583,7 @@ fn fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// xos.rasterizer._fill_buffer(array_dict, values) - fill buffer 1:1 with values
 /// 
 /// Internal function to efficiently fill the frame buffer with a list of values
-/// This is called by _ArrayWrapper when doing slice assignment: array[:] = values
+/// This is called by _TensorWrapper when doing slice assignment: array[:] = values
 fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() != 2 {

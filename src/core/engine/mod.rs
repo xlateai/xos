@@ -37,5 +37,6 @@ pub use f3_menu::{
 };
 pub use engine::{
     f3_ui_scale_multiplier, tick_frame_delta, Application, CursorStyleSetter, EngineState,
-    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    F3_UI_SCALE_DEFAULT_PERCENT, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };

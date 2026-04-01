@@ -1,6 +1,6 @@
 use crate::engine::{Application, EngineState};
 
-const DRAW_COLOR: (u8, u8, u8) = (255, 255, 255);
+const DRAW_COLOR: (u8, u8, u8) = (255, 0, 255);
 const STROKE_WIDTH: f32 = 2.0;
 
 fn draw_line(pixels: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f32, y1: f32) {
