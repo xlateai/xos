@@ -154,22 +154,7 @@ impl Application for ChatApp {
         self.draw_text_to_buffer(buffer, width, height, &self.input_rasterizer, input_padding, input_offset_y, INPUT_TEXT_COLOR);
     }
 
-    fn on_mouse_down(&mut self, state: &mut EngineState) {
-        // Show on-screen keyboard when user clicks/taps in the input area
-        let shape = state.frame.tensor.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let input_height = (height as f32 * 0.12).max(48.0) as u32;
-        let messages_height = height.saturating_sub(input_height);
-
-        let mx = state.mouse.x as f32;
-        let my = state.mouse.y as f32;
-
-        // Coordinates are in pixels; input area starts at messages_height
-        if my >= messages_height as f32 {
-            state.keyboard.onscreen.show();
-        }
-    }
+    fn on_mouse_down(&mut self, _state: &mut EngineState) {}
 
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
