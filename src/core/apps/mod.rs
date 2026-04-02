@@ -69,6 +69,7 @@ define_apps! {
     Waveform => waveform::Waveform,
     Scroll => scroll::ScrollApp,
     Text => text::TextApp,
+    Chat => chat::ChatApp,
     Wireframe => wireframe::WireframeDemo,
     WireframeText => wireframe_text::WireframeText,
     Triangles => triangles::TrianglesApp,
