@@ -15,6 +15,22 @@ pub fn make_nn_module(vm: &VirtualMachine) -> PyRef<PyModule> {
 def _xos_tensor(data, shape):
     return __import__("xos").tensor(data, shape)
 
+def _normalize_out_features_shape(out_features):
+    if isinstance(out_features, tuple):
+        dims = tuple(max(1, int(d)) for d in out_features)
+        return dims, _shape_product(dims)
+    if isinstance(out_features, list):
+        dims = tuple(max(1, int(d)) for d in out_features)
+        return dims, _shape_product(dims)
+    out = max(1, int(out_features))
+    return (out,), out
+
+def _shape_product(dims):
+    p = 1
+    for d in dims:
+        p *= d
+    return p
+
 def _tensor_to_flat_list(t):
     out = []
     if hasattr(t, "_data"):
@@ -64,19 +80,17 @@ class Linear(Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.out_shape, self.out_size = _normalize_out_features_shape(out_features)
         self.bias = bias
 
     def forward(self, x):
         # Deterministic placeholder projection to fixed feature width.
-        # Repeats/truncates source values until out_features is filled,
-        # then shapes as (1, N, 2, 2) when out_features is divisible by 4.
+        # Repeats/truncates source values and reshapes to configured out_features.
         src = _tensor_to_flat_list(x)
         if not src:
             src = [0.0]
-        out = [src[i % len(src)] for i in range(self.out_features)]
-        if self.out_features % 4 == 0:
-            return _xos_tensor(out, (1, self.out_features // 4, 2, 2))
-        return _xos_tensor(out, (1, self.out_features))
+        out = [src[i % len(src)] for i in range(self.out_size)]
+        return _xos_tensor(out, (1,) + self.out_shape)
 
 class ReLU(Module):
     def __init__(self):
