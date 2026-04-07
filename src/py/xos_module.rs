@@ -287,6 +287,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                     let dragging = *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false);
 
                     if dragging {
+                        crate::engine::f3_menu_boost_interaction_fade(es);
                         if let Some(state) = self.states.get(&_window_id) {
                             crate::engine::frame_view_pan_by_pixels(
                                 es,
@@ -325,6 +326,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                             let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
                             if command && shift && es.frame_view_zoom > 1.001 {
                                 self.frame_pan_dragging.insert(viewport_id, true);
+                                crate::engine::f3_menu_boost_interaction_fade(es);
                                 if let Some(state) = self.states.get(&_window_id) {
                                     state.window.set_cursor(CursorIcon::Grabbing);
                                 }

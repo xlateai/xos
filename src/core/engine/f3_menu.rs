@@ -150,7 +150,7 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
 }
 
 #[inline]
-fn boost_interaction_fade(state: &mut EngineState) {
+pub fn f3_menu_boost_interaction_fade(state: &mut EngineState) {
     state.f3_menu.interaction_fade = 1.0;
 }
 
@@ -217,7 +217,7 @@ pub fn f3_menu_handle_zoom_scroll(state: &mut EngineState, wheel_delta_y: f32) -
     if wheel_delta_y.abs() < 1e-4 {
         return false;
     }
-    boost_interaction_fade(state);
+    f3_menu_boost_interaction_fade(state);
     let step = wheel_delta_y * SCALE_WHEEL_PERCENT_PER_UNIT;
     let target = clamp_scale_percent_f32(state.f3_menu.scale_zoom_target + step);
     state.f3_menu.scale_zoom_target = target;
@@ -229,7 +229,7 @@ pub fn f3_menu_handle_frame_zoom_scroll(state: &mut EngineState, wheel_delta_y: 
     if wheel_delta_y.abs() < 1e-4 {
         return false;
     }
-    boost_interaction_fade(state);
+    f3_menu_boost_interaction_fade(state);
 
     let old_zoom = state
         .frame_view_zoom_target
@@ -342,14 +342,14 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
         && my >= geom.button_top
         && my <= geom.button_bottom;
     if on_button {
-        boost_interaction_fade(state);
+        f3_menu_boost_interaction_fade(state);
         state.paused = !state.paused;
         state.f3_menu.scale_dragging = false;
         state.f3_menu.pointer_captured = true;
         return true;
     }
     if on_slider {
-        boost_interaction_fade(state);
+        f3_menu_boost_interaction_fade(state);
         state.f3_menu.scale_dragging = true;
         set_scale_immediate(state, percent_from_mouse_x(mx, &geom, knob_w));
     }
@@ -367,7 +367,7 @@ pub fn f3_menu_handle_mouse_move(state: &mut EngineState) -> bool {
         return false;
     };
     set_scale_immediate(state, percent_from_mouse_x(state.mouse.x, &geom, knob_w));
-    boost_interaction_fade(state);
+    f3_menu_boost_interaction_fade(state);
     true
 }
 

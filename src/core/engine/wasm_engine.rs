@@ -6,6 +6,7 @@ use wasm_bindgen::JsCast;
 
 use super::{
     apply_frame_view_zoom,
+    f3_menu_boost_interaction_fade,
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
     f3_menu_handle_zoom_scroll, tick_f3_menu,
@@ -112,6 +113,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.y = new_y;
 
                 if state.frame_pan_dragging {
+                    f3_menu_boost_interaction_fade(&mut state.engine_state);
                     let shape = state.engine_state.frame.shape();
                     frame_view_pan_by_pixels(
                         &mut state.engine_state,
@@ -203,6 +205,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                             && state.engine_state.frame_view_zoom > 1.001
                         {
                             state.frame_pan_dragging = true;
+                            f3_menu_boost_interaction_fade(&mut state.engine_state);
                             event.prevent_default();
                             return;
                         }

@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use super::{
     apply_frame_view_zoom,
+    f3_menu_boost_interaction_fade,
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
     f3_menu_handle_zoom_scroll, tick_f3_menu,
@@ -266,6 +267,7 @@ impl ApplicationHandler for AppState {
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
 
                 if self.frame_pan_dragging {
+                    f3_menu_boost_interaction_fade(&mut self.engine_state);
                     let dx = self.engine_state.mouse.dx;
                     let dy = self.engine_state.mouse.dy;
                     frame_view_pan_by_pixels(
@@ -300,6 +302,7 @@ impl ApplicationHandler for AppState {
                         && self.engine_state.frame_view_zoom > 1.001
                     {
                         self.frame_pan_dragging = true;
+                        f3_menu_boost_interaction_fade(&mut self.engine_state);
                         if self.engine_state.paused {
                             self.window.request_redraw();
                         }
