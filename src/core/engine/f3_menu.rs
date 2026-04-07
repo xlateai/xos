@@ -11,10 +11,8 @@ const REF_SHORT_EDGE: f32 = 920.0;
 const BASE_FONT: f32 = 27.0;
 /// Ctrl/Cmd + wheel sensitivity in scale-percent per wheel delta unit.
 const SCALE_WHEEL_PERCENT_PER_UNIT: f32 = 16.0;
-/// Spring frequency for smooth zoom response (higher = faster).
-const SCALE_SPRING_OMEGA: f32 = 24.0;
-/// Damping ratio for spring smoothing (<1 is slightly lively, 1 is critically damped).
-const SCALE_SPRING_ZETA: f32 = 0.82;
+/// Monotonic settle rate for Ctrl/Cmd wheel scale smoothing (1/s).
+const SCALE_SMOOTH_RATE: f32 = 22.0;
 /// Shift + Ctrl/Cmd + wheel frame-zoom sensitivity.
 const FRAME_ZOOM_WHEEL_RATE: f32 = 0.085;
 /// Interaction fade decay rate for transient F3 visibility (1/s).
@@ -191,29 +189,25 @@ fn tick_scale_zoom_smoothing(state: &mut EngineState) {
     state.f3_menu.scale_zoom_target = target;
 
     let current = state.f3_menu.scale_zoom_value;
-    let x = current - target;
-    let v = state.f3_menu.scale_zoom_velocity;
-
-    if x.abs() < 0.01 && v.abs() < 0.02 {
+    let delta = target - current;
+    if delta.abs() < 0.01 {
         state.f3_menu.scale_zoom_value = target;
         state.ui_scale_percent = target.round() as u16;
         state.f3_menu.scale_zoom_velocity = 0.0;
         return;
     }
 
-    let accel = -2.0 * SCALE_SPRING_ZETA * SCALE_SPRING_OMEGA * v
-        - SCALE_SPRING_OMEGA * SCALE_SPRING_OMEGA * x;
-    let mut new_v = v + accel * dt;
-    let mut new_p = current + new_v * dt;
-    let clamped_p = clamp_scale_percent_f32(new_p);
-    if (clamped_p - new_p).abs() > f32::EPSILON {
-        new_p = clamped_p;
-        new_v = 0.0;
+    // First-order low-pass toward target: smooth, fast, and strictly non-oscillatory.
+    let alpha = 1.0 - (-SCALE_SMOOTH_RATE * dt).exp();
+    let mut next = current + delta * alpha;
+    // Hard snap in a tiny neighborhood so UI text/knob stop perfectly.
+    if (target - next).abs() < 0.08 {
+        next = target;
     }
 
-    state.f3_menu.scale_zoom_velocity = new_v;
-    state.f3_menu.scale_zoom_value = new_p;
-    state.ui_scale_percent = new_p.round() as u16;
+    state.f3_menu.scale_zoom_velocity = 0.0;
+    state.f3_menu.scale_zoom_value = next;
+    state.ui_scale_percent = next.round() as u16;
 }
 
 /// Handle Ctrl/Cmd + wheel zoom on the F3 scale.
@@ -318,7 +312,8 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
     let slider_w = (200.0 * ui_scale).max(120.0);
     // Keep panel width stable so FPS/scale text width changes don't make the slider jitter horizontally.
     let content_w = slider_w.max(button_size + 120.0 * ui_scale);
-    let show_minimap = state.frame_view_zoom > FRAME_VIEW_ZOOM_MIN + 1e-3;
+    let (_, _, vw, vh) = frame_view_rect_norm(state);
+    let show_minimap = vw < 0.999 || vh < 0.999;
     let geom = panel_geom(state, content_w, ui_scale, pad, show_minimap);
     let knob_w = (12.0 * ui_scale).max(8.0).round().max(1.0);
     Some((geom, knob_w))

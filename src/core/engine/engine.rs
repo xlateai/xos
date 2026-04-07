@@ -308,13 +308,22 @@ pub fn tick_frame_view_zoom(engine_state: &mut EngineState) {
         engine_state.frame_view_zoom_velocity = new_v;
     }
 
+    // Hard snap near full-frame zoom to avoid residual micro-zoom after wheel release.
+    if (engine_state.frame_view_zoom_target - FRAME_VIEW_ZOOM_MIN).abs() < 0.0005
+        && (engine_state.frame_view_zoom - FRAME_VIEW_ZOOM_MIN).abs() < 0.003
+    {
+        engine_state.frame_view_zoom = FRAME_VIEW_ZOOM_MIN;
+        engine_state.frame_view_zoom_target = FRAME_VIEW_ZOOM_MIN;
+        engine_state.frame_view_zoom_velocity = 0.0;
+    }
+
     engine_state.frame_view_center_x = clamp_center_for_zoom(engine_state.frame_view_center_x, engine_state.frame_view_zoom);
     engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, engine_state.frame_view_zoom);
 }
 
 /// Apply current frame-view zoom directly to the app frame buffer (before keyboard/F3 overlays).
 pub fn apply_frame_view_zoom(engine_state: &mut EngineState) {
-    if engine_state.frame_view_zoom <= FRAME_VIEW_ZOOM_MIN + 1e-4 {
+    if engine_state.frame_view_zoom <= FRAME_VIEW_ZOOM_MIN + 0.001 {
         return;
     }
 
