@@ -577,6 +577,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm).unwrap();
     module.set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm).unwrap();
 
+    crate::python_api::burn_train::register_burn_module(&module, vm);
+
     // Add nn submodule
     let nn_module = crate::python_api::nn::make_nn_module(vm);
     module.set_attr("nn", nn_module, vm).unwrap();

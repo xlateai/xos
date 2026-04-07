@@ -10,7 +10,9 @@ default-run = "xos"
 
 [dependencies]
 burn = "0.20"
+burn-autodiff = "0.20"
 burn-backend = "0.20"
+burn-ndarray = "0.20"
 burn-wgpu = "0.20"
 pixels = "0.15.0"
 winit = "0.30.12"

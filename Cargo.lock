@@ -10539,7 +10539,9 @@ name = "xos"
 version = "0.3.7"
 dependencies = [
  "burn",
+ "burn-autodiff",
  "burn-backend",
+ "burn-ndarray",
  "burn-wgpu",
  "clap",
  "console_error_panic_hook",
