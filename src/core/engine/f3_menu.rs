@@ -262,7 +262,10 @@ pub fn f3_menu_handle_frame_zoom_scroll(state: &mut EngineState, wheel_delta_y: 
 
     state.frame_view_center_x = new_left + new_view * 0.5;
     state.frame_view_center_y = new_top + new_view * 0.5;
+    // Apply immediately so paused/event-driven redraws (e.g. mouse move) cannot advance zoom.
+    state.frame_view_zoom = new_zoom;
     state.frame_view_zoom_target = new_zoom;
+    state.frame_view_zoom_velocity = 0.0;
     true
 }
 
@@ -363,6 +366,9 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
 /// Returns true if the app should not receive this move (slider drag).
 pub fn f3_menu_handle_mouse_move(state: &mut EngineState) -> bool {
     let menu = &mut state.f3_menu;
+    if menu.scale_dragging && !state.mouse.is_left_clicking {
+        menu.scale_dragging = false;
+    }
     if !menu.visible || !menu.scale_dragging {
         return false;
     }

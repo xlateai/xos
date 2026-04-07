@@ -280,33 +280,14 @@ pub fn frame_view_rect_norm(engine_state: &EngineState) -> (f32, f32, f32, f32) 
 
 /// Smoothly update frame zoom value toward its target.
 pub fn tick_frame_view_zoom(engine_state: &mut EngineState) {
-    let dt = engine_state.delta_time_seconds.clamp(1.0 / 240.0, 1.0 / 20.0);
     let target = engine_state
         .frame_view_zoom_target
         .clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
     engine_state.frame_view_zoom_target = target;
-
-    let current = engine_state.frame_view_zoom;
-    let x = current - target;
-    let v = engine_state.frame_view_zoom_velocity;
-    const OMEGA: f32 = 20.0;
-    const ZETA: f32 = 0.84;
-
-    if x.abs() < 0.0008 && v.abs() < 0.01 {
-        engine_state.frame_view_zoom = target;
-        engine_state.frame_view_zoom_velocity = 0.0;
-    } else {
-        let accel = -2.0 * ZETA * OMEGA * v - OMEGA * OMEGA * x;
-        let mut new_v = v + accel * dt;
-        let mut new_zoom = current + new_v * dt;
-        let clamped = new_zoom.clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
-        if (clamped - new_zoom).abs() > f32::EPSILON {
-            new_zoom = clamped;
-            new_v = 0.0;
-        }
-        engine_state.frame_view_zoom = new_zoom;
-        engine_state.frame_view_zoom_velocity = new_v;
-    }
+    // Keep frame zoom fully deterministic and event-driven (wheel/drag only).
+    // Never animate in tick; this prevents redraw-driven drift (e.g. plain mouse move).
+    engine_state.frame_view_zoom = target;
+    engine_state.frame_view_zoom_velocity = 0.0;
 
     // Hard snap near full-frame zoom to avoid residual micro-zoom after wheel release.
     if (engine_state.frame_view_zoom_target - FRAME_VIEW_ZOOM_MIN).abs() < 0.0005

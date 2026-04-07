@@ -43,6 +43,7 @@ struct StandalonePreviewApp {
     states: HashMap<WindowId, StandalonePreviewState>,
     viewport_to_window: HashMap<u64, WindowId>,
     pending_frames: HashMap<u64, StandalonePendingFrame>,
+    source_frames: HashMap<u64, StandalonePendingFrame>,
     paused_base_frames: HashMap<u64, StandalonePendingFrame>,
     pending_window_creates: HashMap<u64, (u32, u32)>,
     f3_engine_state: HashMap<u64, crate::engine::EngineState>,
@@ -59,6 +60,7 @@ impl StandalonePreviewApp {
             states: HashMap::new(),
             viewport_to_window: HashMap::new(),
             pending_frames: HashMap::new(),
+            source_frames: HashMap::new(),
             paused_base_frames: HashMap::new(),
             pending_window_creates: HashMap::new(),
             f3_engine_state: HashMap::new(),
@@ -194,14 +196,16 @@ impl StandalonePreviewApp {
         }
 
         if !paused {
-            self.paused_base_frames.insert(
-                viewport_id,
-                StandalonePendingFrame {
-                    width: frame_data.width,
-                    height: frame_data.height,
-                    rgba: frame_data.rgba.clone(),
-                },
-            );
+            if let Some(src) = self.source_frames.get(&viewport_id) {
+                self.paused_base_frames.insert(
+                    viewport_id,
+                    StandalonePendingFrame {
+                        width: src.width,
+                        height: src.height,
+                        rgba: src.rgba.clone(),
+                    },
+                );
+            }
         }
 
         let (src_w, src_h, src_rgba) = if paused {
@@ -211,7 +215,11 @@ impl StandalonePreviewApp {
                 (frame_data.width, frame_data.height, frame_data.rgba.clone())
             }
         } else {
-            (frame_data.width, frame_data.height, frame_data.rgba.clone())
+            if let Some(src) = self.source_frames.get(&viewport_id) {
+                (src.width, src.height, src.rgba.clone())
+            } else {
+                (frame_data.width, frame_data.height, frame_data.rgba.clone())
+            }
         };
 
         let expected = (state.size.width as usize)
@@ -790,6 +798,16 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                         rgba: frame,
                     },
                 );
+                if let Some(pf) = host.app.pending_frames.get(&viewport_id) {
+                    host.app.source_frames.insert(
+                        viewport_id,
+                        StandalonePendingFrame {
+                            width: pf.width,
+                            height: pf.height,
+                            rgba: pf.rgba.clone(),
+                        },
+                    );
+                }
                 if !host.app.viewport_to_window.contains_key(&viewport_id) {
                     host.app
                         .pending_window_creates
