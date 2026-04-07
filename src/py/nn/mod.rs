@@ -12,6 +12,9 @@ pub fn make_nn_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Expose real Python classes so `class Foo(xos.nn.Module)` works.
     // Runtime behavior is intentionally minimal for now.
     let nn_class_code = r#"
+def _xos_tensor(data, shape):
+    return __import__("xos").tensor(data, shape)
+
 def _tensor_to_flat_list(t):
     out = []
     if hasattr(t, "_data"):
@@ -64,12 +67,16 @@ class Linear(Module):
         self.bias = bias
 
     def forward(self, x):
-        # Minimal deterministic projection to fixed feature width.
-        # Repeats/truncates source values until out_features is filled.
+        # Deterministic placeholder projection to fixed feature width.
+        # Repeats/truncates source values until out_features is filled,
+        # then shapes as (1, N, 2, 2) when out_features is divisible by 4.
         src = _tensor_to_flat_list(x)
         if not src:
             src = [0.0]
-        return [src[i % len(src)] for i in range(self.out_features)]
+        out = [src[i % len(src)] for i in range(self.out_features)]
+        if self.out_features % 4 == 0:
+            return _xos_tensor(out, (1, self.out_features // 4, 2, 2))
+        return _xos_tensor(out, (1, self.out_features))
 
 class ReLU(Module):
     def __init__(self):
