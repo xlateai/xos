@@ -22,6 +22,21 @@ use std::cell::RefCell;
 static STANDALONE_FRAME_BUFFERS: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub(crate) fn standalone_frame_buffer_copy(viewport_id: u64) -> Option<Vec<u8>> {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        let _ = viewport_id;
+        None
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        STANDALONE_FRAME_BUFFERS
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&viewport_id).cloned())
+    }
+}
+
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 struct StandalonePreviewState {
     viewport_id: u64,
@@ -665,12 +680,42 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
     tensor_dict.set_item("size", vm.ctx.new_int(width * height * 4).into(), vm)?;
+    tensor_dict.set_item("_xos_viewport_id", vm.ctx.new_int(viewport_id as i64).into(), vm)?;
 
     let frame_dict = vm.ctx.new_dict();
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
     frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
     Ok(frame_dict.into())
+}
+
+/// xos.frame._standalone_tensor_data(viewport_id) -> list[int]
+/// Returns a flat copy of RGBA bytes for a standalone viewport buffer.
+fn frame_standalone_tensor_data(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.new_list(vec![]).into())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let viewport_id: u64 = if !args.args.is_empty() {
+            let id: i64 = args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
+        let bytes = STANDALONE_FRAME_BUFFERS
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
+            .get(&viewport_id)
+            .cloned()
+            .unwrap_or_default();
+        let py = bytes
+            .into_iter()
+            .map(|b| vm.ctx.new_int(b as i64).into())
+            .collect();
+        Ok(vm.ctx.new_list(py).into())
+    }
 }
 
 /// xos.frame._end_standalone() - clears temporary standalone framebuffer context.
@@ -926,6 +971,13 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     frame_module
         .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_tensor_data",
+            vm.new_function("_standalone_tensor_data", frame_standalone_tensor_data),
+            vm,
+        )
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 

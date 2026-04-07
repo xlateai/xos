@@ -9,6 +9,7 @@ use burn_autodiff::Autodiff;
 use burn::tensor::{Tensor, TensorData};
 use burn_ndarray::NdArray;
 use once_cell::sync::Lazy;
+use crate::tensor::tensor::{tensor_flat_data_list, tensor_shape_tuple};
 use rustpython_vm::{
     PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyList, builtins::PyModule, function::FuncArgs,
 };
@@ -163,11 +164,36 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     for x in list.borrow_vec().iter() {
         flatten(x, &mut flat, vm)?;
     }
+    conv2d_forward_impl(id as u64, flat, h, w, c, vm)
+}
+
+/// `_burn.conv2d_forward_tensor(id, x) -> Tensor`
+/// Fast path: takes a tensor-like object directly and extracts shape/data in Rust.
+pub fn conv2d_forward_tensor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 2 {
+        return Err(vm.new_type_error("conv2d_forward_tensor(id, x)".to_string()));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let x = &args_vec[1];
+    let shape = tensor_shape_tuple(x, vm)?;
+    if shape.len() != 3 {
+        return Err(vm.new_value_error("shape must be (H, W, C)".to_string()));
+    }
+    let h = shape[0].max(1);
+    let w = shape[1].max(1);
+    let c = shape[2].max(1);
+    let flat = tensor_flat_data_list(x, vm)?;
+    conv2d_forward_impl(id as u64, flat, h, w, c, vm)
+}
+
+fn conv2d_forward_impl(id: u64, flat: Vec<f32>, h: usize, w: usize, c: usize, vm: &VirtualMachine) -> PyResult {
     let expected = h * w * c;
-    if flat.len() < expected {
-        flat.resize(expected, 0.0);
-    } else if flat.len() > expected {
-        flat.truncate(expected);
+    if flat.len() != expected {
+        return Err(vm.new_value_error(format!(
+            "conv2d_forward shape mismatch: got {} values, expected {} for shape ({}, {}, {})",
+            flat.len(), expected, h, w, c
+        )));
     }
 
     // NHWC -> NCHW
@@ -185,7 +211,7 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let conv = rt
         .conv2ds
-        .get(&(id as u64))
+        .get(&id)
         .ok_or_else(|| vm.new_value_error("unknown conv2d id".to_string()))?;
     let dev = device();
     let input: Tensor<TrainAD, 4> = Tensor::from_data(TensorData::new(nchw, [1, c, h, w]), &dev);
@@ -331,10 +357,11 @@ pub fn linear_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .shape()
         .dims[0];
 
-    if flat.len() < d_in {
-        flat.resize(d_in, 0.0);
-    } else if flat.len() > d_in {
-        flat.truncate(d_in);
+    if flat.len() != d_in {
+        return Err(vm.new_value_error(format!(
+            "linear_forward input size mismatch: got {}, expected {} (check in_features or add flatten/reshape before Linear)",
+            flat.len(), d_in
+        )));
     }
 
     let dev = device();
@@ -543,6 +570,13 @@ pub fn register_burn_module(parent: &PyRef<PyModule>, vm: &VirtualMachine) {
         .unwrap();
     burn
         .set_attr("conv2d_forward", vm.new_function("conv2d_forward", conv2d_forward), vm)
+        .unwrap();
+    burn
+        .set_attr(
+            "conv2d_forward_tensor",
+            vm.new_function("conv2d_forward_tensor", conv2d_forward_tensor),
+            vm,
+        )
         .unwrap();
     burn
         .set_attr("linear_register", vm.new_function("linear_register", linear_register), vm)

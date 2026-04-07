@@ -91,6 +91,18 @@ pub fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult
                 cur = item;
                 continue;
             }
+            if let Ok(item) = dict.get_item("data", vm) {
+                cur = item;
+                continue;
+            }
+            if let Ok(vid_obj) = dict.get_item("_xos_viewport_id", vm) {
+                if let Ok(vid) = vid_obj.try_into_value::<i64>(vm) {
+                    if let Some(bytes) = crate::python_api::xos_module::standalone_frame_buffer_copy(vid.max(0) as u64) {
+                        let out = bytes.into_iter().map(|b| b as f32).collect::<Vec<f32>>();
+                        return Ok(out);
+                    }
+                }
+            }
         }
         if let Ok(Some(attr)) = vm.get_attribute_opt(cur.clone(), "_data") {
             cur = attr;

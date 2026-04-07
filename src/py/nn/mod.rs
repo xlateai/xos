@@ -45,25 +45,59 @@ def _shape_product(dims):
 
 def _tensor_to_flat_list(t):
     out = []
+
+    def _flatten_any(obj):
+        if isinstance(obj, (list, tuple)):
+            for it in obj:
+                _flatten_any(it)
+            return
+        try:
+            out.append(float(obj))
+        except Exception:
+            pass
+
     if hasattr(t, "_data"):
-        data = t._data
-        if hasattr(data, "get"):
-            data = data.get("_data", [])
-        for v in data:
-            try:
-                out.append(float(v))
-            except Exception:
-                pass
-        return out
+        data_obj = t._data
+        if isinstance(data_obj, dict):
+            raw = data_obj.get("_data", None)
+            if raw is None:
+                raw = data_obj.get("data", None)
+            if raw is not None:
+                _flatten_any(raw)
+                if out:
+                    return out
+            viewport_id = data_obj.get("_xos_viewport_id", None)
+            if viewport_id is not None:
+                try:
+                    raw = _x().frame._standalone_tensor_data(int(viewport_id))
+                    _flatten_any(raw)
+                    if out:
+                        return out
+                except Exception:
+                    pass
+        else:
+            _flatten_any(data_obj)
+            if out:
+                return out
+
     if hasattr(t, "get"):
-        data = t.get("_data", [])
-        for v in data:
-            try:
-                out.append(float(v))
-            except Exception:
-                pass
-        return out
-    return []
+        raw = t.get("_data", None)
+        if raw is None:
+            raw = t.get("data", None)
+        if raw is not None:
+            _flatten_any(raw)
+            if out:
+                return out
+
+    if hasattr(t, "list"):
+        try:
+            _flatten_any(t.list())
+            if out:
+                return out
+        except Exception:
+            pass
+
+    return out
 
 class Module:
     def __init__(self):
@@ -78,7 +112,7 @@ class Module:
     def parameters(self):
         out = []
         for _k, v in self.__dict__.items():
-            if isinstance(v, Linear) and getattr(v, "_burn_linear_id", None) is not None:
+            if isinstance(v, Linear):
                 out.append(v)
             elif hasattr(v, "parameters"):
                 out.extend(v.parameters())
@@ -102,11 +136,14 @@ class Conv2d(Module):
         )
 
     def forward(self, x):
-        shape = getattr(x, "shape", None)
-        if shape is None:
-            shape = (600, 800, max(1, int(self.in_channels)))
-        flat = _tensor_to_flat_list(x)
-        return _x()._burn.conv2d_forward(self._burn_conv2d_id, flat, tuple(shape))
+        try:
+            return _x()._burn.conv2d_forward_tensor(self._burn_conv2d_id, x)
+        except Exception:
+            shape = getattr(x, "shape", None)
+            if shape is None:
+                shape = (600, 800, max(1, int(self.in_channels)))
+            flat = _tensor_to_flat_list(x)
+            return _x()._burn.conv2d_forward(self._burn_conv2d_id, flat, tuple(shape))
 
 class Linear(Module):
     """Burn-backed linear layer (Autodiff + ndarray)."""
@@ -116,20 +153,46 @@ class Linear(Module):
         self.in_features = in_features
         self.out_features = out_features
         self.out_shape, self.out_size = _normalize_out_features_shape(out_features)
-        self.in_size = max(1, int(in_features))
+        if in_features is None:
+            self.in_size = None
+        else:
+            self.in_size = max(1, int(in_features))
         self.bias = bias
-        xos = _x()
-        self._burn_linear_id = int(
-            xos._burn.linear_register(
-                in_features=self.in_size,
-                out_features=self.out_size,
-                bias=bias,
+        self._burn_linear_id = None
+        if self.in_size is not None:
+            xos = _x()
+            self._burn_linear_id = int(
+                xos._burn.linear_register(
+                    in_features=self.in_size,
+                    out_features=self.out_size,
+                    bias=bias,
+                )
             )
-        )
+
+    def _ensure_initialized(self, input_size):
+        input_size = max(1, int(input_size))
+        if self._burn_linear_id is None:
+            self.in_size = input_size
+            self._burn_linear_id = int(
+                _x()._burn.linear_register(
+                    in_features=self.in_size,
+                    out_features=self.out_size,
+                    bias=self.bias,
+                )
+            )
+            return
+        if self.in_size != input_size:
+            raise ValueError(
+                f"Linear input size mismatch: got {input_size}, expected {self.in_size}. "
+                "Set in_features correctly, or initialize with in_features=None for lazy init."
+            )
 
     def forward(self, x):
         flat = _tensor_to_flat_list(x)
+        self._ensure_initialized(len(flat))
         out = _x()._burn.linear_forward(self._burn_linear_id, flat)
+        if len(self.out_shape) > 1:
+            out = out.reshape((1,) + tuple(self.out_shape))
         try:
             out._burn_linear_id = self._burn_linear_id
         except Exception:
@@ -168,30 +231,44 @@ class Adam:
         self.lr = float(lr)
         self.betas = betas
         self.eps = float(eps)
+        self._params = list(params)
+        self._optim_id = None
+        self._try_init()
+
+    def _try_init(self):
+        if self._optim_id is not None:
+            return True
         linear_id = None
-        for p in params:
+        for p in self._params:
             lid = getattr(p, "_burn_linear_id", None)
             if lid is not None:
                 linear_id = int(lid)
                 break
         if linear_id is None:
-            raise ValueError(
-                "Adam requires a Burn Linear in parameters() (e.g. include self.linear1 from Agent)"
-            )
+            return False
         self._optim_id = int(
             _x()._burn.adam_init(
                 linear_id=linear_id,
                 lr=self.lr,
-                beta1=float(betas[0]),
-                beta2=float(betas[1]),
+                beta1=float(self.betas[0]),
+                beta2=float(self.betas[1]),
                 eps=self.eps,
             )
         )
+        return True
 
     def zero_grad(self):
+        if self._optim_id is None:
+            self._try_init()
+        if self._optim_id is None:
+            return
         _x()._burn.adam_zero_grad()
 
     def step(self):
+        if self._optim_id is None and not self._try_init():
+            raise ValueError(
+                "Adam not initialized yet: run one forward pass first so lazy Linear layers can infer input size."
+            )
         _x()._burn.adam_step(self._optim_id, self.lr)
 "#;
     let scope = vm.new_scope_with_builtins();
