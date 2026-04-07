@@ -5,7 +5,11 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::{
-    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    apply_frame_view_zoom,
+    f3_menu_handle_frame_zoom_scroll,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
+    f3_menu_handle_zoom_scroll, tick_f3_menu,
+    tick_frame_view_zoom,
     F3Menu,
 };
 use super::engine::{
@@ -68,6 +72,11 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
             paused: false,
+            frame_view_zoom: 1.0,
+            frame_view_zoom_target: 1.0,
+            frame_view_zoom_velocity: 0.0,
+            frame_view_center_x: 0.5,
+            frame_view_center_y: 0.5,
         },
         app,
     }));
@@ -128,6 +137,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 let dx = event.delta_x() as f32;
                 let dy = -event.delta_y() as f32;
+                if event.ctrl_key() || event.meta_key() {
+                    let consumed = if event.shift_key() {
+                        f3_menu_handle_frame_zoom_scroll(&mut state.engine_state, dy)
+                    } else {
+                        f3_menu_handle_zoom_scroll(&mut state.engine_state, dy)
+                    };
+                    if consumed {
+                        event.prevent_default();
+                        return;
+                    }
+                }
+                if (event.ctrl_key() || event.meta_key()) {
+                    event.prevent_default();
+                }
                 state.app.on_scroll(&mut state.engine_state, dx, dy);
             }
         }) as Box<dyn FnMut(_)>);
@@ -382,6 +405,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     // Tick the app first
                     state.app.tick(&mut state.engine_state);
                 }
+
+                tick_frame_view_zoom(&mut state.engine_state);
+                apply_frame_view_zoom(&mut state.engine_state);
                 
                 // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
                 {

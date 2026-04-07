@@ -10,7 +10,7 @@ use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
@@ -46,6 +46,8 @@ struct StandalonePreviewApp {
     pending_window_creates: HashMap<u64, (u32, u32)>,
     f3_engine_state: HashMap<u64, crate::engine::EngineState>,
     last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
+    command_held: HashMap<u64, bool>,
+    shift_held: HashMap<u64, bool>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -58,6 +60,8 @@ impl StandalonePreviewApp {
             pending_window_creates: HashMap::new(),
             f3_engine_state: HashMap::new(),
             last_tick_instant: HashMap::new(),
+            command_held: HashMap::new(),
+            shift_held: HashMap::new(),
         }
     }
 
@@ -131,9 +135,16 @@ impl StandalonePreviewApp {
                     ui_scale_percent: 100,
                     delta_time_seconds: 1.0 / 60.0,
                     paused: false,
+                    frame_view_zoom: 1.0,
+                    frame_view_zoom_target: 1.0,
+                    frame_view_zoom_velocity: 0.0,
+                    frame_view_center_x: 0.5,
+                    frame_view_center_y: 0.5,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);
+            self.command_held.insert(viewport_id, false);
+            self.shift_held.insert(viewport_id, false);
             self.pending_window_creates.remove(&viewport_id);
         }
     }
@@ -191,6 +202,8 @@ impl StandalonePreviewApp {
                     } else if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
                         crate::engine::tick_frame_delta(es, last);
                     }
+                    crate::engine::tick_frame_view_zoom(es);
+                    crate::engine::apply_frame_view_zoom(es);
                     crate::engine::tick_f3_menu(es);
                     frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
                 }
@@ -303,6 +316,42 @@ impl ApplicationHandler for StandalonePreviewApp {
                         state.window.request_redraw();
                     }
                 }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, dy) => dy,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                };
+                let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                if command {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                        let consumed = if shift {
+                            crate::engine::f3_menu_handle_frame_zoom_scroll(es, dy)
+                        } else {
+                            crate::engine::f3_menu_handle_zoom_scroll(es, dy)
+                        };
+                        if consumed {
+                            if let Some(state) = self.states.get(&_window_id) {
+                                state.window.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                #[cfg(target_os = "macos")]
+                {
+                    self.command_held
+                        .insert(viewport_id, modifiers.state().super_key());
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.command_held
+                        .insert(viewport_id, modifiers.state().control_key());
+                }
+                self.shift_held
+                    .insert(viewport_id, modifiers.state().shift_key());
             }
             WindowEvent::RedrawRequested => {
                 self.render_viewport(viewport_id);

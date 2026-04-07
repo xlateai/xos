@@ -15,9 +15,10 @@ use std::sync::{Mutex, OnceLock};
 use crate::apps;
 #[cfg(target_os = "ios")]
 use crate::engine::{
+    apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
-    tick_frame_delta, Application, EngineState, F3Menu, FrameState, KeyboardState, MouseState,
-    SafeRegionBoundingRectangle,
+    tick_frame_delta, tick_frame_view_zoom, Application, EngineState, F3Menu, FrameState,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
@@ -160,6 +161,11 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
         paused: false,
+        frame_view_zoom: 1.0,
+        frame_view_zoom_target: 1.0,
+        frame_view_zoom_velocity: 0.0,
+        frame_view_center_x: 0.5,
+        frame_view_center_y: 0.5,
     };
 
     // Call setup
@@ -220,6 +226,9 @@ pub extern "C" fn xos_engine_tick() -> i32 {
                 ios_state.app.tick(&mut ios_state.engine_state);
             }
         }));
+
+        tick_frame_view_zoom(&mut ios_state.engine_state);
+        apply_frame_view_zoom(&mut ios_state.engine_state);
         
         // Check for panic first
         if let Err(_) = result {

@@ -196,12 +196,24 @@ pub struct EngineState {
     pub delta_time_seconds: f32,
     /// Global simulation pause controlled by the F3 menu play/pause button.
     pub paused: bool,
+    /// View zoom applied to the app-rendered frame before overlays (1.0 = full frame).
+    pub frame_view_zoom: f32,
+    /// Target view zoom used by smoothing.
+    pub frame_view_zoom_target: f32,
+    /// Smoothed velocity for frame view zoom.
+    pub frame_view_zoom_velocity: f32,
+    /// Normalized viewport center within source frame (0..1).
+    pub frame_view_center_x: f32,
+    /// Normalized viewport center within source frame (0..1).
+    pub frame_view_center_y: f32,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).
 pub const F3_UI_SCALE_MIN_PERCENT: u16 = 25;
 pub const F3_UI_SCALE_MAX_PERCENT: u16 = 500;
 pub const F3_UI_SCALE_DEFAULT_PERCENT: u16 = 100;
+pub const FRAME_VIEW_ZOOM_MIN: f32 = 1.0;
+pub const FRAME_VIEW_ZOOM_MAX: f32 = 24.0;
 
 /// Global UI scale multiplier from F3: **25% → 0.25**, **100% → 1.0**, **500% → 5.0**.
 #[inline]
@@ -244,6 +256,92 @@ pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Optio
         .map(|prev| (now - prev).as_secs_f32())
         .unwrap_or(1.0 / 60.0);
     *last_instant = Some(now);
+}
+
+#[inline]
+fn clamp_center_for_zoom(center: f32, zoom: f32) -> f32 {
+    let view_span = (1.0 / zoom.max(FRAME_VIEW_ZOOM_MIN)).clamp(0.0, 1.0);
+    let half = 0.5 * view_span;
+    center.clamp(half, 1.0 - half)
+}
+
+/// Normalized source rectangle currently visible in the output frame.
+/// Returns `(x, y, w, h)` in normalized `[0,1]` coordinates.
+pub fn frame_view_rect_norm(engine_state: &EngineState) -> (f32, f32, f32, f32) {
+    let zoom = engine_state
+        .frame_view_zoom
+        .clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
+    let w = (1.0 / zoom).clamp(0.0, 1.0);
+    let h = (1.0 / zoom).clamp(0.0, 1.0);
+    let cx = clamp_center_for_zoom(engine_state.frame_view_center_x, zoom);
+    let cy = clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
+    (cx - w * 0.5, cy - h * 0.5, w, h)
+}
+
+/// Smoothly update frame zoom value toward its target.
+pub fn tick_frame_view_zoom(engine_state: &mut EngineState) {
+    let dt = engine_state.delta_time_seconds.clamp(1.0 / 240.0, 1.0 / 20.0);
+    let target = engine_state
+        .frame_view_zoom_target
+        .clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
+    engine_state.frame_view_zoom_target = target;
+
+    let current = engine_state.frame_view_zoom;
+    let x = current - target;
+    let v = engine_state.frame_view_zoom_velocity;
+    const OMEGA: f32 = 20.0;
+    const ZETA: f32 = 0.84;
+
+    if x.abs() < 0.0008 && v.abs() < 0.01 {
+        engine_state.frame_view_zoom = target;
+        engine_state.frame_view_zoom_velocity = 0.0;
+    } else {
+        let accel = -2.0 * ZETA * OMEGA * v - OMEGA * OMEGA * x;
+        let mut new_v = v + accel * dt;
+        let mut new_zoom = current + new_v * dt;
+        let clamped = new_zoom.clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
+        if (clamped - new_zoom).abs() > f32::EPSILON {
+            new_zoom = clamped;
+            new_v = 0.0;
+        }
+        engine_state.frame_view_zoom = new_zoom;
+        engine_state.frame_view_zoom_velocity = new_v;
+    }
+
+    engine_state.frame_view_center_x = clamp_center_for_zoom(engine_state.frame_view_center_x, engine_state.frame_view_zoom);
+    engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, engine_state.frame_view_zoom);
+}
+
+/// Apply current frame-view zoom directly to the app frame buffer (before keyboard/F3 overlays).
+pub fn apply_frame_view_zoom(engine_state: &mut EngineState) {
+    if engine_state.frame_view_zoom <= FRAME_VIEW_ZOOM_MIN + 1e-4 {
+        return;
+    }
+
+    let shape = engine_state.frame.shape();
+    let h = shape[0];
+    let w = shape[1];
+    if h == 0 || w == 0 {
+        return;
+    }
+
+    let (left, top, vw, vh) = frame_view_rect_norm(engine_state);
+    let src = engine_state.frame.buffer_mut().to_vec();
+    let dst = engine_state.frame.buffer_mut();
+
+    for y in 0..h {
+        let v = (y as f32 + 0.5) / h as f32;
+        let sy = ((top + v * vh) * h as f32).floor() as isize;
+        let sy = sy.clamp(0, (h as isize) - 1) as usize;
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let sx = ((left + u * vw) * w as f32).floor() as isize;
+            let sx = sx.clamp(0, (w as isize) - 1) as usize;
+            let sidx = (sy * w + sx) * 4;
+            let didx = (y * w + x) * 4;
+            dst[didx..didx + 4].copy_from_slice(&src[sidx..sidx + 4]);
+        }
+    }
 }
 
 pub trait Application {

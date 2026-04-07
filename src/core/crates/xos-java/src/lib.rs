@@ -12,9 +12,10 @@ use jni::JNIEnv;
 use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
+    apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
-    tick_frame_delta, Application, CursorStyleSetter, EngineState, F3Menu, FrameState, KeyboardState,
-    MouseState, SafeRegionBoundingRectangle,
+    tick_frame_delta, tick_frame_view_zoom, Application, CursorStyleSetter, EngineState, F3Menu,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 thread_local! {
@@ -128,6 +129,11 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
             paused: false,
+            frame_view_zoom: 1.0,
+            frame_view_zoom_target: 1.0,
+            frame_view_zoom_velocity: 0.0,
+            frame_view_center_x: 0.5,
+            frame_view_center_y: 0.5,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -179,6 +185,9 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
             host.app.tick(&mut host.engine);
         }
+
+        tick_frame_view_zoom(&mut host.engine);
+        apply_frame_view_zoom(&mut host.engine);
 
         // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.
         {
