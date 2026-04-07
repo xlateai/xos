@@ -119,12 +119,13 @@ class Module:
         return out
 
 class Conv2d(Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, averaged=True):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.stride = stride
+        self.averaged = bool(averaged)
         xos = _x()
         self._burn_conv2d_id = int(
             xos._burn.conv2d_register(
@@ -132,6 +133,7 @@ class Conv2d(Module):
                 out_channels=max(1, int(out_channels)),
                 kernel_size=kernel_size,
                 stride=stride,
+                averaged=self.averaged,
             )
         )
 

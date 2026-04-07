@@ -23,6 +23,7 @@ struct BurnRuntime {
     next_id: u64,
     linears: HashMap<u64, burn::nn::Linear<TrainAD>>,
     conv2ds: HashMap<u64, burn::nn::conv::Conv2d<TrainAD>>,
+    conv2d_divisors: HashMap<u64, f32>,
     optimizers: HashMap<u64, OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD>>,
     optim_linear: HashMap<u64, u64>,
     last_pred: HashMap<u64, Tensor<TrainAD, 2>>,
@@ -38,6 +39,7 @@ impl Default for BurnRuntime {
             next_id: 1,
             linears: HashMap::new(),
             conv2ds: HashMap::new(),
+            conv2d_divisors: HashMap::new(),
             optimizers: HashMap::new(),
             optim_linear: HashMap::new(),
             last_pred: HashMap::new(),
@@ -116,6 +118,12 @@ pub fn conv2d_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let in_channels = in_channels.max(1) as usize;
     let out_channels = out_channels.max(1) as usize;
+    let averaged: bool = args
+        .kwargs
+        .get("averaged")
+        .or_else(|| args.args.get(4))
+        .map(|v| v.clone().try_into_value::<bool>(vm).unwrap_or(true))
+        .unwrap_or(true);
 
     let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let dev = device();
@@ -124,6 +132,12 @@ pub fn conv2d_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .init::<TrainAD>(&dev);
     let id = next_id(&mut rt);
     rt.conv2ds.insert(id, conv);
+    let divisor = if averaged {
+        (k_h.saturating_mul(k_w)).max(1) as f32
+    } else {
+        1.0
+    };
+    rt.conv2d_divisors.insert(id, divisor);
     Ok(vm.ctx.new_int(id as i64).into())
 }
 
@@ -216,6 +230,7 @@ fn conv2d_forward_impl(id: u64, flat: Vec<f32>, h: usize, w: usize, c: usize, vm
     let dev = device();
     let input: Tensor<TrainAD, 4> = Tensor::from_data(TensorData::new(nchw, [1, c, h, w]), &dev);
     let out: Tensor<TrainAD, 4> = conv.forward(input);
+    let divisor = *rt.conv2d_divisors.get(&id).unwrap_or(&1.0);
 
     let out_data = out.into_data();
     let shape = &out_data.shape;
@@ -224,9 +239,14 @@ fn conv2d_forward_impl(id: u64, flat: Vec<f32>, h: usize, w: usize, c: usize, vm
     let co = *shape.get(1).unwrap_or(&1);
     let ho = *shape.get(2).unwrap_or(&1);
     let wo = *shape.get(3).unwrap_or(&1);
-    let flat_nchw: Vec<f32> = out_data
+    let mut flat_nchw: Vec<f32> = out_data
         .to_vec::<f32>()
         .map_err(|e| vm.new_runtime_error(format!("tensor to_vec: {e:?}")))?;
+    if divisor != 1.0 {
+        for v in &mut flat_nchw {
+            *v /= divisor;
+        }
+    }
     let mut flat_nhwc = vec![0.0f32; n * ho * wo * co];
     for b in 0..n {
         for oy in 0..ho {
