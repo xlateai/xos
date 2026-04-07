@@ -142,14 +142,7 @@ class Conv2d(Module):
         return _x()._burn.conv2d_weights(self._burn_conv2d_id)
 
     def forward(self, x):
-        try:
-            return _x()._burn.conv2d_forward_tensor(self._burn_conv2d_id, x)
-        except Exception:
-            shape = getattr(x, "shape", None)
-            if shape is None:
-                shape = (600, 800, max(1, int(self.in_channels)))
-            flat = _tensor_to_flat_list(x)
-            return _x()._burn.conv2d_forward(self._burn_conv2d_id, flat, tuple(shape))
+        return _x()._burn.conv2d_forward_tensor(self._burn_conv2d_id, x)
 
 class Linear(Module):
     """Burn-backed linear layer (Autodiff + ndarray)."""
@@ -192,6 +185,14 @@ class Linear(Module):
                 f"Linear input size mismatch: got {input_size}, expected {self.in_size}. "
                 "Set in_features correctly, or initialize with in_features=None for lazy init."
             )
+
+    @property
+    def weights(self):
+        if self._burn_linear_id is None:
+            raise ValueError(
+                "Linear weights are not initialized yet. Run one forward pass first when using in_features=None."
+            )
+        return _x()._burn.linear_weights(self._burn_linear_id)
 
     def forward(self, x):
         flat = _tensor_to_flat_list(x)

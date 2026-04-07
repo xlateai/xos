@@ -14,16 +14,16 @@ class Convolution(xos.Application):
         self.needs_init = True
         xos.print("Convolution Demo initialized")
         kernel_size = 3
-        self.kernel = xos.random.uniform(-1.0, 1.0, shape=(kernel_size, kernel_size, 3), dtype=xos.float32)
+        self.kernel = xos.random.uniform(-0.5, 1.0, shape=(kernel_size, kernel_size, 3), dtype=xos.float32)
         xos.print(f"Generated random {kernel_size}x{kernel_size}x3 kernel")
         xos.print("Setup complete!")
     
     def reset_state(self):
         """Generate fresh random image"""
+        self.frame.clear(xos.color.BLACK)
         width = self.get_width()
         height = self.get_height()
         xos.print(f"Generating random {width}x{height} image...")
-        xos.random.uniform_fill(self.frame.tensor, 0.0, 255.0)
     
     def tick(self):
         """First tick: init image. Then: apply convolution every frame."""
@@ -33,7 +33,7 @@ class Convolution(xos.Application):
             self.needs_init = False
             return
         
-        result = xos.ops.convolve(self.frame.tensor, self.kernel)
+        result = xos.ops.convolve(self.frame.tensor, self.kernel).to(xos.uint8)
         self.frame.tensor[:] = result
     
     def on_screen_size_change(self, width, height):

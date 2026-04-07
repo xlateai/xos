@@ -456,6 +456,45 @@ pub fn linear_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     wrap_tensor_dict(dict.into(), vm)
 }
 
+/// `_burn.linear_weights(id) -> Tensor`
+/// Returns Linear weights with shape (out_features, in_features).
+pub fn linear_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.is_empty() {
+        return Err(vm.new_type_error("linear_weights(id)".to_string()));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+
+    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let linear = rt
+        .linears
+        .get(&(id as u64))
+        .ok_or_else(|| vm.new_value_error("unknown linear id".to_string()))?;
+
+    let w = linear.weight.val();
+    let w_data = w.into_data();
+    let shape_vec = w_data.shape.clone();
+    let flat_out: Vec<f32> = w_data
+        .to_vec::<f32>()
+        .map_err(|e| vm.new_runtime_error(format!("tensor to_vec: {e:?}")))?;
+
+    let dict = vm.ctx.new_dict();
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(shape_vec.iter().map(|&s| vm.ctx.new_int(s as i64).into()).collect())
+            .into(),
+        vm,
+    )?;
+    dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    let py_data: Vec<PyObjectRef> = flat_out.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+    dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
+    dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
+
+    wrap_tensor_dict(dict.into(), vm)
+}
+
 /// `_burn.mse_loss(linear_id, target_flat) -> None` (stores loss); use item/backward
 pub fn mse_loss(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -645,6 +684,9 @@ pub fn register_burn_module(parent: &PyRef<PyModule>, vm: &VirtualMachine) {
         .unwrap();
     burn
         .set_attr("linear_forward", vm.new_function("linear_forward", linear_forward), vm)
+        .unwrap();
+    burn
+        .set_attr("linear_weights", vm.new_function("linear_weights", linear_weights), vm)
         .unwrap();
     burn.set_attr("mse_loss", vm.new_function("mse_loss", mse_loss), vm).unwrap();
     burn.set_attr("loss_item", vm.new_function("loss_item", loss_item), vm).unwrap();

@@ -35,10 +35,12 @@ fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Optio
 /// xos.ops.convolve(image, kernel, padding="same")
 /// Fast 2D convolution operation using tensor backend
 /// 
-/// - image: frame.tensor (modified in-place)
+/// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 3D array [height, width, channels] - e.g., KxKx3 for RGB
 /// - padding: "same" (default) maintains image dimensions
 /// 
+/// Returns raw float output as shape [height, width, 3] (RGB, no alpha).
+/// Caller is responsible for any display-space mapping/clamping.
 /// Note: Automatically detects kernel size from array length
 pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -162,51 +164,57 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         [pad, pad], // padding
     );
     
-    // Convert back from NCHW to interleaved RGB
-    // Normalized kernel gives output ~[-255,255]; map to u8: (out+255)/2, then clamp
-    let mut output_rgb = vec![0u8; buffer_len];
+    // Convert back from NCHW to interleaved RGB floats (row-major NHWC)
+    let mut output_rgb = vec![0.0f32; width * height * 3];
     for y in 0..height {
         for x in 0..width {
-            let dst_idx = (y * width + x) * 4;
+            let dst_idx = (y * width + x) * 3;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                let v = (output_nchw[src_idx] + 255.0) / 2.0;
-                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
+                output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
-            output_rgb[dst_idx + 3] = 255; // Alpha
         }
     }
     
-    // Return output as Python list wrapped in _TensorResult
+    // Return output as tensor wrapper so callers can use tensor APIs like .to(...)
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
-        .map(|&b| vm.ctx.new_int(b).into())
+        .map(|&v| vm.ctx.new_float(v as f64).into())
         .collect();
-    
-    let list_obj = vm.ctx.new_list(py_list);
-    
-    // Try to wrap in _TensorResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
-        let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
-            vm.ctx.new_int(height).into(),
-            vm.ctx.new_int(width).into(),
-            vm.ctx.new_int(4).into(),
-        ]).into();
-        if let Ok(wrapped) = wrapper_class.call((list_obj.clone(), shape_tuple), vm) {
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(3).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
-    // Fallback to plain list if wrapper not available
-    Ok(list_obj.into())
+
+    Ok(tensor_dict.into())
 }
 
 /// xos.ops.convolve_depthwise(image, kernel, padding="same")
 /// Fast 2D depthwise convolution - each channel processed independently using tensor backend
 /// 
-/// - image: frame.tensor (modified in-place)
+/// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 2D array [height, width] = KxK values (applied to each channel separately)
 /// - padding: "same" (default) maintains image dimensions
 /// 
+/// Returns raw float output as shape [height, width, 3] (RGB, no alpha).
+/// Caller is responsible for any display-space mapping/clamping.
 /// Note: Automatically detects kernel size from array length
 pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -312,39 +320,44 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         [pad, pad], // padding
     );
     
-    // Convert back: normalized output ~[-255,255] -> u8 via (out+255)/2
-    let mut output_rgb = vec![0u8; buffer_len];
+    // Convert back from NCHW to interleaved RGB floats (row-major NHWC)
+    let mut output_rgb = vec![0.0f32; width * height * 3];
     for y in 0..height {
         for x in 0..width {
-            let dst_idx = (y * width + x) * 4;
+            let dst_idx = (y * width + x) * 3;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                let v = (output_nchw[src_idx] + 255.0) / 2.0;
-                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
+                output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
-            output_rgb[dst_idx + 3] = 255; // Alpha
         }
     }
     
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
-        .map(|&b| vm.ctx.new_int(b).into())
+        .map(|&v| vm.ctx.new_float(v as f64).into())
         .collect();
-    
-    let list_obj = vm.ctx.new_list(py_list);
-    
-    // Try to wrap in _TensorResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
-        let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
-            vm.ctx.new_int(height).into(),
-            vm.ctx.new_int(width).into(),
-            vm.ctx.new_int(4).into(),
-        ]).into();
-        if let Ok(wrapped) = wrapper_class.call((list_obj.clone(), shape_tuple), vm) {
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(3).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+
+    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+        if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
-    // Fallback to plain list if wrapper not available
-    Ok(list_obj.into())
+
+    Ok(tensor_dict.into())
 }
 

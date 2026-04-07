@@ -4,23 +4,37 @@
 //! so we can swap internal storage to Burn-backed tensors incrementally.
 
 use crate::python_api::dtypes::DType;
+use once_cell::sync::Lazy;
 use rustpython_vm::{
     PyObjectRef, PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyTuple,
 };
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+static NEXT_TENSOR_ID: AtomicU64 = AtomicU64::new(1);
+static TENSOR_REGISTRY: Lazy<Mutex<HashMap<u64, Arc<Mutex<Vec<f32>>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Python wrapper for tensor - stores f32 data with shape.
 /// Backed by Vec<f32> for Python compatibility; Burn tensors are introduced incrementally.
 #[derive(Clone)]
 pub struct PyTensor {
+    pub id: u64,
     pub data: Arc<Mutex<Vec<f32>>>,
     pub shape: Vec<usize>,
 }
 
 impl PyTensor {
     pub fn new(data: Vec<f32>, shape: Vec<usize>) -> Self {
+        let id = NEXT_TENSOR_ID.fetch_add(1, Ordering::Relaxed);
+        let data = Arc::new(Mutex::new(data));
+        if let Ok(mut reg) = TENSOR_REGISTRY.lock() {
+            reg.insert(id, data.clone());
+        }
         Self {
-            data: Arc::new(Mutex::new(data)),
+            id,
+            data,
             shape,
         }
     }
@@ -56,12 +70,20 @@ impl PyTensor {
         dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
         dict.set_item(
             "_rust_tensor",
-            vm.ctx.new_int(self.data.as_ref() as *const _ as i64).into(),
+            vm.ctx.new_int(self.id as i64).into(),
             vm,
         )?;
 
         Ok(dict.into())
     }
+}
+
+fn try_get_tensor_data_by_id(id: u64) -> Option<Vec<f32>> {
+    let reg = TENSOR_REGISTRY.lock().ok()?;
+    let data = reg.get(&id)?.clone();
+    drop(reg);
+    let guard = data.lock().ok()?;
+    Some(guard.clone())
 }
 
 /// Extract f64 from Python int or float.
@@ -87,6 +109,13 @@ pub fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult
                 .collect::<Result<Vec<f32>, _>>();
         }
         if let Some(dict) = cur.downcast_ref::<PyDict>() {
+            if let Ok(id_obj) = dict.get_item("_rust_tensor", vm) {
+                if let Ok(id) = id_obj.try_into_value::<i64>(vm) {
+                    if let Some(v) = try_get_tensor_data_by_id(id.max(0) as u64) {
+                        return Ok(v);
+                    }
+                }
+            }
             if let Ok(item) = dict.get_item("_data", vm) {
                 cur = item;
                 continue;

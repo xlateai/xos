@@ -328,6 +328,53 @@ class _TensorWrapper:
     @property
     def dtype(self):
         return self._data.get('dtype', 'unknown')
+
+    def to(self, dtype):
+        """Return a new tensor converted to ``dtype`` using flat elementwise casting."""
+        if "_data" not in self._data or not isinstance(self._data["_data"], list):
+            raise TypeError("tensor has no element data for to()")
+
+        if isinstance(dtype, str):
+            target = dtype.strip().lower()
+        elif hasattr(dtype, "name"):
+            target = str(dtype.name).strip().lower()
+        else:
+            raise TypeError("dtype must be a dtype object or string")
+
+        alias = {
+            "u8": "uint8",
+            "byte": "uint8",
+            "f32": "float32",
+            "float": "float32",
+            "i32": "int32",
+            "int": "int32",
+            "i64": "int64",
+        }
+        target = alias.get(target, target)
+
+        src = self._data["_data"]
+        if target == "uint8":
+            out = []
+            for v in src:
+                iv = int(v)
+                if iv < 0:
+                    iv = 0
+                elif iv > 255:
+                    iv = 255
+                out.append(iv)
+        elif target in ("int8", "int16", "int32", "int64", "uint16", "uint32", "uint64"):
+            out = [int(v) for v in src]
+        elif target in ("float16", "float32", "float64"):
+            out = [float(v) for v in src]
+        else:
+            raise ValueError(f"unsupported dtype for to(): {target}")
+
+        return _TensorWrapper({
+            "shape": tuple(self.shape),
+            "dtype": target,
+            "device": self._data.get("device", "cpu"),
+            "_data": out,
+        })
     
     def size(self):
         """Return the total number of elements (product of all dimensions)"""

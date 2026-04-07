@@ -608,24 +608,39 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
-    // Parse values - can be a list or an object with _data attribute
-    // Get the data attribute upfront if needed (to avoid lifetime issues)
-    let data_attr_holder = if values_list.downcast_ref::<rustpython_vm::builtins::PyList>().is_none() {
-        vm.get_attribute_opt(values_list.clone(), "_data")
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-    
-    // Now get the actual list
-    let actual_list = if let Some(list) = values_list.downcast_ref::<rustpython_vm::builtins::PyList>() {
-        list
-    } else if let Some(ref data_obj) = data_attr_holder {
-        data_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
-            .ok_or_else(|| vm.new_type_error("_data must be a list".to_string()))?
-    } else {
-        return Err(vm.new_type_error("values must be a list or have _data attribute".to_string()));
+    // Parse values - supports list, _TensorWrapper, or dict-like tensor data.
+    // Walk nested _data/data containers until we reach a flat list.
+    let mut cur = values_list.clone();
+    let mut depth = 0usize;
+    let actual_list = loop {
+        if let Some(list) = cur.downcast_ref::<rustpython_vm::builtins::PyList>() {
+            break list;
+        }
+
+        if depth >= 8 {
+            return Err(vm.new_type_error("values nesting too deep while resolving _data".to_string()));
+        }
+
+        if let Some(dict) = cur.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+            if let Ok(next) = dict.get_item("_data", vm) {
+                cur = next;
+                depth += 1;
+                continue;
+            }
+            if let Ok(next) = dict.get_item("data", vm) {
+                cur = next;
+                depth += 1;
+                continue;
+            }
+        }
+
+        if let Ok(Some(next)) = vm.get_attribute_opt(cur.clone(), "_data") {
+            cur = next;
+            depth += 1;
+            continue;
+        }
+
+        return Err(vm.new_type_error("values must be a list or tensor-like object with _data list".to_string()));
     };
     
     let values_vec = actual_list.borrow_vec();
