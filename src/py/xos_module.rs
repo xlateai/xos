@@ -43,6 +43,7 @@ struct StandalonePreviewApp {
     states: HashMap<WindowId, StandalonePreviewState>,
     viewport_to_window: HashMap<u64, WindowId>,
     pending_frames: HashMap<u64, StandalonePendingFrame>,
+    pending_window_creates: HashMap<u64, (u32, u32)>,
     f3_engine_state: HashMap<u64, crate::engine::EngineState>,
     last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
 }
@@ -54,8 +55,78 @@ impl StandalonePreviewApp {
             states: HashMap::new(),
             viewport_to_window: HashMap::new(),
             pending_frames: HashMap::new(),
+            pending_window_creates: HashMap::new(),
             f3_engine_state: HashMap::new(),
             last_tick_instant: HashMap::new(),
+        }
+    }
+
+    fn ensure_windows_created(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pending_window_creates.is_empty() {
+            return;
+        }
+        let pending: Vec<(u64, (u32, u32))> = self
+            .pending_window_creates
+            .iter()
+            .map(|(id, size)| (*id, *size))
+            .collect();
+        for (viewport_id, (width, height)) in pending {
+            if self.viewport_to_window.contains_key(&viewport_id) {
+                self.pending_window_creates.remove(&viewport_id);
+                continue;
+            }
+            let attrs = WindowAttributes::default()
+                .with_title(format!("xos standalone preview ({viewport_id})"))
+                .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)))
+                .with_visible(false);
+            let Ok(window) = event_loop.create_window(attrs) else {
+                continue;
+            };
+            let size = window.inner_size();
+            let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+            let Ok(pixels) = PixelsBuilder::new(size.width, size.height, surface_texture)
+                .enable_vsync(false)
+                .build()
+            else {
+                continue;
+            };
+            let pixels = unsafe { std::mem::transmute(pixels) };
+            let window_id = window.id();
+            self.states.insert(
+                window_id,
+                StandalonePreviewState {
+                    viewport_id,
+                    window,
+                    pixels,
+                    size,
+                    has_presented_first_frame: false,
+                },
+            );
+            self.viewport_to_window.insert(viewport_id, window_id);
+            let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
+            self.f3_engine_state.insert(
+                viewport_id,
+                crate::engine::EngineState {
+                    frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+                    mouse: crate::engine::MouseState {
+                        x: 0.0,
+                        y: 0.0,
+                        dx: 0.0,
+                        dy: 0.0,
+                        is_left_clicking: false,
+                        is_right_clicking: false,
+                        style: crate::engine::CursorStyleSetter::new(),
+                    },
+                    keyboard: crate::engine::KeyboardState {
+                        onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                    },
+                    f3_menu: crate::engine::F3Menu::new(),
+                    ui_scale_percent: 100,
+                    delta_time_seconds: 1.0 / 60.0,
+                },
+            );
+            self.last_tick_instant.insert(viewport_id, None);
+            self.pending_window_creates.remove(&viewport_id);
         }
     }
 
@@ -106,7 +177,9 @@ impl StandalonePreviewApp {
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 impl ApplicationHandler for StandalonePreviewApp {
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.ensure_windows_created(event_loop);
+    }
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         let Some(viewport_id) = self
@@ -180,6 +253,7 @@ impl ApplicationHandler for StandalonePreviewApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.ensure_windows_created(event_loop);
         if self.states.is_empty() {
             event_loop.exit();
         }
@@ -490,56 +564,9 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     },
                 );
                 if !host.app.viewport_to_window.contains_key(&viewport_id) {
-                    let attrs = WindowAttributes::default()
-                        .with_title(format!("xos standalone preview ({viewport_id})"))
-                        .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)))
-                        .with_visible(false);
-                    let window = host
-                        .event_loop
-                        .create_window(attrs)
-                        .map_err(|e| vm.new_runtime_error(format!("failed to create preview window: {e}")))?;
-                    let size = window.inner_size();
-                    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-                    let pixels = PixelsBuilder::new(size.width, size.height, surface_texture)
-                        .enable_vsync(false)
-                        .build()
-                        .map_err(|e| vm.new_runtime_error(format!("failed to create pixel surface: {e}")))?;
-                    let pixels = unsafe { std::mem::transmute(pixels) };
-                    let window_id = window.id();
-                    host.app.states.insert(
-                        window_id,
-                        StandalonePreviewState {
-                            viewport_id,
-                            window,
-                            pixels,
-                            size,
-                            has_presented_first_frame: false,
-                        },
-                    );
-                    host.app.viewport_to_window.insert(viewport_id, window_id);
-                    let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
-                    host.app.f3_engine_state.insert(
-                        viewport_id,
-                        crate::engine::EngineState {
-                            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
-                            mouse: crate::engine::MouseState {
-                                x: 0.0,
-                                y: 0.0,
-                                dx: 0.0,
-                                dy: 0.0,
-                                is_left_clicking: false,
-                                is_right_clicking: false,
-                                style: crate::engine::CursorStyleSetter::new(),
-                            },
-                            keyboard: crate::engine::KeyboardState {
-                                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
-                            },
-                            f3_menu: crate::engine::F3Menu::new(),
-                            ui_scale_percent: 100,
-                            delta_time_seconds: 1.0 / 60.0,
-                        },
-                    );
-                    host.app.last_tick_instant.insert(viewport_id, None);
+                    host.app
+                        .pending_window_creates
+                        .insert(viewport_id, (width.max(1), height.max(1)));
                 }
                 host.app.render_viewport(viewport_id);
                 match host
