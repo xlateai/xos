@@ -329,11 +329,12 @@ class Text:
         if frame is not None:
             fd = getattr(frame, "_data", None)
             if fd is not None and fd.get("_xos_viewport_id") is not None:
-                vid = int(fd["_xos_viewport_id"])
-                w = int(fd["width"])
-                h = int(fd["height"])
-                xos.frame._begin_standalone(vid, w, h)
-                bound = True
+                if not xos.frame._has_context():
+                    vid = int(fd["_xos_viewport_id"])
+                    w = int(fd["width"])
+                    h = int(fd["height"])
+                    xos.frame._begin_standalone(vid, w, h)
+                    bound = True
         try:
             state = _text_render(
                 self.text,

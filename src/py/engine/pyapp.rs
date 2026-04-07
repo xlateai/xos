@@ -418,16 +418,19 @@ class _FrameWrapper:
         else:
             raise TypeError("frame.clear accepts (), RGB, or RGBA")
 
-        # Standalone preview frames carry _xos_viewport_id; bind rasterizer context outside tick().
+        # Standalone preview frames carry _xos_viewport_id. Only bind/unbind here when
+        # there is no active tick-owned context.
         vid = self._data.get("_xos_viewport_id")
-        if vid is not None:
+        bound = False
+        if vid is not None and not xos.frame._has_context():
             w = int(self._data["width"])
             h = int(self._data["height"])
             xos.frame._begin_standalone(int(vid), w, h)
+            bound = True
         try:
             xos.rasterizer.fill(self, rgba)
         finally:
-            if vid is not None:
+            if bound:
                 xos.frame._end_standalone()
 
 class Application:

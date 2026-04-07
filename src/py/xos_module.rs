@@ -453,6 +453,16 @@ fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.frame._has_context() -> bool
+/// Returns whether a framebuffer context is currently bound.
+fn frame_has_context(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let has_context = crate::python_api::rasterizer::CURRENT_FRAME_BUFFER
+        .lock()
+        .map_err(|_| vm.new_runtime_error("frame buffer context lock poisoned".to_string()))?
+        .is_some();
+    Ok(vm.ctx.new_bool(has_context).into())
+}
+
 /// xos.frame._standalone_window_size() -> (width, height) | None
 /// Returns the current standalone preview window size when available.
 fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -633,6 +643,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     frame_module
         .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr("_has_context", vm.new_function("_has_context", frame_has_context), vm)
         .unwrap();
     frame_module
         .set_attr(
