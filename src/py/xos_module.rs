@@ -43,6 +43,7 @@ struct StandalonePreviewApp {
     states: HashMap<WindowId, StandalonePreviewState>,
     viewport_to_window: HashMap<u64, WindowId>,
     pending_frames: HashMap<u64, StandalonePendingFrame>,
+    paused_base_frames: HashMap<u64, StandalonePendingFrame>,
     pending_window_creates: HashMap<u64, (u32, u32)>,
     f3_engine_state: HashMap<u64, crate::engine::EngineState>,
     last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
@@ -58,6 +59,7 @@ impl StandalonePreviewApp {
             states: HashMap::new(),
             viewport_to_window: HashMap::new(),
             pending_frames: HashMap::new(),
+            paused_base_frames: HashMap::new(),
             pending_window_creates: HashMap::new(),
             f3_engine_state: HashMap::new(),
             last_tick_instant: HashMap::new(),
@@ -153,6 +155,7 @@ impl StandalonePreviewApp {
     }
 
     fn render_viewport(&mut self, viewport_id: u64) {
+        let paused = self.viewport_paused(viewport_id);
         let Some(window_id) = self.viewport_to_window.get(&viewport_id).copied() else {
             return;
         };
@@ -190,14 +193,51 @@ impl StandalonePreviewApp {
             frame_data.rgba = resized;
         }
 
+        if !paused {
+            self.paused_base_frames.insert(
+                viewport_id,
+                StandalonePendingFrame {
+                    width: frame_data.width,
+                    height: frame_data.height,
+                    rgba: frame_data.rgba.clone(),
+                },
+            );
+        }
+
+        let (src_w, src_h, src_rgba) = if paused {
+            if let Some(base) = self.paused_base_frames.get(&viewport_id) {
+                (base.width, base.height, base.rgba.clone())
+            } else {
+                (frame_data.width, frame_data.height, frame_data.rgba.clone())
+            }
+        } else {
+            (frame_data.width, frame_data.height, frame_data.rgba.clone())
+        };
+
         let expected = (state.size.width as usize)
             .saturating_mul(state.size.height as usize)
             .saturating_mul(4);
-        if frame_data.rgba.len() == expected {
+        if src_rgba.len() >= (src_w as usize).saturating_mul(src_h as usize).saturating_mul(4) {
             if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                 let frame = es.frame.buffer_mut();
-                if frame.len() == frame_data.rgba.len() {
-                    frame.copy_from_slice(&frame_data.rgba);
+                frame.fill(0);
+                let dst_w = state.size.width as usize;
+                let dst_h = state.size.height as usize;
+                let src_wu = src_w as usize;
+                let src_hu = src_h as usize;
+                let copy_w = src_wu.min(dst_w);
+                let copy_h = src_hu.min(dst_h);
+                let src_stride = src_wu * 4;
+                let dst_stride = dst_w * 4;
+                let row_bytes = copy_w * 4;
+                for y in 0..copy_h {
+                    let src_off = y * src_stride;
+                    let dst_off = y * dst_stride;
+                    frame[dst_off..dst_off + row_bytes]
+                        .copy_from_slice(&src_rgba[src_off..src_off + row_bytes]);
+                }
+
+                if frame.len() == expected {
                     if es.paused {
                         if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
                             *last = Some(std::time::Instant::now());
@@ -331,7 +371,20 @@ impl ApplicationHandler for StandalonePreviewApp {
                                     state.window.set_cursor(CursorIcon::Grabbing);
                                 }
                             } else {
+                                let was_paused = es.paused;
                                 let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                                if !was_paused && es.paused {
+                                    if let Some(frame_data) = self.pending_frames.get(&viewport_id) {
+                                        self.paused_base_frames.insert(
+                                            viewport_id,
+                                            StandalonePendingFrame {
+                                                width: frame_data.width,
+                                                height: frame_data.height,
+                                                rgba: frame_data.rgba.clone(),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
                         ElementState::Released => {

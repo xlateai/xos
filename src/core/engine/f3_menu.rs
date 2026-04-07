@@ -28,6 +28,8 @@ pub struct F3Menu {
     pub(crate) scale_dragging: bool,
     /// Smooth wheel-zoom target in F3 percent units.
     scale_zoom_target: f32,
+    /// Current smooth scale value in F3 percent units (float; avoids integer oscillation).
+    scale_zoom_value: f32,
     /// Current wheel-zoom spring velocity in percent / second.
     scale_zoom_velocity: f32,
     /// 0..1 transient alpha boost shown after zoom interactions when menu isn't pinned visible.
@@ -57,6 +59,7 @@ impl F3Menu {
             scale_rasterizer,
             scale_dragging: false,
             scale_zoom_target: 100.0,
+            scale_zoom_value: 100.0,
             scale_zoom_velocity: 0.0,
             interaction_fade: 0.0,
             pointer_captured: false,
@@ -178,6 +181,7 @@ fn set_scale_immediate(state: &mut EngineState, percent: u16) {
     let p = percent.clamp(F3_UI_SCALE_MIN_PERCENT, F3_UI_SCALE_MAX_PERCENT);
     state.ui_scale_percent = p;
     state.f3_menu.scale_zoom_target = p as f32;
+    state.f3_menu.scale_zoom_value = p as f32;
     state.f3_menu.scale_zoom_velocity = 0.0;
 }
 
@@ -186,11 +190,12 @@ fn tick_scale_zoom_smoothing(state: &mut EngineState) {
     let target = clamp_scale_percent_f32(state.f3_menu.scale_zoom_target);
     state.f3_menu.scale_zoom_target = target;
 
-    let current = state.ui_scale_percent as f32;
+    let current = state.f3_menu.scale_zoom_value;
     let x = current - target;
     let v = state.f3_menu.scale_zoom_velocity;
 
     if x.abs() < 0.01 && v.abs() < 0.02 {
+        state.f3_menu.scale_zoom_value = target;
         state.ui_scale_percent = target.round() as u16;
         state.f3_menu.scale_zoom_velocity = 0.0;
         return;
@@ -207,6 +212,7 @@ fn tick_scale_zoom_smoothing(state: &mut EngineState) {
     }
 
     state.f3_menu.scale_zoom_velocity = new_v;
+    state.f3_menu.scale_zoom_value = new_p;
     state.ui_scale_percent = new_p.round() as u16;
 }
 
@@ -294,14 +300,14 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         menu.scale_rasterizer.tick(width, height);
     }
 
-    let fps_w: f32 = state
+    let _fps_w: f32 = state
         .f3_menu
         .fps_rasterizer
         .characters
         .iter()
         .map(|c| c.metrics.advance_width)
         .sum();
-    let label_w: f32 = state
+    let _label_w: f32 = state
         .f3_menu
         .scale_rasterizer
         .characters
@@ -309,7 +315,9 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         .map(|c| c.metrics.advance_width)
         .sum();
     let button_size = (22.0 * ui_scale).max(12.0);
-    let content_w = (fps_w + (10.0 * ui_scale) + button_size).max(label_w);
+    let slider_w = (200.0 * ui_scale).max(120.0);
+    // Keep panel width stable so FPS/scale text width changes don't make the slider jitter horizontally.
+    let content_w = slider_w.max(button_size + 120.0 * ui_scale);
     let show_minimap = state.frame_view_zoom > FRAME_VIEW_ZOOM_MIN + 1e-3;
     let geom = panel_geom(state, content_w, ui_scale, pad, show_minimap);
     let knob_w = (12.0 * ui_scale).max(8.0).round().max(1.0);

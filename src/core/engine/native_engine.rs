@@ -114,10 +114,42 @@ struct AppState {
     shift_held: bool,
     alt_held: bool,
     frame_pan_dragging: bool,
+    paused_base_frame: Vec<u8>,
+    paused_base_w: usize,
+    paused_base_h: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl AppState {
+    fn restore_paused_base_frame(&mut self) {
+        if self.paused_base_frame.is_empty() || self.paused_base_w == 0 || self.paused_base_h == 0 {
+            return;
+        }
+        let shape = self.engine_state.frame.shape();
+        let dst_w = shape[1];
+        let dst_h = shape[0];
+        let dst = self.engine_state.frame.buffer_mut();
+        dst.fill(0);
+        let copy_w = self.paused_base_w.min(dst_w);
+        let copy_h = self.paused_base_h.min(dst_h);
+        let src_stride = self.paused_base_w * 4;
+        let dst_stride = dst_w * 4;
+        let row_bytes = copy_w * 4;
+        for y in 0..copy_h {
+            let src_off = y * src_stride;
+            let dst_off = y * dst_stride;
+            dst[dst_off..dst_off + row_bytes]
+                .copy_from_slice(&self.paused_base_frame[src_off..src_off + row_bytes]);
+        }
+    }
+
+    fn capture_paused_base_frame(&mut self) {
+        let shape = self.engine_state.frame.shape();
+        self.paused_base_w = shape[1];
+        self.paused_base_h = shape[0];
+        self.paused_base_frame = self.engine_state.frame.buffer_mut().to_vec();
+    }
+
     fn toggle_borderless_fullscreen(&self) {
         if self.window.fullscreen().is_some() {
             self.window.set_fullscreen(None);
@@ -161,9 +193,14 @@ impl AppState {
 
         if self.engine_state.paused {
             self.last_tick_instant = Some(std::time::Instant::now());
+            if self.paused_base_frame.is_empty() {
+                self.capture_paused_base_frame();
+            }
+            self.restore_paused_base_frame();
         } else {
             tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
             let _ = self.app.tick(&mut self.engine_state);
+            self.capture_paused_base_frame();
         }
 
         tick_frame_view_zoom(&mut self.engine_state);
@@ -610,6 +647,9 @@ impl ApplicationHandler for AppStateWrapper {
                 shift_held: false,
                 alt_held: false,
                 frame_pan_dragging: false,
+                paused_base_frame: Vec::new(),
+                paused_base_w: 0,
+                paused_base_h: 0,
             });
         }
     }

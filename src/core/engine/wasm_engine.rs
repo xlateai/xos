@@ -53,6 +53,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         command_held: bool,
         shift_held: bool,
         frame_pan_dragging: bool,
+        paused_base_frame: Vec<u8>,
+        paused_base_w: usize,
+        paused_base_h: usize,
     }
     
     let state_ptr = Box::into_raw(Box::new(WasmState {
@@ -87,6 +90,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         command_held: false,
         shift_held: false,
         frame_pan_dragging: false,
+        paused_base_frame: Vec::new(),
+        paused_base_w: 0,
+        paused_base_h: 0,
     }));
     
     // Setup the app
@@ -470,6 +476,30 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 
                 if state.engine_state.paused {
                     anim_state.last_tick_instant = Some(std::time::Instant::now());
+                    if state.paused_base_frame.is_empty() {
+                        let shape = state.engine_state.frame.shape();
+                        state.paused_base_w = shape[1];
+                        state.paused_base_h = shape[0];
+                        state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
+                    }
+                    if !state.paused_base_frame.is_empty() && state.paused_base_w > 0 && state.paused_base_h > 0 {
+                        let shape = state.engine_state.frame.shape();
+                        let dst_w = shape[1];
+                        let dst_h = shape[0];
+                        let dst = state.engine_state.frame.buffer_mut();
+                        dst.fill(0);
+                        let copy_w = state.paused_base_w.min(dst_w);
+                        let copy_h = state.paused_base_h.min(dst_h);
+                        let src_stride = state.paused_base_w * 4;
+                        let dst_stride = dst_w * 4;
+                        let row_bytes = copy_w * 4;
+                        for y in 0..copy_h {
+                            let src_off = y * src_stride;
+                            let dst_off = y * dst_stride;
+                            dst[dst_off..dst_off + row_bytes]
+                                .copy_from_slice(&state.paused_base_frame[src_off..src_off + row_bytes]);
+                        }
+                    }
                 } else {
                     tick_frame_delta(
                         &mut state.engine_state,
@@ -477,6 +507,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     );
                     // Tick the app first
                     state.app.tick(&mut state.engine_state);
+                    let shape = state.engine_state.frame.shape();
+                    state.paused_base_w = shape[1];
+                    state.paused_base_h = shape[0];
+                    state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
                 }
 
                 tick_frame_view_zoom(&mut state.engine_state);
