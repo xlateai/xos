@@ -141,13 +141,31 @@ impl StandalonePreviewApp {
             return;
         };
 
-        if state.size.width != frame_data.width || state.size.height != frame_data.height {
-            state.size = PhysicalSize::new(frame_data.width, frame_data.height);
-            let _ = state.pixels.resize_buffer(frame_data.width, frame_data.height);
-            let _ = state.pixels.resize_surface(frame_data.width, frame_data.height);
-            if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
-                es.resize_frame(frame_data.width, frame_data.height);
+        // Keep viewport/frame dimensions aligned to the current OS window size.
+        // During interactive resize, Python frame production can lag by a tick.
+        // Resizing pending frame data avoids oscillation and prevents apparent freezes.
+        if frame_data.width != state.size.width || frame_data.height != state.size.height {
+            let target_w = state.size.width.max(1);
+            let target_h = state.size.height.max(1);
+            let mut resized = vec![0u8; (target_w as usize)
+                .saturating_mul(target_h as usize)
+                .saturating_mul(4)];
+
+            let copy_w = frame_data.width.min(target_w) as usize;
+            let copy_h = frame_data.height.min(target_h) as usize;
+            let src_stride = frame_data.width as usize * 4;
+            let dst_stride = target_w as usize * 4;
+            let row_bytes = copy_w * 4;
+            for y in 0..copy_h {
+                let src_off = y * src_stride;
+                let dst_off = y * dst_stride;
+                resized[dst_off..dst_off + row_bytes]
+                    .copy_from_slice(&frame_data.rgba[src_off..src_off + row_bytes]);
             }
+
+            frame_data.width = target_w;
+            frame_data.height = target_h;
+            frame_data.rgba = resized;
         }
 
         let expected = (state.size.width as usize)
@@ -207,6 +225,26 @@ impl ApplicationHandler for StandalonePreviewApp {
                         es.resize_frame(new_size.width, new_size.height);
                         let _ = crate::engine::f3_menu_handle_mouse_move(es);
                     }
+                    if let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) {
+                        let mut resized = vec![0u8; (new_size.width as usize)
+                            .saturating_mul(new_size.height as usize)
+                            .saturating_mul(4)];
+                        let copy_w = frame_data.width.min(new_size.width) as usize;
+                        let copy_h = frame_data.height.min(new_size.height) as usize;
+                        let src_stride = frame_data.width as usize * 4;
+                        let dst_stride = new_size.width as usize * 4;
+                        let row_bytes = copy_w * 4;
+                        for y in 0..copy_h {
+                            let src_off = y * src_stride;
+                            let dst_off = y * dst_stride;
+                            resized[dst_off..dst_off + row_bytes]
+                                .copy_from_slice(&frame_data.rgba[src_off..src_off + row_bytes]);
+                        }
+                        frame_data.width = new_size.width;
+                        frame_data.height = new_size.height;
+                        frame_data.rgba = resized;
+                    }
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
