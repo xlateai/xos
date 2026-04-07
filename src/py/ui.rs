@@ -319,23 +319,37 @@ class Text:
         self.baselines = baselines
         self.font_size = font_size
 
-    def render(self, _frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
+    def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
+        import xos
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.baselines if baselines is None else baselines
         resolved_font_size = self.font_size if font_size is None else font_size
-        state = _text_render(
-            self.text,
-            self.x1,
-            self.y1,
-            self.x2,
-            self.y2,
-            resolved_color,
-            resolved_hitboxes,
-            resolved_baselines,
-            resolved_font_size,
-        )
-        return TextRenderState(state)
+        bound = False
+        if frame is not None:
+            fd = getattr(frame, "_data", None)
+            if fd is not None and fd.get("_xos_viewport_id") is not None:
+                vid = int(fd["_xos_viewport_id"])
+                w = int(fd["width"])
+                h = int(fd["height"])
+                xos.frame._begin_standalone(vid, w, h)
+                bound = True
+        try:
+            state = _text_render(
+                self.text,
+                self.x1,
+                self.y1,
+                self.x2,
+                self.y2,
+                resolved_color,
+                resolved_hitboxes,
+                resolved_baselines,
+                resolved_font_size,
+            )
+            return TextRenderState(state)
+        finally:
+            if bound:
+                xos.frame._end_standalone()
 
 class TextRenderState:
     def __init__(self, state_dict):

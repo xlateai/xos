@@ -418,7 +418,17 @@ class _FrameWrapper:
         else:
             raise TypeError("frame.clear accepts (), RGB, or RGBA")
 
-        xos.rasterizer.fill(self, rgba)
+        # Standalone preview frames carry _xos_viewport_id; bind rasterizer context outside tick().
+        vid = self._data.get("_xos_viewport_id")
+        if vid is not None:
+            w = int(self._data["width"])
+            h = int(self._data["height"])
+            xos.frame._begin_standalone(int(vid), w, h)
+        try:
+            xos.rasterizer.fill(self, rgba)
+        finally:
+            if vid is not None:
+                xos.frame._end_standalone()
 
 class Application:
     """Base class for xos applications. Extend this class and implement __init__() and tick()."""
@@ -430,8 +440,7 @@ class Application:
         self._xos_viewport_id = next_id
         self._xos_initialized = True
         self._xos_engine_bound = False
-        self.frame = None  # Will be set by the engine
-        self.mouse = None  # Will be set by the engine
+        self.mouse = None  # Overwritten by engine in run(); standalone set below
         self.fps = 0.0  # Frames per second derived from timestep
         self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
@@ -444,6 +453,24 @@ class Application:
         self._xos_ticks_completed = 0
         if headless is not None:
             self.headless = bool(headless)
+
+        # Empty standalone framebuffer before first tick() or run(); enables frame.clear etc. in __init__.
+        self._xos_init_standalone_frame()
+
+    def _xos_init_standalone_frame(self):
+        """Build a CPU frame + rasterizer context for standalone use (before tick/run)."""
+        import xos
+
+        if getattr(self, "_xos_engine_bound", False):
+            return
+        w = int(getattr(self, "_xos_standalone_width", 800))
+        h = int(getattr(self, "_xos_standalone_height", 600))
+        fd = xos.frame._begin_standalone(int(self._xos_viewport_id), w, h)
+        fd["_xos_viewport_id"] = int(self._xos_viewport_id)
+        self.frame = _FrameWrapper(fd)
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        xos.rasterizer.fill(self.frame, (0, 0, 0, 255))
+        xos.frame._end_standalone()
 
     @property
     def scale(self):
@@ -505,6 +532,7 @@ class Application:
             int(getattr(self, "_xos_standalone_width", 800)),
             int(getattr(self, "_xos_standalone_height", 600)),
         )
+        frame_dict["_xos_viewport_id"] = int(getattr(self, "_xos_viewport_id", 0))
         self.frame = _FrameWrapper(frame_dict)
         self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
         self.pre_tick()
