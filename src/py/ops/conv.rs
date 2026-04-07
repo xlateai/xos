@@ -44,6 +44,22 @@ fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Optio
 /// Note: Automatically detects kernel size from array length
 pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
+    let inplace = args
+        .kwargs
+        .get("inplace")
+        .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        .or_else(|| {
+            args.kwargs
+                .get("direct")
+                .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        })
+        .unwrap_or(false);
+    let stride = args
+        .kwargs
+        .get("stride")
+        .and_then(|v| v.clone().try_into_value::<i32>(vm).ok())
+        .unwrap_or(1)
+        .max(1) as usize;
     
     if args_vec.len() < 2 {
         return Err(vm.new_type_error("convolve() requires at least 2 arguments (image, kernel)".to_string()));
@@ -160,7 +176,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         width as usize,
         kernel_size,
         kernel_size,
-        [1, 1], // stride
+        [stride, stride], // stride
         [pad, pad], // padding
     );
     
@@ -174,6 +190,29 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
         }
+    }
+
+    // Fast path: write directly into current frame buffer and return sentinel dict.
+    // This avoids creating millions of Python float objects each frame.
+    if inplace {
+        if stride != 1 {
+            return Err(vm.new_value_error("inplace=True currently requires stride=1".to_string()));
+        }
+        for y in 0..height {
+            for x in 0..width {
+                let src_idx = (y * width + x) * 3;
+                let dst_idx = (y * width + x) * 4;
+                for c in 0..3 {
+                    let iv = output_rgb[src_idx + c] as i32;
+                    buffer[dst_idx + c] = iv.clamp(0, 255) as u8;
+                }
+                buffer[dst_idx + 3] = 255;
+            }
+        }
+
+        let sentinel = vm.ctx.new_dict();
+        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+        return Ok(sentinel.into());
     }
     
     // Return output as tensor wrapper so callers can use tensor APIs like .to(...)
@@ -218,6 +257,22 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Note: Automatically detects kernel size from array length
 pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
+    let inplace = args
+        .kwargs
+        .get("inplace")
+        .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        .or_else(|| {
+            args.kwargs
+                .get("direct")
+                .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        })
+        .unwrap_or(false);
+    let stride = args
+        .kwargs
+        .get("stride")
+        .and_then(|v| v.clone().try_into_value::<i32>(vm).ok())
+        .unwrap_or(1)
+        .max(1) as usize;
     
     if args_vec.len() < 2 {
         return Err(vm.new_type_error("convolve_depthwise() requires at least 2 arguments (image, kernel)".to_string()));
@@ -316,7 +371,7 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         width as usize,
         kernel_size,
         kernel_size,
-        [1, 1], // stride
+        [stride, stride], // stride
         [pad, pad], // padding
     );
     
@@ -330,6 +385,28 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
         }
+    }
+
+    // Fast path: write directly into current frame buffer and return sentinel dict.
+    if inplace {
+        if stride != 1 {
+            return Err(vm.new_value_error("inplace=True currently requires stride=1".to_string()));
+        }
+        for y in 0..height {
+            for x in 0..width {
+                let src_idx = (y * width + x) * 3;
+                let dst_idx = (y * width + x) * 4;
+                for c in 0..3 {
+                    let iv = output_rgb[src_idx + c] as i32;
+                    buffer[dst_idx + c] = iv.clamp(0, 255) as u8;
+                }
+                buffer[dst_idx + 3] = 255;
+            }
+        }
+
+        let sentinel = vm.ctx.new_dict();
+        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+        return Ok(sentinel.into());
     }
     
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()

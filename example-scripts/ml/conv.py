@@ -14,6 +14,7 @@ class Convolution(xos.Application):
         self.needs_init = True
         xos.print("Convolution Demo initialized")
         kernel_size = 3
+        self.stride = 1
         self.kernel = xos.random.uniform(-0.5, 1.0, shape=(kernel_size, kernel_size, 3), dtype=xos.float32)
         xos.print(f"Generated random {kernel_size}x{kernel_size}x3 kernel")
         xos.print("Setup complete!")
@@ -32,8 +33,8 @@ class Convolution(xos.Application):
             xos.print("Starting convolution...")
             self.needs_init = False
             return
-        
-        result = xos.ops.convolve(self.frame.tensor, self.kernel).to(xos.uint8)
+
+        result = xos.ops.convolve(self.frame.tensor, self.kernel, stride=self.stride, inplace=True)
         self.frame.tensor[:] = result
     
     def on_screen_size_change(self, width, height):
