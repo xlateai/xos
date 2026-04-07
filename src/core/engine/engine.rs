@@ -344,6 +344,29 @@ pub fn apply_frame_view_zoom(engine_state: &mut EngineState) {
     }
 }
 
+/// Pan the zoomed frame view by pixel deltas in output space.
+/// Positive `dx`/`dy` follow mouse movement; view center shifts inversely (drag-to-pan).
+pub fn frame_view_pan_by_pixels(
+    engine_state: &mut EngineState,
+    dx: f32,
+    dy: f32,
+    output_width: f32,
+    output_height: f32,
+) {
+    let zoom = engine_state
+        .frame_view_zoom
+        .clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
+    if zoom <= FRAME_VIEW_ZOOM_MIN + 1e-4 {
+        return;
+    }
+    let w = output_width.max(1.0);
+    let h = output_height.max(1.0);
+    engine_state.frame_view_center_x -= dx / (w * zoom);
+    engine_state.frame_view_center_y -= dy / (h * zoom);
+    engine_state.frame_view_center_x = clamp_center_for_zoom(engine_state.frame_view_center_x, zoom);
+    engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
+}
+
 pub trait Application {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String>;
     fn tick(&mut self, state: &mut EngineState);

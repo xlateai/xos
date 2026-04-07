@@ -9,6 +9,7 @@ use super::{
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
     f3_menu_handle_zoom_scroll, tick_f3_menu,
+    frame_view_pan_by_pixels,
     tick_frame_view_zoom,
     F3Menu,
 };
@@ -48,6 +49,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     struct WasmState {
         engine_state: EngineState,
         app: Box<dyn Application>,
+        command_held: bool,
+        shift_held: bool,
+        frame_pan_dragging: bool,
     }
     
     let state_ptr = Box::into_raw(Box::new(WasmState {
@@ -79,6 +83,9 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             frame_view_center_y: 0.5,
         },
         app,
+        command_held: false,
+        shift_held: false,
+        frame_pan_dragging: false,
     }));
     
     // Setup the app
@@ -103,6 +110,19 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         
                 state.engine_state.mouse.x = new_x;
                 state.engine_state.mouse.y = new_y;
+
+                if state.frame_pan_dragging {
+                    let shape = state.engine_state.frame.shape();
+                    frame_view_pan_by_pixels(
+                        &mut state.engine_state,
+                        state.engine_state.mouse.dx,
+                        state.engine_state.mouse.dy,
+                        shape[1] as f32,
+                        shape[0] as f32,
+                    );
+                    canvas_clone.style().set_property("cursor", "grabbing").unwrap();
+                    return;
+                }
         
                 if !f3_menu_handle_mouse_move(&mut state.engine_state) {
                     state.app.on_mouse_move(&mut state.engine_state);
@@ -120,7 +140,14 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     CursorStyle::Crosshair => "crosshair",
                     CursorStyle::Hidden => "none",
                 };
-                canvas_clone.style().set_property("cursor", style).unwrap();
+                if state.command_held
+                    && state.shift_held
+                    && state.engine_state.frame_view_zoom > 1.001
+                {
+                    canvas_clone.style().set_property("cursor", "grab").unwrap();
+                } else {
+                    canvas_clone.style().set_property("cursor", style).unwrap();
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", move_callback.as_ref().unchecked_ref())?;
@@ -171,6 +198,14 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = true;
+                        if state.command_held
+                            && state.shift_held
+                            && state.engine_state.frame_view_zoom > 1.001
+                        {
+                            state.frame_pan_dragging = true;
+                            event.prevent_default();
+                            return;
+                        }
                         if !f3_menu_handle_mouse_down(&mut state.engine_state) {
                             state.app.on_mouse_down(&mut state.engine_state);
                         }
@@ -199,6 +234,11 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = false;
+                        if state.frame_pan_dragging {
+                            state.frame_pan_dragging = false;
+                            event.prevent_default();
+                            return;
+                        }
                         if !f3_menu_handle_mouse_up(&mut state.engine_state) {
                             state.app.on_mouse_up(&mut state.engine_state);
                         }
@@ -307,6 +347,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let key = event.key();
         
                 match key.as_str() {
+                    "Control" | "Meta" => {
+                        state.command_held = true;
+                    }
+                    "Shift" => {
+                        state.shift_held = true;
+                    }
                     "Enter" => {
                         state.app.on_key_char(&mut state.engine_state, '\n');
                         event.prevent_default();
@@ -357,6 +403,30 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         window
             .add_event_listener_with_callback("keydown", keydown_callback.as_ref().unchecked_ref())?;
         keydown_callback.forget();
+    }
+
+    // Key up (modifier release for pan gesture)
+    {
+        use web_sys::KeyboardEvent;
+        let state_ptr_clone = state_ptr;
+
+        let keyup_callback = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                match event.key().as_str() {
+                    "Control" | "Meta" => state.command_held = false,
+                    "Shift" => state.shift_held = false,
+                    _ => {}
+                }
+                if !(state.command_held && state.shift_held) {
+                    state.frame_pan_dragging = false;
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        window
+            .add_event_listener_with_callback("keyup", keyup_callback.as_ref().unchecked_ref())?;
+        keyup_callback.forget();
     }
 
     // Animation loop - use a different approach without Rc/RefCell

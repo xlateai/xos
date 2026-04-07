@@ -38,8 +38,9 @@ pub use f3_menu::{
     F3Menu,
 };
 pub use engine::{
-    apply_frame_view_zoom, f3_ui_scale_multiplier, frame_view_rect_norm, tick_frame_delta,
-    tick_frame_view_zoom, Application, CursorStyleSetter, EngineState,
+    apply_frame_view_zoom, f3_ui_scale_multiplier, frame_view_pan_by_pixels,
+    frame_view_rect_norm, tick_frame_delta, tick_frame_view_zoom, Application,
+    CursorStyleSetter, EngineState,
     F3_UI_SCALE_DEFAULT_PERCENT, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT,
     FRAME_VIEW_ZOOM_MAX, FRAME_VIEW_ZOOM_MIN, FrameState, KeyboardState, MouseState,
     SafeRegionBoundingRectangle,

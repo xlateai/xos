@@ -21,6 +21,7 @@ use super::{
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
     f3_menu_handle_zoom_scroll, tick_f3_menu,
+    frame_view_pan_by_pixels,
     tick_frame_view_zoom,
     F3Menu,
 };
@@ -111,6 +112,7 @@ struct AppState {
     command_held: bool,
     shift_held: bool,
     alt_held: bool,
+    frame_pan_dragging: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -262,6 +264,22 @@ impl ApplicationHandler for AppState {
             
                 self.engine_state.mouse.dx = self.engine_state.mouse.x - prev_x;
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
+
+                if self.frame_pan_dragging {
+                    let dx = self.engine_state.mouse.dx;
+                    let dy = self.engine_state.mouse.dy;
+                    frame_view_pan_by_pixels(
+                        &mut self.engine_state,
+                        dx,
+                        dy,
+                        self.size.width as f32,
+                        self.size.height as f32,
+                    );
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
+                    }
+                    return;
+                }
             
                 if !f3_menu_handle_mouse_move(&mut self.engine_state) {
                     let _ = self.app.on_mouse_move(&mut self.engine_state);
@@ -277,6 +295,16 @@ impl ApplicationHandler for AppState {
             } => match button_state {
                 ElementState::Pressed => {
                     self.engine_state.mouse.is_left_clicking = true;
+                    if self.command_held
+                        && self.shift_held
+                        && self.engine_state.frame_view_zoom > 1.001
+                    {
+                        self.frame_pan_dragging = true;
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
+                        return;
+                    }
                     if !f3_menu_handle_mouse_down(&mut self.engine_state) {
                         let _ = self.app.on_mouse_down(&mut self.engine_state);
                     }
@@ -286,6 +314,13 @@ impl ApplicationHandler for AppState {
                 }
                 ElementState::Released => {
                     self.engine_state.mouse.is_left_clicking = false;
+                    if self.frame_pan_dragging {
+                        self.frame_pan_dragging = false;
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
+                        return;
+                    }
                     if !f3_menu_handle_mouse_up(&mut self.engine_state) {
                         let _ = self.app.on_mouse_up(&mut self.engine_state);
                     }
@@ -352,6 +387,9 @@ impl ApplicationHandler for AppState {
                 
                 self.shift_held = modifiers.state().shift_key();
                 self.alt_held = modifiers.state().alt_key();
+                if !(self.command_held && self.shift_held) {
+                    self.frame_pan_dragging = false;
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
@@ -441,25 +479,34 @@ impl ApplicationHandler for AppState {
             return;
         }
         
-        // Update cursor style
-        match self.engine_state.mouse.style.get() {
-            CursorStyle::Hidden => {
-                self.window.set_cursor_visible(false);
-            }
-            other => {
-                self.window.set_cursor_visible(true);
-                let icon = match other {
-                    CursorStyle::Default => CursorIcon::Default,
-                    CursorStyle::Text => CursorIcon::Text,
-                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
-                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
-                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
-                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
-                    CursorStyle::Hand => CursorIcon::Pointer,
-                    CursorStyle::Crosshair => CursorIcon::Crosshair,
-                    CursorStyle::Hidden => unreachable!(), // already handled above
-                };
-                self.window.set_cursor(icon);
+        // Update cursor style (zoom-pan gesture gets grab/grabbing cursor override).
+        if self.command_held && self.shift_held && self.engine_state.frame_view_zoom > 1.001 {
+            self.window.set_cursor_visible(true);
+            self.window.set_cursor(if self.frame_pan_dragging {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Grab
+            });
+        } else {
+            match self.engine_state.mouse.style.get() {
+                CursorStyle::Hidden => {
+                    self.window.set_cursor_visible(false);
+                }
+                other => {
+                    self.window.set_cursor_visible(true);
+                    let icon = match other {
+                        CursorStyle::Default => CursorIcon::Default,
+                        CursorStyle::Text => CursorIcon::Text,
+                        CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                        CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                        CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                        CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                        CursorStyle::Hand => CursorIcon::Pointer,
+                        CursorStyle::Crosshair => CursorIcon::Crosshair,
+                        CursorStyle::Hidden => unreachable!(), // already handled above
+                    };
+                    self.window.set_cursor(icon);
+                }
             }
         }
         
@@ -559,6 +606,7 @@ impl ApplicationHandler for AppStateWrapper {
                 command_held: false,
                 shift_held: false,
                 alt_held: false,
+                frame_pan_dragging: false,
             });
         }
     }

@@ -14,7 +14,7 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
-    window::{Window, WindowAttributes, WindowId},
+    window::{CursorIcon, Window, WindowAttributes, WindowId},
 };
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::cell::RefCell;
@@ -48,6 +48,7 @@ struct StandalonePreviewApp {
     last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
     command_held: HashMap<u64, bool>,
     shift_held: HashMap<u64, bool>,
+    frame_pan_dragging: HashMap<u64, bool>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -62,6 +63,7 @@ impl StandalonePreviewApp {
             last_tick_instant: HashMap::new(),
             command_held: HashMap::new(),
             shift_held: HashMap::new(),
+            frame_pan_dragging: HashMap::new(),
         }
     }
 
@@ -145,6 +147,7 @@ impl StandalonePreviewApp {
             self.last_tick_instant.insert(viewport_id, None);
             self.command_held.insert(viewport_id, false);
             self.shift_held.insert(viewport_id, false);
+            self.frame_pan_dragging.insert(viewport_id, false);
             self.pending_window_creates.remove(&viewport_id);
         }
     }
@@ -278,7 +281,32 @@ impl ApplicationHandler for StandalonePreviewApp {
                     es.mouse.dy = position.y as f32 - es.mouse.y;
                     es.mouse.x = position.x as f32;
                     es.mouse.y = position.y as f32;
-                    let _ = crate::engine::f3_menu_handle_mouse_move(es);
+
+                    let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                    let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                    let dragging = *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false);
+
+                    if dragging {
+                        if let Some(state) = self.states.get(&_window_id) {
+                            crate::engine::frame_view_pan_by_pixels(
+                                es,
+                                es.mouse.dx,
+                                es.mouse.dy,
+                                state.size.width as f32,
+                                state.size.height as f32,
+                            );
+                            state.window.set_cursor(CursorIcon::Grabbing);
+                        }
+                    } else {
+                        let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                        if let Some(state) = self.states.get(&_window_id) {
+                            if command && shift && es.frame_view_zoom > 1.001 {
+                                state.window.set_cursor(CursorIcon::Grab);
+                            } else {
+                                state.window.set_cursor(CursorIcon::Default);
+                            }
+                        }
+                    }
                 }
                 if let Some(state) = self.states.get(&_window_id) {
                     state.window.request_redraw();
@@ -293,11 +321,24 @@ impl ApplicationHandler for StandalonePreviewApp {
                     match button_state {
                         ElementState::Pressed => {
                             es.mouse.is_left_clicking = true;
-                            let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                            let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                            let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                            if command && shift && es.frame_view_zoom > 1.001 {
+                                self.frame_pan_dragging.insert(viewport_id, true);
+                                if let Some(state) = self.states.get(&_window_id) {
+                                    state.window.set_cursor(CursorIcon::Grabbing);
+                                }
+                            } else {
+                                let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                            }
                         }
                         ElementState::Released => {
                             es.mouse.is_left_clicking = false;
-                            let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                            if *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false) {
+                                self.frame_pan_dragging.insert(viewport_id, false);
+                            } else {
+                                let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                            }
                         }
                     }
                 }
@@ -352,6 +393,11 @@ impl ApplicationHandler for StandalonePreviewApp {
                 }
                 self.shift_held
                     .insert(viewport_id, modifiers.state().shift_key());
+                if !(*self.command_held.get(&viewport_id).unwrap_or(&false)
+                    && *self.shift_held.get(&viewport_id).unwrap_or(&false))
+                {
+                    self.frame_pan_dragging.insert(viewport_id, false);
+                }
             }
             WindowEvent::RedrawRequested => {
                 self.render_viewport(viewport_id);

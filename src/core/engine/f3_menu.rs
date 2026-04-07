@@ -4,7 +4,6 @@ use crate::engine::{
     frame_view_rect_norm, EngineState, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT,
     FRAME_VIEW_ZOOM_MAX, FRAME_VIEW_ZOOM_MIN,
 };
-use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 
 const REF_SHORT_EDGE: f32 = 920.0;
@@ -416,7 +415,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     // Opaque black panel behind text and slider.
     let panel_x1 = (geom.panel_left + geom.panel_w).ceil() as i32;
     let panel_y1 = (geom.panel_top + geom.panel_h).ceil() as i32;
-    fill_rect_buffer(
+    blend_rect(
         buffer,
         fw,
         fh,
@@ -430,7 +429,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     // Slider track
     let track_x1 = geom.slider_right.ceil() as i32;
     let track_y1 = geom.slider_bottom.ceil() as i32;
-    fill_rect_buffer(
+    blend_rect(
         buffer,
         fw,
         fh,
@@ -451,7 +450,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     } else {
         (120, 92, 26, 0xff)
     };
-    fill_rect_buffer(
+    blend_rect(
         buffer,
         fw,
         fh,
@@ -475,7 +474,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
             let t = (x - left) as f32 / (right - left).max(1) as f32;
             let y0 = (mid as f32 - t * (mid - top) as f32) as i32;
             let y1 = (mid as f32 + t * (bottom - mid) as f32) as i32;
-            fill_rect_buffer(
+            blend_rect(
                 buffer,
                 fw,
                 fh,
@@ -495,7 +494,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         let x_start = btn_x0 + ((w - (bar_w * 2 + gap)) / 2);
         let y_start = btn_y0 + (h as f32 * 0.20) as i32;
         let y_end = btn_y0 + (h as f32 * 0.80) as i32;
-        fill_rect_buffer(
+        blend_rect(
             buffer,
             fw,
             fh,
@@ -505,7 +504,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
             y_end,
             (250, 240, 220, (255.0 * overlay_alpha) as u8),
         );
-        fill_rect_buffer(
+        blend_rect(
             buffer,
             fw,
             fh,
@@ -526,7 +525,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     let knob_x1 = (knob_left + knob_w_i as f32).ceil() as i32;
     let knob_y0 = (geom.slider_top - 1.0).floor() as i32;
     let knob_y1 = (geom.slider_bottom + 1.0).ceil() as i32;
-    fill_rect_buffer(
+    blend_rect(
         buffer,
         fw,
         fh,
@@ -545,7 +544,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         let mini_w = (mx1 - mx0).max(1) as f32;
         let mini_h = (my1 - my0).max(1) as f32;
 
-        fill_rect_buffer(
+        blend_rect(
             buffer,
             fw,
             fh,
@@ -567,7 +566,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         let full_y0 = (my0 as f32 + (mini_h - full_h) * 0.5).round() as i32;
         let full_x1 = (full_x0 as f32 + full_w).round() as i32;
         let full_y1 = (full_y0 as f32 + full_h).round() as i32;
-        fill_rect_buffer(
+        blend_rect(
             buffer,
             fw,
             fh,
@@ -583,7 +582,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         let lens_y0 = (full_y0 as f32 + vy * full_h).round() as i32;
         let lens_x1 = (lens_x0 as f32 + vw * full_w).round() as i32;
         let lens_y1 = (lens_y0 as f32 + vh * full_h).round() as i32;
-        fill_rect_buffer(
+        blend_rect(
             buffer,
             fw,
             fh,
@@ -663,6 +662,39 @@ fn blend_text(
                     buffer[idx + 3] = 0xff;
                 }
             }
+        }
+    }
+}
+
+fn blend_rect(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    rgba: (u8, u8, u8, u8),
+) {
+    if rgba.3 == 0 {
+        return;
+    }
+    let sx = x0.max(0) as usize;
+    let sy = y0.max(0) as usize;
+    let ex = x1.max(0).min(width as i32) as usize;
+    let ey = y1.max(0).min(height as i32) as usize;
+    if sx >= ex || sy >= ey {
+        return;
+    }
+    let a = rgba.3 as f32 / 255.0;
+    let ia = 1.0 - a;
+    for y in sy..ey {
+        for x in sx..ex {
+            let idx = (y * width + x) * 4;
+            buffer[idx] = (rgba.0 as f32 * a + buffer[idx] as f32 * ia) as u8;
+            buffer[idx + 1] = (rgba.1 as f32 * a + buffer[idx + 1] as f32 * ia) as u8;
+            buffer[idx + 2] = (rgba.2 as f32 * a + buffer[idx + 2] as f32 * ia) as u8;
+            buffer[idx + 3] = 0xff;
         }
     }
 }
