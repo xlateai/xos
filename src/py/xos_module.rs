@@ -61,6 +61,13 @@ impl StandalonePreviewApp {
         }
     }
 
+    fn viewport_paused(&self, viewport_id: u64) -> bool {
+        self.f3_engine_state
+            .get(&viewport_id)
+            .map(|es| es.paused)
+            .unwrap_or(false)
+    }
+
     fn ensure_windows_created(&mut self, event_loop: &ActiveEventLoop) {
         if self.pending_window_creates.is_empty() {
             return;
@@ -123,6 +130,7 @@ impl StandalonePreviewApp {
                     f3_menu: crate::engine::F3Menu::new(),
                     ui_scale_percent: 100,
                     delta_time_seconds: 1.0 / 60.0,
+                    paused: false,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);
@@ -176,7 +184,11 @@ impl StandalonePreviewApp {
                 let frame = es.frame.buffer_mut();
                 if frame.len() == frame_data.rgba.len() {
                     frame.copy_from_slice(&frame_data.rgba);
-                    if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                    if es.paused {
+                        if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                            *last = Some(std::time::Instant::now());
+                        }
+                    } else if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
                         crate::engine::tick_frame_delta(es, last);
                     }
                     crate::engine::tick_f3_menu(es);
@@ -255,6 +267,9 @@ impl ApplicationHandler for StandalonePreviewApp {
                     es.mouse.y = position.y as f32;
                     let _ = crate::engine::f3_menu_handle_mouse_move(es);
                 }
+                if let Some(state) = self.states.get(&_window_id) {
+                    state.window.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: button_state,
@@ -273,6 +288,9 @@ impl ApplicationHandler for StandalonePreviewApp {
                         }
                     }
                 }
+                if let Some(state) = self.states.get(&_window_id) {
+                    state.window.request_redraw();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
@@ -280,6 +298,9 @@ impl ApplicationHandler for StandalonePreviewApp {
                 {
                     if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         es.f3_menu.toggle_visible();
+                    }
+                    if let Some(state) = self.states.get(&_window_id) {
+                        state.window.request_redraw();
                     }
                 }
             }
@@ -617,13 +638,20 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                         .insert(viewport_id, (width.max(1), height.max(1)));
                 }
                 host.app.render_viewport(viewport_id);
-                match host
-                    .event_loop
-                    .pump_app_events(Some(Duration::ZERO), &mut host.app)
-                {
-                    PumpStatus::Continue => {}
-                    PumpStatus::Exit(_) => {
-                        // Keep EventLoop alive: many platforms allow only one per process.
+                loop {
+                    let timeout = if host.app.viewport_paused(viewport_id) {
+                        Some(Duration::from_millis(250))
+                    } else {
+                        Some(Duration::ZERO)
+                    };
+                    match host.event_loop.pump_app_events(timeout, &mut host.app) {
+                        PumpStatus::Continue => {}
+                        PumpStatus::Exit(_) => {
+                            // Keep EventLoop alive: many platforms allow only one per process.
+                        }
+                    }
+                    if !host.app.viewport_paused(viewport_id) {
+                        break;
                     }
                 }
             }

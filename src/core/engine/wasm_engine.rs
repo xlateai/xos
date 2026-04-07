@@ -67,6 +67,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
+            paused: false,
         },
         app,
     }));
@@ -371,12 +372,16 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     state.app.on_screen_size_change(&mut state.engine_state, width, height);
                 }
                 
-                tick_frame_delta(
-                    &mut state.engine_state,
-                    &mut anim_state.last_tick_instant,
-                );
-                // Tick the app first
-                state.app.tick(&mut state.engine_state);
+                if state.engine_state.paused {
+                    anim_state.last_tick_instant = Some(std::time::Instant::now());
+                } else {
+                    tick_frame_delta(
+                        &mut state.engine_state,
+                        &mut anim_state.last_tick_instant,
+                    );
+                    // Tick the app first
+                    state.app.tick(&mut state.engine_state);
+                }
                 
                 // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
                 {

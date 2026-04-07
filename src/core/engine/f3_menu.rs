@@ -69,6 +69,10 @@ struct PanelGeom {
     slider_right: f32,
     slider_top: f32,
     slider_bottom: f32,
+    button_left: f32,
+    button_right: f32,
+    button_top: f32,
+    button_bottom: f32,
 }
 
 fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32) -> PanelGeom {
@@ -85,6 +89,11 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32) -> PanelGe
     let panel_h = pad + line_h + line_gap + line_h + line_gap + slider_h + pad;
     let panel_left = w - panel_w - pad;
     let panel_top = safe_top + pad;
+    let button_size = (22.0 * us).max(12.0);
+    let button_right = panel_left + panel_w - pad;
+    let button_left = button_right - button_size;
+    let button_top = panel_top + pad + ((line_h - button_size) * 0.5).max(0.0);
+    let button_bottom = button_top + button_size;
     let slider_left = panel_left + pad;
     let slider_right = slider_left + slider_w;
     let slider_top = panel_top + pad + line_h + line_gap + line_h + line_gap;
@@ -98,6 +107,10 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32) -> PanelGe
         slider_right,
         slider_top,
         slider_bottom,
+        button_left,
+        button_right,
+        button_top,
+        button_bottom,
     }
 }
 
@@ -157,7 +170,8 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         .iter()
         .map(|c| c.metrics.advance_width)
         .sum();
-    let content_w = fps_w.max(label_w);
+    let button_size = (22.0 * ui_scale).max(12.0);
+    let content_w = (fps_w + (10.0 * ui_scale) + button_size).max(label_w);
     let geom = panel_geom(state, content_w, ui_scale, pad);
     let knob_w = (12.0 * ui_scale).max(8.0).round().max(1.0);
     Some((geom, knob_w))
@@ -184,6 +198,16 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
         && mx <= geom.slider_right
         && my >= geom.slider_top
         && my <= geom.slider_bottom;
+    let on_button = mx >= geom.button_left
+        && mx <= geom.button_right
+        && my >= geom.button_top
+        && my <= geom.button_bottom;
+    if on_button {
+        state.paused = !state.paused;
+        state.f3_menu.scale_dragging = false;
+        state.f3_menu.pointer_captured = true;
+        return true;
+    }
     if on_slider {
         state.f3_menu.scale_dragging = true;
         state.ui_scale_percent = percent_from_mouse_x(mx, &geom, knob_w);
@@ -258,6 +282,64 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         track_y1,
         (55, 55, 55, 0xff),
     );
+
+    // Play/pause button in top-right of panel.
+    let btn_x0 = geom.button_left.floor() as i32;
+    let btn_y0 = geom.button_top.floor() as i32;
+    let btn_x1 = geom.button_right.ceil() as i32;
+    let btn_y1 = geom.button_bottom.ceil() as i32;
+    let btn_bg = if state.paused {
+        (34, 128, 76, 0xff)
+    } else {
+        (120, 92, 26, 0xff)
+    };
+    fill_rect_buffer(buffer, fw, fh, btn_x0, btn_y0, btn_x1, btn_y1, btn_bg);
+
+    if state.paused {
+        // Play icon (triangle)
+        let w = (btn_x1 - btn_x0).max(2);
+        let h = (btn_y1 - btn_y0).max(2);
+        let left = btn_x0 + (w as f32 * 0.34) as i32;
+        let right = btn_x0 + (w as f32 * 0.72) as i32;
+        let top = btn_y0 + (h as f32 * 0.24) as i32;
+        let bottom = btn_y0 + (h as f32 * 0.76) as i32;
+        let mid = (top + bottom) / 2;
+        for x in left..right {
+            let t = (x - left) as f32 / (right - left).max(1) as f32;
+            let y0 = (mid as f32 - t * (mid - top) as f32) as i32;
+            let y1 = (mid as f32 + t * (bottom - mid) as f32) as i32;
+            fill_rect_buffer(buffer, fw, fh, x, y0, x + 1, y1 + 1, (235, 245, 235, 0xff));
+        }
+    } else {
+        // Pause icon (two vertical bars)
+        let w = (btn_x1 - btn_x0).max(4);
+        let h = (btn_y1 - btn_y0).max(4);
+        let bar_w = ((w as f32) * 0.18).round().max(1.0) as i32;
+        let gap = ((w as f32) * 0.14).round().max(1.0) as i32;
+        let x_start = btn_x0 + ((w - (bar_w * 2 + gap)) / 2);
+        let y_start = btn_y0 + (h as f32 * 0.20) as i32;
+        let y_end = btn_y0 + (h as f32 * 0.80) as i32;
+        fill_rect_buffer(
+            buffer,
+            fw,
+            fh,
+            x_start,
+            y_start,
+            x_start + bar_w,
+            y_end,
+            (250, 240, 220, 0xff),
+        );
+        fill_rect_buffer(
+            buffer,
+            fw,
+            fh,
+            x_start + bar_w + gap,
+            y_start,
+            x_start + bar_w + gap + bar_w,
+            y_end,
+            (250, 240, 220, 0xff),
+        );
+    }
 
     // Knob position from percent (same inner range as [`percent_from_mouse_x`])
     let knob_w_i = knob_w as i32;

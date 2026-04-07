@@ -159,6 +159,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         f3_menu: F3Menu::new(),
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
+        paused: false,
     };
 
     // Call setup
@@ -209,11 +210,15 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // We use AssertUnwindSafe because we know the FFI boundary is safe
         // and we're catching panics to prevent them from crossing the boundary unsafely
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            tick_frame_delta(
-                &mut ios_state.engine_state,
-                &mut ios_state.last_tick_instant,
-            );
-            ios_state.app.tick(&mut ios_state.engine_state);
+            if ios_state.engine_state.paused {
+                ios_state.last_tick_instant = Some(std::time::Instant::now());
+            } else {
+                tick_frame_delta(
+                    &mut ios_state.engine_state,
+                    &mut ios_state.last_tick_instant,
+                );
+                ios_state.app.tick(&mut ios_state.engine_state);
+            }
         }));
         
         // Check for panic first

@@ -152,8 +152,12 @@ impl AppState {
             }
         }
 
-        tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
-        let _ = self.app.tick(&mut self.engine_state);
+        if self.engine_state.paused {
+            self.last_tick_instant = Some(std::time::Instant::now());
+        } else {
+            tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
+            let _ = self.app.tick(&mut self.engine_state);
+        }
 
         {
             let width = self.size.width;
@@ -255,6 +259,9 @@ impl ApplicationHandler for AppState {
                 if !f3_menu_handle_mouse_move(&mut self.engine_state) {
                     let _ = self.app.on_mouse_move(&mut self.engine_state);
                 }
+                if self.engine_state.paused {
+                    self.window.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: button_state,
@@ -266,11 +273,17 @@ impl ApplicationHandler for AppState {
                     if !f3_menu_handle_mouse_down(&mut self.engine_state) {
                         let _ = self.app.on_mouse_down(&mut self.engine_state);
                     }
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
+                    }
                 }
                 ElementState::Released => {
                     self.engine_state.mouse.is_left_clicking = false;
                     if !f3_menu_handle_mouse_up(&mut self.engine_state) {
                         let _ = self.app.on_mouse_up(&mut self.engine_state);
+                    }
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
                     }
                 }
             },
@@ -326,6 +339,9 @@ impl ApplicationHandler for AppState {
                 if event.state == ElementState::Pressed {
                     if matches!(event.logical_key, Key::Named(NamedKey::F3)) {
                         self.engine_state.f3_menu.toggle_visible();
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
                         return;
                     }
 
@@ -429,8 +445,10 @@ impl ApplicationHandler for AppState {
             }
         }
         
-        // Request continuous redraws to keep checking SHOULD_EXIT flag
-        self.window.request_redraw();
+        // Keep continuous redraw only while running; paused mode is event-driven to avoid busy CPU usage.
+        if !self.engine_state.paused {
+            self.window.request_redraw();
+        }
     }
 }
 
@@ -496,6 +514,7 @@ impl ApplicationHandler for AppStateWrapper {
                 f3_menu: F3Menu::new(),
                 ui_scale_percent: 100,
                 delta_time_seconds: 1.0 / 60.0,
+                paused: false,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -599,6 +618,7 @@ pub fn start_headless_native(
         f3_menu: F3Menu::new(),
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
+        paused: false,
     };
 
     if let Err(e) = app.setup(&mut engine_state) {
@@ -607,8 +627,13 @@ pub fn start_headless_native(
 
     let mut last_tick_instant: Option<std::time::Instant> = None;
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
-        tick_frame_delta(&mut engine_state, &mut last_tick_instant);
-        app.tick(&mut engine_state);
+        if engine_state.paused {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            last_tick_instant = Some(std::time::Instant::now());
+        } else {
+            tick_frame_delta(&mut engine_state, &mut last_tick_instant);
+            app.tick(&mut engine_state);
+        }
         tick_f3_menu(&mut engine_state);
     }
     SHOULD_EXIT.store(false, Ordering::Relaxed);

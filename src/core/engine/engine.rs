@@ -194,6 +194,8 @@ pub struct EngineState {
     /// Seconds since the previous `Application::tick` (set by the host immediately before each tick).
     /// The first tick uses `1.0 / 60.0` as a nominal step so simulations can use `delta_time_seconds` safely.
     pub delta_time_seconds: f32,
+    /// Global simulation pause controlled by the F3 menu play/pause button.
+    pub paused: bool,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).

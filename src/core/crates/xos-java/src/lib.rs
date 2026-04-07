@@ -127,6 +127,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
+            paused: false,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -172,8 +173,12 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
         };
 
         host.tick_count = host.tick_count.wrapping_add(1);
-        tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
-        host.app.tick(&mut host.engine);
+        if host.engine.paused {
+            host.last_tick_instant = Some(std::time::Instant::now());
+        } else {
+            tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
+            host.app.tick(&mut host.engine);
+        }
 
         // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.
         {
