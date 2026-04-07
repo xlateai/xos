@@ -137,6 +137,10 @@ class Conv2d(Module):
             )
         )
 
+    @property
+    def weights(self):
+        return _x()._burn.conv2d_weights(self._burn_conv2d_id)
+
     def forward(self, x):
         try:
             return _x()._burn.conv2d_forward_tensor(self._burn_conv2d_id, x)

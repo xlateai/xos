@@ -181,6 +181,45 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     conv2d_forward_impl(id as u64, flat, h, w, c, vm)
 }
 
+/// `_burn.conv2d_weights(id) -> Tensor`
+/// Returns Conv2d kernel weights with shape (out_channels, in_channels, kernel_h, kernel_w).
+pub fn conv2d_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.is_empty() {
+        return Err(vm.new_type_error("conv2d_weights(id)".to_string()));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+
+    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let conv = rt
+        .conv2ds
+        .get(&(id as u64))
+        .ok_or_else(|| vm.new_value_error("unknown conv2d id".to_string()))?;
+
+    let w = conv.weight.val();
+    let w_data = w.into_data();
+    let shape_vec = w_data.shape.clone();
+    let flat_out: Vec<f32> = w_data
+        .to_vec::<f32>()
+        .map_err(|e| vm.new_runtime_error(format!("tensor to_vec: {e:?}")))?;
+
+    let dict = vm.ctx.new_dict();
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(shape_vec.iter().map(|&s| vm.ctx.new_int(s as i64).into()).collect())
+            .into(),
+        vm,
+    )?;
+    dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    let py_data: Vec<PyObjectRef> = flat_out.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+    dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
+    dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
+
+    wrap_tensor_dict(dict.into(), vm)
+}
+
 /// `_burn.conv2d_forward_tensor(id, x) -> Tensor`
 /// Fast path: takes a tensor-like object directly and extracts shape/data in Rust.
 pub fn conv2d_forward_tensor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -597,6 +636,9 @@ pub fn register_burn_module(parent: &PyRef<PyModule>, vm: &VirtualMachine) {
             vm.new_function("conv2d_forward_tensor", conv2d_forward_tensor),
             vm,
         )
+        .unwrap();
+    burn
+        .set_attr("conv2d_weights", vm.new_function("conv2d_weights", conv2d_weights), vm)
         .unwrap();
     burn
         .set_attr("linear_register", vm.new_function("linear_register", linear_register), vm)
