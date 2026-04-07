@@ -304,6 +304,12 @@ impl ApplicationHandler for AppState {
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
 
                 if self.frame_pan_dragging {
+                    if !self.engine_state.mouse.is_left_clicking || !(self.command_held && self.shift_held) {
+                        self.frame_pan_dragging = false;
+                    }
+                }
+
+                if self.frame_pan_dragging {
                     f3_menu_boost_interaction_fade(&mut self.engine_state);
                     let dx = self.engine_state.mouse.dx;
                     let dy = self.engine_state.mouse.dy;

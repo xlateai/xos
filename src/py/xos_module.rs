@@ -326,7 +326,15 @@ impl ApplicationHandler for StandalonePreviewApp {
                     let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
                     let dragging = *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false);
 
-                    if dragging {
+                    let actively_dragging = dragging
+                        && es.mouse.is_left_clicking
+                        && command
+                        && shift;
+                    if dragging && !actively_dragging {
+                        self.frame_pan_dragging.insert(viewport_id, false);
+                    }
+
+                    if actively_dragging {
                         crate::engine::f3_menu_boost_interaction_fade(es);
                         if let Some(state) = self.states.get(&_window_id) {
                             crate::engine::frame_view_pan_by_pixels(

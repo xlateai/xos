@@ -119,6 +119,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 state.engine_state.mouse.y = new_y;
 
                 if state.frame_pan_dragging {
+                    if !state.engine_state.mouse.is_left_clicking || !(state.command_held && state.shift_held) {
+                        state.frame_pan_dragging = false;
+                    }
+                }
+
+                if state.frame_pan_dragging {
                     f3_menu_boost_interaction_fade(&mut state.engine_state);
                     let shape = state.engine_state.frame.shape();
                     frame_view_pan_by_pixels(
