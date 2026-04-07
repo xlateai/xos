@@ -793,7 +793,13 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let text_str: String = args_vec[0].clone().try_into_value(vm)?;
     let x: f64 = args_vec[1].clone().try_into_value(vm)?;
     let y: f64 = args_vec[2].clone().try_into_value(vm)?;
-    let font_size: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let font_size: f64 = if let Ok(v) = args_vec[3].clone().try_into_value::<f64>(vm) {
+        v
+    } else if let Ok(v) = args_vec[3].clone().try_into_value::<i64>(vm) {
+        v as f64
+    } else {
+        return Err(vm.new_type_error("font_size must be an int or float".to_string()));
+    };
     let color_tuple = &args_vec[4];
     
     // Get the frame buffer from global context

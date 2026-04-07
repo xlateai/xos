@@ -73,11 +73,11 @@ impl ApplicationHandler for StandalonePreviewApp {
         };
         match event {
             WindowEvent::CloseRequested => {
-                self.states.remove(&_window_id);
-                self.viewport_to_window.remove(&viewport_id);
-                self.pending_frames.remove(&viewport_id);
-                self.f3_engine_state.remove(&viewport_id);
-                self.last_tick_instant.remove(&viewport_id);
+                // Standalone preview is typically driven by user script loops
+                // (e.g. `while ...: app.tick()`). Closing any preview window should
+                // terminate the script immediately and close all windows together.
+                let _ = viewport_id;
+                std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
                 let Some(state) = self.states.get_mut(&_window_id) else { return; };
