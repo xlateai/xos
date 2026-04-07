@@ -1,6 +1,7 @@
 //! Burn-backed autograd, MSE loss, and Adam for `xos.nn` (Autodiff + ndarray CPU backend).
 
 use burn::nn::LinearConfig;
+use burn::nn::conv::Conv2dConfig;
 use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::tensor::backend::AutodiffBackend;
@@ -20,6 +21,7 @@ type TrainAD = Autodiff<NdArray<f32>>;
 struct BurnRuntime {
     next_id: u64,
     linears: HashMap<u64, burn::nn::Linear<TrainAD>>,
+    conv2ds: HashMap<u64, burn::nn::conv::Conv2d<TrainAD>>,
     optimizers: HashMap<u64, OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD>>,
     optim_linear: HashMap<u64, u64>,
     last_pred: HashMap<u64, Tensor<TrainAD, 2>>,
@@ -34,6 +36,7 @@ impl Default for BurnRuntime {
         Self {
             next_id: 1,
             linears: HashMap::new(),
+            conv2ds: HashMap::new(),
             optimizers: HashMap::new(),
             optim_linear: HashMap::new(),
             last_pred: HashMap::new(),
@@ -43,6 +46,196 @@ impl Default for BurnRuntime {
             last_loss_linear_id: None,
         }
     }
+}
+
+/// `_burn.conv2d_register(in_channels, out_channels, kernel_size, stride=1) -> id`
+pub fn conv2d_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let in_channels: i32 = args
+        .kwargs
+        .get("in_channels")
+        .or_else(|| args.args.get(0))
+        .ok_or_else(|| vm.new_type_error("conv2d_register: in_channels required".to_string()))?
+        .clone()
+        .try_into_value(vm)?;
+    let out_channels: i32 = args
+        .kwargs
+        .get("out_channels")
+        .or_else(|| args.args.get(1))
+        .ok_or_else(|| vm.new_type_error("conv2d_register: out_channels required".to_string()))?
+        .clone()
+        .try_into_value(vm)?;
+
+    let mut k_h = 3usize;
+    let mut k_w = 3usize;
+    if let Some(v) = args.kwargs.get("kernel_size").or_else(|| args.args.get(2)) {
+        if let Some(tup) = v.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+            let items = tup.as_slice();
+            if items.len() >= 2 {
+                k_h = items[0]
+                    .clone()
+                    .try_into_value::<i32>(vm)
+                    .unwrap_or(3)
+                    .max(1) as usize;
+                k_w = items[1]
+                    .clone()
+                    .try_into_value::<i32>(vm)
+                    .unwrap_or(3)
+                    .max(1) as usize;
+            }
+        } else if let Ok(k) = v.clone().try_into_value::<i32>(vm) {
+            let kk = k.max(1) as usize;
+            k_h = kk;
+            k_w = kk;
+        }
+    }
+
+    let mut s_h = 1usize;
+    let mut s_w = 1usize;
+    if let Some(v) = args.kwargs.get("stride").or_else(|| args.args.get(3)) {
+        if let Some(tup) = v.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+            let items = tup.as_slice();
+            if items.len() >= 2 {
+                s_h = items[0]
+                    .clone()
+                    .try_into_value::<i32>(vm)
+                    .unwrap_or(1)
+                    .max(1) as usize;
+                s_w = items[1]
+                    .clone()
+                    .try_into_value::<i32>(vm)
+                    .unwrap_or(1)
+                    .max(1) as usize;
+            }
+        } else if let Ok(s) = v.clone().try_into_value::<i32>(vm) {
+            let ss = s.max(1) as usize;
+            s_h = ss;
+            s_w = ss;
+        }
+    }
+
+    let in_channels = in_channels.max(1) as usize;
+    let out_channels = out_channels.max(1) as usize;
+
+    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let dev = device();
+    let conv = Conv2dConfig::new([in_channels, out_channels], [k_h, k_w])
+        .with_stride([s_h, s_w])
+        .init::<TrainAD>(&dev);
+    let id = next_id(&mut rt);
+    rt.conv2ds.insert(id, conv);
+    Ok(vm.ctx.new_int(id as i64).into())
+}
+
+/// `_burn.conv2d_forward(id, flat_input, shape_tuple) -> Tensor`
+/// Input shape expected as (H, W, C) and converted to NCHW for Burn.
+pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 3 {
+        return Err(vm.new_type_error("conv2d_forward(id, flat_input, shape)".to_string()));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let list = args_vec[1]
+        .downcast_ref::<PyList>()
+        .ok_or_else(|| vm.new_type_error("flat_input must be a list".to_string()))?;
+    let shape_tuple = args_vec[2]
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
+    let dims = shape_tuple.as_slice();
+    if dims.len() != 3 {
+        return Err(vm.new_value_error("shape must be (H, W, C)".to_string()));
+    }
+    let h = dims[0].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
+    let w = dims[1].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
+    let c = dims[2].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
+
+    let mut flat: Vec<f32> = Vec::new();
+    fn flatten(obj: &PyObjectRef, out: &mut Vec<f32>, vm: &VirtualMachine) -> PyResult<()> {
+        if let Some(l) = obj.downcast_ref::<PyList>() {
+            for x in l.borrow_vec().iter() {
+                flatten(x, out, vm)?;
+            }
+        } else {
+            use crate::tensor::tensor::py_number_to_f64;
+            out.push(py_number_to_f64(obj, vm)? as f32);
+        }
+        Ok(())
+    }
+    for x in list.borrow_vec().iter() {
+        flatten(x, &mut flat, vm)?;
+    }
+    let expected = h * w * c;
+    if flat.len() < expected {
+        flat.resize(expected, 0.0);
+    } else if flat.len() > expected {
+        flat.truncate(expected);
+    }
+
+    // NHWC -> NCHW
+    let mut nchw = vec![0.0f32; expected];
+    for iy in 0..h {
+        for ix in 0..w {
+            for ic in 0..c {
+                let src = (iy * w + ix) * c + ic;
+                let dst = (ic * h + iy) * w + ix;
+                nchw[dst] = flat[src];
+            }
+        }
+    }
+
+    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let conv = rt
+        .conv2ds
+        .get(&(id as u64))
+        .ok_or_else(|| vm.new_value_error("unknown conv2d id".to_string()))?;
+    let dev = device();
+    let input: Tensor<TrainAD, 4> = Tensor::from_data(TensorData::new(nchw, [1, c, h, w]), &dev);
+    let out: Tensor<TrainAD, 4> = conv.forward(input);
+
+    let out_data = out.into_data();
+    let shape = &out_data.shape;
+    // shape expected [1, C_out, H_out, W_out]
+    let n = *shape.get(0).unwrap_or(&1);
+    let co = *shape.get(1).unwrap_or(&1);
+    let ho = *shape.get(2).unwrap_or(&1);
+    let wo = *shape.get(3).unwrap_or(&1);
+    let flat_nchw: Vec<f32> = out_data
+        .to_vec::<f32>()
+        .map_err(|e| vm.new_runtime_error(format!("tensor to_vec: {e:?}")))?;
+    let mut flat_nhwc = vec![0.0f32; n * ho * wo * co];
+    for b in 0..n {
+        for oy in 0..ho {
+            for ox in 0..wo {
+                for oc in 0..co {
+                    let src = ((b * co + oc) * ho + oy) * wo + ox;
+                    let dst = ((b * ho + oy) * wo + ox) * co + oc;
+                    flat_nhwc[dst] = flat_nchw[src];
+                }
+            }
+        }
+    }
+
+    let dict = vm.ctx.new_dict();
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int((ho) as i64).into(),
+                vm.ctx.new_int((wo) as i64).into(),
+                vm.ctx.new_int((co) as i64).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    let py_data: Vec<PyObjectRef> = flat_nhwc
+        .iter()
+        .map(|&f| vm.ctx.new_float(f as f64).into())
+        .collect();
+    dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
+    dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
+
+    wrap_tensor_dict(dict.into(), vm)
 }
 
 static RUNTIME: Lazy<Mutex<BurnRuntime>> = Lazy::new(|| Mutex::new(BurnRuntime::default()));
@@ -345,6 +538,12 @@ pub fn adam_zero_grad(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 pub fn register_burn_module(parent: &PyRef<PyModule>, vm: &VirtualMachine) {
     let burn = vm.new_module("_burn", vm.ctx.new_dict(), None);
+    burn
+        .set_attr("conv2d_register", vm.new_function("conv2d_register", conv2d_register), vm)
+        .unwrap();
+    burn
+        .set_attr("conv2d_forward", vm.new_function("conv2d_forward", conv2d_forward), vm)
+        .unwrap();
     burn
         .set_attr("linear_register", vm.new_function("linear_register", linear_register), vm)
         .unwrap();

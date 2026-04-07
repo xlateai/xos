@@ -8,6 +8,20 @@ pub fn make_nn_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr("Module", vm.ctx.types.object_type.to_owned(), vm)
         .unwrap();
+    module
+        .set_attr(
+            "_conv2d_forward_native",
+            vm.new_function("_conv2d_forward_native", layers::conv2d_forward),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_relu_forward_native",
+            vm.new_function("_relu_forward_native", layers::relu_forward),
+            vm,
+        )
+        .unwrap();
 
     let nn_class_code = r#"
 def _x():
@@ -77,9 +91,22 @@ class Conv2d(Module):
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.stride = stride
+        xos = _x()
+        self._burn_conv2d_id = int(
+            xos._burn.conv2d_register(
+                in_channels=max(1, int(in_channels)),
+                out_channels=max(1, int(out_channels)),
+                kernel_size=kernel_size,
+                stride=stride,
+            )
+        )
 
     def forward(self, x):
-        return x
+        shape = getattr(x, "shape", None)
+        if shape is None:
+            shape = (600, 800, max(1, int(self.in_channels)))
+        flat = _tensor_to_flat_list(x)
+        return _x()._burn.conv2d_forward(self._burn_conv2d_id, flat, tuple(shape))
 
 class Linear(Module):
     """Burn-backed linear layer (Autodiff + ndarray)."""
@@ -114,7 +141,7 @@ class ReLU(Module):
         super().__init__()
 
     def forward(self, x):
-        return x
+        return _x().nn._relu_forward_native(self, x)
 
 class _BurnLoss:
     def backward(self):
