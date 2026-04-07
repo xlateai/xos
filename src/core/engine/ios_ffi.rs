@@ -161,6 +161,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
         paused: false,
+        pending_step_ticks: 0,
         frame_view_zoom: 1.0,
         frame_view_zoom_target: 1.0,
         frame_view_zoom_velocity: 0.0,
@@ -217,7 +218,16 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         // and we're catching panics to prevent them from crossing the boundary unsafely
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             if ios_state.engine_state.paused {
-                ios_state.last_tick_instant = Some(std::time::Instant::now());
+                if ios_state.engine_state.pending_step_ticks > 0 {
+                    ios_state.engine_state.pending_step_ticks = ios_state.engine_state.pending_step_ticks.saturating_sub(1);
+                    tick_frame_delta(
+                        &mut ios_state.engine_state,
+                        &mut ios_state.last_tick_instant,
+                    );
+                    ios_state.app.tick(&mut ios_state.engine_state);
+                } else {
+                    ios_state.last_tick_instant = Some(std::time::Instant::now());
+                }
             } else {
                 tick_frame_delta(
                     &mut ios_state.engine_state,

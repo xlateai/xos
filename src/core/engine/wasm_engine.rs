@@ -80,6 +80,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
             paused: false,
+            pending_step_ticks: 0,
             frame_view_zoom: 1.0,
             frame_view_zoom_target: 1.0,
             frame_view_zoom_velocity: 0.0,
@@ -481,29 +482,42 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 }
                 
                 if state.engine_state.paused {
-                    anim_state.last_tick_instant = Some(std::time::Instant::now());
-                    if state.paused_base_frame.is_empty() {
+                    if state.engine_state.pending_step_ticks > 0 {
+                        state.engine_state.pending_step_ticks = state.engine_state.pending_step_ticks.saturating_sub(1);
+                        tick_frame_delta(
+                            &mut state.engine_state,
+                            &mut anim_state.last_tick_instant,
+                        );
+                        state.app.tick(&mut state.engine_state);
                         let shape = state.engine_state.frame.shape();
                         state.paused_base_w = shape[1];
                         state.paused_base_h = shape[0];
                         state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
-                    }
-                    if !state.paused_base_frame.is_empty() && state.paused_base_w > 0 && state.paused_base_h > 0 {
-                        let shape = state.engine_state.frame.shape();
-                        let dst_w = shape[1];
-                        let dst_h = shape[0];
-                        let dst = state.engine_state.frame.buffer_mut();
-                        dst.fill(0);
-                        let copy_w = state.paused_base_w.min(dst_w);
-                        let copy_h = state.paused_base_h.min(dst_h);
-                        let src_stride = state.paused_base_w * 4;
-                        let dst_stride = dst_w * 4;
-                        let row_bytes = copy_w * 4;
-                        for y in 0..copy_h {
-                            let src_off = y * src_stride;
-                            let dst_off = y * dst_stride;
-                            dst[dst_off..dst_off + row_bytes]
-                                .copy_from_slice(&state.paused_base_frame[src_off..src_off + row_bytes]);
+                    } else {
+                        anim_state.last_tick_instant = Some(std::time::Instant::now());
+                        if state.paused_base_frame.is_empty() {
+                            let shape = state.engine_state.frame.shape();
+                            state.paused_base_w = shape[1];
+                            state.paused_base_h = shape[0];
+                            state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
+                        }
+                        if !state.paused_base_frame.is_empty() && state.paused_base_w > 0 && state.paused_base_h > 0 {
+                            let shape = state.engine_state.frame.shape();
+                            let dst_w = shape[1];
+                            let dst_h = shape[0];
+                            let dst = state.engine_state.frame.buffer_mut();
+                            dst.fill(0);
+                            let copy_w = state.paused_base_w.min(dst_w);
+                            let copy_h = state.paused_base_h.min(dst_h);
+                            let src_stride = state.paused_base_w * 4;
+                            let dst_stride = dst_w * 4;
+                            let row_bytes = copy_w * 4;
+                            for y in 0..copy_h {
+                                let src_off = y * src_stride;
+                                let dst_off = y * dst_stride;
+                                dst[dst_off..dst_off + row_bytes]
+                                    .copy_from_slice(&state.paused_base_frame[src_off..src_off + row_bytes]);
+                            }
                         }
                     }
                 } else {

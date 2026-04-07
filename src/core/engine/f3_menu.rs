@@ -93,6 +93,10 @@ struct PanelGeom {
     button_right: f32,
     button_top: f32,
     button_bottom: f32,
+    step_left: f32,
+    step_right: f32,
+    step_top: f32,
+    step_bottom: f32,
     minimap_left: f32,
     minimap_right: f32,
     minimap_top: f32,
@@ -117,10 +121,15 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
     let panel_left = w - panel_w - pad;
     let panel_top = safe_top + pad;
     let button_size = (22.0 * us).max(12.0);
-    let button_right = panel_left + panel_w - pad;
+    let button_gap = (6.0 * us).max(3.0);
+    let step_right = panel_left + panel_w - pad;
+    let step_left = step_right - button_size;
+    let button_right = step_left - button_gap;
     let button_left = button_right - button_size;
     let button_top = panel_top + pad + ((line_h - button_size) * 0.5).max(0.0);
     let button_bottom = button_top + button_size;
+    let step_top = button_top;
+    let step_bottom = button_bottom;
     let slider_left = panel_left + pad;
     let slider_right = slider_left + slider_w;
     let slider_top = panel_top + pad + line_h + line_gap + line_h + line_gap;
@@ -142,6 +151,10 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
         button_right,
         button_top,
         button_bottom,
+        step_left,
+        step_right,
+        step_top,
+        step_bottom,
         minimap_left,
         minimap_right,
         minimap_top,
@@ -312,9 +325,10 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         .map(|c| c.metrics.advance_width)
         .sum();
     let button_size = (22.0 * ui_scale).max(12.0);
+    let button_gap = (6.0 * ui_scale).max(3.0);
     let slider_w = (200.0 * ui_scale).max(120.0);
     // Keep panel width stable so FPS/scale text width changes don't make the slider jitter horizontally.
-    let content_w = slider_w.max(button_size + 120.0 * ui_scale);
+    let content_w = slider_w.max(button_size * 2.0 + button_gap + 120.0 * ui_scale);
     let (_, _, vw, vh) = frame_view_rect_norm(state);
     let show_minimap = vw < 0.999 || vh < 0.999;
     let geom = panel_geom(state, content_w, ui_scale, pad, show_minimap);
@@ -347,9 +361,22 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
         && mx <= geom.button_right
         && my >= geom.button_top
         && my <= geom.button_bottom;
+    let on_step = mx >= geom.step_left
+        && mx <= geom.step_right
+        && my >= geom.step_top
+        && my <= geom.step_bottom;
     if on_button {
         f3_menu_boost_interaction_fade(state);
         state.paused = !state.paused;
+        state.f3_menu.scale_dragging = false;
+        state.f3_menu.pointer_captured = true;
+        return true;
+    }
+    if on_step {
+        f3_menu_boost_interaction_fade(state);
+        if state.paused {
+            state.pending_step_ticks = state.pending_step_ticks.saturating_add(1);
+        }
         state.f3_menu.scale_dragging = false;
         state.f3_menu.pointer_captured = true;
         return true;
@@ -469,6 +496,53 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         btn_y1,
         (btn_bg.0, btn_bg.1, btn_bg.2, (255.0 * overlay_alpha) as u8),
     );
+
+    // Step button (active only while paused).
+    let step_x0 = geom.step_left.floor() as i32;
+    let step_y0 = geom.step_top.floor() as i32;
+    let step_x1 = geom.step_right.ceil() as i32;
+    let step_y1 = geom.step_bottom.ceil() as i32;
+    let step_bg = if state.paused {
+        (44, 72, 124, 0xff)
+    } else {
+        (70, 70, 70, 0xff)
+    };
+    blend_rect(
+        buffer,
+        fw,
+        fh,
+        step_x0,
+        step_y0,
+        step_x1,
+        step_y1,
+        (step_bg.0, step_bg.1, step_bg.2, (255.0 * overlay_alpha) as u8),
+    );
+
+    // Step icon: rightward step-forward (triangle then right bar).
+    let sw = (step_x1 - step_x0).max(4);
+    let sh = (step_y1 - step_y0).max(4);
+    let icon_col = if state.paused {
+        (228, 240, 255, (255.0 * overlay_alpha) as u8)
+    } else {
+        (155, 155, 155, (255.0 * overlay_alpha) as u8)
+    };
+    let bar_x0 = step_x0 + (sw as f32 * 0.68) as i32;
+    let bar_x1 = bar_x0 + ((sw as f32 * 0.11).round().max(1.0) as i32);
+    let bar_y0 = step_y0 + (sh as f32 * 0.22) as i32;
+    let bar_y1 = step_y0 + (sh as f32 * 0.78) as i32;
+    blend_rect(buffer, fw, fh, bar_x0, bar_y0, bar_x1, bar_y1, icon_col);
+
+    let tri_left = step_x0 + (sw as f32 * 0.26) as i32;
+    let tri_right = step_x0 + (sw as f32 * 0.62) as i32;
+    let tri_top = step_y0 + (sh as f32 * 0.24) as i32;
+    let tri_bottom = step_y0 + (sh as f32 * 0.76) as i32;
+    let tri_mid = (tri_top + tri_bottom) / 2;
+    for x in tri_left..tri_right {
+        let t = (x - tri_left) as f32 / (tri_right - tri_left).max(1) as f32;
+        let y0 = (tri_mid as f32 - t * (tri_mid - tri_top) as f32) as i32;
+        let y1 = (tri_mid as f32 + t * (tri_bottom - tri_mid) as f32) as i32;
+        blend_rect(buffer, fw, fh, x, y0, x + 1, y1 + 1, icon_col);
+    }
 
     if state.paused {
         // Play icon (triangle)

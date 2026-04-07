@@ -192,11 +192,18 @@ impl AppState {
         }
 
         if self.engine_state.paused {
-            self.last_tick_instant = Some(std::time::Instant::now());
-            if self.paused_base_frame.is_empty() {
+            if self.engine_state.pending_step_ticks > 0 {
+                self.engine_state.pending_step_ticks = self.engine_state.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
+                let _ = self.app.tick(&mut self.engine_state);
                 self.capture_paused_base_frame();
+            } else {
+                self.last_tick_instant = Some(std::time::Instant::now());
+                if self.paused_base_frame.is_empty() {
+                    self.capture_paused_base_frame();
+                }
+                self.restore_paused_base_frame();
             }
-            self.restore_paused_base_frame();
         } else {
             tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
             let _ = self.app.tick(&mut self.engine_state);
@@ -626,6 +633,7 @@ impl ApplicationHandler for AppStateWrapper {
                 ui_scale_percent: 100,
                 delta_time_seconds: 1.0 / 60.0,
                 paused: false,
+                pending_step_ticks: 0,
                 frame_view_zoom: 1.0,
                 frame_view_zoom_target: 1.0,
                 frame_view_zoom_velocity: 0.0,
@@ -739,6 +747,7 @@ pub fn start_headless_native(
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
         paused: false,
+        pending_step_ticks: 0,
         frame_view_zoom: 1.0,
         frame_view_zoom_target: 1.0,
         frame_view_zoom_velocity: 0.0,
@@ -753,8 +762,14 @@ pub fn start_headless_native(
     let mut last_tick_instant: Option<std::time::Instant> = None;
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
         if engine_state.paused {
-            std::thread::sleep(std::time::Duration::from_millis(16));
-            last_tick_instant = Some(std::time::Instant::now());
+            if engine_state.pending_step_ticks > 0 {
+                engine_state.pending_step_ticks = engine_state.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut engine_state, &mut last_tick_instant);
+                app.tick(&mut engine_state);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                last_tick_instant = Some(std::time::Instant::now());
+            }
         } else {
             tick_frame_delta(&mut engine_state, &mut last_tick_instant);
             app.tick(&mut engine_state);

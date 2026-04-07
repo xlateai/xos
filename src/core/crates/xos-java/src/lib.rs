@@ -129,6 +129,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
             paused: false,
+            pending_step_ticks: 0,
             frame_view_zoom: 1.0,
             frame_view_zoom_target: 1.0,
             frame_view_zoom_velocity: 0.0,
@@ -180,7 +181,13 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
 
         host.tick_count = host.tick_count.wrapping_add(1);
         if host.engine.paused {
-            host.last_tick_instant = Some(std::time::Instant::now());
+            if host.engine.pending_step_ticks > 0 {
+                host.engine.pending_step_ticks = host.engine.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
+                host.app.tick(&mut host.engine);
+            } else {
+                host.last_tick_instant = Some(std::time::Instant::now());
+            }
         } else {
             tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
             host.app.tick(&mut host.engine);

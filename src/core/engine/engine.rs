@@ -196,6 +196,8 @@ pub struct EngineState {
     pub delta_time_seconds: f32,
     /// Global simulation pause controlled by the F3 menu play/pause button.
     pub paused: bool,
+    /// Number of one-tick step requests queued while paused.
+    pub pending_step_ticks: u32,
     /// View zoom applied to the app-rendered frame before overlays (1.0 = full frame).
     pub frame_view_zoom: f32,
     /// Target view zoom used by smoothing.

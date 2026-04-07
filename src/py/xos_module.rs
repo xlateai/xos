@@ -141,6 +141,7 @@ impl StandalonePreviewApp {
                     ui_scale_percent: 100,
                     delta_time_seconds: 1.0 / 60.0,
                     paused: false,
+                    pending_step_ticks: 0,
                     frame_view_zoom: 1.0,
                     frame_view_zoom_target: 1.0,
                     frame_view_zoom_velocity: 0.0,
@@ -807,6 +808,16 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                             rgba: pf.rgba.clone(),
                         },
                     );
+                    if host.app.viewport_paused(viewport_id) {
+                        host.app.paused_base_frames.insert(
+                            viewport_id,
+                            StandalonePendingFrame {
+                                width: pf.width,
+                                height: pf.height,
+                                rgba: pf.rgba.clone(),
+                            },
+                        );
+                    }
                 }
                 if !host.app.viewport_to_window.contains_key(&viewport_id) {
                     host.app
@@ -825,6 +836,16 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                         PumpStatus::Exit(_) => {
                             // Keep EventLoop alive: many platforms allow only one per process.
                         }
+                    }
+                    let mut stepped = false;
+                    if let Some(es) = host.app.f3_engine_state.get_mut(&viewport_id) {
+                        if es.paused && es.pending_step_ticks > 0 {
+                            es.pending_step_ticks = es.pending_step_ticks.saturating_sub(1);
+                            stepped = true;
+                        }
+                    }
+                    if stepped {
+                        break;
                     }
                     if !host.app.viewport_paused(viewport_id) {
                         break;
