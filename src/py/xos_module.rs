@@ -28,6 +28,7 @@ struct StandalonePreviewState {
     window: Window,
     pixels: Pixels<'static>,
     size: PhysicalSize<u32>,
+    has_presented_first_frame: bool,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -55,6 +56,50 @@ impl StandalonePreviewApp {
             pending_frames: HashMap::new(),
             f3_engine_state: HashMap::new(),
             last_tick_instant: HashMap::new(),
+        }
+    }
+
+    fn render_viewport(&mut self, viewport_id: u64) {
+        let Some(window_id) = self.viewport_to_window.get(&viewport_id).copied() else {
+            return;
+        };
+        let Some(state) = self.states.get_mut(&window_id) else {
+            return;
+        };
+        let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) else {
+            return;
+        };
+
+        if state.size.width != frame_data.width || state.size.height != frame_data.height {
+            state.size = PhysicalSize::new(frame_data.width, frame_data.height);
+            let _ = state.pixels.resize_buffer(frame_data.width, frame_data.height);
+            let _ = state.pixels.resize_surface(frame_data.width, frame_data.height);
+            if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                es.resize_frame(frame_data.width, frame_data.height);
+            }
+        }
+
+        let expected = (state.size.width as usize)
+            .saturating_mul(state.size.height as usize)
+            .saturating_mul(4);
+        if frame_data.rgba.len() == expected {
+            if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                let frame = es.frame.buffer_mut();
+                if frame.len() == frame_data.rgba.len() {
+                    frame.copy_from_slice(&frame_data.rgba);
+                    if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                        crate::engine::tick_frame_delta(es, last);
+                    }
+                    crate::engine::tick_f3_menu(es);
+                    frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
+                }
+            }
+            state.pixels.frame_mut().copy_from_slice(&frame_data.rgba);
+        }
+        let _ = state.pixels.render();
+        if !state.has_presented_first_frame {
+            state.window.set_visible(true);
+            state.has_presented_first_frame = true;
         }
     }
 }
@@ -128,36 +173,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let Some(state) = self.states.get_mut(&_window_id) else { return; };
-                let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) else { return; };
-                if state.size.width != frame_data.width || state.size.height != frame_data.height {
-                    state.size = PhysicalSize::new(frame_data.width, frame_data.height);
-                    let _ = state.pixels.resize_buffer(frame_data.width, frame_data.height);
-                    let _ = state.pixels.resize_surface(frame_data.width, frame_data.height);
-                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
-                        es.resize_frame(frame_data.width, frame_data.height);
-                    }
-                }
-                let expected = (state.size.width as usize)
-                    .saturating_mul(state.size.height as usize)
-                    .saturating_mul(4);
-                if frame_data.rgba.len() == expected {
-                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
-                        let frame = es.frame.buffer_mut();
-                        if frame.len() == frame_data.rgba.len() {
-                            frame.copy_from_slice(&frame_data.rgba);
-                            if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
-                                crate::engine::tick_frame_delta(es, last);
-                            }
-                            crate::engine::tick_f3_menu(es);
-                            frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
-                        }
-                    }
-                    state.pixels.frame_mut().copy_from_slice(&frame_data.rgba);
-                    let _ = state.pixels.render();
-                } else {
-                    let _ = state.pixels.render();
-                }
+                self.render_viewport(viewport_id);
             }
             _ => {}
         }
@@ -166,9 +182,6 @@ impl ApplicationHandler for StandalonePreviewApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.states.is_empty() {
             event_loop.exit();
-        }
-        for state in self.states.values() {
-            state.window.request_redraw();
         }
     }
 }
@@ -479,7 +492,8 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 if !host.app.viewport_to_window.contains_key(&viewport_id) {
                     let attrs = WindowAttributes::default()
                         .with_title(format!("xos standalone preview ({viewport_id})"))
-                        .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)));
+                        .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)))
+                        .with_visible(false);
                     let window = host
                         .event_loop
                         .create_window(attrs)
@@ -499,6 +513,7 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                             window,
                             pixels,
                             size,
+                            has_presented_first_frame: false,
                         },
                     );
                     host.app.viewport_to_window.insert(viewport_id, window_id);
@@ -526,6 +541,7 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     );
                     host.app.last_tick_instant.insert(viewport_id, None);
                 }
+                host.app.render_viewport(viewport_id);
                 match host
                     .event_loop
                     .pump_app_events(Some(Duration::ZERO), &mut host.app)
