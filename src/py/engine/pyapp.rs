@@ -424,6 +424,10 @@ class Application:
     """Base class for xos applications. Extend this class and implement __init__() and tick()."""
     
     def __init__(self, headless=None):
+        import builtins
+        next_id = int(getattr(builtins, "__xos_next_viewport_id__", 0))
+        builtins.__xos_next_viewport_id__ = next_id + 1
+        self._xos_viewport_id = next_id
         self._xos_initialized = True
         self._xos_engine_bound = False
         self.frame = None  # Will be set by the engine
@@ -474,12 +478,12 @@ class Application:
 
         # In standalone preview mode, follow live preview window size and F3 scale.
         if not bool(getattr(self, "headless", False)):
-            ws = xos.frame._standalone_window_size()
+            ws = xos.frame._standalone_window_size(self._xos_viewport_id)
             if ws is not None:
                 w, h = ws
                 self._xos_standalone_width = int(max(1, w))
                 self._xos_standalone_height = int(max(1, h))
-            sp = xos.frame._standalone_ui_scale()
+            sp = xos.frame._standalone_ui_scale(self._xos_viewport_id)
             if sp is not None:
                 self.xos_scale = float(sp)
 
@@ -497,6 +501,7 @@ class Application:
 
         # Standalone mode (manual Python-driven tick loop): create temporary frame context.
         frame_dict = xos.frame._begin_standalone(
+            int(getattr(self, "_xos_viewport_id", 0)),
             int(getattr(self, "_xos_standalone_width", 800)),
             int(getattr(self, "_xos_standalone_height", 600)),
         )
@@ -511,7 +516,7 @@ class Application:
         finally:
             if not getattr(self, "_xos_engine_bound", False):
                 if not bool(getattr(self, "headless", False)):
-                    xos.frame._present_standalone()
+                    xos.frame._present_standalone(int(getattr(self, "_xos_viewport_id", 0)))
                 xos.frame._end_standalone()
                 self._xos_ticks_completed = int(getattr(self, "_xos_ticks_completed", 0)) + 1
     

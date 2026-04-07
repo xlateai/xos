@@ -1,5 +1,6 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::time::Duration;
 
@@ -18,108 +19,80 @@ use winit::{
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::cell::RefCell;
 
-static STANDALONE_FRAME_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+static STANDALONE_FRAME_BUFFERS: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 struct StandalonePreviewState {
+    viewport_id: u64,
     window: Window,
     pixels: Pixels<'static>,
     size: PhysicalSize<u32>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-struct StandalonePreviewApp {
-    state: Option<StandalonePreviewState>,
+struct StandalonePendingFrame {
     width: u32,
     height: u32,
-    frame_rgba: Vec<u8>,
-    should_close: bool,
-    f3_engine_state: Option<crate::engine::EngineState>,
-    last_tick_instant: Option<std::time::Instant>,
+    rgba: Vec<u8>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePreviewApp {
+    states: HashMap<WindowId, StandalonePreviewState>,
+    viewport_to_window: HashMap<u64, WindowId>,
+    pending_frames: HashMap<u64, StandalonePendingFrame>,
+    f3_engine_state: HashMap<u64, crate::engine::EngineState>,
+    last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 impl StandalonePreviewApp {
     fn new() -> Self {
         Self {
-            state: None,
-            width: 800,
-            height: 600,
-            frame_rgba: Vec::new(),
-            should_close: false,
-            f3_engine_state: None,
-            last_tick_instant: None,
+            states: HashMap::new(),
+            viewport_to_window: HashMap::new(),
+            pending_frames: HashMap::new(),
+            f3_engine_state: HashMap::new(),
+            last_tick_instant: HashMap::new(),
         }
     }
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 impl ApplicationHandler for StandalonePreviewApp {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
-            return;
-        }
-        let attrs = WindowAttributes::default()
-            .with_title("xos standalone preview")
-            .with_inner_size(PhysicalSize::new(self.width, self.height));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => w,
-            Err(_) => return,
-        };
-        let size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-        let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
-            .enable_vsync(false)
-            .build()
-        {
-            Ok(p) => unsafe { std::mem::transmute(p) },
-            Err(_) => return,
-        };
-        let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
-        let f3_engine_state = crate::engine::EngineState {
-            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
-            mouse: crate::engine::MouseState {
-                x: 0.0,
-                y: 0.0,
-                dx: 0.0,
-                dy: 0.0,
-                is_left_clicking: false,
-                is_right_clicking: false,
-                style: crate::engine::CursorStyleSetter::new(),
-            },
-            keyboard: crate::engine::KeyboardState {
-                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
-            },
-            f3_menu: crate::engine::F3Menu::new(),
-            ui_scale_percent: 100,
-            delta_time_seconds: 1.0 / 60.0,
-        };
-        self.f3_engine_state = Some(f3_engine_state);
-        self.state = Some(StandalonePreviewState { window, pixels, size });
-    }
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        let Some(state) = self.state.as_mut() else { return; };
+        let Some(viewport_id) = self
+            .states
+            .get(&_window_id)
+            .map(|s| s.viewport_id)
+        else {
+            return;
+        };
         match event {
             WindowEvent::CloseRequested => {
-                // Standalone preview is driven by user script loops (e.g. `while ...: app.tick()`).
-                // Closing the preview window should terminate immediately instead of letting the
-                // Python loop continue headless for an arbitrary amount of time.
-                std::process::exit(0);
+                self.states.remove(&_window_id);
+                self.viewport_to_window.remove(&viewport_id);
+                self.pending_frames.remove(&viewport_id);
+                self.f3_engine_state.remove(&viewport_id);
+                self.last_tick_instant.remove(&viewport_id);
             }
             WindowEvent::Resized(new_size) => {
+                let Some(state) = self.states.get_mut(&_window_id) else { return; };
                 if new_size.width > 0 && new_size.height > 0 {
                     state.size = new_size;
                     let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
                     let _ = state.pixels.resize_surface(new_size.width, new_size.height);
-                    if let Some(es) = self.f3_engine_state.as_mut() {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         es.resize_frame(new_size.width, new_size.height);
                         let _ = crate::engine::f3_menu_handle_mouse_move(es);
                     }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if let Some(es) = self.f3_engine_state.as_mut() {
+                if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                     es.mouse.dx = position.x as f32 - es.mouse.x;
                     es.mouse.dy = position.y as f32 - es.mouse.y;
                     es.mouse.x = position.x as f32;
@@ -132,7 +105,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(es) = self.f3_engine_state.as_mut() {
+                if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                     match button_state {
                         ElementState::Pressed => {
                             es.mouse.is_left_clicking = true;
@@ -149,26 +122,38 @@ impl ApplicationHandler for StandalonePreviewApp {
                 if event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::F3))
                 {
-                    if let Some(es) = self.f3_engine_state.as_mut() {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         es.f3_menu.toggle_visible();
                     }
                 }
             }
             WindowEvent::RedrawRequested => {
+                let Some(state) = self.states.get_mut(&_window_id) else { return; };
+                let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) else { return; };
+                if state.size.width != frame_data.width || state.size.height != frame_data.height {
+                    state.size = PhysicalSize::new(frame_data.width, frame_data.height);
+                    let _ = state.pixels.resize_buffer(frame_data.width, frame_data.height);
+                    let _ = state.pixels.resize_surface(frame_data.width, frame_data.height);
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                        es.resize_frame(frame_data.width, frame_data.height);
+                    }
+                }
                 let expected = (state.size.width as usize)
                     .saturating_mul(state.size.height as usize)
                     .saturating_mul(4);
-                if self.frame_rgba.len() == expected {
-                    if let Some(es) = self.f3_engine_state.as_mut() {
+                if frame_data.rgba.len() == expected {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         let frame = es.frame.buffer_mut();
-                        if frame.len() == self.frame_rgba.len() {
-                            frame.copy_from_slice(&self.frame_rgba);
-                            crate::engine::tick_frame_delta(es, &mut self.last_tick_instant);
+                        if frame.len() == frame_data.rgba.len() {
+                            frame.copy_from_slice(&frame_data.rgba);
+                            if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                                crate::engine::tick_frame_delta(es, last);
+                            }
                             crate::engine::tick_f3_menu(es);
-                            self.frame_rgba.copy_from_slice(es.frame.buffer_mut());
+                            frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
                         }
                     }
-                    state.pixels.frame_mut().copy_from_slice(&self.frame_rgba);
+                    state.pixels.frame_mut().copy_from_slice(&frame_data.rgba);
                     let _ = state.pixels.render();
                 } else {
                     let _ = state.pixels.render();
@@ -179,11 +164,10 @@ impl ApplicationHandler for StandalonePreviewApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.should_close {
+        if self.states.is_empty() {
             event_loop.exit();
-            return;
         }
-        if let Some(state) = self.state.as_ref() {
+        for state in self.states.values() {
             state.window.request_redraw();
         }
     }
@@ -322,23 +306,30 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Initializes a temporary framebuffer context so `app.tick()` can be called directly from Python.
 fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
-    let width: usize = if !args_vec.is_empty() {
-        let w: i32 = args_vec[0].clone().try_into_value(vm)?;
+    let viewport_id: u64 = if !args_vec.is_empty() {
+        let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+        id.max(0) as u64
+    } else {
+        0
+    };
+    let width: usize = if args_vec.len() > 1 {
+        let w: i32 = args_vec[1].clone().try_into_value(vm)?;
         w.max(1) as usize
     } else {
         800
     };
-    let height: usize = if args_vec.len() > 1 {
-        let h: i32 = args_vec[1].clone().try_into_value(vm)?;
+    let height: usize = if args_vec.len() > 2 {
+        let h: i32 = args_vec[2].clone().try_into_value(vm)?;
         h.max(1) as usize
     } else {
         600
     };
 
     {
-        let mut buf = STANDALONE_FRAME_BUFFER
+        let mut buffers = STANDALONE_FRAME_BUFFERS
             .lock()
             .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?;
+        let buf = buffers.entry(viewport_id).or_default();
         let required = width.saturating_mul(height).saturating_mul(4);
         if buf.len() != required {
             buf.resize(required, 0);
@@ -384,10 +375,22 @@ fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResul
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let maybe_size = STANDALONE_PREVIEW_HOST.with(|slot| {
             slot.borrow()
                 .as_ref()
-                .and_then(|host| host.app.state.as_ref().map(|s| (s.size.width, s.size.height)))
+                .and_then(|host| {
+                    host.app
+                        .viewport_to_window
+                        .get(&viewport_id)
+                        .and_then(|wid| host.app.states.get(wid))
+                        .map(|s| (s.size.width, s.size.height))
+                })
         });
         if let Some((w, h)) = maybe_size {
             Ok(vm
@@ -409,11 +412,17 @@ fn frame_standalone_ui_scale(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let v = STANDALONE_PREVIEW_HOST.with(|slot| {
             slot.borrow().as_ref().and_then(|host| {
                 host.app
                     .f3_engine_state
-                    .as_ref()
+                    .get(&viewport_id)
                     .map(|es| es.ui_scale_percent as f64 / 100.0)
             })
         });
@@ -433,12 +442,20 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap() as u32;
         let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap() as u32;
-        let frame = STANDALONE_FRAME_BUFFER
+        let frame = STANDALONE_FRAME_BUFFERS
             .lock()
             .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
-            .clone();
+            .get(&viewport_id)
+            .cloned()
+            .unwrap_or_default();
 
         STANDALONE_PREVIEW_HOST.with(|slot| {
             let mut opt = slot.borrow_mut();
@@ -451,9 +468,64 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 });
             }
             if let Some(host) = opt.as_mut() {
-                host.app.width = width.max(1);
-                host.app.height = height.max(1);
-                host.app.frame_rgba = frame;
+                host.app.pending_frames.insert(
+                    viewport_id,
+                    StandalonePendingFrame {
+                        width: width.max(1),
+                        height: height.max(1),
+                        rgba: frame,
+                    },
+                );
+                if !host.app.viewport_to_window.contains_key(&viewport_id) {
+                    let attrs = WindowAttributes::default()
+                        .with_title(format!("xos standalone preview ({viewport_id})"))
+                        .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)));
+                    let window = host
+                        .event_loop
+                        .create_window(attrs)
+                        .map_err(|e| vm.new_runtime_error(format!("failed to create preview window: {e}")))?;
+                    let size = window.inner_size();
+                    let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+                    let pixels = PixelsBuilder::new(size.width, size.height, surface_texture)
+                        .enable_vsync(false)
+                        .build()
+                        .map_err(|e| vm.new_runtime_error(format!("failed to create pixel surface: {e}")))?;
+                    let pixels = unsafe { std::mem::transmute(pixels) };
+                    let window_id = window.id();
+                    host.app.states.insert(
+                        window_id,
+                        StandalonePreviewState {
+                            viewport_id,
+                            window,
+                            pixels,
+                            size,
+                        },
+                    );
+                    host.app.viewport_to_window.insert(viewport_id, window_id);
+                    let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
+                    host.app.f3_engine_state.insert(
+                        viewport_id,
+                        crate::engine::EngineState {
+                            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+                            mouse: crate::engine::MouseState {
+                                x: 0.0,
+                                y: 0.0,
+                                dx: 0.0,
+                                dy: 0.0,
+                                is_left_clicking: false,
+                                is_right_clicking: false,
+                                style: crate::engine::CursorStyleSetter::new(),
+                            },
+                            keyboard: crate::engine::KeyboardState {
+                                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                            },
+                            f3_menu: crate::engine::F3Menu::new(),
+                            ui_scale_percent: 100,
+                            delta_time_seconds: 1.0 / 60.0,
+                        },
+                    );
+                    host.app.last_tick_instant.insert(viewport_id, None);
+                }
                 match host
                     .event_loop
                     .pump_app_events(Some(Duration::ZERO), &mut host.app)
