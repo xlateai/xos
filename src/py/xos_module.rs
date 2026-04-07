@@ -567,7 +567,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("ops", ops_module, vm).unwrap();
     
     // Add the tensors submodule (Burn-backed, replaces array)
-    let tensors_module = crate::python_api::tensors::make_tensors_module(vm);
+    let tensors_module = crate::python_api::make_tensors_module(vm);
     module.set_attr("tensor", tensors_module.get_attr("tensor", vm).unwrap(), vm).unwrap();
     module.set_attr("zeros", tensors_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
     module.set_attr("ones", tensors_module.get_attr("ones", vm).unwrap(), vm).unwrap();
@@ -576,6 +576,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("stack", tensors_module.get_attr("stack", vm).unwrap(), vm).unwrap();
     module.set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm).unwrap();
     module.set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm).unwrap();
+
+    // Add nn submodule
+    let nn_module = crate::python_api::nn::make_nn_module(vm);
+    module.set_attr("nn", nn_module, vm).unwrap();
     
     // Add the data submodule
     let data_module = crate::python_api::data::make_data_module(vm);

@@ -6,6 +6,7 @@
 
 pub mod burn_raster;
 pub mod conv;
+pub mod tensor;
 
 pub use burn::tensor::backend::Backend;
 pub use burn::tensor::{ElementConversion, Int, Shape, Tensor, TensorData};

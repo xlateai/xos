@@ -14,5 +14,14 @@ pub mod colors;
 pub mod dtypes;
 pub mod data;
 pub mod ui;
+pub mod nn;
+
+use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 
 pub use runtime::{run_python_file, run_python_interactive, run_python_app};
+
+pub fn make_tensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
+    let module = vm.new_module("xos.tensors", vm.ctx.new_dict(), None);
+    tensors::register_tensors_functions(&module, vm);
+    module
+}
