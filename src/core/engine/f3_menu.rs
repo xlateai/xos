@@ -538,7 +538,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     let tri_bottom = step_y0 + (sh as f32 * 0.76) as i32;
     let tri_mid = (tri_top + tri_bottom) / 2;
     for x in tri_left..tri_right {
-        let t = (x - tri_left) as f32 / (tri_right - tri_left).max(1) as f32;
+        let t = (tri_right - 1 - x) as f32 / (tri_right - tri_left).max(1) as f32;
         let y0 = (tri_mid as f32 - t * (tri_mid - tri_top) as f32) as i32;
         let y1 = (tri_mid as f32 + t * (tri_bottom - tri_mid) as f32) as i32;
         blend_rect(buffer, fw, fh, x, y0, x + 1, y1 + 1, icon_col);
@@ -554,7 +554,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         let bottom = btn_y0 + (h as f32 * 0.76) as i32;
         let mid = (top + bottom) / 2;
         for x in left..right {
-            let t = (x - left) as f32 / (right - left).max(1) as f32;
+            let t = (right - 1 - x) as f32 / (right - left).max(1) as f32;
             let y0 = (mid as f32 - t * (mid - top) as f32) as i32;
             let y1 = (mid as f32 + t * (bottom - mid) as f32) as i32;
             blend_rect(
