@@ -1,9 +1,9 @@
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
 use crate::tensor::conv::{conv2d, depthwise_conv2d};
 
-/// Extract the underlying data list from an array/tensor (handles _TensorWrapper, dict, or list)
+/// Extract the underlying data list from an array/tensor (handles xos.Tensor, dict, or list)
 fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Option<PyObjectRef>> {
-    // _TensorWrapper: get_attr("_data") returns the inner dict; dict["_data"] is the list
+    // Tensor: get_attr("_data") returns the inner dict; dict["_data"] is the list
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
         if let Ok(inner_dict) = data_attr.clone().downcast::<rustpython_vm::builtins::PyDict>() {
             if let Ok(list_obj) = inner_dict.get_item("_data", vm) {
@@ -166,8 +166,8 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
     conv2d(
-        &input_nchw,
-        &kernel_nchw,
+        input_nchw,
+        kernel_nchw,
         &mut output_nchw,
         1,      // batch
         3,      // in_channels
@@ -236,7 +236,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -362,8 +362,8 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
     depthwise_conv2d(
-        &input_nchw,
-        &kernel_depthwise,
+        input_nchw,
+        kernel_depthwise,
         &mut output_nchw,
         1,      // batch
         3,      // channels
@@ -429,7 +429,7 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
 
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }

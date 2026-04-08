@@ -69,44 +69,30 @@ def _nested_list_to_tuple(nested):
         return tuple(_nested_list_to_tuple(x) for x in nested)
     return nested
 
-class _TensorResult:
-    """Wrapper for list results that provides nice string representation"""
+class Tensor:
+    """xos.Tensor — dict-backed tensor (``shape``, ``dtype``, ``_data``) or flat list + optional ``shape``."""
     def __init__(self, data, shape=None):
-        self._data = data
-        self._shape = shape
-    
+        if isinstance(data, dict):
+            self._data = data
+        else:
+            flat = list(data)
+            sh = shape if shape is not None else (len(flat),)
+            self._data = {
+                "shape": tuple(sh),
+                "dtype": "float32",
+                "device": "cpu",
+                "_data": flat,
+            }
+
     def __iter__(self):
-        return iter(self._data)
-    
+        d = self._data.get("_data")
+        if isinstance(d, list):
+            return iter(d)
+        return iter([])
+
     def __len__(self):
-        return len(self._data)
-    
-    def __getitem__(self, idx):
-        return self._data[idx]
-
-    def list(self):
-        sh = self._shape if self._shape is not None else (len(self._data),)
-        return _tensor_unflatten(self._data, sh)
-
-    def tuple(self):
-        return _nested_list_to_tuple(self.list())
-    
-    def __str__(self):
-        if not self._data:
-            return "xos.Tensor(empty)"
-        min_val = min(self._data)
-        max_val = max(self._data)
-        mean_val = sum(self._data) / len(self._data)
-        shape_str = f"shape={self._shape}" if self._shape else f"len={len(self._data)}"
-        return f"xos.Tensor({shape_str}, min={min_val:.1f}, mean={mean_val:.1f}, max={max_val:.1f})"
-    
-    def __repr__(self):
-        return self.__str__()
-
-class _TensorWrapper:
-    """Wrapper for array dict that supports slice assignment"""
-    def __init__(self, data):
-        self._data = data
+        d = self._data.get("_data")
+        return len(d) if isinstance(d, list) else 0
 
     def _getitem_int_index(self, key):
         """Row-major integer indexing: ``t[i]``, ``t[i,j]``, … partial views or a scalar."""
@@ -171,12 +157,12 @@ class _TensorWrapper:
                     col = b
                     out = [flat[i * cols + col] for i in range(rows)]
                     return self._wrap_vals((rows,), out)
-        if isinstance(key, _TensorWrapper):
+        if isinstance(key, Tensor):
             return self._gather_rows(key)
         return self._data[key]
 
     def _wrap_vals(self, shape, values):
-        return _TensorWrapper({
+        return Tensor({
             "shape": tuple(shape),
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -216,14 +202,14 @@ class _TensorWrapper:
             if isinstance(value, dict) and value.get('_direct_fill', False):
                 # Data already written directly to buffer by Rust - ZERO COPY! Do nothing.
                 return
-            # Call Rust function to fill buffer (handles lists and _TensorResult)
+            # Call Rust function to fill buffer (handles lists and Tensor)
             import xos
             xos.rasterizer._fill_buffer(self._data, value)
         else:
             self._data[key] = value
 
     def _wrap_like_self(self, values):
-        return _TensorWrapper({
+        return Tensor({
             "shape": self.shape,
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -233,7 +219,7 @@ class _TensorWrapper:
     def _binary_op(self, other, op):
         left = self._data.get("_data", [])
         lshape = tuple(self.shape)
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             right = other._data.get("_data", [])
             rshape = tuple(other.shape)
             if isinstance(right, list):
@@ -265,7 +251,7 @@ class _TensorWrapper:
     def _cmp_broadcast(self, other, cmp_fn):
         left = self._data["_data"]
         lshape = tuple(self.shape)
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             right = other._data["_data"]
             rshape = tuple(other.shape)
             if lshape == rshape:
@@ -289,7 +275,7 @@ class _TensorWrapper:
         return self._cmp_broadcast(other, lambda a, b: 1.0 if a > b else 0.0)
 
     def __or__(self, other):
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             la = self._data["_data"]
             lb = other._data["_data"]
             if len(la) != len(lb):
@@ -310,7 +296,7 @@ class _TensorWrapper:
         return self._binary_op(other, lambda a, b: a - b)
 
     def __rsub__(self, other):
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             return other.__sub__(self)
         left = self._data.get("_data", [])
         return self._wrap_like_self([other - a for a in left])
@@ -369,7 +355,7 @@ class _TensorWrapper:
         else:
             raise ValueError(f"unsupported dtype for to(): {target}")
 
-        return _TensorWrapper({
+        return Tensor({
             "shape": tuple(self.shape),
             "dtype": target,
             "device": self._data.get("device", "cpu"),
@@ -414,16 +400,16 @@ class _TensorWrapper:
     def __repr__(self):
         return self.__str__()
 
-class _FrameWrapper:
+class Frame:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
         self._data = data
-        self._tensor_wrapper = _TensorWrapper(data.get('tensor', {}))
+        self._tensor = Tensor(data.get('tensor', {}))
     
     @property
     def tensor(self):
-        """Get the tensor wrapper with slice assignment support (CPU RGBA frame)."""
-        return self._tensor_wrapper
+        """CPU RGBA frame tensor (``xos.Tensor``) with slice assignment."""
+        return self._tensor
     
     def get_width(self):
         return self._data['width']
@@ -517,7 +503,7 @@ class Application:
         h = int(getattr(self, "_xos_standalone_height", 600))
         fd = xos.frame._begin_standalone(int(self._xos_viewport_id), w, h)
         fd["_xos_viewport_id"] = int(self._xos_viewport_id)
-        self.frame = _FrameWrapper(fd)
+        self.frame = Frame(fd)
         self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
         xos.rasterizer.fill(self.frame, (0, 0, 0, 255))
         xos.frame._end_standalone()
@@ -583,7 +569,7 @@ class Application:
             int(getattr(self, "_xos_standalone_height", 600)),
         )
         frame_dict["_xos_viewport_id"] = int(getattr(self, "_xos_viewport_id", 0))
-        self.frame = _FrameWrapper(frame_dict)
+        self.frame = Frame(frame_dict)
         self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
         self.pre_tick()
 
@@ -667,8 +653,7 @@ impl Application for PyApp {
                 let frame_dict = crate::python_api::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
                     .map_err(|e| format!("Failed to create frame object: {:?}", e))?;
                 
-                // Wrap it in _FrameWrapper
-                if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
+                if let Ok(wrapper_class) = vm.builtins.get_attr("Frame", vm) {
                     // Use the newer call API instead of deprecated invoke
                     if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
                         app_instance.set_attr("frame", frame_obj, vm)

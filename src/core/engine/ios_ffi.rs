@@ -292,7 +292,7 @@ pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
     };
 
     if let Some(ref mut ios_state) = *state {
-        let data = ios_state.engine_state.frame.tensor.data();
+        let data = ios_state.engine_state.frame.data();
         if data.is_empty() {
             ptr::null()
         } else {
@@ -313,7 +313,7 @@ pub extern "C" fn xos_engine_get_frame_buffer_size() -> usize {
     };
 
     if let Some(ref mut ios_state) = *state {
-        ios_state.engine_state.frame.tensor.data().len()
+        ios_state.engine_state.frame.data().len()
     } else {
         0
     }

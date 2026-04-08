@@ -12,7 +12,7 @@ fn relu_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let dtype = crate::python_api::dtypes::DType::Float32;
     let py_tensor = crate::python_api::tensors::create_tensor_from_data(out, shape, dtype);
     let dict = py_tensor.to_py_dict(vm, dtype)?;
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

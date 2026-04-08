@@ -1085,25 +1085,18 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         eprintln!("Failed to create Application class: {:?}", e);
     }
     
-    // Add _TensorWrapper and _TensorResult to builtins so they're globally available
-    if let Ok(tensor_wrapper) = scope.globals.get_item("_TensorWrapper", vm) {
-        vm.builtins
-            .set_attr("_TensorWrapper", tensor_wrapper.clone(), vm)
-            .ok();
-        module.set_attr("Tensor", tensor_wrapper, vm).ok();
+    // xos.Tensor — single Python tensor type (see APPLICATION_CLASS_CODE)
+    if let Ok(tensor_cls) = scope.globals.get_item("Tensor", vm) {
+        vm.builtins.set_attr("Tensor", tensor_cls.clone(), vm).ok();
+        module.set_attr("Tensor", tensor_cls, vm).ok();
     }
-    if let Ok(tensor_result) = scope.globals.get_item("_TensorResult", vm) {
-        vm.builtins.set_attr("_TensorResult", tensor_result, vm).ok();
-    }
-    
-    // Get the Application class and _FrameWrapper from the scope and add them to the module
+
     if let Ok(app_class) = scope.globals.get_item("Application", vm) {
         module.set_attr("Application", app_class, vm).unwrap();
     }
-    if let Ok(frame_wrapper) = scope.globals.get_item("_FrameWrapper", vm) {
-        module.set_attr("_FrameWrapper", frame_wrapper.clone(), vm).unwrap();
-        // Also add to builtins so pyapp can access it
-        let _ = vm.builtins.set_attr("_FrameWrapper", frame_wrapper, vm);
+    if let Ok(frame_cls) = scope.globals.get_item("Frame", vm) {
+        module.set_attr("Frame", frame_cls.clone(), vm).unwrap();
+        let _ = vm.builtins.set_attr("Frame", frame_cls, vm);
     }
     
     module

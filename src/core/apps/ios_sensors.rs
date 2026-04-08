@@ -169,7 +169,7 @@ impl Application for IosSensorsApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -322,7 +322,7 @@ impl Application for IosSensorsApp {
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         // Check if selector is open - handle selector clicks first
         if self.sensor_selector.is_open() {
-            let shape = state.frame.tensor.shape();
+            let shape = state.frame.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
             let mouse_x = state.mouse.x;
@@ -341,7 +341,7 @@ impl Application for IosSensorsApp {
         }
         
         // Check if button was clicked
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let center_y = height / 2.0;
@@ -368,7 +368,7 @@ impl Application for IosSensorsApp {
     
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         // Update button hover state
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let center_y = height / 2.0;

@@ -457,7 +457,7 @@ pub fn speaker_get_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _TensorWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

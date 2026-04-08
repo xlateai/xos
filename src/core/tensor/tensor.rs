@@ -16,16 +16,16 @@ static NEXT_TENSOR_ID: AtomicU64 = AtomicU64::new(1);
 static TENSOR_REGISTRY: Lazy<Mutex<HashMap<u64, Arc<Mutex<Vec<f32>>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Python wrapper for tensor - stores f32 data with shape.
-/// Backed by Vec<f32> for Python compatibility; Burn tensors are introduced incrementally.
+/// CPU-side tensor storage for the Python API (`shape`, `dtype`, `device` in the emitted dict).
+/// GPU-backed paths use the same [`Tensor`] name with `device` set accordingly elsewhere.
 #[derive(Clone)]
-pub struct PyTensor {
+pub struct Tensor {
     pub id: u64,
     pub data: Arc<Mutex<Vec<f32>>>,
     pub shape: Vec<usize>,
 }
 
-impl PyTensor {
+impl Tensor {
     pub fn new(data: Vec<f32>, shape: Vec<usize>) -> Self {
         let id = NEXT_TENSOR_ID.fetch_add(1, Ordering::Relaxed);
         let data = Arc::new(Mutex::new(data));
@@ -97,7 +97,7 @@ pub fn py_number_to_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64>
     Err(vm.new_type_error("Expected a number (int or float)".to_string()))
 }
 
-/// Resolve raw tensor dict, `_TensorWrapper`, or nested `_data` to the flat `PyList` of values.
+/// Resolve raw tensor dict, Python `Tensor` wrapper, or nested `_data` to the flat `PyList` of values.
 pub fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
     let mut cur = obj.clone();
     for _ in 0..8 {
@@ -172,6 +172,6 @@ pub fn tensor_shape_tuple(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Ve
 }
 
 /// Create tensor from flat data and shape.
-pub fn create_tensor_from_data(flat_data: Vec<f32>, shape: Vec<usize>, _dtype: DType) -> PyTensor {
-    PyTensor::new(flat_data, shape)
+pub fn create_tensor_from_data(flat_data: Vec<f32>, shape: Vec<usize>, _dtype: DType) -> Tensor {
+    Tensor::new(flat_data, shape)
 }

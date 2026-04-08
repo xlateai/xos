@@ -184,7 +184,6 @@ impl AppState {
                 unsafe {
                     self.engine_state
                         .frame
-                        .tensor
                         .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
                 }
                 mirror_ok = true;
@@ -231,7 +230,7 @@ impl AppState {
         tick_f3_menu(&mut self.engine_state);
 
         if mirror_ok {
-            self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
+            self.engine_state.frame.clear_pixels_mirror_buffer();
             let _ = self.render_pixels();
         } else {
             let frame = self.pixels.frame_mut();

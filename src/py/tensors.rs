@@ -2,12 +2,12 @@
 
 use crate::python_api::dtypes::DType;
 pub use crate::tensor::tensor::{
-    PyTensor, create_tensor_from_data, py_number_to_f64, tensor_flat_data_list, tensor_shape_tuple,
+    Tensor, create_tensor_from_data, py_number_to_f64, tensor_flat_data_list, tensor_shape_tuple,
 };
 use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
 
 fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

@@ -105,7 +105,7 @@ struct PanelGeom {
 }
 
 fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minimap: bool) -> PanelGeom {
-    let shape = state.frame.tensor.shape();
+    let shape = state.frame.shape();
     let w = shape[1] as f32;
     let h = shape[0] as f32;
     let safe_top = state.frame.safe_region_boundaries.y1 * h;
@@ -250,7 +250,7 @@ pub fn f3_menu_handle_frame_zoom_scroll(state: &mut EngineState, wheel_delta_y: 
     let scale = (wheel_delta_y * FRAME_ZOOM_WHEEL_RATE).exp();
     let new_zoom = (old_zoom * scale).clamp(FRAME_VIEW_ZOOM_MIN, FRAME_VIEW_ZOOM_MAX);
 
-    let shape = state.frame.tensor.shape();
+    let shape = state.frame.shape();
     let w = (shape[1].max(1)) as f32;
     let h = (shape[0].max(1)) as f32;
     let nx = (state.mouse.x / w).clamp(0.0, 1.0);
@@ -284,7 +284,7 @@ pub fn f3_menu_handle_frame_zoom_scroll(state: &mut EngineState, wheel_delta_y: 
 
 /// Match rasterized label widths to [`tick_f3_menu`] so hit-testing uses the same panel and slider as drawing.
 fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
-    let shape = state.frame.tensor.shape();
+    let shape = state.frame.shape();
     let width = shape[1] as f32;
     let height = shape[0] as f32;
     if width < 1.0 || height < 1.0 {
@@ -440,7 +440,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     };
     let view_rect = frame_view_rect_norm(state);
 
-    let shape = state.frame.tensor.shape();
+    let shape = state.frame.shape();
     let width = shape[1] as f32;
     let height = shape[0] as f32;
 

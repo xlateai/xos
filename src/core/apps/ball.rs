@@ -93,8 +93,8 @@ impl BallGame {
 
 impl Application for BallGame {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        let width = state.frame.tensor.shape()[1] as f32;
-        let height = state.frame.tensor.shape()[0] as f32;
+        let width = state.frame.shape()[1] as f32;
+        let height = state.frame.shape()[0] as f32;
         
         for _ in 0..512 {
             let x = rand_float(BALL_RADIUS, width - BALL_RADIUS);
@@ -111,8 +111,8 @@ impl Application for BallGame {
         
         for ball in &mut self.balls {
             ball.update(
-                state.frame.tensor.shape()[1] as f32,
-                state.frame.tensor.shape()[0] as f32,
+                state.frame.shape()[1] as f32,
+                state.frame.shape()[0] as f32,
                 state.delta_time_seconds,
             );
         }

@@ -2,35 +2,36 @@
 //!
 //! RGBA is stored as `f32` in 0..=255 per channel to match legacy u8 semantics and uploads.
 
-use super::{FrameTensor, Tensor, TensorData, XosBackend};
+use crate::engine::FrameState;
+
+use super::{BurnTensor, TensorData, WgpuDevice, XosBackend};
 use burn::tensor::grid::{meshgrid, GridOptions};
-use burn::tensor::{Float, Int};
+use burn::tensor::Int;
+use burn::tensor::Tensor as BurnTensorAny;
 
 fn rgba_tensor(
-    device: &super::WgpuDevice,
+    device: &WgpuDevice,
     h: usize,
     w: usize,
     c: [f32; 4],
-) -> Tensor<XosBackend, 3, Float> {
-    let r = Tensor::<XosBackend, 3>::full([h, w, 1], c[0], device);
-    let g = Tensor::<XosBackend, 3>::full([h, w, 1], c[1], device);
-    let b = Tensor::<XosBackend, 3>::full([h, w, 1], c[2], device);
-    let a = Tensor::<XosBackend, 3>::full([h, w, 1], c[3], device);
-    Tensor::cat(vec![r, g, b, a], 2)
+) -> BurnTensor<3> {
+    let r = BurnTensor::<3>::full([h, w, 1], c[0], device);
+    let g = BurnTensor::<3>::full([h, w, 1], c[1], device);
+    let b = BurnTensor::<3>::full([h, w, 1], c[2], device);
+    let a = BurnTensor::<3>::full([h, w, 1], c[3], device);
+    BurnTensor::<3>::cat(vec![r, g, b, a], 2)
 }
 
 /// Solid fill (replaces the entire framebuffer).
 ///
-/// Uses [`FrameTensor::fill_solid_fast`]: CPU staging only (no per-frame GPU tensor build).
-/// The previous GPU-heavy path used four [`Tensor::full`] planes plus `cat`; the intermediate
-/// upload-every-frame path could hit wgpu queue limits.
-pub fn fill_solid(frame: &mut FrameTensor, color: (u8, u8, u8, u8)) {
+/// Uses [`FrameState::fill_solid_fast`]: CPU staging only (no per-frame GPU tensor build).
+pub fn fill_solid(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
     frame.fill_solid_fast(color);
 }
 
 /// Axis-aligned rectangle `[x0, x1) × [y0, y1)` in pixel coordinates, clipped to the frame.
 pub fn fill_rect(
-    frame: &mut FrameTensor,
+    frame: &mut FrameState,
     frame_width: usize,
     frame_height: usize,
     x0: i32,
@@ -56,10 +57,10 @@ pub fn fill_rect(
     let w = frame_width;
     let device = frame.device().clone();
     frame.ensure_gpu_from_cpu();
-    let mut t = frame.tensor().clone();
+    let mut t = frame.burn_tensor().clone();
 
-    let y = Tensor::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
-    let x = Tensor::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
+    let y = BurnTensorAny::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
+    let x = BurnTensorAny::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
     let [yy, xx] = meshgrid(&[y, x], GridOptions::default());
 
     let mask_x0 = xx.clone().greater_equal_elem(x0 as f32);
@@ -80,12 +81,12 @@ pub fn fill_rect(
     let color_plane = rgba_tensor(&device, h, w, c);
     let mask4 = mask.unsqueeze_dim::<3>(2).expand([h, w, 4]);
     t = t.mask_where(mask4, color_plane);
-    frame.set_tensor(t);
+    frame.set_burn_tensor(t);
 }
 
 /// One filled triangle; vertices in pixel space (same winding / degenerate checks as CPU path).
 pub fn fill_triangle(
-    frame: &mut FrameTensor,
+    frame: &mut FrameState,
     frame_width: usize,
     frame_height: usize,
     v0: (f32, f32),
@@ -116,10 +117,10 @@ pub fn fill_triangle(
 
     let device = frame.device().clone();
     frame.ensure_gpu_from_cpu();
-    let mut t = frame.tensor().clone();
+    let mut t = frame.burn_tensor().clone();
 
-    let y = Tensor::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
-    let x = Tensor::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
+    let y = BurnTensorAny::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
+    let x = BurnTensorAny::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
     let [yy, xx] = meshgrid(&[y, x], GridOptions::default());
     let px = xx + 0.5;
     let py = yy + 0.5;
@@ -131,7 +132,6 @@ pub fn fill_triangle(
     let ax_ = ax as f32;
     let ay_ = ay as f32;
 
-    // edge_ori(ax, ay, bx, by, px, py) = (bx - ax)*(py - ay) - (by - ay)*(px - ax)
     let w0 = (cx_ - bx_) * (py.clone() - by_) - (cy_ - by_) * (px.clone() - bx_);
     let w1 = (ax_ - cx_) * (py.clone() - cy_) - (ay_ - cy_) * (px.clone() - cx_);
     let w2 = (bx_ - ax_) * (py.clone() - ay_) - (by_ - ay_) * (px.clone() - ax_);
@@ -150,12 +150,12 @@ pub fn fill_triangle(
     let color_plane = rgba_tensor(&device, h, w, c);
     let mask4 = mask.unsqueeze_dim::<3>(2).expand([h, w, 4]);
     t = t.mask_where(mask4, color_plane);
-    frame.set_tensor(t);
+    frame.set_burn_tensor(t);
 }
 
 /// Filled triangles batch.
 pub fn triangles(
-    frame: &mut FrameTensor,
+    frame: &mut FrameState,
     points: &[(f32, f32)],
     colors: &[[u8; 4]],
 ) -> Result<(), String> {
@@ -205,11 +205,11 @@ pub fn triangles(
 
 /// Convert u8 RGBA slice to f32 tensor [h,w,4].
 pub(crate) fn tensor_from_rgba_u8(
-    device: &super::WgpuDevice,
+    device: &WgpuDevice,
     width: usize,
     height: usize,
     data: &[u8],
-) -> Tensor<XosBackend, 3, Float> {
+) -> BurnTensor<3> {
     let mut v = Vec::with_capacity(width * height * 4);
     for chunk in data.chunks_exact(4) {
         v.push(chunk[0] as f32);
@@ -217,5 +217,5 @@ pub(crate) fn tensor_from_rgba_u8(
         v.push(chunk[2] as f32);
         v.push(chunk[3] as f32);
     }
-    Tensor::from_data(TensorData::new(v, [height, width, 4]), device)
+    BurnTensor::from_data(TensorData::new(v, [height, width, 4]), device)
 }

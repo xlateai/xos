@@ -19,7 +19,7 @@ pub use shapes::{
 /// Fill `frame` with a solid RGBA color. Matches Python: `xos.rasterizer.fill(frame, (r, g, b, a))`.
 #[inline]
 pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
-    burn_raster::fill_solid(&mut frame.tensor, color);
+    burn_raster::fill_solid(frame, color);
 }
 
 /// Hook for future GPU passes after CPU upload; currently a no-op (Burn raster runs on the frame tensor).

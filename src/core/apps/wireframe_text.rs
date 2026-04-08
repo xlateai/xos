@@ -87,7 +87,7 @@ impl WireframeText {
     }
 
     fn draw_text(&mut self, state: &mut EngineState, tx: i32, ty: i32, tw: u32, th: u32) {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -160,7 +160,7 @@ impl Application for WireframeText {
             p[3] = 0xff;
         });
 
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let (x0, y0, w, h) = self.draw_square_from_edges(state.frame_buffer_mut(), width, height);
@@ -170,7 +170,7 @@ impl Application for WireframeText {
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let w = shape[1] as f32;
         let h = shape[0] as f32;
     
@@ -253,7 +253,7 @@ impl Application for WireframeText {
     
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let w = shape[1] as f32;
         let h = shape[0] as f32;
         self.dragging = Self::region_under_mouse(state.mouse.x, state.mouse.y, w, h);

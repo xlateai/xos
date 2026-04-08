@@ -49,5 +49,5 @@ pub fn fill_rect(
     let shape = frame.shape();
     let h = shape[0];
     let w = shape[1];
-    burn_raster::fill_rect(&mut frame.tensor, w, h, x0, y0, x1, y1, color);
+    burn_raster::fill_rect(frame, w, h, x0, y0, x1, y1, color);
 }
