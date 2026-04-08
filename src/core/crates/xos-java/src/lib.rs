@@ -12,9 +12,10 @@ use jni::JNIEnv;
 use std::cell::RefCell;
 use xos::apps::coder::CoderApp;
 use xos::engine::{
+    apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
-    tick_frame_delta, Application, CursorStyleSetter, EngineState, F3Menu, FrameState, KeyboardState,
-    MouseState, SafeRegionBoundingRectangle,
+    tick_frame_delta, tick_frame_view_zoom, Application, CursorStyleSetter, EngineState, F3Menu,
+    FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 
 thread_local! {
@@ -127,6 +128,13 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
+            paused: false,
+            pending_step_ticks: 0,
+            frame_view_zoom: 1.0,
+            frame_view_zoom_target: 1.0,
+            frame_view_zoom_velocity: 0.0,
+            frame_view_center_x: 0.5,
+            frame_view_center_y: 0.5,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -172,12 +180,25 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
         };
 
         host.tick_count = host.tick_count.wrapping_add(1);
-        tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
-        host.app.tick(&mut host.engine);
+        if host.engine.paused {
+            if host.engine.pending_step_ticks > 0 {
+                host.engine.pending_step_ticks = host.engine.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
+                host.app.tick(&mut host.engine);
+            } else {
+                host.last_tick_instant = Some(std::time::Instant::now());
+            }
+        } else {
+            tick_frame_delta(&mut host.engine, &mut host.last_tick_instant);
+            host.app.tick(&mut host.engine);
+        }
+
+        tick_frame_view_zoom(&mut host.engine);
+        apply_frame_view_zoom(&mut host.engine);
 
         // Same order as `native_engine`: draw the on-screen keyboard on top after the app tick.
         {
-            let shape = host.engine.frame.tensor.shape();
+            let shape = host.engine.frame.shape();
             let height = shape[0] as u32;
             let width = shape[1] as u32;
             let mouse_x = host.engine.mouse.x;
@@ -194,7 +215,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
 
         tick_f3_menu(&mut host.engine);
 
-        let shape = host.engine.frame.tensor.shape();
+        let shape = host.engine.frame.shape();
         let w = shape[1];
         let h = shape[0];
         let src = host.engine.frame_buffer_mut();

@@ -261,14 +261,14 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
         
         // Create xos.tensor backed by Rust memory
-        use crate::python_api::tensors::PyTensor;
+        use crate::python_api::tensors::Tensor;
         use crate::python_api::dtypes::DType;
         
-        let py_tensor = PyTensor::new(random_data, shape.clone());
+        let py_tensor = Tensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::Float32)?;
         
         // Wrap in _TensorWrapper for nice display and compatibility
-        if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+        if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }
@@ -303,14 +303,14 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
         
         // Create xos.tensor backed by Rust memory (stored as f32, displayed as u8)
-        use crate::python_api::tensors::PyTensor;
+        use crate::python_api::tensors::Tensor;
         use crate::python_api::dtypes::DType;
         
-        let py_tensor = PyTensor::new(random_data, shape.clone());
+        let py_tensor = Tensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::UInt8)?;
         
         // Wrap in _TensorWrapper for nice display and compatibility
-        if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+        if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }

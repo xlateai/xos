@@ -352,7 +352,7 @@ impl CoderApp {
 
     /// Window-relative size × F3 multiplier (`ui_scale_percent / 100`, 25–500% → 0.25–5.0).
     fn layout_scale_from_state(state: &EngineState) -> f32 {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         Self::ui_scale((shape[1] as f32).min(shape[0] as f32)) * state.f3_ui_scale_multiplier()
     }
 
@@ -1915,7 +1915,7 @@ impl Application for CoderApp {
         }
         
         // Get dimensions before mutable borrow
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let mouse_x = state.mouse.x;
@@ -1991,7 +1991,7 @@ impl Application for CoderApp {
                     // Setup Python app if not done yet
                     if !self.viewport_app_setup_done {
                         let setup_result = self.interpreter.enter(|vm| {
-                            // Register Application class and _FrameWrapper in builtins
+                            // Register Application class and Frame in builtins
                             let app_class_code = crate::python_api::engine::pyapp::APPLICATION_CLASS_CODE;
                             let scope = vm.new_scope_with_builtins();
                             if let Err(e) = vm.run_code_string(scope, app_class_code, "<viewport_setup>".to_string()) {
@@ -2003,8 +2003,7 @@ impl Application for CoderApp {
                             let frame_dict = crate::python_api::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
                                 .map_err(|e| { eprintln!("Failed to create frame object: {:?}", e); () })?;
                             
-                            // Wrap it in _FrameWrapper
-                            if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
+                            if let Ok(wrapper_class) = vm.builtins.get_attr("Frame", vm) {
                                 if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
                                     app_instance.set_attr("frame", frame_obj, vm)
                                         .map_err(|e| { eprintln!("Failed to set frame attribute: {:?}", e); () })?;
@@ -2055,7 +2054,7 @@ impl Application for CoderApp {
                     // Tick the Python app
                     if self.viewport_app_setup_done {
                         // Set the frame buffer context for the rasterizer
-                        let shape = state.frame.tensor.shape();
+                        let shape = state.frame.shape();
                         let width = shape[1];
                         let height = shape[0];
                         let buffer = state.frame.buffer_mut();
@@ -2468,7 +2467,7 @@ impl Application for CoderApp {
                 if self.explorer_popup_open {
                     self.file_list_scroll_y += dy;
                     let scale = Self::layout_scale_from_state(state);
-                    let shape = state.frame.tensor.shape();
+                    let shape = state.frame.shape();
                     let width = shape[1] as f32;
                     let height = shape[0] as f32;
                     let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
@@ -2584,7 +2583,7 @@ impl Application for CoderApp {
                         let dy = state.mouse.y - self.file_explorer_last_mouse_y;
                         self.file_list_scroll_y -= dy;
                         let scale = Self::layout_scale_from_state(state);
-                        let shape = state.frame.tensor.shape();
+                        let shape = state.frame.shape();
                         let width = shape[1] as f32;
                         let height = shape[0] as f32;
                         let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
@@ -2635,7 +2634,7 @@ impl Application for CoderApp {
         let tab_width = Self::tab_width_scaled(layout_scale);
         let padding = Self::padding_scaled(layout_scale);
         
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
@@ -2849,7 +2848,7 @@ impl Application for CoderApp {
                     let dy = (mouse_y - self.file_explorer_last_tap_y).abs();
                     let drag_threshold = 10.0_f32;
                     if !self.file_explorer_dragging && dx < drag_threshold && dy < drag_threshold {
-                        let shape = state.frame.tensor.shape();
+                        let shape = state.frame.shape();
                         let height = shape[0] as f32;
                         let width = shape[1] as f32;
                         let safe_region_top_y = state.frame.safe_region_boundaries.y1 * height;

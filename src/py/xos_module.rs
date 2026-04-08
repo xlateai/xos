@@ -1,5 +1,6 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::time::Duration;
 
@@ -9,46 +10,277 @@ use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, NamedKey},
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
-    window::{Window, WindowAttributes, WindowId},
+    window::{CursorIcon, Window, WindowAttributes, WindowId},
 };
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::cell::RefCell;
 
-static STANDALONE_FRAME_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+static STANDALONE_FRAME_BUFFERS: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn standalone_frame_buffer_copy(viewport_id: u64) -> Option<Vec<u8>> {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        let _ = viewport_id;
+        None
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        STANDALONE_FRAME_BUFFERS
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&viewport_id).cloned())
+    }
+}
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 struct StandalonePreviewState {
+    viewport_id: u64,
     window: Window,
     pixels: Pixels<'static>,
     size: PhysicalSize<u32>,
+    has_presented_first_frame: bool,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+struct StandalonePendingFrame {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 struct StandalonePreviewApp {
-    state: Option<StandalonePreviewState>,
-    width: u32,
-    height: u32,
-    frame_rgba: Vec<u8>,
-    should_close: bool,
-    f3_engine_state: Option<crate::engine::EngineState>,
-    last_tick_instant: Option<std::time::Instant>,
+    states: HashMap<WindowId, StandalonePreviewState>,
+    viewport_to_window: HashMap<u64, WindowId>,
+    pending_frames: HashMap<u64, StandalonePendingFrame>,
+    source_frames: HashMap<u64, StandalonePendingFrame>,
+    paused_base_frames: HashMap<u64, StandalonePendingFrame>,
+    pending_window_creates: HashMap<u64, (u32, u32)>,
+    f3_engine_state: HashMap<u64, crate::engine::EngineState>,
+    last_tick_instant: HashMap<u64, Option<std::time::Instant>>,
+    command_held: HashMap<u64, bool>,
+    shift_held: HashMap<u64, bool>,
+    frame_pan_dragging: HashMap<u64, bool>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 impl StandalonePreviewApp {
     fn new() -> Self {
         Self {
-            state: None,
-            width: 800,
-            height: 600,
-            frame_rgba: Vec::new(),
-            should_close: false,
-            f3_engine_state: None,
-            last_tick_instant: None,
+            states: HashMap::new(),
+            viewport_to_window: HashMap::new(),
+            pending_frames: HashMap::new(),
+            source_frames: HashMap::new(),
+            paused_base_frames: HashMap::new(),
+            pending_window_creates: HashMap::new(),
+            f3_engine_state: HashMap::new(),
+            last_tick_instant: HashMap::new(),
+            command_held: HashMap::new(),
+            shift_held: HashMap::new(),
+            frame_pan_dragging: HashMap::new(),
+        }
+    }
+
+    fn viewport_paused(&self, viewport_id: u64) -> bool {
+        self.f3_engine_state
+            .get(&viewport_id)
+            .map(|es| es.paused)
+            .unwrap_or(false)
+    }
+
+    fn ensure_windows_created(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pending_window_creates.is_empty() {
+            return;
+        }
+        let pending: Vec<(u64, (u32, u32))> = self
+            .pending_window_creates
+            .iter()
+            .map(|(id, size)| (*id, *size))
+            .collect();
+        for (viewport_id, (width, height)) in pending {
+            if self.viewport_to_window.contains_key(&viewport_id) {
+                self.pending_window_creates.remove(&viewport_id);
+                continue;
+            }
+            let attrs = WindowAttributes::default()
+                .with_title(format!("xos standalone preview ({viewport_id})"))
+                .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)))
+                .with_visible(false);
+            let Ok(window) = event_loop.create_window(attrs) else {
+                continue;
+            };
+            let size = window.inner_size();
+            let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
+            let Ok(pixels) = PixelsBuilder::new(size.width, size.height, surface_texture)
+                .enable_vsync(false)
+                .build()
+            else {
+                continue;
+            };
+            let pixels = unsafe { std::mem::transmute(pixels) };
+            let window_id = window.id();
+            self.states.insert(
+                window_id,
+                StandalonePreviewState {
+                    viewport_id,
+                    window,
+                    pixels,
+                    size,
+                    has_presented_first_frame: false,
+                },
+            );
+            self.viewport_to_window.insert(viewport_id, window_id);
+            let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
+            self.f3_engine_state.insert(
+                viewport_id,
+                crate::engine::EngineState {
+                    frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+                    mouse: crate::engine::MouseState {
+                        x: 0.0,
+                        y: 0.0,
+                        dx: 0.0,
+                        dy: 0.0,
+                        is_left_clicking: false,
+                        is_right_clicking: false,
+                        style: crate::engine::CursorStyleSetter::new(),
+                    },
+                    keyboard: crate::engine::KeyboardState {
+                        onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                    },
+                    f3_menu: crate::engine::F3Menu::new(),
+                    ui_scale_percent: 100,
+                    delta_time_seconds: 1.0 / 60.0,
+                    paused: false,
+                    pending_step_ticks: 0,
+                    frame_view_zoom: 1.0,
+                    frame_view_zoom_target: 1.0,
+                    frame_view_zoom_velocity: 0.0,
+                    frame_view_center_x: 0.5,
+                    frame_view_center_y: 0.5,
+                },
+            );
+            self.last_tick_instant.insert(viewport_id, None);
+            self.command_held.insert(viewport_id, false);
+            self.shift_held.insert(viewport_id, false);
+            self.frame_pan_dragging.insert(viewport_id, false);
+            self.pending_window_creates.remove(&viewport_id);
+        }
+    }
+
+    fn render_viewport(&mut self, viewport_id: u64) {
+        let paused = self.viewport_paused(viewport_id);
+        let Some(window_id) = self.viewport_to_window.get(&viewport_id).copied() else {
+            return;
+        };
+        let Some(state) = self.states.get_mut(&window_id) else {
+            return;
+        };
+        let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) else {
+            return;
+        };
+
+        // Keep viewport/frame dimensions aligned to the current OS window size.
+        // During interactive resize, Python frame production can lag by a tick.
+        // Resizing pending frame data avoids oscillation and prevents apparent freezes.
+        if frame_data.width != state.size.width || frame_data.height != state.size.height {
+            let target_w = state.size.width.max(1);
+            let target_h = state.size.height.max(1);
+            let mut resized = vec![0u8; (target_w as usize)
+                .saturating_mul(target_h as usize)
+                .saturating_mul(4)];
+
+            let copy_w = frame_data.width.min(target_w) as usize;
+            let copy_h = frame_data.height.min(target_h) as usize;
+            let src_stride = frame_data.width as usize * 4;
+            let dst_stride = target_w as usize * 4;
+            let row_bytes = copy_w * 4;
+            for y in 0..copy_h {
+                let src_off = y * src_stride;
+                let dst_off = y * dst_stride;
+                resized[dst_off..dst_off + row_bytes]
+                    .copy_from_slice(&frame_data.rgba[src_off..src_off + row_bytes]);
+            }
+
+            frame_data.width = target_w;
+            frame_data.height = target_h;
+            frame_data.rgba = resized;
+        }
+
+        if !paused {
+            if let Some(src) = self.source_frames.get(&viewport_id) {
+                self.paused_base_frames.insert(
+                    viewport_id,
+                    StandalonePendingFrame {
+                        width: src.width,
+                        height: src.height,
+                        rgba: src.rgba.clone(),
+                    },
+                );
+            }
+        }
+
+        let (src_w, src_h, src_rgba) = if paused {
+            if let Some(base) = self.paused_base_frames.get(&viewport_id) {
+                (base.width, base.height, base.rgba.clone())
+            } else {
+                (frame_data.width, frame_data.height, frame_data.rgba.clone())
+            }
+        } else {
+            if let Some(src) = self.source_frames.get(&viewport_id) {
+                (src.width, src.height, src.rgba.clone())
+            } else {
+                (frame_data.width, frame_data.height, frame_data.rgba.clone())
+            }
+        };
+
+        let expected = (state.size.width as usize)
+            .saturating_mul(state.size.height as usize)
+            .saturating_mul(4);
+        if src_rgba.len() >= (src_w as usize).saturating_mul(src_h as usize).saturating_mul(4) {
+            if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                let frame = es.frame.buffer_mut();
+                frame.fill(0);
+                let dst_w = state.size.width as usize;
+                let dst_h = state.size.height as usize;
+                let src_wu = src_w as usize;
+                let src_hu = src_h as usize;
+                let copy_w = src_wu.min(dst_w);
+                let copy_h = src_hu.min(dst_h);
+                let src_stride = src_wu * 4;
+                let dst_stride = dst_w * 4;
+                let row_bytes = copy_w * 4;
+                for y in 0..copy_h {
+                    let src_off = y * src_stride;
+                    let dst_off = y * dst_stride;
+                    frame[dst_off..dst_off + row_bytes]
+                        .copy_from_slice(&src_rgba[src_off..src_off + row_bytes]);
+                }
+
+                if frame.len() == expected {
+                    if es.paused {
+                        if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                            *last = Some(std::time::Instant::now());
+                        }
+                    } else if let Some(last) = self.last_tick_instant.get_mut(&viewport_id) {
+                        crate::engine::tick_frame_delta(es, last);
+                    }
+                    crate::engine::tick_frame_view_zoom(es);
+                    crate::engine::apply_frame_view_zoom(es);
+                    crate::engine::tick_f3_menu(es);
+                    frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
+                }
+            }
+            state.pixels.frame_mut().copy_from_slice(&frame_data.rgba);
+        }
+        let _ = state.pixels.render();
+        if !state.has_presented_first_frame {
+            state.window.set_visible(true);
+            state.has_presented_first_frame = true;
         }
     }
 }
@@ -56,75 +288,101 @@ impl StandalonePreviewApp {
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 impl ApplicationHandler for StandalonePreviewApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
-            return;
-        }
-        let attrs = WindowAttributes::default()
-            .with_title("xos standalone preview")
-            .with_inner_size(PhysicalSize::new(self.width, self.height));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => w,
-            Err(_) => return,
-        };
-        let size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
-        let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
-            .enable_vsync(false)
-            .build()
-        {
-            Ok(p) => unsafe { std::mem::transmute(p) },
-            Err(_) => return,
-        };
-        let safe_region = crate::engine::SafeRegionBoundingRectangle::full_screen();
-        let f3_engine_state = crate::engine::EngineState {
-            frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
-            mouse: crate::engine::MouseState {
-                x: 0.0,
-                y: 0.0,
-                dx: 0.0,
-                dy: 0.0,
-                is_left_clicking: false,
-                is_right_clicking: false,
-                style: crate::engine::CursorStyleSetter::new(),
-            },
-            keyboard: crate::engine::KeyboardState {
-                onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
-            },
-            f3_menu: crate::engine::F3Menu::new(),
-            ui_scale_percent: 100,
-            delta_time_seconds: 1.0 / 60.0,
-        };
-        self.f3_engine_state = Some(f3_engine_state);
-        self.state = Some(StandalonePreviewState { window, pixels, size });
+        self.ensure_windows_created(event_loop);
     }
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        let Some(state) = self.state.as_mut() else { return; };
+        let Some(viewport_id) = self
+            .states
+            .get(&_window_id)
+            .map(|s| s.viewport_id)
+        else {
+            return;
+        };
         match event {
             WindowEvent::CloseRequested => {
-                // Standalone preview is driven by user script loops (e.g. `while ...: app.tick()`).
-                // Closing the preview window should terminate immediately instead of letting the
-                // Python loop continue headless for an arbitrary amount of time.
+                // Standalone preview is typically driven by user script loops
+                // (e.g. `while ...: app.tick()`). Closing any preview window should
+                // terminate the script immediately and close all windows together.
+                let _ = viewport_id;
                 std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
+                let Some(state) = self.states.get_mut(&_window_id) else { return; };
                 if new_size.width > 0 && new_size.height > 0 {
                     state.size = new_size;
                     let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
                     let _ = state.pixels.resize_surface(new_size.width, new_size.height);
-                    if let Some(es) = self.f3_engine_state.as_mut() {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         es.resize_frame(new_size.width, new_size.height);
                         let _ = crate::engine::f3_menu_handle_mouse_move(es);
                     }
+                    if let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) {
+                        let mut resized = vec![0u8; (new_size.width as usize)
+                            .saturating_mul(new_size.height as usize)
+                            .saturating_mul(4)];
+                        let copy_w = frame_data.width.min(new_size.width) as usize;
+                        let copy_h = frame_data.height.min(new_size.height) as usize;
+                        let src_stride = frame_data.width as usize * 4;
+                        let dst_stride = new_size.width as usize * 4;
+                        let row_bytes = copy_w * 4;
+                        for y in 0..copy_h {
+                            let src_off = y * src_stride;
+                            let dst_off = y * dst_stride;
+                            resized[dst_off..dst_off + row_bytes]
+                                .copy_from_slice(&frame_data.rgba[src_off..src_off + row_bytes]);
+                        }
+                        frame_data.width = new_size.width;
+                        frame_data.height = new_size.height;
+                        frame_data.rgba = resized;
+                    }
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if let Some(es) = self.f3_engine_state.as_mut() {
+                if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                     es.mouse.dx = position.x as f32 - es.mouse.x;
                     es.mouse.dy = position.y as f32 - es.mouse.y;
                     es.mouse.x = position.x as f32;
                     es.mouse.y = position.y as f32;
-                    let _ = crate::engine::f3_menu_handle_mouse_move(es);
+
+                    let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                    let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                    let dragging = *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false);
+
+                    let actively_dragging = dragging
+                        && es.mouse.is_left_clicking
+                        && command
+                        && shift;
+                    if dragging && !actively_dragging {
+                        self.frame_pan_dragging.insert(viewport_id, false);
+                    }
+
+                    if actively_dragging {
+                        crate::engine::f3_menu_boost_interaction_fade(es);
+                        if let Some(state) = self.states.get(&_window_id) {
+                            crate::engine::frame_view_pan_by_pixels(
+                                es,
+                                es.mouse.dx,
+                                es.mouse.dy,
+                                state.size.width as f32,
+                                state.size.height as f32,
+                            );
+                            state.window.set_cursor(CursorIcon::Grabbing);
+                        }
+                    } else {
+                        let _ = crate::engine::f3_menu_handle_mouse_move(es);
+                        if let Some(state) = self.states.get(&_window_id) {
+                            if command && shift && es.frame_view_zoom > 1.001 {
+                                state.window.set_cursor(CursorIcon::Grab);
+                            } else {
+                                state.window.set_cursor(CursorIcon::Default);
+                            }
+                        }
+                    }
+                }
+                if let Some(state) = self.states.get(&_window_id) {
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::MouseInput {
@@ -132,59 +390,113 @@ impl ApplicationHandler for StandalonePreviewApp {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(es) = self.f3_engine_state.as_mut() {
+                if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                     match button_state {
                         ElementState::Pressed => {
                             es.mouse.is_left_clicking = true;
-                            let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                            let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                            let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                            if command && shift && es.frame_view_zoom > 1.001 {
+                                self.frame_pan_dragging.insert(viewport_id, true);
+                                crate::engine::f3_menu_boost_interaction_fade(es);
+                                if let Some(state) = self.states.get(&_window_id) {
+                                    state.window.set_cursor(CursorIcon::Grabbing);
+                                }
+                            } else {
+                                let was_paused = es.paused;
+                                let _ = crate::engine::f3_menu_handle_mouse_down(es);
+                                if !was_paused && es.paused {
+                                    if let Some(frame_data) = self.pending_frames.get(&viewport_id) {
+                                        self.paused_base_frames.insert(
+                                            viewport_id,
+                                            StandalonePendingFrame {
+                                                width: frame_data.width,
+                                                height: frame_data.height,
+                                                rgba: frame_data.rgba.clone(),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
                         }
                         ElementState::Released => {
                             es.mouse.is_left_clicking = false;
-                            let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                            if *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false) {
+                                self.frame_pan_dragging.insert(viewport_id, false);
+                            } else {
+                                let _ = crate::engine::f3_menu_handle_mouse_up(es);
+                            }
                         }
                     }
+                }
+                if let Some(state) = self.states.get(&_window_id) {
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::F3))
                 {
-                    if let Some(es) = self.f3_engine_state.as_mut() {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                         es.f3_menu.toggle_visible();
+                    }
+                    if let Some(state) = self.states.get(&_window_id) {
+                        state.window.request_redraw();
                     }
                 }
             }
-            WindowEvent::RedrawRequested => {
-                let expected = (state.size.width as usize)
-                    .saturating_mul(state.size.height as usize)
-                    .saturating_mul(4);
-                if self.frame_rgba.len() == expected {
-                    if let Some(es) = self.f3_engine_state.as_mut() {
-                        let frame = es.frame.buffer_mut();
-                        if frame.len() == self.frame_rgba.len() {
-                            frame.copy_from_slice(&self.frame_rgba);
-                            crate::engine::tick_frame_delta(es, &mut self.last_tick_instant);
-                            crate::engine::tick_f3_menu(es);
-                            self.frame_rgba.copy_from_slice(es.frame.buffer_mut());
+            WindowEvent::MouseWheel { delta, .. } => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, dy) => dy,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                };
+                let command = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                if command {
+                    if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                        let consumed = if shift {
+                            crate::engine::f3_menu_handle_frame_zoom_scroll(es, dy)
+                        } else {
+                            crate::engine::f3_menu_handle_zoom_scroll(es, dy)
+                        };
+                        if consumed {
+                            if let Some(state) = self.states.get(&_window_id) {
+                                state.window.request_redraw();
+                            }
                         }
                     }
-                    state.pixels.frame_mut().copy_from_slice(&self.frame_rgba);
-                    let _ = state.pixels.render();
-                } else {
-                    let _ = state.pixels.render();
                 }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                #[cfg(target_os = "macos")]
+                {
+                    self.command_held
+                        .insert(viewport_id, modifiers.state().super_key());
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.command_held
+                        .insert(viewport_id, modifiers.state().control_key());
+                }
+                self.shift_held
+                    .insert(viewport_id, modifiers.state().shift_key());
+                if !(*self.command_held.get(&viewport_id).unwrap_or(&false)
+                    && *self.shift_held.get(&viewport_id).unwrap_or(&false))
+                {
+                    self.frame_pan_dragging.insert(viewport_id, false);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_viewport(viewport_id);
             }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.should_close {
+        self.ensure_windows_created(event_loop);
+        if self.states.is_empty() {
             event_loop.exit();
-            return;
-        }
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
         }
     }
 }
@@ -322,23 +634,30 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Initializes a temporary framebuffer context so `app.tick()` can be called directly from Python.
 fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
-    let width: usize = if !args_vec.is_empty() {
-        let w: i32 = args_vec[0].clone().try_into_value(vm)?;
+    let viewport_id: u64 = if !args_vec.is_empty() {
+        let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+        id.max(0) as u64
+    } else {
+        0
+    };
+    let width: usize = if args_vec.len() > 1 {
+        let w: i32 = args_vec[1].clone().try_into_value(vm)?;
         w.max(1) as usize
     } else {
         800
     };
-    let height: usize = if args_vec.len() > 1 {
-        let h: i32 = args_vec[1].clone().try_into_value(vm)?;
+    let height: usize = if args_vec.len() > 2 {
+        let h: i32 = args_vec[2].clone().try_into_value(vm)?;
         h.max(1) as usize
     } else {
         600
     };
 
     {
-        let mut buf = STANDALONE_FRAME_BUFFER
+        let mut buffers = STANDALONE_FRAME_BUFFERS
             .lock()
             .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?;
+        let buf = buffers.entry(viewport_id).or_default();
         let required = width.saturating_mul(height).saturating_mul(4);
         if buf.len() != required {
             buf.resize(required, 0);
@@ -361,6 +680,7 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
     tensor_dict.set_item("size", vm.ctx.new_int(width * height * 4).into(), vm)?;
+    tensor_dict.set_item("_xos_viewport_id", vm.ctx.new_int(viewport_id as i64).into(), vm)?;
 
     let frame_dict = vm.ctx.new_dict();
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
@@ -369,10 +689,49 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(frame_dict.into())
 }
 
+/// xos.frame._standalone_tensor_data(viewport_id) -> list[int]
+/// Returns a flat copy of RGBA bytes for a standalone viewport buffer.
+fn frame_standalone_tensor_data(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        Ok(vm.ctx.new_list(vec![]).into())
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let viewport_id: u64 = if !args.args.is_empty() {
+            let id: i64 = args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
+        let bytes = STANDALONE_FRAME_BUFFERS
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
+            .get(&viewport_id)
+            .cloned()
+            .unwrap_or_default();
+        let py = bytes
+            .into_iter()
+            .map(|b| vm.ctx.new_int(b as i64).into())
+            .collect();
+        Ok(vm.ctx.new_list(py).into())
+    }
+}
+
 /// xos.frame._end_standalone() - clears temporary standalone framebuffer context.
 fn frame_end_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     crate::python_api::rasterizer::clear_frame_buffer_context();
     Ok(vm.ctx.none())
+}
+
+/// xos.frame._has_context() -> bool
+/// Returns whether a framebuffer context is currently bound.
+fn frame_has_context(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let has_context = crate::python_api::rasterizer::CURRENT_FRAME_BUFFER
+        .lock()
+        .map_err(|_| vm.new_runtime_error("frame buffer context lock poisoned".to_string()))?
+        .is_some();
+    Ok(vm.ctx.new_bool(has_context).into())
 }
 
 /// xos.frame._standalone_window_size() -> (width, height) | None
@@ -384,10 +743,22 @@ fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResul
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let maybe_size = STANDALONE_PREVIEW_HOST.with(|slot| {
             slot.borrow()
                 .as_ref()
-                .and_then(|host| host.app.state.as_ref().map(|s| (s.size.width, s.size.height)))
+                .and_then(|host| {
+                    host.app
+                        .viewport_to_window
+                        .get(&viewport_id)
+                        .and_then(|wid| host.app.states.get(wid))
+                        .map(|s| (s.size.width, s.size.height))
+                })
         });
         if let Some((w, h)) = maybe_size {
             Ok(vm
@@ -409,11 +780,17 @@ fn frame_standalone_ui_scale(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let v = STANDALONE_PREVIEW_HOST.with(|slot| {
             slot.borrow().as_ref().and_then(|host| {
                 host.app
                     .f3_engine_state
-                    .as_ref()
+                    .get(&viewport_id)
                     .map(|es| es.ui_scale_percent as f64 / 100.0)
             })
         });
@@ -433,12 +810,20 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let viewport_id: u64 = if !_args.args.is_empty() {
+            let id: i64 = _args.args[0].clone().try_into_value(vm)?;
+            id.max(0) as u64
+        } else {
+            0
+        };
         let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap() as u32;
         let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap() as u32;
-        let frame = STANDALONE_FRAME_BUFFER
+        let frame = STANDALONE_FRAME_BUFFERS
             .lock()
             .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
-            .clone();
+            .get(&viewport_id)
+            .cloned()
+            .unwrap_or_default();
 
         STANDALONE_PREVIEW_HOST.with(|slot| {
             let mut opt = slot.borrow_mut();
@@ -451,16 +836,64 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 });
             }
             if let Some(host) = opt.as_mut() {
-                host.app.width = width.max(1);
-                host.app.height = height.max(1);
-                host.app.frame_rgba = frame;
-                match host
-                    .event_loop
-                    .pump_app_events(Some(Duration::ZERO), &mut host.app)
-                {
-                    PumpStatus::Continue => {}
-                    PumpStatus::Exit(_) => {
-                        // Keep EventLoop alive: many platforms allow only one per process.
+                host.app.pending_frames.insert(
+                    viewport_id,
+                    StandalonePendingFrame {
+                        width: width.max(1),
+                        height: height.max(1),
+                        rgba: frame,
+                    },
+                );
+                if let Some(pf) = host.app.pending_frames.get(&viewport_id) {
+                    host.app.source_frames.insert(
+                        viewport_id,
+                        StandalonePendingFrame {
+                            width: pf.width,
+                            height: pf.height,
+                            rgba: pf.rgba.clone(),
+                        },
+                    );
+                    if host.app.viewport_paused(viewport_id) {
+                        host.app.paused_base_frames.insert(
+                            viewport_id,
+                            StandalonePendingFrame {
+                                width: pf.width,
+                                height: pf.height,
+                                rgba: pf.rgba.clone(),
+                            },
+                        );
+                    }
+                }
+                if !host.app.viewport_to_window.contains_key(&viewport_id) {
+                    host.app
+                        .pending_window_creates
+                        .insert(viewport_id, (width.max(1), height.max(1)));
+                }
+                host.app.render_viewport(viewport_id);
+                loop {
+                    let timeout = if host.app.viewport_paused(viewport_id) {
+                        Some(Duration::from_millis(250))
+                    } else {
+                        Some(Duration::ZERO)
+                    };
+                    match host.event_loop.pump_app_events(timeout, &mut host.app) {
+                        PumpStatus::Continue => {}
+                        PumpStatus::Exit(_) => {
+                            // Keep EventLoop alive: many platforms allow only one per process.
+                        }
+                    }
+                    let mut stepped = false;
+                    if let Some(es) = host.app.f3_engine_state.get_mut(&viewport_id) {
+                        if es.paused && es.pending_step_ticks > 0 {
+                            es.pending_step_ticks = es.pending_step_ticks.saturating_sub(1);
+                            stepped = true;
+                        }
+                    }
+                    if stepped {
+                        break;
+                    }
+                    if !host.app.viewport_paused(viewport_id) {
+                        break;
                     }
                 }
             }
@@ -520,6 +953,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
         .unwrap();
     frame_module
+        .set_attr("_has_context", vm.new_function("_has_context", frame_has_context), vm)
+        .unwrap();
+    frame_module
         .set_attr(
             "_standalone_window_size",
             vm.new_function("_standalone_window_size", frame_standalone_window_size),
@@ -535,6 +971,13 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     frame_module
         .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
+        .unwrap();
+    frame_module
+        .set_attr(
+            "_standalone_tensor_data",
+            vm.new_function("_standalone_tensor_data", frame_standalone_tensor_data),
+            vm,
+        )
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 
@@ -567,7 +1010,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("ops", ops_module, vm).unwrap();
     
     // Add the tensors submodule (Burn-backed, replaces array)
-    let tensors_module = crate::python_api::tensors::make_tensors_module(vm);
+    let tensors_module = crate::python_api::make_tensors_module(vm);
     module.set_attr("tensor", tensors_module.get_attr("tensor", vm).unwrap(), vm).unwrap();
     module.set_attr("zeros", tensors_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
     module.set_attr("ones", tensors_module.get_attr("ones", vm).unwrap(), vm).unwrap();
@@ -576,6 +1019,12 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("stack", tensors_module.get_attr("stack", vm).unwrap(), vm).unwrap();
     module.set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm).unwrap();
     module.set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm).unwrap();
+
+    crate::python_api::burn_train::register_burn_module(&module, vm);
+
+    // Add nn submodule
+    let nn_module = crate::python_api::nn::make_nn_module(vm);
+    module.set_attr("nn", nn_module, vm).unwrap();
     
     // Add the data submodule
     let data_module = crate::python_api::data::make_data_module(vm);
@@ -636,25 +1085,18 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         eprintln!("Failed to create Application class: {:?}", e);
     }
     
-    // Add _TensorWrapper and _TensorResult to builtins so they're globally available
-    if let Ok(tensor_wrapper) = scope.globals.get_item("_TensorWrapper", vm) {
-        vm.builtins
-            .set_attr("_TensorWrapper", tensor_wrapper.clone(), vm)
-            .ok();
-        module.set_attr("Tensor", tensor_wrapper, vm).ok();
+    // xos.Tensor — single Python tensor type (see APPLICATION_CLASS_CODE)
+    if let Ok(tensor_cls) = scope.globals.get_item("Tensor", vm) {
+        vm.builtins.set_attr("Tensor", tensor_cls.clone(), vm).ok();
+        module.set_attr("Tensor", tensor_cls, vm).ok();
     }
-    if let Ok(tensor_result) = scope.globals.get_item("_TensorResult", vm) {
-        vm.builtins.set_attr("_TensorResult", tensor_result, vm).ok();
-    }
-    
-    // Get the Application class and _FrameWrapper from the scope and add them to the module
+
     if let Ok(app_class) = scope.globals.get_item("Application", vm) {
         module.set_attr("Application", app_class, vm).unwrap();
     }
-    if let Ok(frame_wrapper) = scope.globals.get_item("_FrameWrapper", vm) {
-        module.set_attr("_FrameWrapper", frame_wrapper.clone(), vm).unwrap();
-        // Also add to builtins so pyapp can access it
-        let _ = vm.builtins.set_attr("_FrameWrapper", frame_wrapper, vm);
+    if let Ok(frame_cls) = scope.globals.get_item("Frame", vm) {
+        module.set_attr("Frame", frame_cls.clone(), vm).unwrap();
+        let _ = vm.builtins.set_attr("Frame", frame_cls, vm);
     }
     
     module

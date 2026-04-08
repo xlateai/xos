@@ -5,7 +5,13 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::{
-    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    apply_frame_view_zoom,
+    f3_menu_boost_interaction_fade,
+    f3_menu_handle_frame_zoom_scroll,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
+    f3_menu_handle_zoom_scroll, tick_f3_menu,
+    frame_view_pan_by_pixels,
+    tick_frame_view_zoom,
     F3Menu,
 };
 use super::engine::{
@@ -44,6 +50,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     struct WasmState {
         engine_state: EngineState,
         app: Box<dyn Application>,
+        command_held: bool,
+        shift_held: bool,
+        frame_pan_dragging: bool,
+        paused_base_frame: Vec<u8>,
+        paused_base_w: usize,
+        paused_base_h: usize,
     }
     
     let state_ptr = Box::into_raw(Box::new(WasmState {
@@ -67,8 +79,21 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,
             delta_time_seconds: 1.0 / 60.0,
+            paused: false,
+            pending_step_ticks: 0,
+            frame_view_zoom: 1.0,
+            frame_view_zoom_target: 1.0,
+            frame_view_zoom_velocity: 0.0,
+            frame_view_center_x: 0.5,
+            frame_view_center_y: 0.5,
         },
         app,
+        command_held: false,
+        shift_held: false,
+        frame_pan_dragging: false,
+        paused_base_frame: Vec::new(),
+        paused_base_w: 0,
+        paused_base_h: 0,
     }));
     
     // Setup the app
@@ -93,6 +118,26 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         
                 state.engine_state.mouse.x = new_x;
                 state.engine_state.mouse.y = new_y;
+
+                if state.frame_pan_dragging {
+                    if !state.engine_state.mouse.is_left_clicking || !(state.command_held && state.shift_held) {
+                        state.frame_pan_dragging = false;
+                    }
+                }
+
+                if state.frame_pan_dragging {
+                    f3_menu_boost_interaction_fade(&mut state.engine_state);
+                    let shape = state.engine_state.frame.shape();
+                    frame_view_pan_by_pixels(
+                        &mut state.engine_state,
+                        state.engine_state.mouse.dx,
+                        state.engine_state.mouse.dy,
+                        shape[1] as f32,
+                        shape[0] as f32,
+                    );
+                    canvas_clone.style().set_property("cursor", "grabbing").unwrap();
+                    return;
+                }
         
                 if !f3_menu_handle_mouse_move(&mut state.engine_state) {
                     state.app.on_mouse_move(&mut state.engine_state);
@@ -110,7 +155,14 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     CursorStyle::Crosshair => "crosshair",
                     CursorStyle::Hidden => "none",
                 };
-                canvas_clone.style().set_property("cursor", style).unwrap();
+                if state.command_held
+                    && state.shift_held
+                    && state.engine_state.frame_view_zoom > 1.001
+                {
+                    canvas_clone.style().set_property("cursor", "grab").unwrap();
+                } else {
+                    canvas_clone.style().set_property("cursor", style).unwrap();
+                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback("mousemove", move_callback.as_ref().unchecked_ref())?;
@@ -127,6 +179,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let state = &mut *state_ptr_clone;
                 let dx = event.delta_x() as f32;
                 let dy = -event.delta_y() as f32;
+                if event.ctrl_key() || event.meta_key() {
+                    let consumed = if event.shift_key() {
+                        f3_menu_handle_frame_zoom_scroll(&mut state.engine_state, dy)
+                    } else {
+                        f3_menu_handle_zoom_scroll(&mut state.engine_state, dy)
+                    };
+                    if consumed {
+                        event.prevent_default();
+                        return;
+                    }
+                }
+                if (event.ctrl_key() || event.meta_key()) {
+                    event.prevent_default();
+                }
                 state.app.on_scroll(&mut state.engine_state, dx, dy);
             }
         }) as Box<dyn FnMut(_)>);
@@ -147,6 +213,15 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = true;
+                        if state.command_held
+                            && state.shift_held
+                            && state.engine_state.frame_view_zoom > 1.001
+                        {
+                            state.frame_pan_dragging = true;
+                            f3_menu_boost_interaction_fade(&mut state.engine_state);
+                            event.prevent_default();
+                            return;
+                        }
                         if !f3_menu_handle_mouse_down(&mut state.engine_state) {
                             state.app.on_mouse_down(&mut state.engine_state);
                         }
@@ -175,6 +250,11 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 match event.button() {
                     0 => {
                         state.engine_state.mouse.is_left_clicking = false;
+                        if state.frame_pan_dragging {
+                            state.frame_pan_dragging = false;
+                            event.prevent_default();
+                            return;
+                        }
                         if !f3_menu_handle_mouse_up(&mut state.engine_state) {
                             state.app.on_mouse_up(&mut state.engine_state);
                         }
@@ -283,6 +363,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let key = event.key();
         
                 match key.as_str() {
+                    "Control" | "Meta" => {
+                        state.command_held = true;
+                    }
+                    "Shift" => {
+                        state.shift_held = true;
+                    }
                     "Enter" => {
                         state.app.on_key_char(&mut state.engine_state, '\n');
                         event.prevent_default();
@@ -335,6 +421,30 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         keydown_callback.forget();
     }
 
+    // Key up (modifier release for pan gesture)
+    {
+        use web_sys::KeyboardEvent;
+        let state_ptr_clone = state_ptr;
+
+        let keyup_callback = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+            unsafe {
+                let state = &mut *state_ptr_clone;
+                match event.key().as_str() {
+                    "Control" | "Meta" => state.command_held = false,
+                    "Shift" => state.shift_held = false,
+                    _ => {}
+                }
+                if !(state.command_held && state.shift_held) {
+                    state.frame_pan_dragging = false;
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        window
+            .add_event_listener_with_callback("keyup", keyup_callback.as_ref().unchecked_ref())?;
+        keyup_callback.forget();
+    }
+
     // Animation loop - use a different approach without Rc/RefCell
     {
         // Store the callback in a static location
@@ -371,12 +481,60 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     state.app.on_screen_size_change(&mut state.engine_state, width, height);
                 }
                 
-                tick_frame_delta(
-                    &mut state.engine_state,
-                    &mut anim_state.last_tick_instant,
-                );
-                // Tick the app first
-                state.app.tick(&mut state.engine_state);
+                if state.engine_state.paused {
+                    if state.engine_state.pending_step_ticks > 0 {
+                        state.engine_state.pending_step_ticks = state.engine_state.pending_step_ticks.saturating_sub(1);
+                        tick_frame_delta(
+                            &mut state.engine_state,
+                            &mut anim_state.last_tick_instant,
+                        );
+                        state.app.tick(&mut state.engine_state);
+                        let shape = state.engine_state.frame.shape();
+                        state.paused_base_w = shape[1];
+                        state.paused_base_h = shape[0];
+                        state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
+                    } else {
+                        anim_state.last_tick_instant = Some(std::time::Instant::now());
+                        if state.paused_base_frame.is_empty() {
+                            let shape = state.engine_state.frame.shape();
+                            state.paused_base_w = shape[1];
+                            state.paused_base_h = shape[0];
+                            state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
+                        }
+                        if !state.paused_base_frame.is_empty() && state.paused_base_w > 0 && state.paused_base_h > 0 {
+                            let shape = state.engine_state.frame.shape();
+                            let dst_w = shape[1];
+                            let dst_h = shape[0];
+                            let dst = state.engine_state.frame.buffer_mut();
+                            dst.fill(0);
+                            let copy_w = state.paused_base_w.min(dst_w);
+                            let copy_h = state.paused_base_h.min(dst_h);
+                            let src_stride = state.paused_base_w * 4;
+                            let dst_stride = dst_w * 4;
+                            let row_bytes = copy_w * 4;
+                            for y in 0..copy_h {
+                                let src_off = y * src_stride;
+                                let dst_off = y * dst_stride;
+                                dst[dst_off..dst_off + row_bytes]
+                                    .copy_from_slice(&state.paused_base_frame[src_off..src_off + row_bytes]);
+                            }
+                        }
+                    }
+                } else {
+                    tick_frame_delta(
+                        &mut state.engine_state,
+                        &mut anim_state.last_tick_instant,
+                    );
+                    // Tick the app first
+                    state.app.tick(&mut state.engine_state);
+                    let shape = state.engine_state.frame.shape();
+                    state.paused_base_w = shape[1];
+                    state.paused_base_h = shape[0];
+                    state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
+                }
+
+                tick_frame_view_zoom(&mut state.engine_state);
+                apply_frame_view_zoom(&mut state.engine_state);
                 
                 // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
                 {

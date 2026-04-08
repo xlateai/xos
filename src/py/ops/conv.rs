@@ -1,9 +1,9 @@
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
 use crate::tensor::conv::{conv2d, depthwise_conv2d};
 
-/// Extract the underlying data list from an array/tensor (handles _TensorWrapper, dict, or list)
+/// Extract the underlying data list from an array/tensor (handles xos.Tensor, dict, or list)
 fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Option<PyObjectRef>> {
-    // _TensorWrapper: get_attr("_data") returns the inner dict; dict["_data"] is the list
+    // Tensor: get_attr("_data") returns the inner dict; dict["_data"] is the list
     if let Ok(data_attr) = obj.get_attr("_data", vm) {
         if let Ok(inner_dict) = data_attr.clone().downcast::<rustpython_vm::builtins::PyDict>() {
             if let Ok(list_obj) = inner_dict.get_item("_data", vm) {
@@ -35,13 +35,31 @@ fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Optio
 /// xos.ops.convolve(image, kernel, padding="same")
 /// Fast 2D convolution operation using tensor backend
 /// 
-/// - image: frame.tensor (modified in-place)
+/// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 3D array [height, width, channels] - e.g., KxKx3 for RGB
 /// - padding: "same" (default) maintains image dimensions
 /// 
+/// Returns raw float output as shape [height, width, 3] (RGB, no alpha).
+/// Caller is responsible for any display-space mapping/clamping.
 /// Note: Automatically detects kernel size from array length
 pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
+    let inplace = args
+        .kwargs
+        .get("inplace")
+        .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        .or_else(|| {
+            args.kwargs
+                .get("direct")
+                .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        })
+        .unwrap_or(false);
+    let stride = args
+        .kwargs
+        .get("stride")
+        .and_then(|v| v.clone().try_into_value::<i32>(vm).ok())
+        .unwrap_or(1)
+        .max(1) as usize;
     
     if args_vec.len() < 2 {
         return Err(vm.new_type_error("convolve() requires at least 2 arguments (image, kernel)".to_string()));
@@ -148,8 +166,8 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
     conv2d(
-        &input_nchw,
-        &kernel_nchw,
+        input_nchw,
+        kernel_nchw,
         &mut output_nchw,
         1,      // batch
         3,      // in_channels
@@ -158,58 +176,103 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         width as usize,
         kernel_size,
         kernel_size,
-        [1, 1], // stride
+        [stride, stride], // stride
         [pad, pad], // padding
     );
     
-    // Convert back from NCHW to interleaved RGB
-    // Normalized kernel gives output ~[-255,255]; map to u8: (out+255)/2, then clamp
-    let mut output_rgb = vec![0u8; buffer_len];
+    // Convert back from NCHW to interleaved RGB floats (row-major NHWC)
+    let mut output_rgb = vec![0.0f32; width * height * 3];
     for y in 0..height {
         for x in 0..width {
-            let dst_idx = (y * width + x) * 4;
+            let dst_idx = (y * width + x) * 3;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                let v = (output_nchw[src_idx] + 255.0) / 2.0;
-                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
+                output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
-            output_rgb[dst_idx + 3] = 255; // Alpha
         }
     }
+
+    // Fast path: write directly into current frame buffer and return sentinel dict.
+    // This avoids creating millions of Python float objects each frame.
+    if inplace {
+        if stride != 1 {
+            return Err(vm.new_value_error("inplace=True currently requires stride=1".to_string()));
+        }
+        for y in 0..height {
+            for x in 0..width {
+                let src_idx = (y * width + x) * 3;
+                let dst_idx = (y * width + x) * 4;
+                for c in 0..3 {
+                    let iv = output_rgb[src_idx + c] as i32;
+                    buffer[dst_idx + c] = iv.clamp(0, 255) as u8;
+                }
+                buffer[dst_idx + 3] = 255;
+            }
+        }
+
+        let sentinel = vm.ctx.new_dict();
+        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+        return Ok(sentinel.into());
+    }
     
-    // Return output as Python list wrapped in _TensorResult
+    // Return output as tensor wrapper so callers can use tensor APIs like .to(...)
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
-        .map(|&b| vm.ctx.new_int(b).into())
+        .map(|&v| vm.ctx.new_float(v as f64).into())
         .collect();
-    
-    let list_obj = vm.ctx.new_list(py_list);
-    
-    // Try to wrap in _TensorResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
-        let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
-            vm.ctx.new_int(height).into(),
-            vm.ctx.new_int(width).into(),
-            vm.ctx.new_int(4).into(),
-        ]).into();
-        if let Ok(wrapped) = wrapper_class.call((list_obj.clone(), shape_tuple), vm) {
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(3).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
+        if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
-    // Fallback to plain list if wrapper not available
-    Ok(list_obj.into())
+
+    Ok(tensor_dict.into())
 }
 
 /// xos.ops.convolve_depthwise(image, kernel, padding="same")
 /// Fast 2D depthwise convolution - each channel processed independently using tensor backend
 /// 
-/// - image: frame.tensor (modified in-place)
+/// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 2D array [height, width] = KxK values (applied to each channel separately)
 /// - padding: "same" (default) maintains image dimensions
 /// 
+/// Returns raw float output as shape [height, width, 3] (RGB, no alpha).
+/// Caller is responsible for any display-space mapping/clamping.
 /// Note: Automatically detects kernel size from array length
 pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
+    let inplace = args
+        .kwargs
+        .get("inplace")
+        .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        .or_else(|| {
+            args.kwargs
+                .get("direct")
+                .and_then(|v| v.clone().try_into_value::<bool>(vm).ok())
+        })
+        .unwrap_or(false);
+    let stride = args
+        .kwargs
+        .get("stride")
+        .and_then(|v| v.clone().try_into_value::<i32>(vm).ok())
+        .unwrap_or(1)
+        .max(1) as usize;
     
     if args_vec.len() < 2 {
         return Err(vm.new_type_error("convolve_depthwise() requires at least 2 arguments (image, kernel)".to_string()));
@@ -299,8 +362,8 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut output_nchw = vec![0.0f32; width * height * 3];
     
     depthwise_conv2d(
-        &input_nchw,
-        &kernel_depthwise,
+        input_nchw,
+        kernel_depthwise,
         &mut output_nchw,
         1,      // batch
         3,      // channels
@@ -308,43 +371,70 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         width as usize,
         kernel_size,
         kernel_size,
-        [1, 1], // stride
+        [stride, stride], // stride
         [pad, pad], // padding
     );
     
-    // Convert back: normalized output ~[-255,255] -> u8 via (out+255)/2
-    let mut output_rgb = vec![0u8; buffer_len];
+    // Convert back from NCHW to interleaved RGB floats (row-major NHWC)
+    let mut output_rgb = vec![0.0f32; width * height * 3];
     for y in 0..height {
         for x in 0..width {
-            let dst_idx = (y * width + x) * 4;
+            let dst_idx = (y * width + x) * 3;
             for c in 0..3 {
                 let src_idx = (c * height + y) * width + x;
-                let v = (output_nchw[src_idx] + 255.0) / 2.0;
-                output_rgb[dst_idx + c] = v.clamp(0.0, 255.0) as u8;
+                output_rgb[dst_idx + c] = output_nchw[src_idx];
             }
-            output_rgb[dst_idx + 3] = 255; // Alpha
         }
+    }
+
+    // Fast path: write directly into current frame buffer and return sentinel dict.
+    if inplace {
+        if stride != 1 {
+            return Err(vm.new_value_error("inplace=True currently requires stride=1".to_string()));
+        }
+        for y in 0..height {
+            for x in 0..width {
+                let src_idx = (y * width + x) * 3;
+                let dst_idx = (y * width + x) * 4;
+                for c in 0..3 {
+                    let iv = output_rgb[src_idx + c] as i32;
+                    buffer[dst_idx + c] = iv.clamp(0, 255) as u8;
+                }
+                buffer[dst_idx + 3] = 255;
+            }
+        }
+
+        let sentinel = vm.ctx.new_dict();
+        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+        return Ok(sentinel.into());
     }
     
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb.iter()
-        .map(|&b| vm.ctx.new_int(b).into())
+        .map(|&v| vm.ctx.new_float(v as f64).into())
         .collect();
-    
-    let list_obj = vm.ctx.new_list(py_list);
-    
-    // Try to wrap in _TensorResult if available
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorResult", vm) {
-        let shape_tuple: rustpython_vm::PyObjectRef = vm.ctx.new_tuple(vec![
-            vm.ctx.new_int(height).into(),
-            vm.ctx.new_int(width).into(),
-            vm.ctx.new_int(4).into(),
-        ]).into();
-        if let Ok(wrapped) = wrapper_class.call((list_obj.clone(), shape_tuple), vm) {
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(height).into(),
+                vm.ctx.new_int(width).into(),
+                vm.ctx.new_int(3).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
+
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
+        if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
-    // Fallback to plain list if wrapper not available
-    Ok(list_obj.into())
+
+    Ok(tensor_dict.into())
 }
 

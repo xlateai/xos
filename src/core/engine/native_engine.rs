@@ -17,7 +17,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::{
-    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    apply_frame_view_zoom,
+    f3_menu_boost_interaction_fade,
+    f3_menu_handle_frame_zoom_scroll,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
+    f3_menu_handle_zoom_scroll, tick_f3_menu,
+    frame_view_pan_by_pixels,
+    tick_frame_view_zoom,
     F3Menu,
 };
 use super::engine::{
@@ -107,10 +113,43 @@ struct AppState {
     command_held: bool,
     shift_held: bool,
     alt_held: bool,
+    frame_pan_dragging: bool,
+    paused_base_frame: Vec<u8>,
+    paused_base_w: usize,
+    paused_base_h: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl AppState {
+    fn restore_paused_base_frame(&mut self) {
+        if self.paused_base_frame.is_empty() || self.paused_base_w == 0 || self.paused_base_h == 0 {
+            return;
+        }
+        let shape = self.engine_state.frame.shape();
+        let dst_w = shape[1];
+        let dst_h = shape[0];
+        let dst = self.engine_state.frame.buffer_mut();
+        dst.fill(0);
+        let copy_w = self.paused_base_w.min(dst_w);
+        let copy_h = self.paused_base_h.min(dst_h);
+        let src_stride = self.paused_base_w * 4;
+        let dst_stride = dst_w * 4;
+        let row_bytes = copy_w * 4;
+        for y in 0..copy_h {
+            let src_off = y * src_stride;
+            let dst_off = y * dst_stride;
+            dst[dst_off..dst_off + row_bytes]
+                .copy_from_slice(&self.paused_base_frame[src_off..src_off + row_bytes]);
+        }
+    }
+
+    fn capture_paused_base_frame(&mut self) {
+        let shape = self.engine_state.frame.shape();
+        self.paused_base_w = shape[1];
+        self.paused_base_h = shape[0];
+        self.paused_base_frame = self.engine_state.frame.buffer_mut().to_vec();
+    }
+
     fn toggle_borderless_fullscreen(&self) {
         if self.window.fullscreen().is_some() {
             self.window.set_fullscreen(None);
@@ -145,15 +184,33 @@ impl AppState {
                 unsafe {
                     self.engine_state
                         .frame
-                        .tensor
                         .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
                 }
                 mirror_ok = true;
             }
         }
 
-        tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
-        let _ = self.app.tick(&mut self.engine_state);
+        if self.engine_state.paused {
+            if self.engine_state.pending_step_ticks > 0 {
+                self.engine_state.pending_step_ticks = self.engine_state.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
+                let _ = self.app.tick(&mut self.engine_state);
+                self.capture_paused_base_frame();
+            } else {
+                self.last_tick_instant = Some(std::time::Instant::now());
+                if self.paused_base_frame.is_empty() {
+                    self.capture_paused_base_frame();
+                }
+                self.restore_paused_base_frame();
+            }
+        } else {
+            tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
+            let _ = self.app.tick(&mut self.engine_state);
+            self.capture_paused_base_frame();
+        }
+
+        tick_frame_view_zoom(&mut self.engine_state);
+        apply_frame_view_zoom(&mut self.engine_state);
 
         {
             let width = self.size.width;
@@ -173,7 +230,7 @@ impl AppState {
         tick_f3_menu(&mut self.engine_state);
 
         if mirror_ok {
-            self.engine_state.frame.tensor.clear_pixels_mirror_buffer();
+            self.engine_state.frame.clear_pixels_mirror_buffer();
             let _ = self.render_pixels();
         } else {
             let frame = self.pixels.frame_mut();
@@ -251,9 +308,35 @@ impl ApplicationHandler for AppState {
             
                 self.engine_state.mouse.dx = self.engine_state.mouse.x - prev_x;
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
+
+                if self.frame_pan_dragging {
+                    if !self.engine_state.mouse.is_left_clicking || !(self.command_held && self.shift_held) {
+                        self.frame_pan_dragging = false;
+                    }
+                }
+
+                if self.frame_pan_dragging {
+                    f3_menu_boost_interaction_fade(&mut self.engine_state);
+                    let dx = self.engine_state.mouse.dx;
+                    let dy = self.engine_state.mouse.dy;
+                    frame_view_pan_by_pixels(
+                        &mut self.engine_state,
+                        dx,
+                        dy,
+                        self.size.width as f32,
+                        self.size.height as f32,
+                    );
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
+                    }
+                    return;
+                }
             
                 if !f3_menu_handle_mouse_move(&mut self.engine_state) {
                     let _ = self.app.on_mouse_move(&mut self.engine_state);
+                }
+                if self.engine_state.paused {
+                    self.window.request_redraw();
                 }
             }
             WindowEvent::MouseInput {
@@ -263,14 +346,38 @@ impl ApplicationHandler for AppState {
             } => match button_state {
                 ElementState::Pressed => {
                     self.engine_state.mouse.is_left_clicking = true;
+                    if self.command_held
+                        && self.shift_held
+                        && self.engine_state.frame_view_zoom > 1.001
+                    {
+                        self.frame_pan_dragging = true;
+                        f3_menu_boost_interaction_fade(&mut self.engine_state);
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
+                        return;
+                    }
                     if !f3_menu_handle_mouse_down(&mut self.engine_state) {
                         let _ = self.app.on_mouse_down(&mut self.engine_state);
+                    }
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
                     }
                 }
                 ElementState::Released => {
                     self.engine_state.mouse.is_left_clicking = false;
+                    if self.frame_pan_dragging {
+                        self.frame_pan_dragging = false;
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
+                        return;
+                    }
                     if !f3_menu_handle_mouse_up(&mut self.engine_state) {
                         let _ = self.app.on_mouse_up(&mut self.engine_state);
+                    }
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
                     }
                 }
             },
@@ -291,6 +398,17 @@ impl ApplicationHandler for AppState {
                     MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
                     MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
                 };
+                if self.command_held
+                    && ((self.shift_held
+                        && f3_menu_handle_frame_zoom_scroll(&mut self.engine_state, dy))
+                        || (!self.shift_held
+                            && f3_menu_handle_zoom_scroll(&mut self.engine_state, dy)))
+                {
+                    if self.engine_state.paused {
+                        self.window.request_redraw();
+                    }
+                    return;
+                }
                 let _ = self.app.on_scroll(&mut self.engine_state, dx, dy);
             }
             WindowEvent::Ime(ime) => {
@@ -321,11 +439,17 @@ impl ApplicationHandler for AppState {
                 
                 self.shift_held = modifiers.state().shift_key();
                 self.alt_held = modifiers.state().alt_key();
+                if !(self.command_held && self.shift_held) {
+                    self.frame_pan_dragging = false;
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
                     if matches!(event.logical_key, Key::Named(NamedKey::F3)) {
                         self.engine_state.f3_menu.toggle_visible();
+                        if self.engine_state.paused {
+                            self.window.request_redraw();
+                        }
                         return;
                     }
 
@@ -407,30 +531,41 @@ impl ApplicationHandler for AppState {
             return;
         }
         
-        // Update cursor style
-        match self.engine_state.mouse.style.get() {
-            CursorStyle::Hidden => {
-                self.window.set_cursor_visible(false);
-            }
-            other => {
-                self.window.set_cursor_visible(true);
-                let icon = match other {
-                    CursorStyle::Default => CursorIcon::Default,
-                    CursorStyle::Text => CursorIcon::Text,
-                    CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
-                    CursorStyle::ResizeVertical => CursorIcon::NsResize,
-                    CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
-                    CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
-                    CursorStyle::Hand => CursorIcon::Pointer,
-                    CursorStyle::Crosshair => CursorIcon::Crosshair,
-                    CursorStyle::Hidden => unreachable!(), // already handled above
-                };
-                self.window.set_cursor(icon);
+        // Update cursor style (zoom-pan gesture gets grab/grabbing cursor override).
+        if self.command_held && self.shift_held && self.engine_state.frame_view_zoom > 1.001 {
+            self.window.set_cursor_visible(true);
+            self.window.set_cursor(if self.frame_pan_dragging {
+                CursorIcon::Grabbing
+            } else {
+                CursorIcon::Grab
+            });
+        } else {
+            match self.engine_state.mouse.style.get() {
+                CursorStyle::Hidden => {
+                    self.window.set_cursor_visible(false);
+                }
+                other => {
+                    self.window.set_cursor_visible(true);
+                    let icon = match other {
+                        CursorStyle::Default => CursorIcon::Default,
+                        CursorStyle::Text => CursorIcon::Text,
+                        CursorStyle::ResizeHorizontal => CursorIcon::EwResize,
+                        CursorStyle::ResizeVertical => CursorIcon::NsResize,
+                        CursorStyle::ResizeDiagonalNE => CursorIcon::NeswResize,
+                        CursorStyle::ResizeDiagonalNW => CursorIcon::NwseResize,
+                        CursorStyle::Hand => CursorIcon::Pointer,
+                        CursorStyle::Crosshair => CursorIcon::Crosshair,
+                        CursorStyle::Hidden => unreachable!(), // already handled above
+                    };
+                    self.window.set_cursor(icon);
+                }
             }
         }
         
-        // Request continuous redraws to keep checking SHOULD_EXIT flag
-        self.window.request_redraw();
+        // Keep continuous redraw only while running; paused mode is event-driven to avoid busy CPU usage.
+        if !self.engine_state.paused {
+            self.window.request_redraw();
+        }
     }
 }
 
@@ -496,6 +631,13 @@ impl ApplicationHandler for AppStateWrapper {
                 f3_menu: F3Menu::new(),
                 ui_scale_percent: 100,
                 delta_time_seconds: 1.0 / 60.0,
+                paused: false,
+                pending_step_ticks: 0,
+                frame_view_zoom: 1.0,
+                frame_view_zoom_target: 1.0,
+                frame_view_zoom_velocity: 0.0,
+                frame_view_center_x: 0.5,
+                frame_view_center_y: 0.5,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -517,6 +659,10 @@ impl ApplicationHandler for AppStateWrapper {
                 command_held: false,
                 shift_held: false,
                 alt_held: false,
+                frame_pan_dragging: false,
+                paused_base_frame: Vec::new(),
+                paused_base_w: 0,
+                paused_base_h: 0,
             });
         }
     }
@@ -599,6 +745,13 @@ pub fn start_headless_native(
         f3_menu: F3Menu::new(),
         ui_scale_percent: 100,
         delta_time_seconds: 1.0 / 60.0,
+        paused: false,
+        pending_step_ticks: 0,
+        frame_view_zoom: 1.0,
+        frame_view_zoom_target: 1.0,
+        frame_view_zoom_velocity: 0.0,
+        frame_view_center_x: 0.5,
+        frame_view_center_y: 0.5,
     };
 
     if let Err(e) = app.setup(&mut engine_state) {
@@ -607,8 +760,19 @@ pub fn start_headless_native(
 
     let mut last_tick_instant: Option<std::time::Instant> = None;
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
-        tick_frame_delta(&mut engine_state, &mut last_tick_instant);
-        app.tick(&mut engine_state);
+        if engine_state.paused {
+            if engine_state.pending_step_ticks > 0 {
+                engine_state.pending_step_ticks = engine_state.pending_step_ticks.saturating_sub(1);
+                tick_frame_delta(&mut engine_state, &mut last_tick_instant);
+                app.tick(&mut engine_state);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                last_tick_instant = Some(std::time::Instant::now());
+            }
+        } else {
+            tick_frame_delta(&mut engine_state, &mut last_tick_instant);
+            app.tick(&mut engine_state);
+        }
         tick_f3_menu(&mut engine_state);
     }
     SHOULD_EXIT.store(false, Ordering::Relaxed);

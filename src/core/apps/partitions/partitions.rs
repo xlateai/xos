@@ -153,7 +153,7 @@ impl Application for Partitions {
             p[3] = 0xff;
         });
 
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
@@ -165,7 +165,7 @@ impl Application for Partitions {
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let w = shape[1] as f32;
         let h = shape[0] as f32;
 
@@ -208,7 +208,7 @@ impl Application for Partitions {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let w = shape[1] as f32;
         let h = shape[0] as f32;
         let mx = state.mouse.x;

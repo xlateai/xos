@@ -317,7 +317,7 @@ pub fn microphone_get_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _TensorWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -370,7 +370,7 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _TensorWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -423,7 +423,7 @@ pub fn microphone_read_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _TensorWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
@@ -473,7 +473,7 @@ pub fn microphone_read_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     
     // Wrap in _TensorWrapper for nice display
-    if let Ok(wrapper_class) = vm.builtins.get_attr("_TensorWrapper", vm) {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }

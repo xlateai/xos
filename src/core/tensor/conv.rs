@@ -1,19 +1,22 @@
 //! Burn-backed convolution helpers for xos
 //!
 //! Wraps Burn's conv2d with NCHW layout (batch, channels, height, width).
+//!
+//! **`input` / `kernel` take `Vec<f32>`** so callers move owned buffers into [`TensorData`] without an
+//! extra `slice::to_vec()` copy. If you only have `&[f32]`, call `.to_vec()` once at the call site.
 
-use burn::tensor::{Tensor, TensorData};
+use burn::tensor::TensorData;
 use burn_backend::ops::ConvOptions;
 
-use super::{WgpuDevice, XosBackend};
+use super::{BurnTensor, WgpuDevice};
 
 /// Perform 2D convolution using Burn
 /// - input: NCHW [batch, in_c, h, w]
 /// - kernel: [out_c, in_c, kh, kw]
 /// - padding: [pad_h, pad_w] for "same" use (k-1)/2
 pub fn conv2d(
-    input: &[f32],
-    kernel: &[f32],
+    input: Vec<f32>,
+    kernel: Vec<f32>,
     output: &mut [f32],
     batch: usize,
     in_channels: usize,
@@ -27,13 +30,13 @@ pub fn conv2d(
 ) {
     let device = WgpuDevice::default();
 
-    let x = Tensor::<XosBackend, 4>::from_data(
-        TensorData::new(input.to_vec(), [batch, in_channels, in_h, in_w]),
+    let x = BurnTensor::<4>::from_data(
+        TensorData::new(input, [batch, in_channels, in_h, in_w]),
         &device,
     );
 
-    let weight = Tensor::<XosBackend, 4>::from_data(
-        TensorData::new(kernel.to_vec(), [out_channels, in_channels, kernel_h, kernel_w]),
+    let weight = BurnTensor::<4>::from_data(
+        TensorData::new(kernel, [out_channels, in_channels, kernel_h, kernel_w]),
         &device,
     );
 
@@ -55,8 +58,8 @@ pub fn conv2d(
 /// - kernel: [in_c, 1, kh, kw] (each channel has its own KxK kernel)
 /// - output: [batch, in_c, out_h, out_w]
 pub fn depthwise_conv2d(
-    input: &[f32],
-    kernel: &[f32],
+    input: Vec<f32>,
+    kernel: Vec<f32>,
     output: &mut [f32],
     batch: usize,
     channels: usize,
@@ -69,14 +72,13 @@ pub fn depthwise_conv2d(
 ) {
     let device = WgpuDevice::default();
 
-    let x = Tensor::<XosBackend, 4>::from_data(
-        TensorData::new(input.to_vec(), [batch, channels, in_h, in_w]),
+    let x = BurnTensor::<4>::from_data(
+        TensorData::new(input, [batch, channels, in_h, in_w]),
         &device,
     );
 
-    // Burn expects weight [out_c, in_c/groups, kh, kw]; for depthwise groups=channels so in_c/groups=1
-    let weight = Tensor::<XosBackend, 4>::from_data(
-        TensorData::new(kernel.to_vec(), [channels, 1, kernel_h, kernel_w]),
+    let weight = BurnTensor::<4>::from_data(
+        TensorData::new(kernel, [channels, 1, kernel_h, kernel_w]),
         &device,
     );
 

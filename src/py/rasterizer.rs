@@ -608,24 +608,39 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
     
-    // Parse values - can be a list or an object with _data attribute
-    // Get the data attribute upfront if needed (to avoid lifetime issues)
-    let data_attr_holder = if values_list.downcast_ref::<rustpython_vm::builtins::PyList>().is_none() {
-        vm.get_attribute_opt(values_list.clone(), "_data")
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-    
-    // Now get the actual list
-    let actual_list = if let Some(list) = values_list.downcast_ref::<rustpython_vm::builtins::PyList>() {
-        list
-    } else if let Some(ref data_obj) = data_attr_holder {
-        data_obj.downcast_ref::<rustpython_vm::builtins::PyList>()
-            .ok_or_else(|| vm.new_type_error("_data must be a list".to_string()))?
-    } else {
-        return Err(vm.new_type_error("values must be a list or have _data attribute".to_string()));
+    // Parse values - supports list, _TensorWrapper, or dict-like tensor data.
+    // Walk nested _data/data containers until we reach a flat list.
+    let mut cur = values_list.clone();
+    let mut depth = 0usize;
+    let actual_list = loop {
+        if let Some(list) = cur.downcast_ref::<rustpython_vm::builtins::PyList>() {
+            break list;
+        }
+
+        if depth >= 8 {
+            return Err(vm.new_type_error("values nesting too deep while resolving _data".to_string()));
+        }
+
+        if let Some(dict) = cur.downcast_ref::<rustpython_vm::builtins::PyDict>() {
+            if let Ok(next) = dict.get_item("_data", vm) {
+                cur = next;
+                depth += 1;
+                continue;
+            }
+            if let Ok(next) = dict.get_item("data", vm) {
+                cur = next;
+                depth += 1;
+                continue;
+            }
+        }
+
+        if let Ok(Some(next)) = vm.get_attribute_opt(cur.clone(), "_data") {
+            cur = next;
+            depth += 1;
+            continue;
+        }
+
+        return Err(vm.new_type_error("values must be a list or tensor-like object with _data list".to_string()));
     };
     
     let values_vec = actual_list.borrow_vec();
@@ -771,6 +786,104 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// xos.rasterizer.rectangles() - draw rectangle outlines from normalized boxes
+///
+/// Usage: xos.rasterizer.rectangles(frame, boxes, color, thickness=1.0)
+/// - frame: frame object (ignored, we use global context)
+/// - boxes: either shape (N, 2, 2) or a single box shape (2, 2), normalized [0,1]
+/// - color: (r, g, b) or (r, g, b, a)
+/// - thickness: optional outline thickness in pixels
+fn rectangles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 3 || args_vec.len() > 4 {
+        return Err(vm.new_type_error(format!(
+            "rectangles() takes 3 or 4 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+
+    let boxes_obj = &args_vec[1];
+    let color_tuple = &args_vec[2];
+    let thickness: f32 = if args_vec.len() > 3 {
+        args_vec[3].clone().try_into_value::<f64>(vm).unwrap_or(1.0) as f32
+    } else {
+        1.0
+    };
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error("No frame buffer context set. rectangles must be called during tick().".to_string())
+    })?;
+    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, width * height * 4) };
+
+    let color_obj = color_tuple
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+    let color_vec = color_obj.as_slice();
+    if color_vec.len() != 3 && color_vec.len() != 4 {
+        return Err(vm.new_type_error("color must be (r, g, b) or (r, g, b, a)".to_string()));
+    }
+    let r: i32 = color_vec[0].clone().try_into_value(vm)?;
+    let g: i32 = color_vec[1].clone().try_into_value(vm)?;
+    let b: i32 = color_vec[2].clone().try_into_value(vm)?;
+    let a: i32 = if color_vec.len() == 4 {
+        color_vec[3].clone().try_into_value(vm)?
+    } else {
+        255
+    };
+    let color = (
+        r.clamp(0, 255) as u8,
+        g.clamp(0, 255) as u8,
+        b.clamp(0, 255) as u8,
+        a.clamp(0, 255) as u8,
+    );
+
+    let flat = tensor_flat_data_list(boxes_obj, vm)?;
+    let shape = tensor_shape_tuple(boxes_obj, vm).unwrap_or_default();
+
+    let mut draw_box = |x1n: f32, y1n: f32, x2n: f32, y2n: f32| {
+        let x1 = (x1n.clamp(0.0, 1.0) * width as f32) as f32;
+        let y1 = (y1n.clamp(0.0, 1.0) * height as f32) as f32;
+        let x2 = (x2n.clamp(0.0, 1.0) * width as f32) as f32;
+        let y2 = (y2n.clamp(0.0, 1.0) * height as f32) as f32;
+        let (xa, xb) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
+        let (ya, yb) = if y1 <= y2 { (y1, y2) } else { (y2, y1) };
+
+        draw_line_direct(buffer, width, height, xa, ya, xb, ya, thickness, color);
+        draw_line_direct(buffer, width, height, xb, ya, xb, yb, thickness, color);
+        draw_line_direct(buffer, width, height, xb, yb, xa, yb, thickness, color);
+        draw_line_direct(buffer, width, height, xa, yb, xa, ya, thickness, color);
+    };
+
+    if shape == vec![2, 2] && flat.len() >= 4 {
+        draw_box(flat[0], flat[1], flat[2], flat[3]);
+        return Ok(vm.ctx.none());
+    }
+    if shape.len() == 3 && shape[1] == 2 && shape[2] == 2 {
+        let n = shape[0];
+        for i in 0..n {
+            let base = i * 4;
+            if base + 3 >= flat.len() {
+                break;
+            }
+            draw_box(flat[base], flat[base + 1], flat[base + 2], flat[base + 3]);
+        }
+        return Ok(vm.ctx.none());
+    }
+    if flat.len() >= 4 && flat.len() % 4 == 0 {
+        for chunk in flat.chunks_exact(4) {
+            draw_box(chunk[0], chunk[1], chunk[2], chunk[3]);
+        }
+        return Ok(vm.ctx.none());
+    }
+
+    Err(vm.new_type_error(
+        "boxes must be shape (2,2), (N,2,2), or flat length multiple of 4".to_string(),
+    ))
+}
+
 /// xos.rasterizer.text() - render text on the frame buffer
 /// 
 /// Usage: xos.rasterizer.text(text, x, y, font_size, color, max_width)
@@ -793,7 +906,13 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let text_str: String = args_vec[0].clone().try_into_value(vm)?;
     let x: f64 = args_vec[1].clone().try_into_value(vm)?;
     let y: f64 = args_vec[2].clone().try_into_value(vm)?;
-    let font_size: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let font_size: f64 = if let Ok(v) = args_vec[3].clone().try_into_value::<f64>(vm) {
+        v
+    } else if let Ok(v) = args_vec[3].clone().try_into_value::<i64>(vm) {
+        v as f64
+    } else {
+        return Err(vm.new_type_error("font_size must be an int or float".to_string()));
+    };
     let color_tuple = &args_vec[4];
     
     // Get the frame buffer from global context
@@ -892,6 +1011,7 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("clear", vm.new_function("clear", clear), vm).unwrap();
     module.set_attr("fill", vm.new_function("fill", fill), vm).unwrap();
     module.set_attr("rects_filled", vm.new_function("rects_filled", rects_filled), vm).unwrap();
+    module.set_attr("rectangles", vm.new_function("rectangles", rectangles), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module.set_attr("text", vm.new_function("text", text), vm).unwrap();
     module

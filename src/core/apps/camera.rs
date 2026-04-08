@@ -142,7 +142,7 @@ impl CameraApp {
 
 impl Application for CameraApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         self.last_width = shape[1] as u32;
         self.last_height = shape[0] as u32;
 
@@ -151,7 +151,7 @@ impl Application for CameraApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
 

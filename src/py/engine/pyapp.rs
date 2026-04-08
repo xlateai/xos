@@ -69,44 +69,30 @@ def _nested_list_to_tuple(nested):
         return tuple(_nested_list_to_tuple(x) for x in nested)
     return nested
 
-class _TensorResult:
-    """Wrapper for list results that provides nice string representation"""
+class Tensor:
+    """xos.Tensor — dict-backed tensor (``shape``, ``dtype``, ``_data``) or flat list + optional ``shape``."""
     def __init__(self, data, shape=None):
-        self._data = data
-        self._shape = shape
-    
+        if isinstance(data, dict):
+            self._data = data
+        else:
+            flat = list(data)
+            sh = shape if shape is not None else (len(flat),)
+            self._data = {
+                "shape": tuple(sh),
+                "dtype": "float32",
+                "device": "cpu",
+                "_data": flat,
+            }
+
     def __iter__(self):
-        return iter(self._data)
-    
+        d = self._data.get("_data")
+        if isinstance(d, list):
+            return iter(d)
+        return iter([])
+
     def __len__(self):
-        return len(self._data)
-    
-    def __getitem__(self, idx):
-        return self._data[idx]
-
-    def list(self):
-        sh = self._shape if self._shape is not None else (len(self._data),)
-        return _tensor_unflatten(self._data, sh)
-
-    def tuple(self):
-        return _nested_list_to_tuple(self.list())
-    
-    def __str__(self):
-        if not self._data:
-            return "xos.Tensor(empty)"
-        min_val = min(self._data)
-        max_val = max(self._data)
-        mean_val = sum(self._data) / len(self._data)
-        shape_str = f"shape={self._shape}" if self._shape else f"len={len(self._data)}"
-        return f"xos.Tensor({shape_str}, min={min_val:.1f}, mean={mean_val:.1f}, max={max_val:.1f})"
-    
-    def __repr__(self):
-        return self.__str__()
-
-class _TensorWrapper:
-    """Wrapper for array dict that supports slice assignment"""
-    def __init__(self, data):
-        self._data = data
+        d = self._data.get("_data")
+        return len(d) if isinstance(d, list) else 0
 
     def _getitem_int_index(self, key):
         """Row-major integer indexing: ``t[i]``, ``t[i,j]``, … partial views or a scalar."""
@@ -171,12 +157,12 @@ class _TensorWrapper:
                     col = b
                     out = [flat[i * cols + col] for i in range(rows)]
                     return self._wrap_vals((rows,), out)
-        if isinstance(key, _TensorWrapper):
+        if isinstance(key, Tensor):
             return self._gather_rows(key)
         return self._data[key]
 
     def _wrap_vals(self, shape, values):
-        return _TensorWrapper({
+        return Tensor({
             "shape": tuple(shape),
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -216,14 +202,14 @@ class _TensorWrapper:
             if isinstance(value, dict) and value.get('_direct_fill', False):
                 # Data already written directly to buffer by Rust - ZERO COPY! Do nothing.
                 return
-            # Call Rust function to fill buffer (handles lists and _TensorResult)
+            # Call Rust function to fill buffer (handles lists and Tensor)
             import xos
             xos.rasterizer._fill_buffer(self._data, value)
         else:
             self._data[key] = value
 
     def _wrap_like_self(self, values):
-        return _TensorWrapper({
+        return Tensor({
             "shape": self.shape,
             "dtype": self.dtype,
             "device": self._data.get("device", "cpu"),
@@ -233,7 +219,7 @@ class _TensorWrapper:
     def _binary_op(self, other, op):
         left = self._data.get("_data", [])
         lshape = tuple(self.shape)
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             right = other._data.get("_data", [])
             rshape = tuple(other.shape)
             if isinstance(right, list):
@@ -265,7 +251,7 @@ class _TensorWrapper:
     def _cmp_broadcast(self, other, cmp_fn):
         left = self._data["_data"]
         lshape = tuple(self.shape)
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             right = other._data["_data"]
             rshape = tuple(other.shape)
             if lshape == rshape:
@@ -289,7 +275,7 @@ class _TensorWrapper:
         return self._cmp_broadcast(other, lambda a, b: 1.0 if a > b else 0.0)
 
     def __or__(self, other):
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             la = self._data["_data"]
             lb = other._data["_data"]
             if len(la) != len(lb):
@@ -310,7 +296,7 @@ class _TensorWrapper:
         return self._binary_op(other, lambda a, b: a - b)
 
     def __rsub__(self, other):
-        if isinstance(other, _TensorWrapper):
+        if isinstance(other, Tensor):
             return other.__sub__(self)
         left = self._data.get("_data", [])
         return self._wrap_like_self([other - a for a in left])
@@ -328,6 +314,53 @@ class _TensorWrapper:
     @property
     def dtype(self):
         return self._data.get('dtype', 'unknown')
+
+    def to(self, dtype):
+        """Return a new tensor converted to ``dtype`` using flat elementwise casting."""
+        if "_data" not in self._data or not isinstance(self._data["_data"], list):
+            raise TypeError("tensor has no element data for to()")
+
+        if isinstance(dtype, str):
+            target = dtype.strip().lower()
+        elif hasattr(dtype, "name"):
+            target = str(dtype.name).strip().lower()
+        else:
+            raise TypeError("dtype must be a dtype object or string")
+
+        alias = {
+            "u8": "uint8",
+            "byte": "uint8",
+            "f32": "float32",
+            "float": "float32",
+            "i32": "int32",
+            "int": "int32",
+            "i64": "int64",
+        }
+        target = alias.get(target, target)
+
+        src = self._data["_data"]
+        if target == "uint8":
+            out = []
+            for v in src:
+                iv = int(v)
+                if iv < 0:
+                    iv = 0
+                elif iv > 255:
+                    iv = 255
+                out.append(iv)
+        elif target in ("int8", "int16", "int32", "int64", "uint16", "uint32", "uint64"):
+            out = [int(v) for v in src]
+        elif target in ("float16", "float32", "float64"):
+            out = [float(v) for v in src]
+        else:
+            raise ValueError(f"unsupported dtype for to(): {target}")
+
+        return Tensor({
+            "shape": tuple(self.shape),
+            "dtype": target,
+            "device": self._data.get("device", "cpu"),
+            "_data": out,
+        })
     
     def size(self):
         """Return the total number of elements (product of all dimensions)"""
@@ -367,16 +400,16 @@ class _TensorWrapper:
     def __repr__(self):
         return self.__str__()
 
-class _FrameWrapper:
+class Frame:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
         self._data = data
-        self._tensor_wrapper = _TensorWrapper(data.get('tensor', {}))
+        self._tensor = Tensor(data.get('tensor', {}))
     
     @property
     def tensor(self):
-        """Get the tensor wrapper with slice assignment support (CPU RGBA frame)."""
-        return self._tensor_wrapper
+        """CPU RGBA frame tensor (``xos.Tensor``) with slice assignment."""
+        return self._tensor
     
     def get_width(self):
         return self._data['width']
@@ -418,16 +451,32 @@ class _FrameWrapper:
         else:
             raise TypeError("frame.clear accepts (), RGB, or RGBA")
 
-        xos.rasterizer.fill(self, rgba)
+        # Standalone preview frames carry _xos_viewport_id. Only bind/unbind here when
+        # there is no active tick-owned context.
+        vid = self._data.get("_xos_viewport_id")
+        bound = False
+        if vid is not None and not xos.frame._has_context():
+            w = int(self._data["width"])
+            h = int(self._data["height"])
+            xos.frame._begin_standalone(int(vid), w, h)
+            bound = True
+        try:
+            xos.rasterizer.fill(self, rgba)
+        finally:
+            if bound:
+                xos.frame._end_standalone()
 
 class Application:
     """Base class for xos applications. Extend this class and implement __init__() and tick()."""
     
     def __init__(self, headless=None):
+        import builtins
+        next_id = int(getattr(builtins, "__xos_next_viewport_id__", 0))
+        builtins.__xos_next_viewport_id__ = next_id + 1
+        self._xos_viewport_id = next_id
         self._xos_initialized = True
         self._xos_engine_bound = False
-        self.frame = None  # Will be set by the engine
-        self.mouse = None  # Will be set by the engine
+        self.mouse = None  # Overwritten by engine in run(); standalone set below
         self.fps = 0.0  # Frames per second derived from timestep
         self.dt = 0.0  # Last frame delta time in seconds (same source as engine timestep)
         self.t = 0  # Tick index: 0 on first tick(), then increments after each tick completes
@@ -440,6 +489,24 @@ class Application:
         self._xos_ticks_completed = 0
         if headless is not None:
             self.headless = bool(headless)
+
+        # Empty standalone framebuffer before first tick() or run(); enables frame.clear etc. in __init__.
+        self._xos_init_standalone_frame()
+
+    def _xos_init_standalone_frame(self):
+        """Build a CPU frame + rasterizer context for standalone use (before tick/run)."""
+        import xos
+
+        if getattr(self, "_xos_engine_bound", False):
+            return
+        w = int(getattr(self, "_xos_standalone_width", 800))
+        h = int(getattr(self, "_xos_standalone_height", 600))
+        fd = xos.frame._begin_standalone(int(self._xos_viewport_id), w, h)
+        fd["_xos_viewport_id"] = int(self._xos_viewport_id)
+        self.frame = Frame(fd)
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        xos.rasterizer.fill(self.frame, (0, 0, 0, 255))
+        xos.frame._end_standalone()
 
     @property
     def scale(self):
@@ -474,12 +541,12 @@ class Application:
 
         # In standalone preview mode, follow live preview window size and F3 scale.
         if not bool(getattr(self, "headless", False)):
-            ws = xos.frame._standalone_window_size()
+            ws = xos.frame._standalone_window_size(self._xos_viewport_id)
             if ws is not None:
                 w, h = ws
                 self._xos_standalone_width = int(max(1, w))
                 self._xos_standalone_height = int(max(1, h))
-            sp = xos.frame._standalone_ui_scale()
+            sp = xos.frame._standalone_ui_scale(self._xos_viewport_id)
             if sp is not None:
                 self.xos_scale = float(sp)
 
@@ -497,10 +564,12 @@ class Application:
 
         # Standalone mode (manual Python-driven tick loop): create temporary frame context.
         frame_dict = xos.frame._begin_standalone(
+            int(getattr(self, "_xos_viewport_id", 0)),
             int(getattr(self, "_xos_standalone_width", 800)),
             int(getattr(self, "_xos_standalone_height", 600)),
         )
-        self.frame = _FrameWrapper(frame_dict)
+        frame_dict["_xos_viewport_id"] = int(getattr(self, "_xos_viewport_id", 0))
+        self.frame = Frame(frame_dict)
         self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
         self.pre_tick()
 
@@ -511,7 +580,7 @@ class Application:
         finally:
             if not getattr(self, "_xos_engine_bound", False):
                 if not bool(getattr(self, "headless", False)):
-                    xos.frame._present_standalone()
+                    xos.frame._present_standalone(int(getattr(self, "_xos_viewport_id", 0)))
                 xos.frame._end_standalone()
                 self._xos_ticks_completed = int(getattr(self, "_xos_ticks_completed", 0)) + 1
     
@@ -584,8 +653,7 @@ impl Application for PyApp {
                 let frame_dict = crate::python_api::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
                     .map_err(|e| format!("Failed to create frame object: {:?}", e))?;
                 
-                // Wrap it in _FrameWrapper
-                if let Ok(wrapper_class) = vm.builtins.get_attr("_FrameWrapper", vm) {
+                if let Ok(wrapper_class) = vm.builtins.get_attr("Frame", vm) {
                     // Use the newer call API instead of deprecated invoke
                     if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
                         app_instance.set_attr("frame", frame_obj, vm)

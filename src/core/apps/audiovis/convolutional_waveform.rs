@@ -219,8 +219,8 @@ impl ConvolutionalWaveform {
         let mut output_slice = vec![0.0f32; output_size];
 
         depthwise_conv2d(
-            &image_chw,
-            &kernel_chw,
+            image_chw,
+            kernel_chw,
             &mut output_slice,
             1,      // batch
             CHANNELS,
@@ -380,7 +380,7 @@ impl ConvolutionalWaveform {
 
         // Apply convolution each frame
         self.apply_convolution();
-        let shape = state.frame.tensor.shape();
+        let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();

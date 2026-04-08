@@ -136,5 +136,5 @@ pub fn triangles(
     points: &[(f32, f32)],
     colors: &[[u8; 4]],
 ) -> Result<(), String> {
-    burn_raster::triangles(&mut frame.tensor, points, colors)
+    burn_raster::triangles(frame, points, colors)
 }
