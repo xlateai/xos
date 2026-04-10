@@ -13,8 +13,9 @@ on:
     inputs:
       force:
         description: >
-          Run publish + GitHub release even when Cargo.toml is not ahead of crates.io
-          (e.g. repair a failed release, or tag exists after a manual GitHub release).
+          Run publish + GitHub release even when Cargo.toml matches crates.io and a GitHub
+          release for v* already exists (rare repair). Usually unnecessary: the workflow
+          auto-runs when crates.io is ahead OR when this version has no GitHub release yet.
         required: false
         default: false
         type: boolean
@@ -28,6 +29,7 @@ jobs:
       current_version: ${{ steps.check.outputs.current_version }}
       crates_io_version: ${{ steps.check.outputs.crates_io_version }}
       ahead_of_crates: ${{ steps.check.outputs.ahead_of_crates }}
+      github_release_missing: ${{ steps.check.outputs.github_release_missing }}
       crate_name: ${{ steps.check.outputs.crate_name }}
       forced: ${{ steps.check.outputs.forced }}
     steps:
@@ -39,6 +41,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_FORCE: ${{ github.event.inputs.force }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -69,10 +72,19 @@ jobs:
             ahead_of_crates=true
           fi
 
+          # No version bump needed: crates.io already has this version but GitHub has no release for vX.Y.Z
+          github_release_missing=false
+          tag="v${current_version}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            github_release_missing=true
+          fi
+
           should_run=false
           if [ "$forced" = true ]; then
             should_run=true
           elif [ "$ahead_of_crates" = true ]; then
+            should_run=true
+          elif [ "$github_release_missing" = true ]; then
             should_run=true
           fi
 
@@ -80,6 +92,7 @@ jobs:
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
           echo "crates_io_version=${crates_io_version:-}" >> "$GITHUB_OUTPUT"
           echo "ahead_of_crates=${ahead_of_crates}" >> "$GITHUB_OUTPUT"
+          echo "github_release_missing=${github_release_missing}" >> "$GITHUB_OUTPUT"
           echo "forced=${forced}" >> "$GITHUB_OUTPUT"
           echo "should_run=${should_run}" >> "$GITHUB_OUTPUT"
 
@@ -87,6 +100,7 @@ jobs:
           echo "Cargo.toml version: ${current_version}"
           echo "crates.io latest:   ${crates_io_version:-<none or unavailable>}"
           echo "ahead of crates.io: ${ahead_of_crates}"
+          echo "GitHub release missing for ${tag}: ${github_release_missing}"
           echo "workflow_dispatch force: ${forced}"
           echo "should_run: ${should_run}"
 
