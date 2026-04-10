@@ -176,6 +176,10 @@ pub mod py_engine {
 // --- Native startup ---
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if game == "mesh" {
+        apps::mesh::run_mesh_app();
+        return Ok(());
+    }
     if let Some(app) = apps::get_app(game) {
         #[cfg(not(target_os = "ios"))]
         if game == "overlay" {
