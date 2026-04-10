@@ -3,6 +3,7 @@
 
 use crate::apps::mesh::runtime::{MeshSession, Packet};
 use crate::apps::mesh::state::{LINE_EDITOR, MESH};
+use crate::apps::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
@@ -330,6 +331,9 @@ fn xos_input(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     match inner.read_line(wait) {
         Ok(Some(s)) => Ok(vm.ctx.new_str(s.as_str()).into()),
         Ok(None) => Ok(vm.ctx.none()),
+        Err(e) if e == INPUT_INTERRUPT => Err(vm.new_exception_empty(
+            vm.ctx.exceptions.keyboard_interrupt.to_owned(),
+        )),
         Err(e) => Err(vm.new_runtime_error(e)),
     }
 }

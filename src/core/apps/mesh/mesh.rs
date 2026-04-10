@@ -39,6 +39,14 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
     }
     *super::state::LINE_EDITOR.lock().unwrap() = Some(Arc::clone(&editor));
 
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    {
+        use std::sync::atomic::Ordering;
+        let _ = ctrlc::set_handler(move || {
+            super::state::INPUT_INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+        });
+    }
+
     let ed = Arc::clone(&editor);
     let print_cb: PrintCallback = Arc::new(move |s: &str| {
         if let Ok(mut inner) = ed.lock() {
@@ -73,6 +81,13 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
     if let Err(error_msg) = result {
         if !output.is_empty() {
             let _ = io::stdout().flush();
+        }
+        let is_ctrl_c = error_msg.lines().any(|line| {
+            let t = line.trim();
+            t == "KeyboardInterrupt" || t.starts_with("KeyboardInterrupt:")
+        });
+        if is_ctrl_c {
+            std::process::exit(0);
         }
         eprintln!("{}", error_msg);
         std::process::exit(1);

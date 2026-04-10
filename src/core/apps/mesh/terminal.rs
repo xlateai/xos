@@ -1,12 +1,24 @@
 //! Line editor + "print above the prompt" for synchronous polling loops (no Python threads/async).
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use super::state::INPUT_INTERRUPT_REQUESTED;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, IsTerminal, Write};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// `read_line(false)` waits this long for the first key event before returning `None` (non-busy poll).
 const INPUT_POLL_IDLE: Duration = Duration::from_millis(32);
+
+/// Returned from [`LineEditor::read_line`] on Ctrl+C; mapped to `KeyboardInterrupt` in `xos.input`.
+pub const INPUT_INTERRUPT: &str = "xos:input_interrupt";
+
+fn poll_os_interrupt() -> Result<(), String> {
+    if INPUT_INTERRUPT_REQUESTED.swap(false, Ordering::SeqCst) {
+        return Err(INPUT_INTERRUPT.to_string());
+    }
+    Ok(())
+}
 
 pub struct LineEditor {
     prompt: String,
@@ -68,6 +80,7 @@ impl LineEditor {
 
         if wait {
             loop {
+                poll_os_interrupt()?;
                 let ev = event::read().map_err(|e| e.to_string())?;
                 if let Some(line) = self.handle_event(ev)? {
                     return Ok(Some(line));
@@ -75,8 +88,10 @@ impl LineEditor {
             }
         } else {
             // First wait (up to POLL_IDLE) for input; then drain any further ready events without blocking.
+            poll_os_interrupt()?;
             if event::poll(INPUT_POLL_IDLE).map_err(|e| e.to_string())? {
                 loop {
+                    poll_os_interrupt()?;
                     let ev = event::read().map_err(|e| e.to_string())?;
                     if let Some(line) = self.handle_event(ev)? {
                         return Ok(Some(line));
@@ -94,6 +109,14 @@ impl LineEditor {
         if let Event::Key(key) = ev {
             if key.kind == KeyEventKind::Release {
                 return Ok(None);
+            }
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                    return Err(INPUT_INTERRUPT.to_string());
+                }
+            }
+            if matches!(key.code, KeyCode::Char('\x03')) {
+                return Err(INPUT_INTERRUPT.to_string());
             }
             match key.code {
                 KeyCode::Enter => {
