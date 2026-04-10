@@ -10,105 +10,56 @@ on:
       - "Cargo.toml"
       - ".github/workflows/xos.yml"
   workflow_dispatch:
-    inputs:
-      force:
-        description: >
-          Run publish + GitHub release even when Cargo.toml matches crates.io and a GitHub
-          release for v* already exists (rare repair). Usually unnecessary: the workflow
-          auto-runs when crates.io is ahead OR when this version has no GitHub release yet.
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   detect-version-bump:
-    name: Detect publish / release (Cargo vs crates.io)
+    name: Detect Cargo version bump
     runs-on: ubuntu-latest
     outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
+      changed: ${{ steps.check.outputs.changed }}
+      bumped: ${{ steps.check.outputs.bumped }}
       current_version: ${{ steps.check.outputs.current_version }}
-      crates_io_version: ${{ steps.check.outputs.crates_io_version }}
-      ahead_of_crates: ${{ steps.check.outputs.ahead_of_crates }}
-      github_release_missing: ${{ steps.check.outputs.github_release_missing }}
+      previous_version: ${{ steps.check.outputs.previous_version }}
       crate_name: ${{ steps.check.outputs.crate_name }}
-      forced: ${{ steps.check.outputs.forced }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
       - id: check
         shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_FORCE: ${{ github.event.inputs.force }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
           current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
 
-          forced=false
-          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_FORCE}" = "true" ]; then
-            forced=true
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            previous_version=$(git show HEAD^:Cargo.toml | grep '^version =' | head -n1 | cut -d '"' -f2 || true)
+          else
+            previous_version=""
           fi
 
-          # Latest version published on crates.io (authoritative for "did we ship this yet?")
-          api_url="https://crates.io/api/v1/crates/${crate_name}"
-          http_code=$(curl -sS -o /tmp/crates_api.json -w "%{http_code}" "$api_url" || echo "000")
-          crates_io_version=""
-          if [ "$http_code" = "200" ] && [ -s /tmp/crates_api.json ]; then
-            crates_io_version=$(python3 -c "import json; print(json.load(open('/tmp/crates_api.json'))['crate']['max_version'])" 2>/dev/null || true)
-          fi
+          changed=false
+          bumped=false
 
-          ahead_of_crates=false
-          if [ -n "$crates_io_version" ]; then
-            hi=$(printf '%s\n%s\n' "$crates_io_version" "$current_version" | sort -V | tail -n1)
-            if [ "$current_version" = "$hi" ] && [ "$current_version" != "$crates_io_version" ]; then
-              ahead_of_crates=true
+          if [ -n "${previous_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
+            changed=true
+            highest=$(printf "%s\n%s\n" "${previous_version}" "${current_version}" | sort -V | tail -n1)
+            if [ "${highest}" = "${current_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
+              bumped=true
             fi
-          elif [ "$http_code" = "404" ]; then
-            # Crate not on crates.io yet — first publish
-            ahead_of_crates=true
-          fi
-
-          # No version bump needed: crates.io already has this version but GitHub has no release for vX.Y.Z
-          github_release_missing=false
-          tag="v${current_version}"
-          if ! gh release view "${tag}" >/dev/null 2>&1; then
-            github_release_missing=true
-          fi
-
-          should_run=false
-          if [ "$forced" = true ]; then
-            should_run=true
-          elif [ "$ahead_of_crates" = true ]; then
-            should_run=true
-          elif [ "$github_release_missing" = true ]; then
-            should_run=true
           fi
 
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
-          echo "crates_io_version=${crates_io_version:-}" >> "$GITHUB_OUTPUT"
-          echo "ahead_of_crates=${ahead_of_crates}" >> "$GITHUB_OUTPUT"
-          echo "github_release_missing=${github_release_missing}" >> "$GITHUB_OUTPUT"
-          echo "forced=${forced}" >> "$GITHUB_OUTPUT"
-          echo "should_run=${should_run}" >> "$GITHUB_OUTPUT"
-
-          echo "---"
-          echo "Cargo.toml version: ${current_version}"
-          echo "crates.io latest:   ${crates_io_version:-<none or unavailable>}"
-          echo "ahead of crates.io: ${ahead_of_crates}"
-          echo "GitHub release missing for ${tag}: ${github_release_missing}"
-          echo "workflow_dispatch force: ${forced}"
-          echo "should_run: ${should_run}"
+          echo "previous_version=${previous_version}" >> "$GITHUB_OUTPUT"
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+          echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
   publish-rust:
     name: Publish Rust crate
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.should_run == 'true'
+    if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
     steps:
@@ -140,7 +91,7 @@ jobs:
     name: Tag commit and publish GitHub release
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.should_run == 'true'
+    if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,6 +110,7 @@ jobs:
             git tag "${tag}" "${GITHUB_SHA}"
           fi
 
+          # Push tag if missing on remote (safe no-op if already present)
           if git ls-remote --tags origin | grep -q "refs/tags/${tag}$"; then
             echo "Tag ${tag} already exists on origin."
           else
@@ -173,7 +125,7 @@ jobs:
           set -euo pipefail
           tag="${{ steps.tag.outputs.tag }}"
           if gh release view "${tag}" >/dev/null 2>&1; then
-            echo "Release ${tag} already exists — skipping create (idempotent)."
+            echo "Release ${tag} already exists."
           else
             gh release create "${tag}" \
               --target "${GITHUB_SHA}" \
