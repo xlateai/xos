@@ -49,6 +49,51 @@ fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {
     }
 }
 
+/// Snapshot connected client write ends without holding the mutex across blocking I/O (avoids relay deadlock).
+fn clone_all_client_writers(clients: &Arc<Mutex<Vec<Option<TcpStream>>>>) -> Vec<TcpStream> {
+    let guard = clients.lock().unwrap();
+    let mut out = Vec::new();
+    for oc in guard.iter() {
+        if let Some(s) = oc {
+            if let Ok(c) = s.try_clone() {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn clone_client_writers_except_sender(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    sender_rank: u32,
+) -> Vec<TcpStream> {
+    let guard = clients.lock().unwrap();
+    let mut out = Vec::new();
+    for (i, oc) in guard.iter().enumerate() {
+        let client_rank = (i + 1) as u32;
+        if client_rank == sender_rank {
+            continue;
+        }
+        if let Some(s) = oc {
+            if let Ok(c) = s.try_clone() {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn clone_client_writer_at(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    idx: usize,
+) -> Option<TcpStream> {
+    let guard = clients.lock().unwrap();
+    guard
+        .get(idx)
+        .and_then(|oc| oc.as_ref())
+        .and_then(|s| s.try_clone().ok())
+}
+
 /// Per-kind queues + blocking `receive`.
 pub struct Inbox {
     inner: Mutex<InboxInner>,
@@ -264,16 +309,16 @@ impl MeshSession {
                         return Ok(());
                     }
                     let idx = (t - 1) as usize;
-                    let mut guard = clients.lock().unwrap();
-                    if let Some(Some(cs)) = guard.get_mut(idx) {
-                        cs.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                        cs.flush().map_err(|e| e.to_string())?;
-                    }
+                    let Some(mut w) = clone_client_writer_at(clients, idx) else {
+                        return Ok(());
+                    };
+                    w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                    w.flush().map_err(|e| e.to_string())?;
                 } else {
-                    let mut guard = clients.lock().unwrap();
-                    for oc in guard.iter_mut().flatten() {
-                        oc.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                        oc.flush().map_err(|e| e.to_string())?;
+                    let writers = clone_all_client_writers(clients);
+                    for mut w in writers {
+                        w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                        w.flush().map_err(|e| e.to_string())?;
                     }
                 }
                 Ok(())
@@ -311,10 +356,7 @@ fn host_accept_loop(
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
         let rank = next_rank;
-        next_rank += 1;
         let n = rank + 1;
-        num_nodes.store(n, Ordering::SeqCst);
-
         let welcome = json!({
             "v": WIRE_VERSION,
             "cmd": "welcome",
@@ -327,6 +369,8 @@ fn host_accept_loop(
             continue;
         }
         let _ = stream.flush();
+        next_rank += 1;
+        num_nodes.store(n, Ordering::SeqCst);
 
         let idx = (rank - 1) as usize;
         {
@@ -394,28 +438,23 @@ fn host_relay_line(
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
     line: &str,
 ) {
-    let mut guard = clients.lock().unwrap();
     match env.to {
         Some(target) => {
             if target == 0 || target == sender_rank {
                 return;
             }
             let idx = (target - 1) as usize;
-            if let Some(Some(cs)) = guard.get_mut(idx) {
-                let _ = cs.write_all(line.as_bytes());
-                let _ = cs.flush();
-            }
+            let Some(mut w) = clone_client_writer_at(clients, idx) else {
+                return;
+            };
+            let _ = w.write_all(line.as_bytes());
+            let _ = w.flush();
         }
         None => {
-            for (i, oc) in guard.iter_mut().enumerate() {
-                let client_rank = (i + 1) as u32;
-                if client_rank == sender_rank {
-                    continue;
-                }
-                if let Some(cs) = oc {
-                    let _ = cs.write_all(line.as_bytes());
-                    let _ = cs.flush();
-                }
+            let writers = clone_client_writers_except_sender(clients, sender_rank);
+            for mut w in writers {
+                let _ = w.write_all(line.as_bytes());
+                let _ = w.flush();
             }
         }
     }
