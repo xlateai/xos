@@ -4,22 +4,78 @@
 use crate::apps::mesh::runtime::{MeshSession, Packet};
 use crate::apps::mesh::state::{LINE_EDITOR, MESH};
 use crate::python_api::runtime::format_python_exception;
-use rustpython_vm::builtins::PyModule;
+use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
 use rustpython_vm::AsObject;
 
 const MESH_BOOTSTRAP: &str = include_str!("bootstrap.py");
 
+/// Convert a Python value to JSON without importing Python's `json` module (RustPython may omit it).
 fn py_to_json(
     vm: &VirtualMachine,
     obj: rustpython_vm::PyObjectRef,
 ) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
-    let json_mod = vm.import("json", 0)?;
-    let dumps = json_mod.get_attr("dumps", vm)?;
-    let s_obj = dumps.call((obj,), vm)?;
-    let s = s_obj.str(vm)?.to_string();
-    serde_json::from_str(&s).map_err(|e| vm.new_value_error(e.to_string()))
+    py_to_json_inner(vm, obj, 0)
+}
+
+fn py_to_json_inner(
+    vm: &VirtualMachine,
+    obj: rustpython_vm::PyObjectRef,
+    depth: u32,
+) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
+    if depth > 48 {
+        return Err(vm.new_value_error(
+            "mesh payload: nesting too deep (max 48)".to_string(),
+        ));
+    }
+    if vm.is_none(&obj) {
+        return Ok(serde_json::Value::Null);
+    }
+    if let Ok(b) = obj.clone().try_into_value::<bool>(vm) {
+        return Ok(serde_json::Value::Bool(b));
+    }
+    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(serde_json::Value::Number(i.into()));
+    }
+    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(
+            serde_json::Number::from_f64(f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    if let Ok(s) = obj.clone().try_into_value::<String>(vm) {
+        return Ok(serde_json::Value::String(s));
+    }
+    if let Some(list) = obj.downcast_ref::<PyList>() {
+        let mut arr = Vec::with_capacity(list.borrow_vec().len());
+        for item in list.borrow_vec().iter() {
+            arr.push(py_to_json_inner(vm, item.clone(), depth + 1)?);
+        }
+        return Ok(serde_json::Value::Array(arr));
+    }
+    if let Some(tup) = obj.downcast_ref::<PyTuple>() {
+        let mut arr = Vec::with_capacity(tup.as_slice().len());
+        for item in tup.as_slice().iter() {
+            arr.push(py_to_json_inner(vm, item.clone(), depth + 1)?);
+        }
+        return Ok(serde_json::Value::Array(arr));
+    }
+    // Direct `PyDict` iteration — no `list(dict.items())` allocation (see rustpython `IntoIterator for &PyDict`).
+    if let Some(dict) = obj.downcast_ref::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (key, value) in dict {
+            let key_str = key.str(vm)?.to_string();
+            map.insert(key_str, py_to_json_inner(vm, value, depth + 1)?);
+        }
+        return Ok(serde_json::Value::Object(map));
+    }
+
+    Err(vm.new_type_error(
+        "mesh payload must be JSON-serializable: use None, bool, int, float, str, list, tuple, or dict"
+            .to_string(),
+    ))
 }
 
 fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyObjectRef {
