@@ -16,6 +16,7 @@ pub mod data;
 pub mod ui;
 pub mod nn;
 pub mod burn_train;
+pub mod mesh;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 

@@ -1098,7 +1098,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         module.set_attr("Frame", frame_cls.clone(), vm).unwrap();
         let _ = vm.builtins.set_attr("Frame", frame_cls, vm);
     }
-    
+
+    crate::python_api::mesh::register_mesh(&module, vm);
+
     module
 }
 
