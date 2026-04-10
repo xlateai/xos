@@ -1,11 +1,15 @@
 //! `xos.mesh` and `xos.input` — same-machine mesh + terminal line editor (Rust-backed).
+//! Python surface lives in `bootstrap.py` (included at compile time).
 
 use crate::apps::mesh::runtime::{MeshSession, Packet};
 use crate::apps::mesh::state::{LINE_EDITOR, MESH};
+use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::PyModule;
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
 use rustpython_vm::AsObject;
+
+const MESH_BOOTSTRAP: &str = include_str!("bootstrap.py");
 
 fn py_to_json(
     vm: &VirtualMachine,
@@ -270,52 +274,6 @@ fn xos_input(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
-const MESH_BOOTSTRAP: &str = r#"
-import types
-
-class Mesh:
-    def rank(self):
-        return _mesh_rank()
-
-    def num_nodes(self):
-        return _mesh_num_nodes()
-
-    def broadcast(self, id, **kwargs):
-        _mesh_broadcast_payload(id, kwargs)
-
-    def send(self, id, to=None, **kwargs):
-        _mesh_send_payload(id, to, kwargs)
-
-    def receive(self, id, wait=True, latest_only=False):
-        r = _mesh_receive(id, wait, latest_only)
-        if r is None:
-            return None
-
-        def wrap(obj):
-            if isinstance(obj, dict):
-                return types.SimpleNamespace(**obj)
-            return obj
-
-        if isinstance(r, list):
-            return [wrap(x) for x in r]
-        return wrap(r)
-
-    def node(self, rank):
-        return _MeshNode(self, rank)
-
-class _MeshNode:
-    def __init__(self, mesh, rank):
-        self._mesh = mesh
-        self._rank = rank
-
-    def send(self, id, **kwargs):
-        self._mesh.send(id, to=self._rank, **kwargs)
-
-def connect(session="default"):
-    _mesh_connect(session)
-    return Mesh()
-"#;
-
 pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let sub = vm.new_module("xos.mesh", vm.ctx.new_dict(), None);
 
@@ -372,14 +330,18 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm,
     );
 
-    if let Err(e) = vm.run_code_string(
-        scope.clone(),
-        MESH_BOOTSTRAP,
-        "<xos.mesh>".to_string(),
-    ) {
-        eprintln!("xos.mesh bootstrap failed: {:?}", e);
-    } else if let Ok(connect_fn) = scope.globals.get_item("connect", vm) {
-        let _ = sub.set_attr("connect", connect_fn, vm);
+    match vm.run_code_string(scope.clone(), MESH_BOOTSTRAP, "<xos.mesh/bootstrap.py>".to_string()) {
+        Ok(_) => {
+            if let Ok(connect_fn) = scope.globals.get_item("connect", vm) {
+                let _ = sub.set_attr("connect", connect_fn, vm);
+            }
+        }
+        Err(py_exc) => {
+            eprintln!(
+                "xos.mesh bootstrap failed:\n{}",
+                format_python_exception(vm, &py_exc)
+            );
+        }
     }
 
     let _ = module.set_attr("mesh", sub.as_object().to_owned(), vm);
