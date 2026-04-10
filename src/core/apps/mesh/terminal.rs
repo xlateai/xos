@@ -5,6 +5,9 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
+/// `read_line(false)` waits this long for the first key event before returning `None` (non-busy poll).
+const INPUT_POLL_IDLE: Duration = Duration::from_millis(32);
+
 pub struct LineEditor {
     prompt: String,
     buffer: String,
@@ -71,10 +74,16 @@ impl LineEditor {
                 }
             }
         } else {
-            while event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
-                let ev = event::read().map_err(|e| e.to_string())?;
-                if let Some(line) = self.handle_event(ev)? {
-                    return Ok(Some(line));
+            // First wait (up to POLL_IDLE) for input; then drain any further ready events without blocking.
+            if event::poll(INPUT_POLL_IDLE).map_err(|e| e.to_string())? {
+                loop {
+                    let ev = event::read().map_err(|e| e.to_string())?;
+                    if let Some(line) = self.handle_event(ev)? {
+                        return Ok(Some(line));
+                    }
+                    if !event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
+                        break;
+                    }
                 }
             }
             Ok(None)

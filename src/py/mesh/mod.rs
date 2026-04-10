@@ -292,18 +292,22 @@ fn mesh_receive(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 fn xos_input(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let prompt: String = args
-        .args
-        .get(0)
-        .map(|o| o.clone().try_into_value::<String>(vm))
-        .transpose()?
-        .unwrap_or_else(|| ">>> ".to_string());
-    let wait = args
-        .args
-        .get(1)
-        .map(|o| o.clone().try_into_value::<bool>(vm))
-        .transpose()?
-        .unwrap_or(true);
+    let prompt: String = if let Some(o) = args.args.get(0) {
+        o.clone().try_into_value(vm)?
+    } else if let Some(o) = args.kwargs.get("prompt") {
+        o.clone().try_into_value(vm)?
+    } else {
+        ">>> ".to_string()
+    };
+
+    // `xos.input(">>> ", wait=False)` passes `wait` as a **keyword** — it is not `args[1]`.
+    let wait: bool = if let Some(w) = args.args.get(1) {
+        w.clone().try_into_value(vm)?
+    } else if let Some(w) = args.kwargs.get("wait") {
+        w.clone().try_into_value(vm)?
+    } else {
+        true
+    };
 
     let ed = LINE_EDITOR.lock().unwrap();
     let Some(editor) = ed.as_ref() else {

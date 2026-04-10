@@ -15,16 +15,17 @@ def main() -> None:
     print("Type a line and press Enter to broadcast. Ctrl+C to exit.\n")
 
     while True:
-        line = xos.input(">>> ", wait=False)
-        if line is not None:
-            mesh.broadcast(id="message", msg=line)
-
+        # Drain inbound first so chat updates without waiting for local input.
         packets = mesh.receive(id="message", wait=False, latest_only=False)
         if packets:
             for packet in packets:
                 who = getattr(packet, "from_rank", "?")
                 text = getattr(packet, "msg", "")
                 print(f"[{who}] {text}")
+
+        line = xos.input(">>> ", wait=False)
+        if line is not None:
+            mesh.broadcast(id="message", msg=line)
 
 
 main()
