@@ -593,7 +593,7 @@ impl MeshSession {
                     }
                 }
                 MeshMode::Lan => Err(
-                    "LAN mesh requires an unlocked identity. Run `xos login` (or `xos login --offline` without network), then connect again with your password."
+                    "LAN mesh requires a local identity. Run `xos login --offline` first."
                         .into(),
                 ),
             }

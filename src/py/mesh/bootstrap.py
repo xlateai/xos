@@ -73,8 +73,9 @@ class _MeshNode:
 
 def connect(id="default", mode="local"):
     """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
-    ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, peers
-    on the LAN find the coordinator via UDP broadcast; same-machine peers use loopback.
+    ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, run
+    ``xos login --offline`` first. For ``lan``, you will be prompted for your password to unlock
+    the encrypted private key (password is never stored by xos).
     """
     mode = (mode or "local").lower()
     if mode == "online":

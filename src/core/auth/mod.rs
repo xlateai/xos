@@ -1,5 +1,5 @@
-//! Offline identity: RSA-2048 for LAN mesh. **v2** derives keys from username + password (Argon2id +
-//! ChaCha20-seeded RSA); only username and public PEM are stored. **v1** (legacy) encrypted a random key.
+//! Offline identity: RSA-2048 for LAN mesh. **v3** stores encrypted PKCS#8 (deterministic RSA); password
+//! is never persisted. **v2**/**v1** legacy formats still unlock.
 //! Storage: Windows `%LOCALAPPDATA%\\xos\\`, Unix/macOS `~/.xos/`.
 
 mod store;

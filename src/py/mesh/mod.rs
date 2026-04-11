@@ -168,25 +168,14 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let session = if mode == MeshMode::Lan {
         if !has_identity() {
             return Err(vm.new_runtime_error(
-                "xos.mesh.connect(mode='lan') requires a local identity. Run `xos login` first; if you are offline, use `xos login --offline` to create keys on this machine, then connect again."
+                "xos.mesh.connect(mode='lan') requires a local identity. Run `xos login --offline` first."
                     .to_string(),
             ));
         }
-        let password: String =
-            if let Some(p) = args.kwargs.get("password") {
-                if vm.is_none(p) {
-                    return Err(vm.new_type_error(
-                        "password=None is invalid for LAN mesh; omit password to prompt, or pass a str"
-                            .to_string(),
-                    ));
-                }
-                p.clone().try_into_value(vm)?
-            } else {
-                dialoguer::Password::new()
-                    .with_prompt("Password (LAN identity)")
-                    .interact()
-                    .map_err(|e| vm.new_runtime_error(e.to_string()))?
-            };
+        let password = dialoguer::Password::new()
+            .with_prompt("Password (LAN identity)")
+            .interact()
+            .map_err(|e| vm.new_runtime_error(e.to_string()))?;
         let unlocked = unlock_identity(password.trim()).map_err(|e| {
             vm.new_runtime_error(format!("could not unlock identity: {e}"))
         })?;

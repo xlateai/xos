@@ -316,7 +316,7 @@ fn main() {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
-                            "Saved identity (keys derive from your username + password). Use the same password when LAN mesh prompts, or pass password= to connect()."
+                            "Saved identity (encrypted private key on disk; password is not stored — you will enter it when connecting LAN mesh)."
                         );
                     }
                     Err(e) => {

@@ -38,29 +38,19 @@ LAN mesh uses **cryptographic identity** so peers know who they’re talking to.
 
 1. **`xos login --offline`** — no cloud OAuth required; good for air-gapped or “just let me work” setups.
 2. Choose a **username** and **password** you’ll remember.
-3. Run something like **`xos app mesh`** and connect with **`mode="lan"`**.
+3. Run something like **`xos app mesh`** and connect with **`mode="lan"`** — you’ll be **prompted for that password** to unlock your key (xos does **not** save your password anywhere).
 
 If you skip step 1–2, LAN mode will nudge you to log in first. That’s intentional: we’d rather fail fast than pretend trust exists.
 
 ---
 
-## 🔑 Username & password on the wire
+## 🔑 What’s on disk (v3)
 
-Once identity exists, **LAN** still asks you to **unlock** with that username and password when a process needs your keys (you might see a prompt per run, or pass **`password=`** where the API allows). New process, fresh unlock—unless later you wire in OS-level credential storage. The point: **your secret stays yours**; we’re not silently caching passwords in this flow.
+- **Private key:** PKCS#8 bytes, **encrypted** with Argon2id + AES-256-GCM (random salt per install). Stored inside **`identity.json`** under your OS xos data dir.
+- **Password:** **not** stored — not in the file, not in the keychain. You type it when **`xos.mesh.connect(mode="lan")`** runs so the app can decrypt and use the key.
+- Keys are still **deterministically generated** from username + password before encryption, so the **same username + password** on another machine yields the **same** key pair if you register there too.
 
----
-
-## 🧬 How keys are born (v2)
-
-New identities don’t stash a private key blob or your password on disk.
-
-- Your password is **stretched** with **Argon2id**, using a **salt tied to your username**—not a random salt guarding a random key file, but a **deterministic recipe** you can re-run anywhere.
-- That yields a **seed**; from it we generate **RSA-2048** the same way every time.
-- We only persist **username**, KDF settings, and your **public** key. The **private** key is **recomputed** when you unlock—no password file, no duplicated secret material.
-
-**Same username + password → the same key pair on any device.** You get a **shared cryptographic identity** across machines without emailing a `.pem` around: you share the *human* secret, not a file.
-
-Older installs may still use the legacy encrypted format (`xos-auth-v1`); new **`xos login --offline`** registrations use **v2**.
+Legacy **`xos-auth-v2`** files (public-only + derive) and **`xos-auth-v1`** (old encrypted random keys) still unlock.
 
 ---
 
