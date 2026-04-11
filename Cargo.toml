@@ -31,6 +31,10 @@ include_dir = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
+# Keep these in the workspace graph; MSVC release `strip` on proc-macro crates can cause E0463
+# (`can't find crate for ...`) for Burn/CubeCL — see profile.release.package.* below.
+darling = "0.21.3"
+variadics_please = "1"
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies
@@ -127,3 +131,12 @@ resolver = "2"
 # from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see src/core/patches/gpu-allocator/Cargo.toml).
 [patch.crates-io]
 gpu-allocator = { path = "src/core/patches/gpu-allocator" }
+
+# Windows MSVC + release: stripping proc-macro rlibs/DLLs breaks rustc's ability to load them
+# (E0463), which then breaks downstream crates (e.g. cubecl-ir / darling).
+[profile.release.package.cubecl-macros]
+strip = false
+[profile.release.package.variadics_please]
+strip = false
+[profile.release.package.darling_macro]
+strip = false
