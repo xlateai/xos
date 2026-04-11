@@ -74,8 +74,8 @@ class _MeshNode:
 def connect(id="default", mode="local"):
     """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
     ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, run
-    ``xos login --offline`` first. For ``lan``, you will be prompted for your password to unlock
-    the encrypted private key (password is never stored by xos).
+    ``xos login --offline`` first so ``identity.json`` holds your RSA keys; connect loads them
+    from disk (no password prompt).
     """
     mode = (mode or "local").lower()
     if mode == "online":

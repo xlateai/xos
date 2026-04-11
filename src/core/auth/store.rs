@@ -1,12 +1,11 @@
 //! Persisted identity: `identity.json`
 //!
-//! - **v3 (current):** RSA-2048 derived deterministically from username + password, then PKCS#8
-//!   private key encrypted at rest (Argon2id + AES-256-GCM). **Password is never stored** (no
-//!   keychain); you enter it when unlocking (e.g. LAN mesh connect).
-//! - **v2 (legacy):** only public metadata on disk; private key recomputed from password.
-//! - **v1 (legacy):** random RSA + encrypted PKCS#8.
+//! - **v4 (current):** RSA-2048 derived at login from username + password; **private + public PEM**
+//!   stored in the file. LAN mesh loads keys with **`load_identity()`** — no password, nothing in
+//!   keychain. Protect the file like any secret (permissions `0600` on Unix).
+//! - **v3 / v2 / v1:** legacy; still supported by **`unlock_identity(password)`** where applicable.
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng};
+use aes_gcm::aead::{Aead, KeyInit, OsRng as AesOsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -26,10 +25,12 @@ const RSA_BITS: usize = 2048;
 const AUTH_FORMAT_V1: &str = "xos-auth-v1";
 const AUTH_FORMAT_V2: &str = "xos-auth-v2";
 const AUTH_FORMAT_V3: &str = "xos-auth-v3";
+const AUTH_FORMAT_V4: &str = "xos-auth-v4";
 
-const ARGON_M: u32 = 19456;
-const ARGON_T: u32 = 2;
-const ARGON_P: u32 = 1;
+/// Lighter Argon2 for **v4 only** (one run at `xos login --offline`) so interactive login is not multi-minute.
+const V4_ARGON_M: u32 = 8192;
+const V4_ARGON_T: u32 = 2;
+const V4_ARGON_P: u32 = 1;
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -105,6 +106,15 @@ pub struct StoredIdentityFile {
     pub public_key_pem: String,
 }
 
+/// Plain PEM on disk (`xos-auth-v4`): mesh loads without password.
+#[derive(Serialize, Deserialize)]
+pub struct StoredIdentityV4 {
+    pub format: String,
+    pub username: String,
+    pub private_key_pem: String,
+    pub public_key_pem: String,
+}
+
 /// Deterministic identity (`xos-auth-v2`): only username, KDF params, and public key on disk.
 #[derive(Serialize, Deserialize)]
 pub struct StoredIdentityV2 {
@@ -176,8 +186,8 @@ fn rsa_deterministic_from_password(
     Ok((private, public_pem))
 }
 
-/// Create `identity.json`: deterministic RSA-2048, PKCS#8 encrypted with Argon2id + AES-GCM.
-/// Password is **not** stored anywhere (no keychain).
+/// Create `identity.json` (v4): derive RSA once from username + password at login, then store
+/// PKCS#8 PEM private + public on disk. Password is not saved anywhere; mesh uses [`load_identity`].
 pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
     let dir = auth_data_dir()?;
     fs::create_dir_all(&dir).map_err(|e| AuthError::Io(e.to_string()))?;
@@ -187,33 +197,23 @@ pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
     }
 
     let u = username.trim();
-    let (private, public_pem) =
-        rsa_deterministic_from_password(password.as_bytes(), u, ARGON_M, ARGON_T, ARGON_P)?;
+    let (private, public_pem) = rsa_deterministic_from_password(
+        password.as_bytes(),
+        u,
+        V4_ARGON_M,
+        V4_ARGON_T,
+        V4_ARGON_P,
+    )?;
 
-    let pk_der = private
-        .to_pkcs8_der()
-        .map_err(|e| AuthError::Crypto(e.to_string()))?;
-    let pk_bytes = pk_der.as_bytes();
+    let private_pem = private
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
 
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| AuthError::Io(format!("{e:?}")))?;
-    let key_bytes = derive_aes_key(password.as_bytes(), &salt, ARGON_M, ARGON_T, ARGON_P)?;
-
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    let nonce = Aes256Gcm::generate_nonce(&mut AesOsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, pk_bytes.as_ref())
-        .map_err(|e| AuthError::Crypto(e.to_string()))?;
-
-    let stored = StoredIdentityFile {
-        format: AUTH_FORMAT_V3.to_string(),
+    let stored = StoredIdentityV4 {
+        format: AUTH_FORMAT_V4.to_string(),
         username: u.to_string(),
-        salt_b64: B64.encode(salt),
-        argon_m_cost: ARGON_M,
-        argon_t_cost: ARGON_T,
-        argon_p_cost: ARGON_P,
-        aes_nonce_b64: B64.encode(nonce.as_slice()),
-        ciphertext_b64: B64.encode(&ciphertext),
+        private_key_pem: private_pem,
         public_key_pem: public_pem,
     };
 
@@ -227,6 +227,40 @@ pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
     }
 
     Ok(())
+}
+
+fn identity_from_v4(stored: StoredIdentityV4) -> Result<UnlockedIdentity, AuthError> {
+    if stored.format != AUTH_FORMAT_V4 {
+        return Err(AuthError::InvalidFile("not xos-auth-v4".to_string()));
+    }
+    let rsa_private = RsaPrivateKey::from_pkcs8_pem(stored.private_key_pem.trim())
+        .map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+    Ok(UnlockedIdentity {
+        username: stored.username,
+        rsa_private,
+        public_pem: stored.public_key_pem,
+    })
+}
+
+/// Load RSA identity from disk (v4 only). No password — private key is stored in `identity.json`.
+/// LAN mesh uses this; keep the file permissions tight.
+pub fn load_identity() -> Result<UnlockedIdentity, AuthError> {
+    let raw = fs::read_to_string(auth_json_path()?).map_err(|e| AuthError::Io(e.to_string()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+    let fmt = v
+        .get("format")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| AuthError::InvalidFile("missing format".to_string()))?;
+    if fmt != AUTH_FORMAT_V4 {
+        return Err(AuthError::InvalidFile(
+            "LAN mesh needs xos-auth-v4 identity. Run:  xos login --delete  then  xos login --offline"
+                .to_string(),
+        ));
+    }
+    let stored: StoredIdentityV4 =
+        serde_json::from_value(v).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+    identity_from_v4(stored)
 }
 
 fn unlock_identity_encrypted_pkcs8(stored: StoredIdentityFile, password: &str) -> Result<UnlockedIdentity, AuthError> {
@@ -294,7 +328,7 @@ fn unlock_identity_v2(stored: StoredIdentityV2, password: &str) -> Result<Unlock
     })
 }
 
-/// Load RSA identity: v1/v3 decrypt PKCS#8; v2 derives keys from password (no ciphertext).
+/// Load RSA identity: v1/v3 decrypt PKCS#8; v2 derives keys from password; v4 loads PEM from disk (password ignored).
 pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
     let path = auth_json_path()?;
     let raw = fs::read_to_string(&path).map_err(|e| AuthError::Io(e.to_string()))?;
@@ -306,6 +340,11 @@ pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
         .ok_or_else(|| AuthError::InvalidFile("missing format".to_string()))?;
 
     match format.as_str() {
+        AUTH_FORMAT_V4 => {
+            let stored: StoredIdentityV4 =
+                serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+            identity_from_v4(stored)
+        }
         AUTH_FORMAT_V1 | AUTH_FORMAT_V3 => {
             let stored: StoredIdentityFile =
                 serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
@@ -339,12 +378,29 @@ pub fn rsa_verify(public: &RsaPublicKey, msg: &[u8], sig_bytes: &[u8]) -> Result
 mod tests {
     use super::*;
 
+    /// Same memory cost as legacy v2/v3 defaults (tests only).
+    const LEGACY_ARGON_M: u32 = 19456;
+    const LEGACY_ARGON_T: u32 = 2;
+    const LEGACY_ARGON_P: u32 = 1;
+
     #[test]
     fn deterministic_rsa_same_inputs_same_public_pem() {
-        let (a, pem_a) =
-            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
-        let (b, pem_b) =
-            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        let (a, pem_a) = rsa_deterministic_from_password(
+            b"secret",
+            "alice",
+            LEGACY_ARGON_M,
+            LEGACY_ARGON_T,
+            LEGACY_ARGON_P,
+        )
+        .unwrap();
+        let (b, pem_b) = rsa_deterministic_from_password(
+            b"secret",
+            "alice",
+            LEGACY_ARGON_M,
+            LEGACY_ARGON_T,
+            LEGACY_ARGON_P,
+        )
+        .unwrap();
         assert_eq!(pem_a, pem_b);
         assert_eq!(
             a.to_public_key().to_public_key_pem(LineEnding::LF).unwrap(),
@@ -354,10 +410,22 @@ mod tests {
 
     #[test]
     fn wrong_password_changes_keys() {
-        let (_, pem_ok) =
-            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
-        let (_, pem_bad) =
-            rsa_deterministic_from_password(b"wrong", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        let (_, pem_ok) = rsa_deterministic_from_password(
+            b"secret",
+            "alice",
+            LEGACY_ARGON_M,
+            LEGACY_ARGON_T,
+            LEGACY_ARGON_P,
+        )
+        .unwrap();
+        let (_, pem_bad) = rsa_deterministic_from_password(
+            b"wrong",
+            "alice",
+            LEGACY_ARGON_M,
+            LEGACY_ARGON_T,
+            LEGACY_ARGON_P,
+        )
+        .unwrap();
         assert_ne!(pem_ok, pem_bad);
     }
 }

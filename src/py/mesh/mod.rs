@@ -6,7 +6,7 @@ use crate::apps::mesh::state::{LINE_EDITOR, MESH};
 use crate::apps::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-use crate::auth::{has_identity, unlock_identity};
+use crate::auth::{has_identity, load_identity};
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
@@ -172,12 +172,8 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     .to_string(),
             ));
         }
-        let password = dialoguer::Password::new()
-            .with_prompt("Password (LAN identity)")
-            .interact()
-            .map_err(|e| vm.new_runtime_error(e.to_string()))?;
-        let unlocked = unlock_identity(password.trim()).map_err(|e| {
-            vm.new_runtime_error(format!("could not unlock identity: {e}"))
+        let unlocked = load_identity().map_err(|e| {
+            vm.new_runtime_error(format!("could not load identity: {e}"))
         })?;
         let id = std::sync::Arc::new(unlocked);
         MeshSession::join_with_identity(&mesh_id, mode, id)

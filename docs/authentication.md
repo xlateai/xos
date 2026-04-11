@@ -1,17 +1,5 @@
 # 🔗 Mesh & identity
 
-Most software still assumes **one program is the authority** and everything else phones home. xos turns that around: **cooperation is the default**, and “how far the signal travels” is a dial you turn—not a different product category every time.
-
-Mesh is the name we give to **a small graph of peers** that chose the same **connection id**—a shared name for *this* collaboration, not a server you rent. Think of it less like configuring a VPC and more like **naming the room** so the right machines find each other.
-
----
-
-## ℹ️ Why meshes first
-
-We want **local**, **LAN**, and (eventually) **online** to feel like the **same idea** at different radii. Your app shouldn’t become a different architecture when you leave localhost—only the **scope** changes. That’s the step-up: start tight, widen when you need to, without rewriting your mental model.
-
----
-
 ## 🎯 Three scopes
 
 - **`local`** — Same machine. Fast iteration, no network story to think about.
@@ -37,20 +25,19 @@ Every mesh has a **string id**—the handle for “this session, this project, t
 LAN mesh uses **cryptographic identity** so peers know who they’re talking to. You register once on the machine:
 
 1. **`xos login --offline`** — no cloud OAuth required; good for air-gapped or “just let me work” setups.
-2. Choose a **username** and **password** you’ll remember.
-3. Run something like **`xos app mesh`** and connect with **`mode="lan"`** — you’ll be **prompted for that password** to unlock your key (xos does **not** save your password anywhere).
+2. Choose a **username** and **password** you’ll remember (password is used **once** to derive your RSA key pair; it is **not** stored).
+3. Run something like **`xos app mesh`** and connect with **`mode="lan"`** — the app loads your **private key from disk** (same machine, same `identity.json`). No password prompt on connect.
 
 If you skip step 1–2, LAN mode will nudge you to log in first. That’s intentional: we’d rather fail fast than pretend trust exists.
 
 ---
 
-## 🔑 What’s on disk (v3)
+## 🔑 What’s on disk (v4, current)
 
-- **Private key:** PKCS#8 bytes, **encrypted** with Argon2id + AES-256-GCM (random salt per install). Stored inside **`identity.json`** under your OS xos data dir.
-- **Password:** **not** stored — not in the file, not in the keychain. You type it when **`xos.mesh.connect(mode="lan")`** runs so the app can decrypt and use the key.
-- Keys are still **deterministically generated** from username + password before encryption, so the **same username + password** on another machine yields the **same** key pair if you register there too.
+- **Private + public key:** PEM in **`identity.json`** (PKCS#8 private + SPKI public). Derived once at **`xos login --offline`** from username + password (Argon2id + deterministic RSA). **Password is not stored** — not in the file, not in the OS credential store.
+- **LAN mesh** uses **`load_identity()`**: reads the PEM from disk only. Protect **`identity.json`** like any secret (e.g. `0600` on Unix).
 
-Legacy **`xos-auth-v2`** files (public-only + derive) and **`xos-auth-v1`** (old encrypted random keys) still unlock.
+Legacy **`xos-auth-v3`** (encrypted PKCS#8), **`xos-auth-v2`** (derive-only), and **`xos-auth-v1`** may still exist on disk; LAN mesh expects **v4**. To migrate: **`xos login --delete`** then **`xos login --offline`**.
 
 ---
 
