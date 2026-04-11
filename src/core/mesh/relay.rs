@@ -24,8 +24,9 @@ use crate::auth::UnlockedNodeIdentity;
 
 const WIRE_VERSION: u32 = 2;
 
-/// Host→peer relay writes: bound latency on half-dead TCP (default stack timeouts can be seconds each).
-const RELAY_WRITE_TIMEOUT: Duration = Duration::from_millis(450);
+/// TCP write deadline for mesh streams, relay clones, and heartbeats — single value so none of them
+/// trips before the others. Too short causes spurious disconnects on Windows / Wi‑Fi under load.
+const MESH_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Application keepalive kind — **not** delivered to [`Inbox`] / Python `receive()`.
 pub const MESH_HEARTBEAT_KIND: &str = "__mesh_heartbeat__";
@@ -240,7 +241,7 @@ fn relay_write_plain_best_effort(
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
     num_nodes: &Arc<AtomicU32>,
 ) {
-    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
     if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
         clear_disconnected_peer_plain(idx, clients, num_nodes);
     }
@@ -255,7 +256,7 @@ fn relay_write_lan_best_effort(
     lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
     num_nodes: &Arc<AtomicU32>,
 ) {
-    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
     if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
         clear_disconnected_peer_lan(idx, clients, lan_host, num_nodes);
     }
@@ -388,7 +389,6 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                 let lan = session.lan_host.clone();
                 thread::spawn(move || {
                     loop {
-                        thread::sleep(HEARTBEAT_INTERVAL);
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
@@ -397,6 +397,7 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                         } else {
                             host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes)
                         };
+                        thread::sleep(HEARTBEAT_INTERVAL);
                     }
                 });
             }
@@ -404,11 +405,11 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
             {
                 thread::spawn(move || {
                     loop {
-                        thread::sleep(HEARTBEAT_INTERVAL);
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
                         let _ = host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes);
+                        thread::sleep(HEARTBEAT_INTERVAL);
                     }
                 });
             }
@@ -422,11 +423,11 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                 let lan = session.lan_client.clone();
                 thread::spawn(move || {
                     loop {
-                        thread::sleep(HEARTBEAT_INTERVAL);
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
                         let _ = client_send_heartbeat(rank, &node_id, &stream, lan.as_ref());
+                        thread::sleep(HEARTBEAT_INTERVAL);
                     }
                 });
             }
@@ -434,11 +435,11 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
             {
                 thread::spawn(move || {
                     loop {
-                        thread::sleep(HEARTBEAT_INTERVAL);
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
                         let _ = client_send_heartbeat_wasm(rank, &node_id, &stream);
+                        thread::sleep(HEARTBEAT_INTERVAL);
                     }
                 });
             }
@@ -572,7 +573,7 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let shutdown = Arc::new(AtomicU32::new(0));
 
     stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
     let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut line = String::new();
@@ -622,7 +623,7 @@ fn finish_client_connection(
     let shutdown = Arc::new(AtomicU32::new(0));
 
     stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
     let _ = stream.set_nodelay(true);
 
     let (lan_client, mut reader, stream) = if let Some(id) = identity.as_ref() {
@@ -1040,7 +1041,7 @@ fn host_accept_loop(
         }
         let Ok(mut stream) = conn else { continue };
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
 
         let Ok(stored) = stream.try_clone() else {
@@ -1092,7 +1093,7 @@ fn host_accept_loop(
         }
         let Ok(mut stream) = conn else { continue };
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
 
         if identity.is_none() {
