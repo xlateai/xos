@@ -2,8 +2,8 @@
 //! Start the **viewer** first (`xos app remote`), then the **streamer** on the other machine.
 //!
 //! - **Windows**: GDI capture + `SetCursorPos` / `mouse_event` on the streamer.
-//! - **macOS**: [`screenshots`] capture + [`enigo`] mouse on the streamer (grant **Screen Recording**
-//!   in System Settings → Privacy if prompted).
+//! - **macOS**: [`xcap`] (`CGWindowListCreateImage`) + [`enigo`] mouse on the streamer (grant **Screen
+//!   Recording** for the `xos` binary in System Settings → Privacy → Screen Recording).
 //!
 //! Normal windowed app (not the overlay host).
 
@@ -282,24 +282,33 @@ mod win {
 mod mac {
     use super::STREAM_MAX_W;
     use enigo::{Enigo, MouseButton, MouseControllable};
-    use screenshots::Screen;
     use serde_json::Value;
     use std::io::Cursor;
+    use xcap::Monitor;
 
     fn virtual_screen_bounds() -> (i32, i32, i32, i32) {
-        let Ok(screens) = Screen::all() else {
+        let Ok(monitors) = Monitor::all() else {
             return (0, 0, 0, 0);
         };
         let mut min_x = i32::MAX;
         let mut min_y = i32::MAX;
         let mut max_r = i32::MIN;
         let mut max_b = i32::MIN;
-        for s in screens {
-            let d = s.display_info;
-            let x = d.x;
-            let y = d.y;
-            let w = d.width as i32;
-            let h = d.height as i32;
+        for m in monitors {
+            let Ok(x) = m.x() else {
+                continue;
+            };
+            let Ok(y) = m.y() else {
+                continue;
+            };
+            let Ok(w) = m.width() else {
+                continue;
+            };
+            let Ok(h) = m.height() else {
+                continue;
+            };
+            let w = w as i32;
+            let h = h as i32;
             min_x = min_x.min(x);
             min_y = min_y.min(y);
             max_r = max_r.max(x + w);
@@ -311,18 +320,19 @@ mod mac {
         (min_x, min_y, max_r - min_x, max_b - min_y)
     }
 
-    /// Primary monitor only (multi-monitor: use the first listed screen).
+    /// Primary display if available, else first monitor. Uses full composited desktop capture.
     pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
-        let screens = Screen::all().ok()?;
-        let screen = screens.first()?;
-        // `screenshots` uses `image` 0.24; this crate uses 0.25 — rebuild the buffer so types match.
-        let cap = screen.capture().ok()?;
-        let vw = cap.width();
-        let vh = cap.height();
+        let monitors = Monitor::all().ok()?;
+        let monitor = monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .or_else(|| monitors.first())?;
+        let rgba = monitor.capture_image().ok()?;
+        let vw = rgba.width();
+        let vh = rgba.height();
         if vw == 0 || vh == 0 {
             return None;
         }
-        let rgba = image::RgbaImage::from_raw(vw, vh, cap.into_raw())?;
         let scale = (STREAM_MAX_W as f32 / vw as f32).min(1.0f32);
         let tw = ((vw as f32) * scale).round().max(1.0) as u32;
         let th = ((vh as f32) * scale).round().max(1.0) as u32;
