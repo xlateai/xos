@@ -9,6 +9,7 @@ Mesh chat demo — run `xos app mesh` (or `xos rs mesh`).
 import xos
 
 CHAT_ID = "chat-demo"
+# "local" = plaintext, same-machine. "lan" = encrypted + discovery (also tries loopback first).
 MODE = "lan"
 
 

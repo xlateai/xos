@@ -1,5 +1,12 @@
-//! TCP mesh (star topology: rank 0 coordinates). `local` = loopback only (plaintext).
-//! `lan` = UDP discovery + RSA/X25519 handshake + AES-256-GCM line encryption (requires `xos login`).
+//! TCP mesh (star topology: rank 0 coordinates).
+//!
+//! - **`local`**: plaintext JSON lines; one code path ([`host_peer_reader`], plain [`send_impl`]). Fast
+//!   for same-machine multi-terminal tests without identity.
+//! - **`lan`**: per-TCP-session AES after RSA/X25519 handshake; UDP discovery; separate relay/send
+//!   paths ([`host_peer_reader_lan`], encrypted [`send_impl`]). Not mechanically merged with `local`
+//!   because every peer uses distinct wire keys.
+//!
+//! Locking: never hold `clients` + `lan_host` across TCP writes — clone streams/keys, drop locks, then encrypt/write.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -754,32 +761,44 @@ impl MeshSession {
                             return Ok(());
                         }
                         let idx = (t - 1) as usize;
-                        let k = lh.lock().unwrap().get(idx).and_then(|x| x.clone());
-                        let Some(k) = k else {
-                            return Ok(());
+                        let (k, mut w) = {
+                            let cg = clients.lock().unwrap();
+                            let lk = lh.lock().unwrap();
+                            let Some(k) = lk.get(idx).and_then(|x| x.clone()) else {
+                                return Ok(());
+                            };
+                            let Some(s) = cg.get(idx).and_then(|x| x.as_ref()) else {
+                                return Ok(());
+                            };
+                            let w = s.try_clone().map_err(|e| e.to_string())?;
+                            (k, w)
                         };
                         let line = encrypt_mesh_line(&k.tx, &inner)?;
-                        let Some(mut w) = clone_client_writer_at(clients, idx) else {
-                            return Ok(());
-                        };
                         w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
                         w.flush().map_err(|e| e.to_string())?;
                         return Ok(());
                     }
-                    let cg = clients.lock().unwrap();
-                    let lk = lh.lock().unwrap();
-                    for (idx, oc) in cg.iter().enumerate() {
-                        let Some(ref k) = lk.get(idx).and_then(|x| x.as_ref()) else {
-                            continue;
-                        };
-                        let line = encrypt_mesh_line(&k.tx, &inner)?;
-                        if let Some(s) = oc {
-                            if let Ok(mut w) = s.try_clone() {
-                                w.write_all(line.as_bytes())
-                                    .map_err(|e| e.to_string())?;
-                                w.flush().map_err(|e| e.to_string())?;
+                    let targets: Vec<(LanWireKeys, TcpStream)> = {
+                        let cg = clients.lock().unwrap();
+                        let lk = lh.lock().unwrap();
+                        let mut out = Vec::new();
+                        for (idx, oc) in cg.iter().enumerate() {
+                            let Some(k) = lk.get(idx).and_then(|x| x.as_ref()) else {
+                                continue;
+                            };
+                            let Some(s) = oc else {
+                                continue;
+                            };
+                            if let Ok(w) = s.try_clone() {
+                                out.push(((*k).clone(), w));
                             }
                         }
+                        out
+                    };
+                    for (k, mut w) in targets {
+                        let line = encrypt_mesh_line(&k.tx, &inner)?;
+                        w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                        w.flush().map_err(|e| e.to_string())?;
                     }
                     return Ok(());
                 }
@@ -1079,41 +1098,48 @@ fn host_relay_line_lan(
                 return Ok(());
             }
             let idx = (target - 1) as usize;
-            let k = {
-                let g = lan_host.lock().unwrap();
-                g.get(idx).and_then(|x| x.clone())
-            };
-            let Some(k) = k else {
-                return Ok(());
+            let (k, mut w) = {
+                let cg = clients.lock().unwrap();
+                let lk = lan_host.lock().unwrap();
+                let Some(k) = lk.get(idx).and_then(|x| x.clone()) else {
+                    return Ok(());
+                };
+                let Some(s) = cg.get(idx).and_then(|x| x.as_ref()) else {
+                    return Ok(());
+                };
+                let w = s.try_clone().map_err(|e| e.to_string())?;
+                (k, w)
             };
             let line = encrypt_mesh_line(&k.tx, &inner)?;
-            let Some(mut w) = clone_client_writer_at(clients, idx) else {
-                return Ok(());
-            };
             w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
             w.flush().map_err(|e| e.to_string())?;
         }
         None => {
-            let ks: Vec<Option<LanWireKeys>> = {
-                let g = lan_host.lock().unwrap();
-                g.iter().map(|x| x.clone()).collect()
-            };
-            let cg = clients.lock().unwrap();
-            for (idx, oc) in cg.iter().enumerate() {
-                let client_rank = (idx + 1) as u32;
-                if client_rank == sender_rank {
-                    continue;
-                }
-                let Some(ref k) = ks.get(idx).and_then(|x| x.as_ref()) else {
-                    continue;
-                };
-                let line = encrypt_mesh_line(&k.tx, &inner)?;
-                if let Some(s) = oc {
-                    if let Ok(mut w) = s.try_clone() {
-                        let _ = w.write_all(line.as_bytes());
-                        let _ = w.flush();
+            let targets: Vec<(LanWireKeys, TcpStream)> = {
+                let cg = clients.lock().unwrap();
+                let lk = lan_host.lock().unwrap();
+                let mut out = Vec::new();
+                for (idx, oc) in cg.iter().enumerate() {
+                    let client_rank = (idx + 1) as u32;
+                    if client_rank == sender_rank {
+                        continue;
+                    }
+                    let Some(k) = lk.get(idx).and_then(|x| x.as_ref()) else {
+                        continue;
+                    };
+                    let Some(s) = oc else {
+                        continue;
+                    };
+                    if let Ok(w) = s.try_clone() {
+                        out.push(((*k).clone(), w));
                     }
                 }
+                out
+            };
+            for (k, mut w) in targets {
+                let line = encrypt_mesh_line(&k.tx, &inner)?;
+                w.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                w.flush().map_err(|e| e.to_string())?;
             }
         }
     }

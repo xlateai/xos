@@ -239,7 +239,11 @@ pub fn encrypt_mesh_line(cipher: &Aes256Gcm, inner: &str) -> Result<String, Stri
 
 /// Decrypt wire v2 line to inner UTF-8 JSON.
 pub fn decrypt_mesh_line(cipher: &Aes256Gcm, line: &str) -> Result<String, String> {
-    let v: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+    let line = line.trim();
+    if line.is_empty() {
+        return Err("empty mesh line".to_string());
+    }
+    let v: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
     if v.get("v").and_then(|x| x.as_u64()) != Some(2) {
         return Err("expected encrypted mesh line v=2".to_string());
     }
