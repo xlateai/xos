@@ -34,6 +34,7 @@ const ARGON_P: u32 = 1;
 pub enum AuthError {
     Io(String),
     AlreadyExists,
+    NoIdentity,
     InvalidFile(String),
     WrongPassword,
     Crypto(String),
@@ -44,6 +45,7 @@ impl std::fmt::Display for AuthError {
         match self {
             AuthError::Io(s) => write!(f, "{s}"),
             AuthError::AlreadyExists => write!(f, "an identity already exists for this machine"),
+            AuthError::NoIdentity => write!(f, "no identity file found (nothing to delete)"),
             AuthError::InvalidFile(s) => write!(f, "{s}"),
             AuthError::WrongPassword => write!(f, "incorrect password"),
             AuthError::Crypto(s) => write!(f, "{s}"),
@@ -77,6 +79,15 @@ pub fn has_identity() -> bool {
     auth_json_path()
         .map(|p| p.exists())
         .unwrap_or(false)
+}
+
+/// Remove `identity.json` from the standard xos auth directory.
+pub fn delete_identity() -> Result<(), AuthError> {
+    let path = auth_json_path()?;
+    if !path.exists() {
+        return Err(AuthError::NoIdentity);
+    }
+    fs::remove_file(&path).map_err(|e| AuthError::Io(e.to_string()))
 }
 
 /// Legacy on-disk layout (`xos-auth-v1`): encrypted PKCS#8 private key.

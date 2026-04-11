@@ -76,6 +76,9 @@ enum Commands {
         /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
         #[arg(long)]
         offline: bool,
+        /// Remove the local identity file (`identity.json`) for this machine.
+        #[arg(long)]
+        delete: bool,
     },
 }
 
@@ -292,8 +295,24 @@ fn main() {
                 run_python_interactive();
             }
         }
-        Some(Commands::Login { offline }) => {
-            if offline {
+        Some(Commands::Login {
+            offline,
+            delete,
+        }) => {
+            if delete && offline {
+                eprintln!("❌ use either --delete or --offline, not both");
+                std::process::exit(1);
+            }
+            if delete {
+                use xos::auth::delete_identity;
+                match delete_identity() {
+                    Ok(()) => println!("Removed local identity (identity.json)."),
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if offline {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
@@ -308,7 +327,8 @@ fn main() {
             } else {
                 println!(
                     "Online sign-in (browser / OAuth) is not wired up yet.\n\
-                     For offline LAN mesh, run:  xos login --offline"
+                     For offline LAN mesh, run:  xos login --offline\n\
+                     To remove this machine's identity:  xos login --delete"
                 );
             }
         }

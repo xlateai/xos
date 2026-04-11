@@ -5,6 +5,6 @@
 mod store;
 
 pub use store::{
-    auth_data_dir, auth_json_path, has_identity, login_offline, rsa_sign, rsa_verify,
-    unlock_identity, AuthError, StoredIdentityFile, StoredIdentityV2, UnlockedIdentity,
+    auth_data_dir, auth_json_path, delete_identity, has_identity, login_offline, rsa_sign,
+    rsa_verify, unlock_identity, AuthError, StoredIdentityFile, StoredIdentityV2, UnlockedIdentity,
 };
