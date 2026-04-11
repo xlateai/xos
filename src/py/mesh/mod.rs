@@ -6,7 +6,7 @@ use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-use crate::auth::{has_identity, load_identity};
+use crate::auth::{has_identity, load_node_identity};
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
@@ -117,6 +117,7 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
         vm.ctx.new_int(p.from_rank as isize).into(),
         vm,
     )?;
+    dict.set_item("from_id", vm.ctx.new_str(p.from_id.as_str()).into(), vm)?;
     match &p.body {
         serde_json::Value::Object(o) => {
             for (k, v) in o {
@@ -172,8 +173,8 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     .to_string(),
             ));
         }
-        let unlocked = load_identity().map_err(|e| {
-            vm.new_runtime_error(format!("could not load identity: {e}"))
+        let unlocked = load_node_identity().map_err(|e| {
+            vm.new_runtime_error(format!("could not load node identity: {e}"))
         })?;
         let id = std::sync::Arc::new(unlocked);
         MeshSession::join_with_identity(&mesh_id, mode, id)
@@ -228,12 +229,36 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "mesh not connected; call xos.mesh.connect()".to_string(),
         ));
     };
+    let short = if m.node_id.len() >= 8 {
+        format!("{}…", &m.node_id[..8])
+    } else if m.node_id.is_empty() {
+        "—".to_string()
+    } else {
+        m.node_id.clone()
+    };
     let s = format!(
-        "[mesh n={} rank={}] >>> ",
+        "[mesh n={} rank={} id={}] >>> ",
         m.current_num_nodes(),
-        m.rank
+        m.rank,
+        short
     );
     Ok(vm.ctx.new_str(s).into())
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    Ok(vm.ctx.new_str(m.node_id.as_str()).into())
+}
+
+#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(vm.new_runtime_error("mesh not available".to_string()))
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
@@ -420,6 +445,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     );
     let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
     let _ = sub.set_attr(
+        "_mesh_node_id",
+        vm.new_function("_mesh_node_id", mesh_node_id),
+        vm,
+    );
+    let _ = sub.set_attr(
         "_mesh_broadcast_payload",
         vm.new_function("_mesh_broadcast_payload", mesh_broadcast_payload),
         vm,
@@ -448,6 +478,9 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
+    let _ = scope
+        .globals
+        .set_item("_mesh_node_id", sub.get_attr("_mesh_node_id", vm).unwrap(), vm);
     let _ = scope.globals.set_item(
         "_mesh_broadcast_payload",
         sub.get_attr("_mesh_broadcast_payload", vm).unwrap(),

@@ -1,9 +1,10 @@
-//! Persisted identity: `identity.json`
+//! Persisted identity (two files under the xos data dir):
+//! - **`authentication.json`** — account auth: RSA-2048 derived from username + password (**v4**).
+//! - **`node_identity.json`** — per-machine RSA keypair + **`node_name`**; LAN mesh uses this.
+//!   **`node_id`** is **SHA256(SPKI DER of the public key)** as hex — **not** stored (derive anytime).
 //!
-//! - **v4 (current):** RSA-2048 derived at login from username + password; **private + public PEM**
-//!   stored in the file. LAN mesh loads keys with **`load_identity()`** — no password, nothing in
-//!   keychain. Protect the file like any secret (permissions `0600` on Unix).
-//! - **v3 / v2 / v1:** legacy; still supported by **`unlock_identity(password)`** where applicable.
+//! Legacy **`identity.json`** is migrated to `authentication.json` + a generated `node_identity.json`
+//! on first load. **`v3`/`v2`/`v1`** still work via **`unlock_identity(password)`** when reading old layouts.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng as AesOsRng};
 use aes_gcm::{Aes256Gcm, Key};
@@ -12,6 +13,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::rand_core::OsRng as RsaOsRng;
 use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::{
     pkcs1v15::Signature, pkcs1v15::SigningKey, pkcs1v15::VerifyingKey, RsaPrivateKey, RsaPublicKey,
@@ -26,6 +28,7 @@ const AUTH_FORMAT_V1: &str = "xos-auth-v1";
 const AUTH_FORMAT_V2: &str = "xos-auth-v2";
 const AUTH_FORMAT_V3: &str = "xos-auth-v3";
 const AUTH_FORMAT_V4: &str = "xos-auth-v4";
+const NODE_FORMAT_V1: &str = "xos-node-v1";
 
 /// Lighter Argon2 for **v4 only** (one run at `xos login --offline`) so interactive login is not multi-minute.
 const V4_ARGON_M: u32 = 8192;
@@ -73,23 +76,62 @@ pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
     }
 }
 
+/// Account / authentication file (username + password-derived RSA, v4+).
+pub fn authentication_json_path() -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?.join("authentication.json"))
+}
+
+/// Per-machine node keys + friendly name (LAN mesh identity).
+pub fn node_identity_json_path() -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?.join("node_identity.json"))
+}
+
+/// Legacy path (pre-split). Prefer [`authentication_json_path`].
 pub fn auth_json_path() -> Result<PathBuf, AuthError> {
+    authentication_json_path()
+}
+
+fn legacy_identity_json_path() -> Result<PathBuf, AuthError> {
     Ok(auth_data_dir()?.join("identity.json"))
 }
 
-pub fn has_identity() -> bool {
-    auth_json_path()
+pub fn has_authentication() -> bool {
+    authentication_json_path()
         .map(|p| p.exists())
         .unwrap_or(false)
 }
 
-/// Remove `identity.json`.
+pub fn has_node_identity() -> bool {
+    node_identity_json_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+/// True when offline login has produced both auth + node files, or a legacy `identity.json` exists.
+pub fn has_identity() -> bool {
+    (has_authentication() && has_node_identity())
+        || legacy_identity_json_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+}
+
+/// Remove `authentication.json`, `node_identity.json`, and legacy `identity.json` if present.
 pub fn delete_identity() -> Result<(), AuthError> {
-    let path = auth_json_path()?;
-    if !path.exists() {
+    let mut removed = false;
+    for p in [
+        authentication_json_path()?,
+        node_identity_json_path()?,
+        legacy_identity_json_path()?,
+    ] {
+        if p.exists() {
+            fs::remove_file(&p).map_err(|e| AuthError::Io(e.to_string()))?;
+            removed = true;
+        }
+    }
+    if !removed {
         return Err(AuthError::NoIdentity);
     }
-    fs::remove_file(&path).map_err(|e| AuthError::Io(e.to_string()))
+    Ok(())
 }
 
 /// Legacy on-disk layout (`xos-auth-v1`): encrypted PKCS#8 private key.
@@ -111,6 +153,15 @@ pub struct StoredIdentityFile {
 pub struct StoredIdentityV4 {
     pub format: String,
     pub username: String,
+    pub private_key_pem: String,
+    pub public_key_pem: String,
+}
+
+/// Per-machine keys (`xos-node-v1`). Do **not** store `node_id` — use [`node_id_from_public_pem`].
+#[derive(Serialize, Deserialize)]
+pub struct StoredNodeIdentity {
+    pub format: String,
+    pub node_name: String,
     pub private_key_pem: String,
     pub public_key_pem: String,
 }
@@ -142,6 +193,94 @@ impl UnlockedIdentity {
         RsaPublicKey::from_public_key_pem(self.public_pem.as_str())
             .map_err(|e| AuthError::Crypto(e.to_string()))
     }
+}
+
+/// LAN mesh identity: unique RSA keypair per machine + display name.
+pub struct UnlockedNodeIdentity {
+    pub node_name: String,
+    rsa_private: RsaPrivateKey,
+    pub public_pem: String,
+}
+
+impl UnlockedNodeIdentity {
+    pub fn private_key(&self) -> &RsaPrivateKey {
+        &self.rsa_private
+    }
+
+    pub fn public_key(&self) -> Result<RsaPublicKey, AuthError> {
+        RsaPublicKey::from_public_key_pem(self.public_pem.as_str())
+            .map_err(|e| AuthError::Crypto(e.to_string()))
+    }
+
+    /// Stable id: **SHA256(SPKI DER of public key)** as lowercase hex (not persisted).
+    pub fn node_id(&self) -> String {
+        node_id_from_public_pem(self.public_pem.as_str()).unwrap_or_default()
+    }
+}
+
+/// Derive the stable node id from a public key PEM (same rule as [`UnlockedNodeIdentity::node_id`]).
+pub fn node_id_from_public_pem(public_pem: &str) -> Result<String, AuthError> {
+    let pk = RsaPublicKey::from_public_key_pem(public_pem.trim())
+        .map_err(|e| AuthError::Crypto(e.to_string()))?;
+    let der = pk
+        .to_public_key_der()
+        .map_err(|e| AuthError::Crypto(e.to_string()))?;
+    let hash = Sha256::digest(der.as_bytes());
+    Ok(hash.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+fn generate_node_rsa() -> Result<(RsaPrivateKey, String), AuthError> {
+    let mut rng = RsaOsRng;
+    let private =
+        RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| AuthError::Crypto(e.to_string()))?;
+    let public_pem = private
+        .to_public_key()
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
+    Ok((private, public_pem))
+}
+
+fn write_node_identity_file(node_name: &str, private: &RsaPrivateKey, public_pem: &str) -> Result<(), AuthError> {
+    let private_pem = private
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
+    let stored = StoredNodeIdentity {
+        format: NODE_FORMAT_V1.to_string(),
+        node_name: node_name.to_string(),
+        private_key_pem: private_pem,
+        public_key_pem: public_pem.to_string(),
+    };
+    let path = node_identity_json_path()?;
+    let json = serde_json::to_string_pretty(&stored).map_err(|e| AuthError::Io(e.to_string()))?;
+    fs::write(&path, json).map_err(|e| AuthError::Io(e.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// If `identity.json` exists, copy to `authentication.json` and create `node_identity.json` if missing; then remove legacy file.
+pub fn migrate_legacy_identity_file() -> Result<(), AuthError> {
+    let leg = legacy_identity_json_path()?;
+    let auth = authentication_json_path()?;
+    if leg.exists() && !auth.exists() {
+        fs::copy(&leg, &auth).map_err(|e| AuthError::Io(e.to_string()))?;
+    }
+    if auth.exists() && !has_node_identity() {
+        let (priv_k, pub_pem) = generate_node_rsa()?;
+        let node_name = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "migrated".to_string());
+        write_node_identity_file(&node_name, &priv_k, &pub_pem)?;
+    }
+    if leg.exists() && auth.exists() && has_node_identity() {
+        fs::remove_file(&leg).map_err(|e| AuthError::Io(e.to_string()))?;
+    }
+    Ok(())
 }
 
 fn derive_aes_key(password: &[u8], salt: &[u8], m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
@@ -186,14 +325,23 @@ fn rsa_deterministic_from_password(
     Ok((private, public_pem))
 }
 
-/// Create `identity.json` (v4): derive RSA once from username + password at login, then store
-/// PKCS#8 PEM private + public on disk. Password is not saved anywhere; mesh uses [`load_identity`].
-pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
+/// Create `authentication.json` (account RSA) and `node_identity.json` (per-machine RSA + `node_name`).
+/// Password is not stored; mesh loads node keys with [`load_node_identity`].
+pub fn login_offline(username: &str, password: &str, node_name: &str) -> Result<(), AuthError> {
     let dir = auth_data_dir()?;
     fs::create_dir_all(&dir).map_err(|e| AuthError::Io(e.to_string()))?;
-    let path = dir.join("identity.json");
-    if path.exists() {
+    if authentication_json_path()?.exists()
+        || node_identity_json_path()?.exists()
+        || legacy_identity_json_path()?.exists()
+    {
         return Err(AuthError::AlreadyExists);
+    }
+
+    let nn = node_name.trim();
+    if nn.is_empty() {
+        return Err(AuthError::InvalidFile(
+            "machine name (node_name) cannot be empty".to_string(),
+        ));
     }
 
     let u = username.trim();
@@ -217,14 +365,18 @@ pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
         public_key_pem: public_pem,
     };
 
+    let auth_path = authentication_json_path()?;
     let json = serde_json::to_string_pretty(&stored).map_err(|e| AuthError::Io(e.to_string()))?;
-    fs::write(&path, json).map_err(|e| AuthError::Io(e.to_string()))?;
+    fs::write(&auth_path, json).map_err(|e| AuthError::Io(e.to_string()))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(&auth_path, fs::Permissions::from_mode(0o600));
     }
+
+    let (node_priv, node_pub_pem) = generate_node_rsa()?;
+    write_node_identity_file(nn, &node_priv, &node_pub_pem)?;
 
     Ok(())
 }
@@ -242,10 +394,18 @@ fn identity_from_v4(stored: StoredIdentityV4) -> Result<UnlockedIdentity, AuthEr
     })
 }
 
-/// Load RSA identity from disk (v4 only). No password — private key is stored in `identity.json`.
-/// LAN mesh uses this; keep the file permissions tight.
+fn read_authentication_json_or_legacy() -> Result<String, AuthError> {
+    migrate_legacy_identity_file()?;
+    let auth = authentication_json_path()?;
+    if auth.exists() {
+        return fs::read_to_string(&auth).map_err(|e| AuthError::Io(e.to_string()));
+    }
+    Err(AuthError::NoIdentity)
+}
+
+/// Load account RSA from `authentication.json` (v4). Legacy `identity.json` is migrated first.
 pub fn load_identity() -> Result<UnlockedIdentity, AuthError> {
-    let raw = fs::read_to_string(auth_json_path()?).map_err(|e| AuthError::Io(e.to_string()))?;
+    let raw = read_authentication_json_or_legacy()?;
     let v: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
     let fmt = v
@@ -254,13 +414,31 @@ pub fn load_identity() -> Result<UnlockedIdentity, AuthError> {
         .ok_or_else(|| AuthError::InvalidFile("missing format".to_string()))?;
     if fmt != AUTH_FORMAT_V4 {
         return Err(AuthError::InvalidFile(
-            "LAN mesh needs xos-auth-v4 identity. Run:  xos login --delete  then  xos login --offline"
+            "account auth needs xos-auth-v4 in authentication.json. Run:  xos login --delete  then  xos login --offline"
                 .to_string(),
         ));
     }
     let stored: StoredIdentityV4 =
         serde_json::from_value(v).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
     identity_from_v4(stored)
+}
+
+/// Load per-machine LAN identity from `node_identity.json`.
+pub fn load_node_identity() -> Result<UnlockedNodeIdentity, AuthError> {
+    migrate_legacy_identity_file()?;
+    let raw = fs::read_to_string(node_identity_json_path()?).map_err(|e| AuthError::Io(e.to_string()))?;
+    let stored: StoredNodeIdentity =
+        serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+    if stored.format != NODE_FORMAT_V1 {
+        return Err(AuthError::InvalidFile("unknown node identity format".to_string()));
+    }
+    let rsa_private = RsaPrivateKey::from_pkcs8_pem(stored.private_key_pem.trim())
+        .map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+    Ok(UnlockedNodeIdentity {
+        node_name: stored.node_name,
+        rsa_private,
+        public_pem: stored.public_key_pem,
+    })
 }
 
 fn unlock_identity_encrypted_pkcs8(stored: StoredIdentityFile, password: &str) -> Result<UnlockedIdentity, AuthError> {
@@ -330,8 +508,14 @@ fn unlock_identity_v2(stored: StoredIdentityV2, password: &str) -> Result<Unlock
 
 /// Load RSA identity: v1/v3 decrypt PKCS#8; v2 derives keys from password; v4 loads PEM from disk (password ignored).
 pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
-    let path = auth_json_path()?;
-    let raw = fs::read_to_string(&path).map_err(|e| AuthError::Io(e.to_string()))?;
+    migrate_legacy_identity_file()?;
+    let path = authentication_json_path()?;
+    let raw = if path.exists() {
+        fs::read_to_string(&path).map_err(|e| AuthError::Io(e.to_string()))?
+    } else {
+        let leg = legacy_identity_json_path()?;
+        fs::read_to_string(&leg).map_err(|e| AuthError::Io(e.to_string()))?
+    };
     let format: String = serde_json::from_str::<serde_json::Value>(&raw)
         .map_err(|e| AuthError::InvalidFile(e.to_string()))?
         .get("format")

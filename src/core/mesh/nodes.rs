@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Globally unique node id (RFC 4122-style UUID v4 string).
+/// Stable node id: **64-char lowercase hex** = SHA256(SPKI DER) of the node’s RSA public key
+/// (see `crate::auth::node_id_from_public_pem`). Not a random UUID.
 pub type NodeId = String;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,7 +46,7 @@ impl Roster {
     }
 }
 
-/// New random node id (UUID v4).
+/// Deprecated placeholder: prefer deriving the id from the node public key (`auth::node_id_from_public_pem`).
 pub fn new_node_id() -> NodeId {
     uuid::Uuid::new_v4().to_string()
 }

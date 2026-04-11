@@ -29,6 +29,10 @@ class Mesh:
     def num_nodes(self):
         return _mesh_num_nodes()
 
+    def node_id(self):
+        """This session’s stable node id (64-char hex = SHA256 of node public key)."""
+        return _mesh_node_id()
+
     def prompt(self):
         """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
         return _mesh_prompt()
@@ -78,8 +82,8 @@ class _MeshNode:
 def connect(id="default", mode="local"):
     """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
     ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, run
-    ``xos login --offline`` first so ``identity.json`` holds your RSA keys; connect loads them
-    from disk (no password prompt).
+    ``xos login --offline`` first so ``authentication.json`` and ``node_identity.json`` exist;
+    LAN uses the per-machine node keypair from ``node_identity.json`` (no password prompt).
     """
     mode = (mode or "local").lower()
     if mode == "online":

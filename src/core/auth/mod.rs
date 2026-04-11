@@ -1,11 +1,13 @@
-//! Offline identity: RSA-2048 for LAN mesh. **v4** stores PKCS#8 + public PEM in `identity.json`;
-//! password is used only at `xos login --offline`. **v3**/**v2**/**v1** legacy formats still unlock via password.
+//! Offline identity: **`authentication.json`** (account RSA) + **`node_identity.json`** (per-machine
+//! LAN keys + `node_name`). **v4** account format; **v3**/**v2**/**v1** legacy unlock via password.
 //! Storage: Windows `%LOCALAPPDATA%\\xos\\`, Unix/macOS `~/.xos/`.
 
 mod store;
 
 pub use store::{
-    auth_data_dir, auth_json_path, delete_identity, has_identity, load_identity, login_offline,
-    rsa_sign, rsa_verify, unlock_identity, AuthError, StoredIdentityFile, StoredIdentityV2,
-    StoredIdentityV4, UnlockedIdentity,
+    auth_data_dir, authentication_json_path, auth_json_path, delete_identity, has_authentication,
+    has_identity, has_node_identity, load_identity, load_node_identity, login_offline,
+    migrate_legacy_identity_file, node_identity_json_path, node_id_from_public_pem, rsa_sign,
+    rsa_verify, unlock_identity, AuthError, StoredIdentityFile, StoredIdentityV2, StoredIdentityV4,
+    StoredNodeIdentity, UnlockedIdentity, UnlockedNodeIdentity,
 };

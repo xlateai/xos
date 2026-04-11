@@ -26,9 +26,10 @@ def main() -> None:
         packets = mesh.receive(id="message", wait=False, latest_only=False)
         if packets:
             for packet in packets:
-                who = getattr(packet, "from_rank", "?")
+                sid = getattr(packet, "from_id", "") or ""
+                short = (sid[:8] + "…") if len(sid) >= 8 else (sid or "?")
                 text = getattr(packet, "msg", "")
-                print(f"[{who}] {text}")
+                print(f"[rank {getattr(packet, 'from_rank', '?')} id {short}] {text}")
 
         line = xos.input(mesh.prompt(), wait=False)
         if line is not None:

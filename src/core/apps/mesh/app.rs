@@ -33,19 +33,19 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
         }
     };
 
-    let editor = Arc::new(Mutex::new(super::terminal::LineEditor::new()));
+    let editor = Arc::new(Mutex::new(crate::mesh::terminal::LineEditor::new()));
     if let Ok(mut g) = editor.lock() {
         if let Err(e) = g.enter() {
             eprintln!("xos: mesh terminal setup failed: {e}");
         }
     }
-    *super::state::LINE_EDITOR.lock().unwrap() = Some(Arc::clone(&editor));
+    *crate::mesh::state::LINE_EDITOR.lock().unwrap() = Some(Arc::clone(&editor));
 
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     {
         use std::sync::atomic::Ordering;
         let _ = ctrlc::set_handler(move || {
-            super::state::INPUT_INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
+            crate::mesh::state::INPUT_INTERRUPT_REQUESTED.store(true, Ordering::SeqCst);
         });
     }
 
@@ -74,8 +74,8 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
         Some(print_cb),
     );
 
-    *super::state::LINE_EDITOR.lock().unwrap() = None;
-    *super::state::MESH.lock().unwrap() = None;
+    *crate::mesh::state::LINE_EDITOR.lock().unwrap() = None;
+    *crate::mesh::state::MESH.lock().unwrap() = None;
     if let Ok(mut g) = editor.lock() {
         g.leave();
     }
@@ -105,7 +105,7 @@ pub fn run_mesh_app() {
             std::process::exit(1);
         }
     };
-    let script = root.join("src/core/mesh/mesh.py");
+    let script = root.join("src/core/apps/mesh/mesh.py");
     if !script.exists() {
         eprintln!("❌ mesh script not found: {}", script.display());
         std::process::exit(1);

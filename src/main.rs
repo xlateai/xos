@@ -14,10 +14,16 @@ fn login_offline_interactive() -> Result<(), String> {
 
     if has_identity() {
         let p = auth_data_dir()
-            .map(|d| d.join("identity.json").display().to_string())
-            .unwrap_or_else(|_| "~/.xos/identity.json".to_string());
+            .map(|d| {
+                format!(
+                    "{} + {}",
+                    d.join("authentication.json").display(),
+                    d.join("node_identity.json").display()
+                )
+            })
+            .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
         return Err(format!(
-            "identity already exists ({p}). Remove it first only if you intend to replace this machine's key."
+            "identity already exists ({p}). Remove with xos login --delete only if you intend to replace this machine's keys."
         ));
     }
     let username: String = Input::new()
@@ -29,7 +35,22 @@ fn login_offline_interactive() -> Result<(), String> {
         .with_confirmation("Confirm password", "Passwords do not match")
         .interact()
         .map_err(|e| e.to_string())?;
-    login_offline(username.trim(), &password).map_err(|e| e.to_string())
+    let def_name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "machine".to_string());
+    let machine: String = Input::new()
+        .with_prompt(&format!(
+            "Machine name (node_name, shown in LAN mesh) [default: {def_name}]"
+        ))
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let machine = if machine.trim().is_empty() {
+        def_name
+    } else {
+        machine.trim().to_string()
+    };
+    login_offline(username.trim(), &password, &machine).map_err(|e| e.to_string())
 }
 
 #[derive(Parser)]
@@ -76,7 +97,7 @@ enum Commands {
         /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
         #[arg(long)]
         offline: bool,
-        /// Remove the local identity file (`identity.json`) for this machine.
+        /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
     },
@@ -306,7 +327,9 @@ fn main() {
             if delete {
                 use xos::auth::delete_identity;
                 match delete_identity() {
-                    Ok(()) => println!("Removed local identity (identity.json)."),
+                    Ok(()) => println!(
+                        "Removed local identity (authentication.json, node_identity.json, legacy identity.json)."
+                    ),
                     Err(e) => {
                         eprintln!("❌ {e}");
                         std::process::exit(1);
@@ -316,7 +339,7 @@ fn main() {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
-                            "Saved identity (RSA keys in identity.json; password is not stored. LAN mesh loads the key from disk — no password prompt.)"
+                            "Saved identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
                         );
                     }
                     Err(e) => {

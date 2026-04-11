@@ -12,12 +12,25 @@ use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use x25519_dalek::{EphemeralSecret, PublicKey};
-use crate::auth::{rsa_sign, rsa_verify, UnlockedIdentity};
+use crate::auth::{node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity};
+
+const HS_VER: u32 = 2;
+
+fn expect_node_id(nid: &str, pk_pem: &str) -> Result<(), String> {
+    let exp = node_id_from_public_pem(pk_pem).map_err(|e| e.to_string())?;
+    if exp != nid {
+        return Err("LAN handshake: node id does not match public key".to_string());
+    }
+    Ok(())
+}
 
 #[derive(Serialize, Deserialize)]
 struct HsClientHello {
     hs: u32,
-    u: String,
+    /// Friendly machine name.
+    nn: String,
+    /// SHA256(SPKI DER) hex of `pk` — redundant but lets peers route before parsing PEM.
+    nid: String,
     pk: String,
     ec: String,
     nc: String,
@@ -26,6 +39,8 @@ struct HsClientHello {
 #[derive(Serialize, Deserialize)]
 struct HsServerHello {
     hs: u32,
+    nn: String,
+    nid: String,
     pk: String,
     ec: String,
     ns: String,
@@ -77,7 +92,7 @@ fn hkdf_server(shared: &[u8]) -> Result<LanWireKeys, String> {
 /// Returns wire keys and `(read_half, write_half)` for the TCP connection after handshake.
 pub fn client_handshake(
     stream: TcpStream,
-    id: &UnlockedIdentity,
+    id: &UnlockedNodeIdentity,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
@@ -87,9 +102,11 @@ pub fn client_handshake(
     let mut nc = [0u8; 32];
     getrandom::fill(&mut nc).map_err(|e| format!("{e:?}"))?;
 
+    let nid = id.node_id();
     let hello = HsClientHello {
-        hs: 1,
-        u: id.username.clone(),
+        hs: HS_VER,
+        nn: id.node_name.clone(),
+        nid,
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_pub.as_bytes()),
         nc: B64.encode(nc),
@@ -106,9 +123,10 @@ pub fn client_handshake(
         return Err("connection closed during LAN handshake".to_string());
     }
     let srv: HsServerHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if srv.hs != 1 {
+    if srv.hs != HS_VER {
         return Err("LAN handshake: bad server hello".to_string());
     }
+    expect_node_id(&srv.nid, &srv.pk)?;
     let ec_s_bytes = B64.decode(&srv.ec).map_err(|e| e.to_string())?;
     let ec_s_arr: [u8; 32] = ec_s_bytes
         .as_slice()
@@ -126,7 +144,7 @@ pub fn client_handshake(
     sign_msg.extend_from_slice(ec_pub.as_bytes());
     let sig = rsa_sign(id.private_key(), &sign_msg).map_err(|e| e.to_string())?;
     let sig_line = HsSig {
-        hs: 1,
+        hs: HS_VER,
         sig: B64.encode(&sig),
     };
     let line = serde_json::to_string(&sig_line).map_err(|e| e.to_string())?;
@@ -138,6 +156,9 @@ pub fn client_handshake(
     buf.clear();
     reader.read_line(&mut buf).map_err(|e| e.to_string())?;
     let srv_sig: HsSig = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
+    if srv_sig.hs != HS_VER {
+        return Err("LAN handshake: bad server sig".to_string());
+    }
     let sig_bytes = B64.decode(&srv_sig.sig).map_err(|e| e.to_string())?;
     let mut verify_msg = Vec::with_capacity(nc.len() + 64);
     verify_msg.extend_from_slice(&nc);
@@ -151,7 +172,7 @@ pub fn client_handshake(
 
 pub fn server_handshake(
     stream: TcpStream,
-    id: &UnlockedIdentity,
+    id: &UnlockedNodeIdentity,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
@@ -162,9 +183,10 @@ pub fn server_handshake(
         return Err("connection closed during LAN handshake".to_string());
     }
     let cli: HsClientHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if cli.hs != 1 {
+    if cli.hs != HS_VER {
         return Err("LAN handshake: bad client hello".to_string());
     }
+    expect_node_id(&cli.nid, &cli.pk)?;
     let pk_c = RsaPublicKey::from_public_key_pem(cli.pk.as_str()).map_err(|e| e.to_string())?;
     let ec_c_bytes = B64.decode(&cli.ec).map_err(|e| e.to_string())?;
     let ec_c_arr: [u8; 32] = ec_c_bytes
@@ -179,7 +201,9 @@ pub fn server_handshake(
     getrandom::fill(&mut ns).map_err(|e| format!("{e:?}"))?;
 
     let hello = HsServerHello {
-        hs: 1,
+        hs: HS_VER,
+        nn: id.node_name.clone(),
+        nid: id.node_id(),
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_s.as_bytes()),
         ns: B64.encode(ns),
@@ -193,6 +217,9 @@ pub fn server_handshake(
     buf.clear();
     reader.read_line(&mut buf).map_err(|e| e.to_string())?;
     let cli_sig: HsSig = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
+    if cli_sig.hs != HS_VER {
+        return Err("LAN handshake: bad client sig".to_string());
+    }
     let sig_bytes = B64.decode(&cli_sig.sig).map_err(|e| e.to_string())?;
     let mut verify_msg = Vec::with_capacity(ns.len() + 64);
     verify_msg.extend_from_slice(&ns);
@@ -209,7 +236,7 @@ pub fn server_handshake(
     sign_msg.extend_from_slice(ec_s.as_bytes());
     let sig = rsa_sign(id.private_key(), &sign_msg).map_err(|e| e.to_string())?;
     let sig_line = HsSig {
-        hs: 1,
+        hs: HS_VER,
         sig: B64.encode(&sig),
     };
     let line = serde_json::to_string(&sig_line).map_err(|e| e.to_string())?;
