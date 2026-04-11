@@ -784,6 +784,20 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_down", (x, y));
             });
         }
@@ -794,6 +808,20 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
             });
         }
@@ -804,14 +832,42 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_move", (x, y));
             });
         }
     }
 
-    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
             });
         }

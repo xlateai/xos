@@ -97,27 +97,17 @@ class RemoteStreamer(xos.Application):
         packets = mesh.receive(id=KIND_INPUT, wait=False, latest_only=False)
         if not packets:
             return
-        payload = _coalesce_input(packets)
-        if not payload:
-            return
-        xos.mouse.apply_remote_input(payload)
-
-
-def _coalesce_input(packets):
-    """Last sample wins for position and buttons; scroll sums."""
-    if not packets:
-        return None
-    last = packets[-1]
-    scroll_total = 0.0
-    for p in packets:
-        scroll_total += float(getattr(p, "scroll", 0.0) or 0.0)
-    return {
-        "nx": float(getattr(last, "nx", 0.5)),
-        "ny": float(getattr(last, "ny", 0.5)),
-        "left": bool(getattr(last, "left", False)),
-        "right": bool(getattr(last, "right", False)),
-        "scroll": scroll_total,
-    }
+        # Preserve press/release transitions by applying each packet in order.
+        for packet in packets:
+            xos.mouse.apply_remote_input(
+                {
+                    "nx": float(getattr(packet, "nx", 0.5)),
+                    "ny": float(getattr(packet, "ny", 0.5)),
+                    "left": bool(getattr(packet, "left", False)),
+                    "right": bool(getattr(packet, "right", False)),
+                    "scroll": float(getattr(packet, "scroll", 0.0) or 0.0),
+                }
+            )
 
 
 def main():
