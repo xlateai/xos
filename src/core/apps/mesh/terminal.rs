@@ -1,14 +1,14 @@
-//! Line editor + "print above the prompt" for synchronous polling loops (no Python threads/async).
+//! Line-buffered stdin for `xos.input` while mesh runs.
+//!
+//! Uses normal cooked console / TTY line editing (`read_line`), not raw mode or per-key console
+//! reads. That matches typical CLI tools and avoids behavior that security products often flag
+//! (low-level keyboard capture).
 
 use super::state::INPUT_INTERRUPT_REQUESTED;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-
-/// `read_line(false)` waits this long for the first key event before returning `None` (non-busy poll).
-const INPUT_POLL_IDLE: Duration = Duration::from_millis(32);
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 /// Returned from [`LineEditor::read_line`] on Ctrl+C; mapped to `KeyboardInterrupt` in `xos.input`.
 pub const INPUT_INTERRUPT: &str = "xos:input_interrupt";
@@ -20,132 +20,102 @@ fn poll_os_interrupt() -> Result<(), String> {
     Ok(())
 }
 
+struct CookedStdin {
+    rx: mpsc::Receiver<String>,
+    _join: thread::JoinHandle<()>,
+}
+
+impl CookedStdin {
+    fn spawn(prompt: Arc<Mutex<String>>) -> Self {
+        let (tx, rx) = mpsc::channel::<String>();
+        let p = Arc::clone(&prompt);
+        let join = thread::spawn(move || Self::thread_main(p, tx));
+        Self { rx, _join: join }
+    }
+
+    fn thread_main(prompt: Arc<Mutex<String>>, tx: mpsc::Sender<String>) {
+        loop {
+            let pr = match prompt.lock() {
+                Ok(g) => g.clone(),
+                Err(_) => break,
+            };
+            print!("{}", pr);
+            let _ = io::stdout().flush();
+            let mut line = String::new();
+            match io::stdin().lock().read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if tx.send(line.trim_end().to_string()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 pub struct LineEditor {
-    prompt: String,
-    buffer: String,
-    raw_enabled: bool,
+    /// Shared with the stdin helper thread for `set_prompt`.
+    prompt: Arc<Mutex<String>>,
+    /// Lazily started on first `read_line` so Python can print a banner before the first prompt.
+    cooked: Option<CookedStdin>,
 }
 
 impl LineEditor {
     pub fn new() -> Self {
         Self {
-            prompt: ">>> ".to_string(),
-            buffer: String::new(),
-            raw_enabled: false,
+            prompt: Arc::new(Mutex::new(">>> ".to_string())),
+            cooked: None,
         }
     }
 
+    /// Prepares for input; does not touch raw mode or install keyboard hooks.
     pub fn enter(&mut self) -> Result<(), String> {
-        let stdout = io::stdout();
-        let stdin = io::stdin();
-        if !stdout.is_terminal() || !stdin.is_terminal() {
-            return Ok(());
-        }
-        enable_raw_mode().map_err(|e| e.to_string())?;
-        self.raw_enabled = true;
-        self.redraw_bottom()?;
         Ok(())
     }
 
     pub fn set_prompt(&mut self, prompt: String) {
-        self.prompt = prompt;
+        if let Ok(mut g) = self.prompt.lock() {
+            *g = prompt;
+        }
     }
 
-    fn redraw_bottom(&mut self) -> Result<(), String> {
-        print!("\r\x1b[K{}{}", self.prompt, self.buffer);
-        io::stdout().flush().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    /// Print a message above the current input line, then redraw prompt + partial input.
-    pub fn print_above(&mut self, text: &str) {
-        let trim = text.trim_end_matches('\n');
-        print!("\r\x1b[K\n{}\n", trim);
-        let _ = io::stdout().flush();
-        let _ = self.redraw_bottom();
+    fn prompt_str(&self) -> String {
+        self.prompt.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     pub fn read_line(&mut self, wait: bool) -> Result<Option<String>, String> {
-        if !io::stdout().is_terminal() {
-            if wait {
-                return self.read_line_simple_blocking();
+        poll_os_interrupt()?;
+
+        if io::stdout().is_terminal() && io::stdin().is_terminal() {
+            if self.cooked.is_none() {
+                self.cooked = Some(CookedStdin::spawn(Arc::clone(&self.prompt)));
             }
-            return Ok(None);
-        }
-        if !self.raw_enabled {
-            if wait {
-                return self.read_line_simple_blocking();
+            if let Some(ref c) = self.cooked {
+                return if wait {
+                    Ok(Some(
+                        c.rx
+                            .recv()
+                            .map_err(|_| "stdin channel closed".to_string())?,
+                    ))
+                } else {
+                    Ok(c.rx.try_recv().ok())
+                };
             }
-            return Ok(None);
         }
 
         if wait {
-            loop {
-                poll_os_interrupt()?;
-                let ev = event::read().map_err(|e| e.to_string())?;
-                if let Some(line) = self.handle_event(ev)? {
-                    return Ok(Some(line));
-                }
-            }
+            self.read_line_simple_blocking()
         } else {
-            // First wait (up to POLL_IDLE) for input; then drain any further ready events without blocking.
-            poll_os_interrupt()?;
-            if event::poll(INPUT_POLL_IDLE).map_err(|e| e.to_string())? {
-                loop {
-                    poll_os_interrupt()?;
-                    let ev = event::read().map_err(|e| e.to_string())?;
-                    if let Some(line) = self.handle_event(ev)? {
-                        return Ok(Some(line));
-                    }
-                    if !event::poll(Duration::ZERO).map_err(|e| e.to_string())? {
-                        break;
-                    }
-                }
-            }
             Ok(None)
         }
     }
 
-    fn handle_event(&mut self, ev: Event) -> Result<Option<String>, String> {
-        if let Event::Key(key) = ev {
-            if key.kind == KeyEventKind::Release {
-                return Ok(None);
-            }
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
-                    return Err(INPUT_INTERRUPT.to_string());
-                }
-            }
-            if matches!(key.code, KeyCode::Char('\x03')) {
-                return Err(INPUT_INTERRUPT.to_string());
-            }
-            match key.code {
-                KeyCode::Enter => {
-                    let line = std::mem::take(&mut self.buffer);
-                    print!("\r\n");
-                    let _ = io::stdout().flush();
-                    self.redraw_bottom()?;
-                    return Ok(Some(line));
-                }
-                KeyCode::Char(c) => {
-                    self.buffer.push(c);
-                    self.redraw_bottom()?;
-                }
-                KeyCode::Backspace => {
-                    self.buffer.pop();
-                    self.redraw_bottom()?;
-                }
-                KeyCode::Esc => {
-                    self.buffer.clear();
-                    self.redraw_bottom()?;
-                }
-                _ => {}
-            }
-        }
-        Ok(None)
-    }
-
     fn read_line_simple_blocking(&mut self) -> Result<Option<String>, String> {
+        let pr = self.prompt_str();
+        print!("{}", pr);
+        let _ = io::stdout().flush();
         let mut s = String::new();
         let n = io::stdin()
             .lock()
@@ -157,11 +127,15 @@ impl LineEditor {
         Ok(Some(s.trim_end().to_string()))
     }
 
+    /// Print a message above the current input line (best-effort without raw-mode redraw).
+    pub fn print_above(&mut self, text: &str) {
+        let trim = text.trim_end_matches('\n');
+        print!("\n{}\n", trim);
+        let _ = io::stdout().flush();
+    }
+
     pub fn leave(&mut self) {
-        if self.raw_enabled {
-            let _ = disable_raw_mode();
-            self.raw_enabled = false;
-        }
+        self.cooked = None;
     }
 }
 

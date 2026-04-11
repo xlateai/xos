@@ -10918,7 +10918,6 @@ dependencies = [
  "clap",
  "console_error_panic_hook",
  "cpal",
- "crossterm",
  "ctrlc",
  "delaunator",
  "dialoguer",
