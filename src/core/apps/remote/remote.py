@@ -23,6 +23,8 @@ STREAMER_RANK = 1
 mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
 RANK = mesh.rank()
 
+print("Rank:", RANK)
+
 
 def _norm_pointer(x, y, width, height):
     fw = max(float(width), 1.0)
