@@ -177,7 +177,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             vm.new_runtime_error(format!("could not load node identity: {e}"))
         })?;
         let id = std::sync::Arc::new(unlocked);
-        MeshSession::join_with_identity(&mesh_id, mode, id)
+        MeshSession::join_with_identity(&mesh_id, mode, id, None)
     } else {
         MeshSession::join(&mesh_id, mode)
     }

@@ -278,6 +278,27 @@ fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, 
     (idx, rank, num_nodes_after)
 }
 
+/// When `Some(max)`, refuse new TCP peers once the mesh already has `max` nodes (coordinator + clients).
+fn host_has_peer_capacity(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    max_total_nodes: Option<u32>,
+) -> bool {
+    let Some(max) = max_total_nodes else {
+        return true;
+    };
+    if max <= 1 {
+        return false;
+    }
+    let max_clients = max.saturating_sub(1);
+    let connected = clients
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|oc| oc.is_some())
+        .count() as u32;
+    connected < max_clients
+}
+
 fn clone_client_writer_at(
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
     idx: usize,
@@ -452,6 +473,7 @@ fn mesh_session_from_host_listener(
     listener: TcpListener,
     lan_discovery_mesh_id: Option<&str>,
     identity: Option<Arc<UnlockedNodeIdentity>>,
+    max_total_nodes: Option<u32>,
 ) -> Result<MeshSession, String> {
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -492,6 +514,7 @@ fn mesh_session_from_host_listener(
             sd,
             id_c,
             lan_h,
+            max_total_nodes,
         );
     });
 
@@ -519,6 +542,7 @@ fn mesh_session_from_host_listener(
 fn mesh_session_from_host_listener(
     listener: TcpListener,
     lan_discovery_mesh_id: Option<&str>,
+    max_total_nodes: Option<u32>,
 ) -> Result<MeshSession, String> {
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -550,6 +574,7 @@ fn mesh_session_from_host_listener(
             clients_a,
             num_nodes_a,
             sd,
+            max_total_nodes,
         );
     });
 
@@ -783,7 +808,7 @@ impl MeshSession {
                 MeshMode::Local => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                     match TcpListener::bind(loopback) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, None),
+                        Ok(listener) => mesh_session_from_host_listener(listener, None, None),
                         Err(_) => mesh_session_from_client_addr(loopback),
                     }
                 }
@@ -797,7 +822,7 @@ impl MeshSession {
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
                     match TcpListener::bind(any) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
+                        Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id), None),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                             thread::sleep(Duration::from_millis(80));
                             if let Ok(s) = try_mesh_client_once(loopback) {
@@ -822,7 +847,7 @@ impl MeshSession {
                 MeshMode::Local => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                     match TcpListener::bind(loopback) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, None, None),
+                        Ok(listener) => mesh_session_from_host_listener(listener, None, None, None),
                         Err(_) => mesh_session_from_client_addr(loopback, None),
                     }
                 }
@@ -839,6 +864,7 @@ impl MeshSession {
         mesh_id: &str,
         mode: MeshMode,
         identity: Arc<UnlockedNodeIdentity>,
+        max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
         let port = port_for_mesh_id(mesh_id);
         match mode {
@@ -862,6 +888,7 @@ impl MeshSession {
                         listener,
                         Some(mesh_id),
                         Some(identity),
+                        max_total_nodes,
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                         thread::sleep(Duration::from_millis(80));
@@ -1034,12 +1061,16 @@ fn host_accept_loop(
     clients: Arc<Mutex<Vec<Option<TcpStream>>>>,
     num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
+    max_total_nodes: Option<u32>,
 ) {
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
         }
         let Ok(mut stream) = conn else { continue };
+        if !host_has_peer_capacity(&clients, max_total_nodes) {
+            continue;
+        }
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
         stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
@@ -1086,12 +1117,16 @@ fn host_accept_loop(
     shutdown: Arc<AtomicU32>,
     identity: Option<Arc<UnlockedNodeIdentity>>,
     lan_host: Option<Arc<Mutex<Vec<Option<LanWireKeys>>>>>,
+    max_total_nodes: Option<u32>,
 ) {
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
         }
         let Ok(mut stream) = conn else { continue };
+        if !host_has_peer_capacity(&clients, max_total_nodes) {
+            continue;
+        }
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
         stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);

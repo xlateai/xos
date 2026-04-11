@@ -81,5 +81,6 @@ define_apps! {
     IosSensors => ios_sensors::IosSensorsApp,
     AudioRelay => audio_relay::AudioRelay,
     Overlay => overlay::OverlayApp,
+    Remote => remote::RemoteApp,
     Mesh => mesh::MeshApp,
 }
