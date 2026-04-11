@@ -2,6 +2,8 @@
 //! [`runtime::MeshSession`]; TLS / auth / `online` are future work.
 
 mod mesh;
+#[cfg(not(target_arch = "wasm32"))]
+mod lan_crypto;
 pub mod runtime;
 pub mod state;
 pub mod terminal;

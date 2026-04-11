@@ -7,6 +7,31 @@ use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
 use xos::python_api::{run_python_app, run_python_interactive};
 
+#[cfg(not(target_arch = "wasm32"))]
+fn login_offline_interactive() -> Result<(), String> {
+    use dialoguer::{Input, Password};
+    use xos::auth::{auth_data_dir, has_identity, login_offline};
+
+    if has_identity() {
+        let p = auth_data_dir()
+            .map(|d| d.join("identity.json").display().to_string())
+            .unwrap_or_else(|_| "~/.xos/identity.json".to_string());
+        return Err(format!(
+            "identity already exists ({p}). Remove it first only if you intend to replace this machine's key."
+        ));
+    }
+    let username: String = Input::new()
+        .with_prompt("Username")
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let password = Password::new()
+        .with_prompt("Password")
+        .with_confirmation("Confirm password", "Passwords do not match")
+        .interact()
+        .map_err(|e| e.to_string())?;
+    login_offline(username.trim(), &password).map_err(|e| e.to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "xos")]
 #[command(about = "Experimental OS Window Manager", disable_version_flag = true)]
@@ -269,14 +294,19 @@ fn main() {
         }
         Some(Commands::Login { offline }) => {
             if offline {
-                println!(
-                    "xos login --offline: placeholder — no credential file is written yet.\n\
-                     Intended: temporary session until you run `xos login` without --offline."
-                );
+                match login_offline_interactive() {
+                    Ok(()) => {
+                        println!("Saved identity. LAN mesh can use xos.mesh.connect(mode=\"lan\") after unlock.");
+                    }
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
             } else {
                 println!(
-                    "xos login: placeholder — browser OAuth / API key flow is not wired up yet.\n\
-                     Intended: open your auth site (e.g. Sign in with Google) and store an API key locally."
+                    "Online sign-in (browser / OAuth) is not wired up yet.\n\
+                     For offline LAN mesh, run:  xos login --offline"
                 );
             }
         }

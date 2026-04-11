@@ -5,6 +5,8 @@ use crate::apps::mesh::runtime::{MeshMode, MeshSession, Packet};
 use crate::apps::mesh::state::{LINE_EDITOR, MESH};
 use crate::apps::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+use crate::auth::{has_identity, unlock_identity};
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
@@ -163,7 +165,37 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     };
 
-    let session = MeshSession::join(&mesh_id, mode).map_err(|e| vm.new_runtime_error(e))?;
+    let session = if mode == MeshMode::Lan {
+        if !has_identity() {
+            return Err(vm.new_runtime_error(
+                "xos.mesh.connect(mode='lan') requires a local identity. Run `xos login` first; if you are offline, use `xos login --offline` to create keys on this machine, then connect again."
+                    .to_string(),
+            ));
+        }
+        let password: String =
+            if let Some(p) = args.kwargs.get("password") {
+                if vm.is_none(p) {
+                    return Err(vm.new_type_error(
+                        "password=None is invalid for LAN mesh; omit password to prompt, or pass a str"
+                            .to_string(),
+                    ));
+                }
+                p.clone().try_into_value(vm)?
+            } else {
+                dialoguer::Password::new()
+                    .with_prompt("Password (LAN identity)")
+                    .interact()
+                    .map_err(|e| vm.new_runtime_error(e.to_string()))?
+            };
+        let unlocked = unlock_identity(password.trim()).map_err(|e| {
+            vm.new_runtime_error(format!("could not unlock identity: {e}"))
+        })?;
+        let id = std::sync::Arc::new(unlocked);
+        MeshSession::join_with_identity(&mesh_id, mode, id)
+    } else {
+        MeshSession::join(&mesh_id, mode)
+    }
+    .map_err(|e| vm.new_runtime_error(e))?;
     *MESH.lock().unwrap() = Some(std::sync::Arc::new(session));
     Ok(vm.ctx.none())
 }
