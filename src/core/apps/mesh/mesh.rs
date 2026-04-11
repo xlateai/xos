@@ -35,7 +35,9 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
 
     let editor = Arc::new(Mutex::new(super::terminal::LineEditor::new()));
     if let Ok(mut g) = editor.lock() {
-        let _ = g.enter();
+        if let Err(e) = g.enter() {
+            eprintln!("xos: mesh terminal setup failed: {e}");
+        }
     }
     *super::state::LINE_EDITOR.lock().unwrap() = Some(Arc::clone(&editor));
 

@@ -3,7 +3,7 @@
 use super::state::INPUT_INTERRUPT_REQUESTED;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -37,7 +37,8 @@ impl LineEditor {
 
     pub fn enter(&mut self) -> Result<(), String> {
         let stdout = io::stdout();
-        if !stdout.is_terminal() {
+        let stdin = io::stdin();
+        if !stdout.is_terminal() || !stdin.is_terminal() {
             return Ok(());
         }
         enable_raw_mode().map_err(|e| e.to_string())?;
@@ -145,7 +146,6 @@ impl LineEditor {
     }
 
     fn read_line_simple_blocking(&mut self) -> Result<Option<String>, String> {
-        use std::io::BufRead;
         let mut s = String::new();
         let n = io::stdin()
             .lock()
@@ -154,7 +154,7 @@ impl LineEditor {
         if n == 0 {
             return Ok(None);
         }
-        Ok(Some(s.trim_end_matches('\n').to_string()))
+        Ok(Some(s.trim_end().to_string()))
     }
 
     pub fn leave(&mut self) {
