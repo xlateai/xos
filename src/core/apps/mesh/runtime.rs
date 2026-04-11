@@ -87,9 +87,10 @@ pub enum MeshMode {
 /// Broadcast seek for `mesh_id`; coordinator replies with JSON containing the same `tcp` port.
 /// Tuned for sub-second discovery on LAN; Ctrl+C aborts between rounds.
 fn lan_discover_coordinator(mesh_id: &str, tcp_port: u16) -> Result<Option<SocketAddr>, String> {
-    const ROUNDS: u32 = 12;
-    const RECV_MS: u64 = 85;
-    const GAP_MS: u64 = 8;
+    // Rounds only matter when no coordinator answers; first valid UDP reply still returns immediately.
+    const ROUNDS: u32 = 6;
+    const RECV_MS: u64 = 50;
+    const GAP_MS: u64 = 5;
 
     let udp_port = udp_port_for_mesh_id(mesh_id);
     let Some(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok() else {
@@ -481,6 +482,7 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
 
     stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -526,6 +528,7 @@ fn finish_client_connection(
 
     stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let _ = stream.set_nodelay(true);
 
     let (lan_client, mut reader, stream) = if let Some(id) = identity.as_ref() {
         let (keys, reader, stream) = client_handshake(stream, id.as_ref())?;
@@ -681,26 +684,21 @@ impl MeshSession {
                 }
                 MeshMode::Lan => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
-                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                        if let Ok(s) = mesh_session_from_client_addr(remote) {
-                            return Ok(s);
-                        }
-                    }
                     if let Ok(s) = try_mesh_client_once(loopback) {
                         return Ok(s);
+                    }
+                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                        return mesh_session_from_client_addr(remote);
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
                     match TcpListener::bind(any) {
                         Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                             thread::sleep(Duration::from_millis(80));
-                            if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                                if let Ok(s) = mesh_session_from_client_addr(remote) {
-                                    return Ok(s);
-                                }
-                            }
                             if let Ok(s) = try_mesh_client_once(loopback) {
                                 Ok(s)
+                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                                mesh_session_from_client_addr(remote)
                             } else {
                                 mesh_session_from_client_addr(loopback)
                             }
@@ -742,20 +740,16 @@ impl MeshSession {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
             MeshMode::Lan => {
                 check_join_interrupt()?;
-                // 1) UDP discovery first: join using the same TCP address remote peers use (LAN IP from
-                //    the coordinator's UDP reply). If we used loopback first, same-PC clients would use
-                //    127.0.0.1 while Mac/Linux peers use the LAN IP — on some hosts that mix breaks relay
-                //    to local peers behind the coordinator.
-                // 2) Loopback fallback when UDP is blocked or discovery misses (e.g. very fast startup).
-                // 3) Otherwise become coordinator on 0.0.0.0 (others can discover us).
+                // 1) Loopback first — fast when the coordinator is on this machine (discovery-first was
+                //    ~1s slower because UDP had to time out before every local join / first host bind).
+                // 2) UDP discovery for remote peers (e.g. Mac on the LAN).
+                // 3) Otherwise bind 0.0.0.0 and become coordinator.
                 let loopback = SocketAddr::from(([127, 0, 0, 1], port));
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                    if let Ok(s) = mesh_session_from_client_addr(remote, Some(Arc::clone(&identity))) {
-                        return Ok(s);
-                    }
-                }
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
+                }
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                    return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
                 let any = SocketAddr::from(([0, 0, 0, 0], port));
                 match TcpListener::bind(any) {
@@ -766,15 +760,10 @@ impl MeshSession {
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                         thread::sleep(Duration::from_millis(80));
-                        if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                            if let Ok(s) =
-                                mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
-                            {
-                                return Ok(s);
-                            }
-                        }
                         if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                             Ok(s)
+                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                            mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
                             mesh_session_from_client_addr(loopback, Some(Arc::clone(&identity)))
                         }
@@ -939,6 +928,7 @@ fn host_accept_loop(
         let Ok(mut stream) = conn else { continue };
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        let _ = stream.set_nodelay(true);
 
         let Ok(stored) = stream.try_clone() else {
             continue;
@@ -990,6 +980,7 @@ fn host_accept_loop(
         let Ok(mut stream) = conn else { continue };
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        let _ = stream.set_nodelay(true);
 
         if identity.is_none() {
             let Ok(stored) = stream.try_clone() else {
