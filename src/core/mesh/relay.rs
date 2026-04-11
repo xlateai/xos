@@ -24,8 +24,133 @@ use crate::auth::UnlockedNodeIdentity;
 
 const WIRE_VERSION: u32 = 2;
 
-/// Host→peer relay writes: bound latency on half-dead TCP (default stack timeouts can be seconds each).
-const RELAY_WRITE_TIMEOUT: Duration = Duration::from_millis(450);
+/// TCP write deadline for mesh streams, relay clones, and heartbeats — single value so none of them
+/// trips before the others. Too short causes spurious disconnects on Windows / Wi‑Fi under load.
+const MESH_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Application keepalive kind — **not** delivered to [`Inbox`] / Python `receive()`.
+pub const MESH_HEARTBEAT_KIND: &str = "__mesh_heartbeat__";
+
+/// How often each side sends a heartbeat on **open** TCP mesh links (both directions).
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+
+/// TCP read timeout per mesh leg. Must stay **greater** than [`HEARTBEAT_INTERVAL`] so idle links stay up.
+const MESH_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
+    WireEnvelope {
+        v: WIRE_VERSION,
+        from: rank,
+        from_id: node_id.to_string(),
+        kind: MESH_HEARTBEAT_KIND.to_string(),
+        to: None,
+        payload: json!({}),
+    }
+}
+
+fn wire_line_plain_env(env: &WireEnvelope) -> Result<String, String> {
+    let mut s = serde_json::to_string(env).map_err(|e| e.to_string())?;
+    s.push('\n');
+    Ok(s)
+}
+
+/// Coordinator → every connected peer (plaintext local mesh).
+fn host_send_heartbeat_plain(
+    rank: u32,
+    node_id: &str,
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) -> Result<(), String> {
+    let env = heartbeat_envelope(rank, node_id);
+    let line = wire_line_plain_env(&env)?;
+    let targets: Vec<(usize, TcpStream)> = {
+        let guard = clients.lock().unwrap();
+        let mut out = Vec::new();
+        for (idx, oc) in guard.iter().enumerate() {
+            let Some(s) = oc else {
+                continue;
+            };
+            if let Ok(w) = s.try_clone() {
+                out.push((idx, w));
+            }
+        }
+        out
+    };
+    for (idx, w) in targets {
+        relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, num_nodes);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn host_send_heartbeat_lan(
+    rank: u32,
+    node_id: &str,
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) -> Result<(), String> {
+    let env = heartbeat_envelope(rank, node_id);
+    let inner = serde_json::to_string(&env).map_err(|e| e.to_string())?;
+    let targets: Vec<(usize, LanWireKeys, TcpStream)> = {
+        let cg = clients.lock().unwrap();
+        let lk = lan_host.lock().unwrap();
+        let mut out = Vec::new();
+        for (idx, oc) in cg.iter().enumerate() {
+            let Some(k) = lk.get(idx).and_then(|x| x.as_ref()) else {
+                continue;
+            };
+            let Some(s) = oc else {
+                continue;
+            };
+            if let Ok(w) = s.try_clone() {
+                out.push((idx, (*k).clone(), w));
+            }
+        }
+        out
+    };
+    for (idx, k, w) in targets {
+        let Ok(line) = encrypt_mesh_line(&k.tx, &inner) else {
+            continue;
+        };
+        relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lan_host, num_nodes);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn client_send_heartbeat(
+    rank: u32,
+    node_id: &str,
+    stream: &Arc<Mutex<TcpStream>>,
+    lan_client: Option<&LanWireKeys>,
+) -> Result<(), String> {
+    let env = heartbeat_envelope(rank, node_id);
+    let mut s = stream.lock().unwrap();
+    if let Some(k) = lan_client {
+        let inner = serde_json::to_string(&env).map_err(|e| e.to_string())?;
+        let line = encrypt_mesh_line(&k.tx, &inner)?;
+        s.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        s.flush().map_err(|e| e.to_string())
+    } else {
+        let line = wire_line_plain_env(&env)?;
+        s.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        s.flush().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn client_send_heartbeat_wasm(
+    rank: u32,
+    node_id: &str,
+    stream: &Arc<Mutex<TcpStream>>,
+) -> Result<(), String> {
+    let env = heartbeat_envelope(rank, node_id);
+    let line = wire_line_plain_env(&env)?;
+    let mut s = stream.lock().unwrap();
+    s.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    s.flush().map_err(|e| e.to_string())
+}
 
 #[derive(Clone, Debug)]
 pub struct Packet {
@@ -116,7 +241,7 @@ fn relay_write_plain_best_effort(
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
     num_nodes: &Arc<AtomicU32>,
 ) {
-    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
     if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
         clear_disconnected_peer_plain(idx, clients, num_nodes);
     }
@@ -131,7 +256,7 @@ fn relay_write_lan_best_effort(
     lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
     num_nodes: &Arc<AtomicU32>,
 ) {
-    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
     if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
         clear_disconnected_peer_lan(idx, clients, lan_host, num_nodes);
     }
@@ -247,8 +372,79 @@ enum MeshRole {
         clients: Arc<Mutex<Vec<Option<TcpStream>>>>,
     },
     Client {
-        stream: Mutex<TcpStream>,
+        stream: Arc<Mutex<TcpStream>>,
     },
+}
+
+fn attach_mesh_heartbeat(session: &MeshSession) {
+    let sd = Arc::clone(&session.shutdown);
+    match &session.role {
+        MeshRole::Host { clients } => {
+            let rank = session.rank;
+            let node_id = session.node_id.clone();
+            let clients = Arc::clone(clients);
+            let num_nodes = Arc::clone(&session.num_nodes);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let lan = session.lan_host.clone();
+                thread::spawn(move || {
+                    loop {
+                        if sd.load(Ordering::SeqCst) != 0 {
+                            break;
+                        }
+                        let _ = if let Some(ref lh) = lan {
+                            host_send_heartbeat_lan(rank, &node_id, &clients, lh, &num_nodes)
+                        } else {
+                            host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes)
+                        };
+                        thread::sleep(HEARTBEAT_INTERVAL);
+                    }
+                });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                thread::spawn(move || {
+                    loop {
+                        if sd.load(Ordering::SeqCst) != 0 {
+                            break;
+                        }
+                        let _ = host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes);
+                        thread::sleep(HEARTBEAT_INTERVAL);
+                    }
+                });
+            }
+        }
+        MeshRole::Client { stream } => {
+            let rank = session.rank;
+            let node_id = session.node_id.clone();
+            let stream = Arc::clone(stream);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let lan = session.lan_client.clone();
+                thread::spawn(move || {
+                    loop {
+                        if sd.load(Ordering::SeqCst) != 0 {
+                            break;
+                        }
+                        let _ = client_send_heartbeat(rank, &node_id, &stream, lan.as_ref());
+                        thread::sleep(HEARTBEAT_INTERVAL);
+                    }
+                });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                thread::spawn(move || {
+                    loop {
+                        if sd.load(Ordering::SeqCst) != 0 {
+                            break;
+                        }
+                        let _ = client_send_heartbeat_wasm(rank, &node_id, &stream);
+                        thread::sleep(HEARTBEAT_INTERVAL);
+                    }
+                });
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -304,7 +500,7 @@ fn mesh_session_from_host_listener(
         .map(|i| (i.node_id(), i.node_name.clone()))
         .unwrap_or((String::new(), String::new()));
 
-    Ok(MeshSession {
+    let session = MeshSession {
         rank: 0,
         node_id,
         node_name,
@@ -314,7 +510,9 @@ fn mesh_session_from_host_listener(
         shutdown,
         lan_host,
         lan_client: None,
-    })
+    };
+    attach_mesh_heartbeat(&session);
+    Ok(session)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -355,7 +553,7 @@ fn mesh_session_from_host_listener(
         );
     });
 
-    Ok(MeshSession {
+    let session = MeshSession {
         rank: 0,
         node_id: String::new(),
         node_name: String::new(),
@@ -363,7 +561,9 @@ fn mesh_session_from_host_listener(
         inbox,
         role: MeshRole::Host { clients },
         shutdown,
-    })
+    };
+    attach_mesh_heartbeat(&session);
+    Ok(session)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -372,8 +572,8 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let num_nodes = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
 
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
     let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut line = String::new();
@@ -398,17 +598,19 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
         client_read_loop(reader, inbox_r, rank, sd_c, None);
     });
 
-    Ok(MeshSession {
+    let session = MeshSession {
         rank,
         node_id: String::new(),
         node_name: String::new(),
         num_nodes,
         inbox,
         role: MeshRole::Client {
-            stream: Mutex::new(stream),
+            stream: Arc::new(Mutex::new(stream)),
         },
         shutdown,
-    })
+    };
+    attach_mesh_heartbeat(&session);
+    Ok(session)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -420,8 +622,8 @@ fn finish_client_connection(
     let num_nodes = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
 
-    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
     let _ = stream.set_nodelay(true);
 
     let (lan_client, mut reader, stream) = if let Some(id) = identity.as_ref() {
@@ -465,19 +667,21 @@ fn finish_client_connection(
         .map(|i| (i.node_id(), i.node_name.clone()))
         .unwrap_or((String::new(), String::new()));
 
-    Ok(MeshSession {
+    let session = MeshSession {
         rank,
         node_id,
         node_name,
         num_nodes,
         inbox,
         role: MeshRole::Client {
-            stream: Mutex::new(stream),
+            stream: Arc::new(Mutex::new(stream)),
         },
         shutdown,
         lan_client,
         lan_host: None,
-    })
+    };
+    attach_mesh_heartbeat(&session);
+    Ok(session)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -836,8 +1040,8 @@ fn host_accept_loop(
             break;
         }
         let Ok(mut stream) = conn else { continue };
-        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
+        stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
 
         let Ok(stored) = stream.try_clone() else {
@@ -888,8 +1092,8 @@ fn host_accept_loop(
             break;
         }
         let Ok(mut stream) = conn else { continue };
-        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+        stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
+        stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
 
         if identity.is_none() {
@@ -1006,6 +1210,9 @@ fn host_peer_reader(
         let env: Result<WireEnvelope, _> = serde_json::from_str(line.trim());
         let Ok(env) = env else { continue };
         if env.v != 1 && env.v != 2 {
+            continue;
+        }
+        if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
 
@@ -1171,6 +1378,9 @@ fn host_peer_reader_lan(
         if env.v != 1 && env.v != 2 {
             continue;
         }
+        if env.kind == MESH_HEARTBEAT_KIND {
+            continue;
+        }
 
         if should_deliver_locally(0, env.from, env.to) {
             inbox.push(Packet {
@@ -1205,6 +1415,9 @@ fn client_read_loop(
         let env: Result<WireEnvelope, _> = serde_json::from_str(line.trim());
         let Ok(env) = env else { continue };
         if env.v != 1 && env.v != 2 {
+            continue;
+        }
+        if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
         if should_deliver_locally(my_rank, env.from, env.to) {
@@ -1246,6 +1459,9 @@ fn client_read_loop(
         };
         let Some(env) = env else { continue };
         if env.v != 1 && env.v != 2 {
+            continue;
+        }
+        if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
         if should_deliver_locally(my_rank, env.from, env.to) {

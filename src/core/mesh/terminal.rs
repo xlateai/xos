@@ -10,6 +10,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+/// Serialize mesh app stdout so the stdin prompt thread and `print_above` do not interleave
+/// (which breaks cursor position, especially on Windows Terminal / ConPTY).
+static MESH_STDOUT_LOCK: Mutex<()> = Mutex::new(());
+
 /// Returned from [`LineEditor::read_line`] on Ctrl+C; mapped to `KeyboardInterrupt` in `xos.input`.
 pub const INPUT_INTERRUPT: &str = "xos:input_interrupt";
 
@@ -39,8 +43,11 @@ impl CookedStdin {
                 Ok(g) => g.clone(),
                 Err(_) => break,
             };
-            print!("{}", pr);
-            let _ = io::stdout().flush();
+            {
+                let _lock = MESH_STDOUT_LOCK.lock().unwrap();
+                print!("{}", pr);
+                let _ = io::stdout().flush();
+            }
             let mut line = String::new();
             match io::stdin().lock().read_line(&mut line) {
                 Ok(0) => break,
@@ -114,8 +121,11 @@ impl LineEditor {
 
     fn read_line_simple_blocking(&mut self) -> Result<Option<String>, String> {
         let pr = self.prompt_str();
-        print!("{}", pr);
-        let _ = io::stdout().flush();
+        {
+            let _lock = MESH_STDOUT_LOCK.lock().unwrap();
+            print!("{}", pr);
+            let _ = io::stdout().flush();
+        }
         let mut s = String::new();
         let n = io::stdin()
             .lock()
@@ -128,9 +138,15 @@ impl LineEditor {
     }
 
     /// Print a message above the current input line (best-effort without raw-mode redraw).
+    ///
+    /// Re-prints the current prompt after the message so the caret stays on a known line; the stdin
+    /// thread may still have printed an earlier prompt — without a full-screen redraw this cannot be
+    /// perfect, but locking + prompt repeat fixes the worst cursor jumps on Windows.
     pub fn print_above(&mut self, text: &str) {
         let trim = text.trim_end_matches('\n');
-        print!("\n{}\n", trim);
+        let pr = self.prompt_str();
+        let _lock = MESH_STDOUT_LOCK.lock().unwrap();
+        print!("\n{}\n{}", trim, pr);
         let _ = io::stdout().flush();
     }
 
