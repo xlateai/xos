@@ -5,8 +5,7 @@
 
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
-use serde_json::{json, Value};
-use std::io::Cursor;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,7 +31,6 @@ pub struct RemoteApp {
 #[cfg(target_os = "windows")]
 struct RemoteWin {
     mesh: MeshSession,
-    rank: u32,
     last_frame_sent: Option<Instant>,
     pending_scroll: f32,
     prev_peer_left: bool,
@@ -53,6 +51,7 @@ impl RemoteApp {
 mod win {
     use super::STREAM_MAX_W;
     use serde_json::Value;
+    use std::io::Cursor;
     use std::mem::{size_of, zeroed};
     use std::ptr::null_mut;
 
@@ -275,10 +274,8 @@ impl Application for RemoteApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let id = Arc::new(load_node_identity().map_err(|e| format!("{e}"))?);
         let mesh = MeshSession::join_with_identity(REMOTE_MESH_ID, MeshMode::Lan, id, Some(2))?;
-        let rank = mesh.rank;
         self.win = Some(RemoteWin {
             mesh,
-            rank,
             last_frame_sent: None,
             pending_scroll: 0.0,
             prev_peer_left: false,
@@ -295,7 +292,7 @@ impl Application for RemoteApp {
         };
 
         let n = w.mesh.current_num_nodes();
-        if w.rank == 0 {
+        if w.mesh.rank() == 0 {
             Self::tick_viewer(w, state, n);
         } else {
             Self::tick_streamer(w, n);

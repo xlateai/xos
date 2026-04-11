@@ -206,7 +206,7 @@ fn mesh_rank(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "mesh not connected; call xos.mesh.connect()".to_string(),
         ));
     };
-    Ok(vm.ctx.new_int(m.rank as isize).into())
+    Ok(vm.ctx.new_int(m.rank() as isize).into())
 }
 
 fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -239,7 +239,7 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let s = format!(
         "[mesh n={} rank={} id={}] >>> ",
         m.current_num_nodes(),
-        m.rank,
+        m.rank(),
         short
     );
     Ok(vm.ctx.new_str(s).into())
