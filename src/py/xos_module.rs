@@ -1101,6 +1101,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     }
 
     crate::python_api::mesh::register_mesh(&module, vm);
+    crate::python_api::mouse::register_mouse(&module, vm);
 
     module
 }

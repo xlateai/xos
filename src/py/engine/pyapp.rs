@@ -504,7 +504,7 @@ class Application:
         fd = xos.frame._begin_standalone(int(self._xos_viewport_id), w, h)
         fd["_xos_viewport_id"] = int(self._xos_viewport_id)
         self.frame = Frame(fd)
-        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False, "is_right_clicking": False}
         xos.rasterizer.fill(self.frame, (0, 0, 0, 255))
         xos.frame._end_standalone()
 
@@ -570,7 +570,7 @@ class Application:
         )
         frame_dict["_xos_viewport_id"] = int(getattr(self, "_xos_viewport_id", 0))
         self.frame = Frame(frame_dict)
-        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False}
+        self.mouse = {"x": 0.0, "y": 0.0, "is_left_clicking": False, "is_right_clicking": False}
         self.pre_tick()
 
     def _xos_post_tick(self):
@@ -614,6 +614,10 @@ class Application:
     
     def on_mouse_move(self, x, y):
         """Called when mouse moves. Override this method (optional)."""
+        pass
+
+    def on_scroll(self, dx, dy):
+        """Called on mouse wheel / trackpad scroll. Override (optional)."""
         pass
     
     def on_screen_size_change(self, width, height):
@@ -677,6 +681,8 @@ impl Application for PyApp {
                     .map_err(|e| format!("Mouse y error: {:?}", e))?;
                 mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)
                     .map_err(|e| format!("Mouse clicking error: {:?}", e))?;
+                mouse_dict.set_item("is_right_clicking", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)
+                    .map_err(|e| format!("Mouse right click error: {:?}", e))?;
                 
                 app_instance.set_attr("mouse", mouse_dict, vm)
                     .map_err(|e| format!("Failed to set mouse attribute: {:?}", e))?;
@@ -737,6 +743,7 @@ Call super().__init__() in your app __init__ before using tick()."
                     let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
                     let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
                     let _ = mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm);
+                    let _ = mouse_dict.set_item("is_right_clicking", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm);
                     let _ = app_instance.set_attr("mouse", mouse_dict, vm);
 
                     // Expose timestep and FPS directly to Python app.
@@ -777,6 +784,20 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_down", (x, y));
             });
         }
@@ -787,6 +808,20 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
             });
         }
@@ -797,7 +832,43 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
                 let y = state.mouse.y;
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_move", (x, y));
+            });
+        }
+    }
+
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+        if let Some(ref app_instance) = self.app_instance {
+            self.interpreter.enter(|vm| {
+                let mouse_dict = vm.ctx.new_dict();
+                let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+                let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+                let _ = mouse_dict.set_item(
+                    "is_left_clicking",
+                    vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                    vm,
+                );
+                let _ = mouse_dict.set_item(
+                    "is_right_clicking",
+                    vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                    vm,
+                );
+                let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+                let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
             });
         }
     }
