@@ -2,7 +2,7 @@ use rustpython_vm::{
     PyObjectRef, PyResult, VirtualMachine,
     builtins::{PyBytes, PyDict, PyList, PyModule},
     function::FuncArgs,
-    PyRef, TryIntoValue,
+    PyRef,
 };
 use std::sync::Mutex;
 use crate::python_api::tensors::{tensor_flat_data_list, tensor_shape_tuple};
@@ -1025,16 +1025,15 @@ fn blit_rgba_stretch(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: us
 }
 
 fn frame_object_to_rgba(vm: &VirtualMachine, frame_obj: PyObjectRef) -> PyResult<(usize, usize, Vec<u8>)> {
-    let data_obj = if let Ok(d) = vm.get_attribute(frame_obj.clone(), "_data") {
-        d
-    } else {
-        frame_obj
+    let data_obj = match vm.get_attribute_opt(frame_obj.clone(), "_data") {
+        Ok(Some(d)) => d,
+        Ok(None) | Err(_) => frame_obj,
     };
     let dict = data_obj.downcast_ref::<PyDict>().ok_or_else(|| {
         vm.new_type_error("frame_in_frame: src must be a Frame (e.g. mesh remote_frame)".to_string())
     })?;
-    let width: usize = dict.get_item("width", vm)?.try_into_value(vm)?;
-    let height: usize = dict.get_item("height", vm)?.try_into_value(vm)?;
+    let width: usize = dict.get_item("width", vm)?.clone().try_into_value(vm)?;
+    let height: usize = dict.get_item("height", vm)?.clone().try_into_value(vm)?;
     let tensor = dict.get_item("tensor", vm)?;
     let tdict = tensor.downcast_ref::<PyDict>().ok_or_else(|| {
         vm.new_type_error("frame_in_frame: expected tensor dict on Frame".to_string())

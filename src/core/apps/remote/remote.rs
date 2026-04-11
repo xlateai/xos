@@ -78,7 +78,6 @@ impl RemoteApp {
 #[cfg(target_os = "windows")]
 mod win {
     use super::STREAM_MAX_W;
-    use serde_json::Value;
     use std::io::Cursor;
     use std::mem::{size_of, zeroed};
     use std::ptr::null_mut;

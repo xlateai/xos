@@ -809,7 +809,7 @@ Call super().__init__() in your app __init__ before using tick()."
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));

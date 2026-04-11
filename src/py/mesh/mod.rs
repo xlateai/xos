@@ -216,7 +216,7 @@ fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult 
     frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
 
     let frame_cls = vm.builtins.get_attr("Frame", vm)?;
-    frame_cls.call((frame_dict.into(),), vm)
+    frame_cls.call((frame_dict.clone(),), vm)
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]

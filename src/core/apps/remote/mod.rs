@@ -33,7 +33,8 @@ thread_local! {
 pub fn apply_remote_input_python(payload: &Value) {
     PYTHON_REMOTE_INPUT_PREV.with(|p| {
         let mut g = p.borrow_mut();
-        remote::apply_remote_input(payload, &mut g.0, &mut g.1);
+        let (left, right) = &mut *g;
+        remote::apply_remote_input(payload, left, right);
     });
 }
 
