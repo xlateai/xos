@@ -414,6 +414,12 @@ pub fn run_python_app(file_path: &PathBuf) {
                 .unwrap_or(false)
         });
 
+        if headless {
+            interpreter.enter(|vm| {
+                let _ = app_instance.set_attr("screen", vm.ctx.new_bool(true), vm);
+            });
+        }
+
         let pyapp = PyApp::new(interpreter, app_instance);
         
         #[cfg(not(target_arch = "wasm32"))]

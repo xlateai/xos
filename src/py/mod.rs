@@ -17,6 +17,7 @@ pub mod ui;
 pub mod nn;
 pub mod burn_train;
 pub mod mesh;
+pub mod mouse;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 

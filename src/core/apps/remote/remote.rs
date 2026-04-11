@@ -420,7 +420,7 @@ fn blit_rgba_to_frame(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: u
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos")
 ))]
-fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
+pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
     #[cfg(target_os = "windows")]
     {
         win::capture_scaled_jpeg()
@@ -436,7 +436,7 @@ fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos")
 ))]
-fn apply_remote_input(
+pub fn apply_remote_input(
     payload: &serde_json::Value,
     prev_left: &mut bool,
     prev_right: &mut bool,
