@@ -284,7 +284,7 @@ mod mac {
     use enigo::{Enigo, MouseButton, MouseControllable};
     use screenshots::Screen;
     use serde_json::Value;
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
 
     fn virtual_screen_bounds() -> (i32, i32, i32, i32) {
         let Ok(screens) = Screen::all() else {
@@ -315,12 +315,14 @@ mod mac {
     pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
         let screens = Screen::all().ok()?;
         let screen = screens.first()?;
-        let rgba = screen.capture().ok()?;
-        let vw = rgba.width();
-        let vh = rgba.height();
+        // `screenshots` uses `image` 0.24; this crate uses 0.25 — rebuild the buffer so types match.
+        let cap = screen.capture().ok()?;
+        let vw = cap.width();
+        let vh = cap.height();
         if vw == 0 || vh == 0 {
             return None;
         }
+        let rgba = image::RgbaImage::from_raw(vw, vh, cap.into_raw())?;
         let scale = (STREAM_MAX_W as f32 / vw as f32).min(1.0f32);
         let tw = ((vw as f32) * scale).round().max(1.0) as u32;
         let th = ((vh as f32) * scale).round().max(1.0) as u32;
