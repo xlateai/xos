@@ -296,7 +296,9 @@ fn main() {
             if offline {
                 match login_offline_interactive() {
                     Ok(()) => {
-                        println!("Saved identity. LAN mesh can use xos.mesh.connect(mode=\"lan\") after unlock.");
+                        println!(
+                            "Saved identity (keys derive from your username + password). Use the same password when LAN mesh prompts, or pass password= to connect()."
+                        );
                     }
                     Err(e) => {
                         eprintln!("❌ {e}");

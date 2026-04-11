@@ -1,21 +1,30 @@
-//! Persisted identity: `identity.json` (username, salt, Argon2 params, AES-GCM blob, public PEM).
+//! Persisted identity: `identity.json`
+//!
+//! - **v2 (current):** RSA-2048 is generated deterministically from username + password (Argon2id
+//!   stretches the password; ChaCha20 is seeded for RSA keygen). Only **username**, KDF params,
+//!   and **public** PEM are stored — no ciphertext, no saved password. The private key is
+//!   recomputed on each unlock.
+//! - **v1 (legacy):** random RSA key with private key encrypted (Argon2id + AES-GCM); still supported for unlock.
 
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng};
+use aes_gcm::aead::{Aead, KeyInit, OsRng as AesOsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey, LineEnding};
 use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::{
     pkcs1v15::Signature, pkcs1v15::SigningKey, pkcs1v15::VerifyingKey, RsaPrivateKey, RsaPublicKey,
 };
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
 const RSA_BITS: usize = 2048;
-const AUTH_FORMAT: &str = "xos-auth-v1";
+const AUTH_FORMAT_V1: &str = "xos-auth-v1";
+const AUTH_FORMAT_V2: &str = "xos-auth-v2";
 
 const ARGON_M: u32 = 19456;
 const ARGON_T: u32 = 2;
@@ -70,6 +79,7 @@ pub fn has_identity() -> bool {
         .unwrap_or(false)
 }
 
+/// Legacy on-disk layout (`xos-auth-v1`): encrypted PKCS#8 private key.
 #[derive(Serialize, Deserialize)]
 pub struct StoredIdentityFile {
     pub format: String,
@@ -80,6 +90,18 @@ pub struct StoredIdentityFile {
     pub argon_p_cost: u32,
     pub aes_nonce_b64: String,
     pub ciphertext_b64: String,
+    pub public_key_pem: String,
+}
+
+/// Deterministic identity (`xos-auth-v2`): only username, KDF params, and public key on disk.
+#[derive(Serialize, Deserialize)]
+pub struct StoredIdentityV2 {
+    pub format: String,
+    pub username: String,
+    pub argon_m_cost: u32,
+    pub argon_t_cost: u32,
+    pub argon_p_cost: u32,
+    /// PEM of the public key derived from (username, password); used to detect wrong password.
     pub public_key_pem: String,
 }
 
@@ -110,7 +132,40 @@ fn derive_aes_key(password: &[u8], salt: &[u8], m: u32, t: u32, p: u32) -> Resul
     Ok(out)
 }
 
-/// Create `identity.json` with a new RSA-2048 key; private key encrypted with Argon2id + AES-256-GCM.
+/// Deterministic 16-byte salt from username (no random salt stored for v2).
+fn salt_for_username(username: &str) -> [u8; 16] {
+    let h = Sha256::digest(format!("xos-auth-v2|{}", username.trim()).as_bytes());
+    h[..16]
+        .try_into()
+        .expect("sha256 first 16 bytes")
+}
+
+/// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen): Argon2id(password, salt(username)).
+fn derive_rsa_seed(password: &[u8], username: &str, m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
+    let salt = salt_for_username(username);
+    derive_aes_key(password, &salt, m, t, p)
+}
+
+fn rsa_deterministic_from_password(
+    password: &[u8],
+    username: &str,
+    m: u32,
+    t: u32,
+    p: u32,
+) -> Result<(RsaPrivateKey, String), AuthError> {
+    let seed = derive_rsa_seed(password, username, m, t, p)?;
+    let mut rng = ChaCha20Rng::from_seed(seed);
+    let private = RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| AuthError::Crypto(e.to_string()))?;
+    let public_pem = private
+        .to_public_key()
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
+    Ok((private, public_pem))
+}
+
+/// Create `identity.json` with RSA-2048 derived from username + password (v2). Nothing secret except
+/// what the user types; disk holds username, KDF params, and public PEM only.
 pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
     let dir = auth_data_dir()?;
     fs::create_dir_all(&dir).map_err(|e| AuthError::Io(e.to_string()))?;
@@ -119,38 +174,15 @@ pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
         return Err(AuthError::AlreadyExists);
     }
 
-    let mut rng = AesOsRng;
-    let private = RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| AuthError::Crypto(e.to_string()))?;
-    let public = private.to_public_key();
-    let public_pem = public
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|e| AuthError::Crypto(e.to_string()))?
-        .to_string();
+    let u = username.trim();
+    let (_, public_pem) = rsa_deterministic_from_password(password.as_bytes(), u, ARGON_M, ARGON_T, ARGON_P)?;
 
-    let pk_der = private
-        .to_pkcs8_der()
-        .map_err(|e| AuthError::Crypto(e.to_string()))?;
-    let pk_bytes = pk_der.as_bytes();
-
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| AuthError::Io(format!("{e:?}")))?;
-    let key_bytes = derive_aes_key(password.as_bytes(), &salt, ARGON_M, ARGON_T, ARGON_P)?;
-
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-    let nonce = Aes256Gcm::generate_nonce(&mut AesOsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, pk_bytes.as_ref())
-        .map_err(|e| AuthError::Crypto(e.to_string()))?;
-
-    let stored = StoredIdentityFile {
-        format: AUTH_FORMAT.to_string(),
-        username: username.trim().to_string(),
-        salt_b64: B64.encode(salt),
+    let stored = StoredIdentityV2 {
+        format: AUTH_FORMAT_V2.to_string(),
+        username: u.to_string(),
         argon_m_cost: ARGON_M,
         argon_t_cost: ARGON_T,
         argon_p_cost: ARGON_P,
-        aes_nonce_b64: B64.encode(nonce.as_slice()),
-        ciphertext_b64: B64.encode(&ciphertext),
         public_key_pem: public_pem,
     };
 
@@ -166,13 +198,8 @@ pub fn login_offline(username: &str, password: &str) -> Result<(), AuthError> {
     Ok(())
 }
 
-/// Decrypt stored private key and load RSA identity.
-pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
-    let path = auth_json_path()?;
-    let raw = fs::read_to_string(&path).map_err(|e| AuthError::Io(e.to_string()))?;
-    let stored: StoredIdentityFile =
-        serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
-    if stored.format != AUTH_FORMAT {
+fn unlock_identity_v1(stored: StoredIdentityFile, password: &str) -> Result<UnlockedIdentity, AuthError> {
+    if stored.format != AUTH_FORMAT_V1 {
         return Err(AuthError::InvalidFile("unknown identity format".to_string()));
     }
 
@@ -212,6 +239,56 @@ pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
     })
 }
 
+fn unlock_identity_v2(stored: StoredIdentityV2, password: &str) -> Result<UnlockedIdentity, AuthError> {
+    if stored.format != AUTH_FORMAT_V2 {
+        return Err(AuthError::InvalidFile("unknown identity format".to_string()));
+    }
+
+    let (rsa_private, public_pem) = rsa_deterministic_from_password(
+        password.as_bytes(),
+        &stored.username,
+        stored.argon_m_cost,
+        stored.argon_t_cost,
+        stored.argon_p_cost,
+    )?;
+
+    if public_pem.trim() != stored.public_key_pem.trim() {
+        return Err(AuthError::WrongPassword);
+    }
+
+    Ok(UnlockedIdentity {
+        username: stored.username,
+        rsa_private,
+        public_pem,
+    })
+}
+
+/// Load RSA identity: v2 recomputes the private key from username + password; v1 decrypts stored PKCS#8.
+pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
+    let path = auth_json_path()?;
+    let raw = fs::read_to_string(&path).map_err(|e| AuthError::Io(e.to_string()))?;
+    let format: String = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| AuthError::InvalidFile(e.to_string()))?
+        .get("format")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| AuthError::InvalidFile("missing format".to_string()))?;
+
+    match format.as_str() {
+        AUTH_FORMAT_V1 => {
+            let stored: StoredIdentityFile =
+                serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+            unlock_identity_v1(stored, password)
+        }
+        AUTH_FORMAT_V2 => {
+            let stored: StoredIdentityV2 =
+                serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
+            unlock_identity_v2(stored, password)
+        }
+        _ => Err(AuthError::InvalidFile("unknown identity format".to_string())),
+    }
+}
+
 /// RSA-PKCS1-v1.5 + SHA256 sign (LAN handshake).
 pub fn rsa_sign(private: &RsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>, AuthError> {
     let mut rng = AesOsRng;
@@ -225,4 +302,31 @@ pub fn rsa_verify(public: &RsaPublicKey, msg: &[u8], sig_bytes: &[u8]) -> Result
     let sig = Signature::try_from(sig_bytes).map_err(|e| AuthError::Crypto(e.to_string()))?;
     vk.verify(msg, &sig)
         .map_err(|_| AuthError::Crypto("RSA verify failed".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_rsa_same_inputs_same_public_pem() {
+        let (a, pem_a) =
+            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        let (b, pem_b) =
+            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        assert_eq!(pem_a, pem_b);
+        assert_eq!(
+            a.to_public_key().to_public_key_pem(LineEnding::LF).unwrap(),
+            b.to_public_key().to_public_key_pem(LineEnding::LF).unwrap()
+        );
+    }
+
+    #[test]
+    fn wrong_password_changes_keys() {
+        let (_, pem_ok) =
+            rsa_deterministic_from_password(b"secret", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        let (_, pem_bad) =
+            rsa_deterministic_from_password(b"wrong", "alice", ARGON_M, ARGON_T, ARGON_P).unwrap();
+        assert_ne!(pem_ok, pem_bad);
+    }
 }
