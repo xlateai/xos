@@ -222,6 +222,22 @@ fn clear_disconnected_peer_lan(
     recompute_num_nodes(clients, num_nodes);
 }
 
+/// Next peer slot: lowest `None`, or append. Ranks stay dense (1..=N) across disconnect/reconnect.
+/// Returns `(idx, rank, num_nodes_after_this_peer_joins)` before the peer is inserted.
+fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, u32) {
+    let mut g = clients.lock().unwrap();
+    let idx = g.iter().position(|oc| oc.is_none()).unwrap_or(g.len());
+    if idx >= g.len() {
+        g.resize_with(idx + 1, || None);
+    }
+    let somes = g.iter().filter(|oc| oc.is_some()).count();
+    let num_nodes_after = 1u32
+        .saturating_add(somes as u32)
+        .saturating_add(1);
+    let rank = idx as u32 + 1;
+    (idx, rank, num_nodes_after)
+}
+
 /// Snapshot connected client write ends without holding the mutex across blocking I/O (avoids relay deadlock).
 fn clone_all_client_writers(clients: &Arc<Mutex<Vec<Option<TcpStream>>>>) -> Vec<TcpStream> {
     let guard = clients.lock().unwrap();
@@ -902,7 +918,6 @@ fn host_accept_loop(
     num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
 ) {
-    let mut next_rank: u32 = 1;
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
@@ -911,11 +926,10 @@ fn host_accept_loop(
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
-        let rank = next_rank;
-        let n = rank + 1;
         let Ok(stored) = stream.try_clone() else {
             continue;
         };
+        let (idx, rank, n) = take_next_peer_slot(&*clients);
         let welcome = json!({
             "v": WIRE_VERSION,
             "cmd": "welcome",
@@ -928,17 +942,11 @@ fn host_accept_loop(
             continue;
         }
         let _ = stream.flush();
-        next_rank += 1;
-        num_nodes.store(n, Ordering::SeqCst);
-
-        let idx = (rank - 1) as usize;
         {
             let mut guard = clients.lock().unwrap();
-            if guard.len() <= idx {
-                guard.resize_with(idx + 1, || None);
-            }
             guard[idx] = Some(stored);
         }
+        recompute_num_nodes(&clients, &num_nodes);
 
         let inbox_r = Arc::clone(&inbox);
         let clients_r = Arc::clone(&clients);
@@ -961,7 +969,6 @@ fn host_accept_loop(
     identity: Option<Arc<UnlockedIdentity>>,
     lan_host: Option<Arc<Mutex<Vec<Option<LanWireKeys>>>>>,
 ) {
-    let mut next_rank: u32 = 1;
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
@@ -971,11 +978,10 @@ fn host_accept_loop(
         stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
 
         if identity.is_none() {
-            let rank = next_rank;
-            let n = rank + 1;
             let Ok(stored) = stream.try_clone() else {
                 continue;
             };
+            let (idx, rank, n) = take_next_peer_slot(&*clients);
             let welcome = json!({
                 "v": WIRE_VERSION,
                 "cmd": "welcome",
@@ -988,17 +994,11 @@ fn host_accept_loop(
                 continue;
             }
             let _ = stream.flush();
-            next_rank += 1;
-            num_nodes.store(n, Ordering::SeqCst);
-
-            let idx = (rank - 1) as usize;
             {
                 let mut guard = clients.lock().unwrap();
-                if guard.len() <= idx {
-                    guard.resize_with(idx + 1, || None);
-                }
                 guard[idx] = Some(stored);
             }
+            recompute_num_nodes(&clients, &num_nodes);
 
             let inbox_r = Arc::clone(&inbox);
             let clients_r = Arc::clone(&clients);
@@ -1017,8 +1017,10 @@ fn host_accept_loop(
             continue;
         };
 
-        let rank = next_rank;
-        let n = rank + 1;
+        let Ok(stored) = write_half.try_clone() else {
+            continue;
+        };
+        let (idx, rank, n) = take_next_peer_slot(&*clients);
         let welcome = json!({
             "v": WIRE_VERSION,
             "cmd": "welcome",
@@ -1030,22 +1032,12 @@ fn host_accept_loop(
             continue;
         };
         let mut wh = write_half;
-        let Ok(stored) = wh.try_clone() else {
-            continue;
-        };
         if wh.write_all(enc.as_bytes()).is_err() {
             continue;
         }
         let _ = wh.flush();
-        next_rank += 1;
-        num_nodes.store(n, Ordering::SeqCst);
-
-        let idx = (rank - 1) as usize;
         {
             let mut guard = clients.lock().unwrap();
-            if guard.len() <= idx {
-                guard.resize_with(idx + 1, || None);
-            }
             guard[idx] = Some(stored);
         }
         {
@@ -1055,6 +1047,7 @@ fn host_accept_loop(
             }
             g[idx] = Some(keys.clone());
         }
+        recompute_num_nodes(&clients, &num_nodes);
 
         let inbox_r = Arc::clone(&inbox);
         let clients_r = Arc::clone(&clients);
