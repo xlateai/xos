@@ -681,21 +681,26 @@ impl MeshSession {
                 }
                 MeshMode::Lan => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                        if let Ok(s) = mesh_session_from_client_addr(remote) {
+                            return Ok(s);
+                        }
+                    }
                     if let Ok(s) = try_mesh_client_once(loopback) {
                         return Ok(s);
-                    }
-                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                        return mesh_session_from_client_addr(remote);
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
                     match TcpListener::bind(any) {
                         Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                             thread::sleep(Duration::from_millis(80));
+                            if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                                if let Ok(s) = mesh_session_from_client_addr(remote) {
+                                    return Ok(s);
+                                }
+                            }
                             if let Ok(s) = try_mesh_client_once(loopback) {
                                 Ok(s)
-                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                                mesh_session_from_client_addr(remote)
                             } else {
                                 mesh_session_from_client_addr(loopback)
                             }
@@ -737,15 +742,20 @@ impl MeshSession {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
             MeshMode::Lan => {
                 check_join_interrupt()?;
-                // 1) Same machine: coordinator listens on 0.0.0.0 — connect via loopback first.
-                // 2) UDP discovery finds a peer on the LAN.
+                // 1) UDP discovery first: join using the same TCP address remote peers use (LAN IP from
+                //    the coordinator's UDP reply). If we used loopback first, same-PC clients would use
+                //    127.0.0.1 while Mac/Linux peers use the LAN IP — on some hosts that mix breaks relay
+                //    to local peers behind the coordinator.
+                // 2) Loopback fallback when UDP is blocked or discovery misses (e.g. very fast startup).
                 // 3) Otherwise become coordinator on 0.0.0.0 (others can discover us).
                 let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                    if let Ok(s) = mesh_session_from_client_addr(remote, Some(Arc::clone(&identity))) {
+                        return Ok(s);
+                    }
+                }
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
-                }
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                    return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
                 let any = SocketAddr::from(([0, 0, 0, 0], port));
                 match TcpListener::bind(any) {
@@ -756,11 +766,15 @@ impl MeshSession {
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                         thread::sleep(Duration::from_millis(80));
-                        if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity)))
-                        {
+                        if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                            if let Ok(s) =
+                                mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
+                            {
+                                return Ok(s);
+                            }
+                        }
+                        if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                             Ok(s)
-                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
-                            mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
                             mesh_session_from_client_addr(loopback, Some(Arc::clone(&identity)))
                         }
