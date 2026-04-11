@@ -1,10 +1,12 @@
-//! Localhost TCP mesh (star topology: rank 0 coordinates). Swap for QUIC/WebRTC later.
+//! TCP mesh (star topology: rank 0 coordinates). `local` = loopback only; `lan` binds all
+//! interfaces and uses UDP broadcast discovery so peers find the coordinator without a manual IP.
+//! Plaintext today — add TLS / pairing before trusting hostile LANs.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -29,17 +31,106 @@ struct WireEnvelope {
     payload: serde_json::Value,
 }
 
-fn port_for_session(session: &str) -> u16 {
+fn port_for_mesh_id(mesh_id: &str) -> u16 {
     let mut h: u32 = 2166136261;
-    for b in session.bytes() {
+    for b in mesh_id.bytes() {
         h = h.wrapping_mul(16777619);
         h ^= b as u32;
     }
     40_000u16.saturating_add((h % 25_000) as u16)
 }
 
-fn socket_addr(session: &str) -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], port_for_session(session)))
+/// UDP port for LAN discovery (separate from TCP). Peers broadcast `seek` here; coordinator replies.
+fn udp_port_for_mesh_id(mesh_id: &str) -> u16 {
+    let mut h: u32 = 0x811C_9DC5;
+    for b in mesh_id.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    35_000u16.saturating_add((h % 5_000) as u16)
+}
+
+/// Transport scope for [`MeshSession::join`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshMode {
+    /// Loopback only (same machine). Other hosts cannot attach.
+    Local,
+    /// Coordinator binds `0.0.0.0` on TCP; LAN peers locate it via UDP broadcast on a derived port.
+    Lan,
+}
+
+/// Broadcast seek for `mesh_id`; coordinator replies with JSON containing the same `tcp` port.
+fn lan_discover_coordinator(mesh_id: &str, tcp_port: u16) -> Option<SocketAddr> {
+    let udp_port = udp_port_for_mesh_id(mesh_id);
+    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    sock.set_broadcast(true).ok()?;
+    sock.set_read_timeout(Some(Duration::from_millis(280))).ok()?;
+    let seek = json!({"v": 1, "mesh": mesh_id, "seek": true});
+    let payload = seek.to_string();
+    let bcast: SocketAddr = SocketAddr::from(([255, 255, 255, 255], udp_port));
+    for _ in 0..28 {
+        let _ = sock.send_to(payload.as_bytes(), bcast);
+        let mut buf = [0u8; 1024];
+        match sock.recv_from(&mut buf) {
+            Ok((n, src)) => {
+                let msg = String::from_utf8_lossy(&buf[..n]);
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(msg.trim()) else {
+                    continue;
+                };
+                if v.get("v").and_then(|x| x.as_u64()) != Some(1) {
+                    continue;
+                }
+                if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id) {
+                    continue;
+                }
+                if v.get("tcp").and_then(|x| x.as_u64()) != Some(u64::from(tcp_port)) {
+                    continue;
+                }
+                return Some(SocketAddr::new(src.ip(), tcp_port));
+            }
+            Err(_) => {}
+        }
+        thread::sleep(Duration::from_millis(35));
+    }
+    None
+}
+
+fn lan_discovery_responder_loop(
+    mesh_id: String,
+    tcp_port: u16,
+    udp_port: u16,
+    shutdown: Arc<AtomicU32>,
+) {
+    let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, udp_port)) else {
+        return;
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
+    let mut buf = [0u8; 1024];
+    loop {
+        if shutdown.load(Ordering::SeqCst) != 0 {
+            break;
+        }
+        match sock.recv_from(&mut buf) {
+            Ok((n, src)) => {
+                let msg = String::from_utf8_lossy(&buf[..n]);
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(msg.trim()) else {
+                    continue;
+                };
+                if v.get("v").and_then(|x| x.as_u64()) != Some(1) {
+                    continue;
+                }
+                if v.get("seek").and_then(|x| x.as_bool()) != Some(true) {
+                    continue;
+                }
+                if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id.as_str()) {
+                    continue;
+                }
+                let reply = json!({"v": 1, "mesh": mesh_id.as_str(), "tcp": tcp_port});
+                let _ = sock.send_to(reply.to_string().as_bytes(), src);
+            }
+            Err(_) => {}
+        }
+    }
 }
 
 fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {
@@ -172,96 +263,157 @@ enum MeshRole {
     },
 }
 
+fn mesh_session_from_host_listener(
+    listener: TcpListener,
+    lan_discovery_mesh_id: Option<&str>,
+) -> Result<MeshSession, String> {
+    listener.set_nonblocking(false).map_err(|e| e.to_string())?;
+    let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let inbox = Arc::new(Inbox::new());
+    let num_nodes = Arc::new(AtomicU32::new(1));
+    let shutdown = Arc::new(AtomicU32::new(0));
+    let clients: Arc<Mutex<Vec<Option<TcpStream>>>> = Arc::new(Mutex::new(Vec::new()));
+    num_nodes.store(1, Ordering::SeqCst);
+
+    if let Some(mid) = lan_discovery_mesh_id {
+        let mid = mid.to_string();
+        let udp_port = udp_port_for_mesh_id(&mid);
+        let sd_udp = Arc::clone(&shutdown);
+        thread::spawn(move || {
+            lan_discovery_responder_loop(mid, tcp_port, udp_port, sd_udp);
+        });
+    }
+
+    let listener_c = listener.try_clone().map_err(|e| e.to_string())?;
+    let inbox_a = Arc::clone(&inbox);
+    let clients_a = Arc::clone(&clients);
+    let num_nodes_a = Arc::clone(&num_nodes);
+    let sd = Arc::clone(&shutdown);
+
+    thread::spawn(move || {
+        host_accept_loop(
+            listener_c,
+            inbox_a,
+            clients_a,
+            num_nodes_a,
+            sd,
+        );
+    });
+
+    Ok(MeshSession {
+        rank: 0,
+        num_nodes,
+        inbox,
+        role: MeshRole::Host { clients },
+        shutdown,
+    })
+}
+
+fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
+    let inbox = Arc::new(Inbox::new());
+    let num_nodes = Arc::new(AtomicU32::new(1));
+    let shutdown = Arc::new(AtomicU32::new(0));
+
+    stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    let welcome: serde_json::Value =
+        serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
+    let rank = welcome
+        .get("rank")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "bad welcome: rank".to_string())?
+        as u32;
+    let n = welcome
+        .get("num_nodes")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "bad welcome: num_nodes".to_string())?
+        as u32;
+    num_nodes.store(n, Ordering::SeqCst);
+
+    let inbox_r = Arc::clone(&inbox);
+    let sd_c = Arc::clone(&shutdown);
+    thread::spawn(move || {
+        client_read_loop(reader, inbox_r, rank, sd_c);
+    });
+
+    Ok(MeshSession {
+        rank,
+        num_nodes,
+        inbox,
+        role: MeshRole::Client {
+            stream: Mutex::new(stream),
+        },
+        shutdown,
+    })
+}
+
+fn try_mesh_client_once(addr: SocketAddr) -> Result<MeshSession, String> {
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
+        .map_err(|e| e.to_string())?;
+    finish_client_connection(stream)
+}
+
+fn mesh_session_from_client_addr(addr: SocketAddr) -> Result<MeshSession, String> {
+    for _ in 0..80 {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+            Ok(stream) => match finish_client_connection(stream) {
+                Ok(s) => return Ok(s),
+                Err(_) => thread::sleep(Duration::from_millis(50)),
+            },
+            Err(_) => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    Err("could not join mesh (coordinator not reachable)".into())
+}
+
 impl MeshSession {
     pub fn inbox(&self) -> Arc<Inbox> {
         Arc::clone(&self.inbox)
     }
 
-    pub fn join(session: &str) -> Result<Self, String> {
-        let addr = socket_addr(session);
-        let inbox = Arc::new(Inbox::new());
-        let num_nodes = Arc::new(AtomicU32::new(1));
-        let shutdown = Arc::new(AtomicU32::new(0));
-
-        match TcpListener::bind(addr) {
-            Ok(listener) => {
-                listener.set_nonblocking(false).map_err(|e| e.to_string())?;
-                let clients: Arc<Mutex<Vec<Option<TcpStream>>>> =
-                    Arc::new(Mutex::new(Vec::new()));
-                num_nodes.store(1, Ordering::SeqCst);
-
-                let listener_c = listener.try_clone().map_err(|e| e.to_string())?;
-                let inbox_a = Arc::clone(&inbox);
-                let clients_a = Arc::clone(&clients);
-                let num_nodes_a = Arc::clone(&num_nodes);
-                let sd = Arc::clone(&shutdown);
-
-                thread::spawn(move || {
-                    host_accept_loop(
-                        listener_c,
-                        inbox_a,
-                        clients_a,
-                        num_nodes_a,
-                        sd,
-                    );
-                });
-
-                Ok(MeshSession {
-                    rank: 0,
-                    num_nodes,
-                    inbox,
-                    role: MeshRole::Host { clients },
-                    shutdown,
-                })
-            }
-            Err(_) => {
-                for _ in 0..80 {
-                    if shutdown.load(Ordering::SeqCst) != 0 {
-                        break;
-                    }
-                    match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-                        Ok(stream) => {
-                            stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-                            stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
-                            let mut reader = BufReader::new(
-                                stream.try_clone().map_err(|e| e.to_string())?,
-                            );
-                            let mut line = String::new();
-                            reader.read_line(&mut line).map_err(|e| e.to_string())?;
-                            let welcome: serde_json::Value =
-                                serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
-                            let rank = welcome
-                                .get("rank")
-                                .and_then(|v| v.as_u64())
-                                .ok_or_else(|| "bad welcome: rank".to_string())?
-                                as u32;
-                            let n = welcome
-                                .get("num_nodes")
-                                .and_then(|v| v.as_u64())
-                                .ok_or_else(|| "bad welcome: num_nodes".to_string())?
-                                as u32;
-                            num_nodes.store(n, Ordering::SeqCst);
-
-                            let inbox_r = Arc::clone(&inbox);
-                            let sd_c = Arc::clone(&shutdown);
-                            thread::spawn(move || {
-                                client_read_loop(reader, inbox_r, rank, sd_c);
-                            });
-
-                            return Ok(MeshSession {
-                                rank,
-                                num_nodes,
-                                inbox,
-                                role: MeshRole::Client {
-                                    stream: Mutex::new(stream),
-                                },
-                                shutdown,
-                            });
-                        }
-                        Err(_) => thread::sleep(Duration::from_millis(50)),
-                    }
+    pub fn join(mesh_id: &str, mode: MeshMode) -> Result<Self, String> {
+        let port = port_for_mesh_id(mesh_id);
+        match mode {
+            MeshMode::Local => {
+                let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                match TcpListener::bind(loopback) {
+                    Ok(listener) => mesh_session_from_host_listener(listener, None),
+                    Err(_) => mesh_session_from_client_addr(loopback),
                 }
-                Err("could not join mesh session (coordinator not reachable)".into())
+            }
+            MeshMode::Lan => {
+                let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                if let Ok(s) = try_mesh_client_once(loopback) {
+                    return Ok(s);
+                }
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                    return mesh_session_from_client_addr(remote);
+                }
+                // Coordinator may have started UDP a moment after our first seek; retry once.
+                thread::sleep(Duration::from_millis(250));
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                    return mesh_session_from_client_addr(remote);
+                }
+                let any = SocketAddr::from(([0, 0, 0, 0], port));
+                match TcpListener::bind(any) {
+                    Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                        thread::sleep(Duration::from_millis(120));
+                        if let Ok(s) = try_mesh_client_once(loopback) {
+                            Ok(s)
+                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                            mesh_session_from_client_addr(remote)
+                        } else {
+                            mesh_session_from_client_addr(loopback)
+                        }
+                    }
+                    Err(e) => Err(format!(
+                        "lan mesh: could not bind 0.0.0.0:{port} (is another app using it?): {e}"
+                    )),
+                }
             }
         }
     }

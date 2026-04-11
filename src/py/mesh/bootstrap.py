@@ -71,6 +71,15 @@ class _MeshNode:
         self._mesh.send(id=kind, to=self._rank, **kwargs)
 
 
-def connect(session="default"):
-    _mesh_connect(session)
+def connect(id="default", mode="local"):
+    """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
+    ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, peers
+    on the LAN find the coordinator via UDP broadcast; same-machine peers use loopback.
+    """
+    mode = (mode or "local").lower()
+    if mode == "online":
+        raise NotImplementedError("xos.mesh mode 'online' is not implemented yet")
+    if mode not in ("local", "lan"):
+        raise ValueError("xos.mesh.connect: mode must be 'local', 'lan', or 'online'")
+    _mesh_connect(id, mode)
     return Mesh()

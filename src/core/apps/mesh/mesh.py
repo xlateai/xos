@@ -1,17 +1,22 @@
 """
-Local mesh chat — run `xos app mesh` (or `xos rs mesh`) in two or more terminals on the same machine.
+Mesh chat demo — run `xos app mesh` (or `xos rs mesh`).
+
+- ``mode="local"``: loopback only (same machine).
+- ``mode="lan"``: coordinator listens on all interfaces; peers find it via UDP broadcast on a
+  derived port (same ``id``). No manual IP. Edit ``CHAT_ID`` / ``MODE`` below.
 """
 
 import xos
 
-SESSION = "chat-demo"
+CHAT_ID = "chat-demo"
+MODE = "local"
 
 
 def main() -> None:
-    mesh = xos.mesh.connect(SESSION)
+    mesh = xos.mesh.connect(id=CHAT_ID, mode=MODE)
     rank = mesh.rank()
     nodes = mesh.num_nodes()
-    print(f"[mesh] rank={rank}  nodes={nodes}  session={SESSION!r}")
+    print(f"[mesh] rank={rank}  nodes={nodes}  id={CHAT_ID!r}  mode={MODE!r}")
     print("Type a line and press Enter to broadcast. Ctrl+C to exit.\n")
 
     while True:

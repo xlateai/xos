@@ -46,6 +46,12 @@ enum Commands {
         #[arg(long)]
         exe: bool,
     },
+    /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
+    Login {
+        /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
+        #[arg(long)]
+        offline: bool,
+    },
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -145,6 +151,7 @@ fn main() {
                     | "build"
                     | "code"
                     | "path"
+                    | "login"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -172,6 +179,7 @@ fn main() {
                     | "build"
                     | "code"
                     | "path"
+                    | "login"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -257,6 +265,19 @@ fn main() {
                 run_python_app(&path_to_run);
             } else {
                 run_python_interactive();
+            }
+        }
+        Some(Commands::Login { offline }) => {
+            if offline {
+                println!(
+                    "xos login --offline: placeholder — no credential file is written yet.\n\
+                     Intended: temporary session until you run `xos login` without --offline."
+                );
+            } else {
+                println!(
+                    "xos login: placeholder — browser OAuth / API key flow is not wired up yet.\n\
+                     Intended: open your auth site (e.g. Sign in with Google) and store an API key locally."
+                );
             }
         }
         None => {

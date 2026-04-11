@@ -1,6 +1,5 @@
-//! Same-machine mesh prototype: TCP on localhost + terminal line editor for clean CLI UX.
-//!
-//! LAN / QUIC / WebRTC / auth can plug in behind the same session + inbox abstraction later.
+//! Mesh: TCP star topology + terminal line editor for CLI UX. Modes `local` / `lan` in
+//! [`runtime::MeshSession`]; TLS / auth / `online` are future work.
 
 mod mesh;
 pub mod runtime;
