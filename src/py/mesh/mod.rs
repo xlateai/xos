@@ -1,9 +1,9 @@
 //! `xos.mesh` and `xos.input` — mesh (`local` / `lan`) + terminal line editor (Rust-backed).
 //! Python surface lives in `bootstrap.py` (included at compile time).
 
-use crate::apps::mesh::runtime::{MeshMode, MeshSession, Packet};
-use crate::apps::mesh::state::{LINE_EDITOR, MESH};
-use crate::apps::mesh::terminal::INPUT_INTERRUPT;
+use crate::mesh::{MeshMode, MeshSession, Packet};
+use crate::mesh::state::{LINE_EDITOR, MESH};
+use crate::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 use crate::auth::{has_identity, load_identity};
@@ -221,6 +221,21 @@ fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .into())
 }
 
+fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    let s = format!(
+        "[mesh n={} rank={}] >>> ",
+        m.current_num_nodes(),
+        m.rank
+    );
+    Ok(vm.ctx.new_str(s).into())
+}
+
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn mesh_broadcast_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let id: String = args
@@ -403,6 +418,7 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm.new_function("_mesh_num_nodes", mesh_num_nodes),
         vm,
     );
+    let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
     let _ = sub.set_attr(
         "_mesh_broadcast_payload",
         vm.new_function("_mesh_broadcast_payload", mesh_broadcast_payload),
@@ -429,6 +445,9 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_num_nodes", sub.get_attr("_mesh_num_nodes", vm).unwrap(), vm);
+    let _ = scope
+        .globals
+        .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
     let _ = scope.globals.set_item(
         "_mesh_broadcast_payload",
         sub.get_attr("_mesh_broadcast_payload", vm).unwrap(),

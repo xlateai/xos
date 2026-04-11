@@ -1,10 +1,4 @@
-//! TCP mesh (star topology: rank 0 coordinates).
-//!
-//! - **`local`**: plaintext JSON lines; one code path ([`host_peer_reader`], plain [`send_impl`]). Fast
-//!   for same-machine multi-terminal tests without identity.
-//! - **`lan`**: per-TCP-session AES after RSA/X25519 handshake; UDP discovery; separate relay/send
-//!   paths ([`host_peer_reader_lan`], encrypted [`send_impl`]). Not mechanically merged with `local`
-//!   because every peer uses distinct wire keys.
+//! TCP mesh transport: star topology (coordinator relays). See [`super::local`] / [`super::lan`].
 //!
 //! Locking: never hold `clients` + `lan_host` across TCP writes — clone streams/keys, drop locks, then encrypt/write.
 
@@ -12,26 +6,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::apps::mesh::state::INPUT_INTERRUPT_REQUESTED;
-use crate::apps::mesh::terminal::INPUT_INTERRUPT;
-
-/// Ctrl+C during `mesh.connect` — same token as [`INPUT_INTERRUPT`] for `KeyboardInterrupt` mapping.
-fn check_join_interrupt() -> Result<(), String> {
-    if INPUT_INTERRUPT_REQUESTED.swap(false, Ordering::SeqCst) {
-        Err(INPUT_INTERRUPT.to_string())
-    } else {
-        Ok(())
-    }
-}
+use super::lan::{check_join_interrupt, lan_discover_coordinator, lan_discovery_responder_loop, udp_port_for_mesh_id};
+use super::local::port_for_mesh_id;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::apps::mesh::lan_crypto::{
+use super::lan_crypto::{
     client_handshake, decrypt_mesh_line, encrypt_mesh_line, server_handshake, LanWireKeys,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -59,25 +44,6 @@ struct WireEnvelope {
     payload: serde_json::Value,
 }
 
-fn port_for_mesh_id(mesh_id: &str) -> u16 {
-    let mut h: u32 = 2166136261;
-    for b in mesh_id.bytes() {
-        h = h.wrapping_mul(16777619);
-        h ^= b as u32;
-    }
-    40_000u16.saturating_add((h % 25_000) as u16)
-}
-
-/// UDP port for LAN discovery (separate from TCP). Peers broadcast `seek` here; coordinator replies.
-fn udp_port_for_mesh_id(mesh_id: &str) -> u16 {
-    let mut h: u32 = 0x811C_9DC5;
-    for b in mesh_id.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x0100_0193);
-    }
-    35_000u16.saturating_add((h % 5_000) as u16)
-}
-
 /// Transport scope for [`MeshSession::join`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshMode {
@@ -85,93 +51,6 @@ pub enum MeshMode {
     Local,
     /// Coordinator binds `0.0.0.0` on TCP; LAN peers locate it via UDP broadcast on a derived port.
     Lan,
-}
-
-/// Broadcast seek for `mesh_id`; coordinator replies with JSON containing the same `tcp` port.
-/// Tuned for sub-second discovery on LAN; Ctrl+C aborts between rounds.
-fn lan_discover_coordinator(mesh_id: &str, tcp_port: u16) -> Result<Option<SocketAddr>, String> {
-    // Rounds only matter when no coordinator answers; first valid UDP reply still returns immediately.
-    const ROUNDS: u32 = 6;
-    const RECV_MS: u64 = 50;
-    const GAP_MS: u64 = 5;
-
-    let udp_port = udp_port_for_mesh_id(mesh_id);
-    let Some(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok() else {
-        return Ok(None);
-    };
-    sock.set_broadcast(true).ok();
-    sock.set_read_timeout(Some(Duration::from_millis(RECV_MS))).ok();
-    let seek = json!({"v": 1, "mesh": mesh_id, "seek": true});
-    let payload = seek.to_string();
-    let bcast: SocketAddr = SocketAddr::from(([255, 255, 255, 255], udp_port));
-    for _ in 0..ROUNDS {
-        check_join_interrupt()?;
-        let _ = sock.send_to(payload.as_bytes(), bcast);
-        let mut buf = [0u8; 1024];
-        match sock.recv_from(&mut buf) {
-            Ok((n, src)) => {
-                let msg = String::from_utf8_lossy(&buf[..n]);
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(msg.trim()) else {
-                    thread::sleep(Duration::from_millis(GAP_MS));
-                    continue;
-                };
-                if v.get("v").and_then(|x| x.as_u64()) != Some(1) {
-                    thread::sleep(Duration::from_millis(GAP_MS));
-                    continue;
-                }
-                if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id) {
-                    thread::sleep(Duration::from_millis(GAP_MS));
-                    continue;
-                }
-                if v.get("tcp").and_then(|x| x.as_u64()) != Some(u64::from(tcp_port)) {
-                    thread::sleep(Duration::from_millis(GAP_MS));
-                    continue;
-                }
-                return Ok(Some(SocketAddr::new(src.ip(), tcp_port)));
-            }
-            Err(_) => {}
-        }
-        thread::sleep(Duration::from_millis(GAP_MS));
-    }
-    Ok(None)
-}
-
-fn lan_discovery_responder_loop(
-    mesh_id: String,
-    tcp_port: u16,
-    udp_port: u16,
-    shutdown: Arc<AtomicU32>,
-) {
-    let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, udp_port)) else {
-        return;
-    };
-    let _ = sock.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut buf = [0u8; 1024];
-    loop {
-        if shutdown.load(Ordering::SeqCst) != 0 {
-            break;
-        }
-        match sock.recv_from(&mut buf) {
-            Ok((n, src)) => {
-                let msg = String::from_utf8_lossy(&buf[..n]);
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(msg.trim()) else {
-                    continue;
-                };
-                if v.get("v").and_then(|x| x.as_u64()) != Some(1) {
-                    continue;
-                }
-                if v.get("seek").and_then(|x| x.as_bool()) != Some(true) {
-                    continue;
-                }
-                if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id.as_str()) {
-                    continue;
-                }
-                let reply = json!({"v": 1, "mesh": mesh_id.as_str(), "tcp": tcp_port});
-                let _ = sock.send_to(reply.to_string().as_bytes(), src);
-            }
-            Err(_) => {}
-        }
-    }
 }
 
 fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {

@@ -12,6 +12,7 @@ pub mod tuneable;
 pub mod engine;
 pub mod video;
 pub mod apps;
+pub mod mesh;
 pub mod ui;
 pub mod tensor;
 

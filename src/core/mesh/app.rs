@@ -1,4 +1,4 @@
-//! `xos app mesh` entry: run adjacent `mesh.py` with mesh + terminal bindings (same as `xpy`, plus mesh state).
+//! `xos app mesh` entry: run adjacent `mesh.py` with mesh + terminal bindings.
 
 use crate::engine::{Application, EngineState};
 use crate::python_api::runtime::{execute_python_code, PrintCallback};
@@ -105,7 +105,7 @@ pub fn run_mesh_app() {
             std::process::exit(1);
         }
     };
-    let script = root.join("src/core/apps/mesh/mesh.py");
+    let script = root.join("src/core/mesh/mesh.py");
     if !script.exists() {
         eprintln!("❌ mesh script not found: {}", script.display());
         std::process::exit(1);

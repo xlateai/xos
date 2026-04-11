@@ -15,9 +15,10 @@ MODE = "lan"
 
 def main() -> None:
     mesh = xos.mesh.connect(id=CHAT_ID, mode=MODE)
-    rank = mesh.rank()
-    nodes = mesh.num_nodes()
-    print(f"[mesh] rank={rank}  nodes={nodes}  id={CHAT_ID!r}  mode={MODE!r}")
+    print(
+        f"[mesh] rank={mesh.rank()}  nodes={mesh.num_nodes()}  "
+        f"id={CHAT_ID!r}  mode={MODE!r}"
+    )
     print("Type a line and press Enter to broadcast. Ctrl+C to exit.\n")
 
     while True:
@@ -29,7 +30,7 @@ def main() -> None:
                 text = getattr(packet, "msg", "")
                 print(f"[{who}] {text}")
 
-        line = xos.input(">>> ", wait=False)
+        line = xos.input(mesh.prompt(), wait=False)
         if line is not None:
             mesh.broadcast(id="message", msg=line)
 

@@ -29,6 +29,10 @@ class Mesh:
     def num_nodes(self):
         return _mesh_num_nodes()
 
+    def prompt(self):
+        """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
+        return _mesh_prompt()
+
     def broadcast(self, **kwargs):
         kind = kwargs.pop("id")
         _mesh_broadcast_payload(kind, kwargs)
