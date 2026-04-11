@@ -9,7 +9,7 @@ Mesh chat demo — run `xos app mesh` (or `xos rs mesh`).
 import xos
 
 CHAT_ID = "chat-demo"
-MODE = "local"
+MODE = "lan"
 
 
 def main() -> None:
