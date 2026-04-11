@@ -9,11 +9,6 @@ Remote desktop over mesh — Python entrypoint for `xpy path/to/remote.py`.
 Run the viewer first, then the streamer. LAN mode expects ``xos login --offline``.
 """
 
-from __future__ import annotations
-
-import time
-from typing import Any, Dict, List, Optional
-
 import xos
 
 MESH_ID = "xos-remote"
@@ -29,7 +24,7 @@ mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
 RANK = mesh.rank()
 
 
-def _norm_pointer(x: float, y: float, width: int, height: int) -> tuple[float, float]:
+def _norm_pointer(x, y, width, height):
     fw = max(float(width), 1.0)
     fh = max(float(height), 1.0)
     return (x / fw, y / fh)
@@ -38,11 +33,11 @@ def _norm_pointer(x: float, y: float, width: int, height: int) -> tuple[float, f
 class RemoteViewer(xos.Application):
     """Rank 0: show streamer frames; send input on pointer events."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(headless=False)
         self._pending_scroll = 0.0
 
-    def tick(self) -> None:
+    def tick(self):
         stream_frame = mesh.receive(id=KIND_FRAME, wait=False, latest_only=True)
         if stream_frame:
             xos.rasterizer.frame_in_frame(self.frame, stream_frame)
@@ -51,7 +46,7 @@ class RemoteViewer(xos.Application):
             self._push_input()
             self._pending_scroll = 0.0
 
-    def _push_input(self) -> None:
+    def _push_input(self):
         w, h = self.frame.get_width(), self.frame.get_height()
         nx, ny = _norm_pointer(float(self.mouse["x"]), float(self.mouse["y"]), w, h)
         mesh.send(
@@ -64,16 +59,16 @@ class RemoteViewer(xos.Application):
             scroll=float(self._pending_scroll),
         )
 
-    def on_mouse_move(self, x: float, y: float) -> None:
+    def on_mouse_move(self, x, y):
         self._push_input()
 
-    def on_mouse_down(self, x: float, y: float) -> None:
+    def on_mouse_down(self, x, y):
         self._push_input()
 
-    def on_mouse_up(self, x: float, y: float) -> None:
+    def on_mouse_up(self, x, y):
         self._push_input()
 
-    def on_scroll(self, dx: float, dy: float) -> None:
+    def on_scroll(self, dx, dy):
         self._pending_scroll += dy
         self._push_input()
 
@@ -81,24 +76,22 @@ class RemoteViewer(xos.Application):
 class RemoteStreamer(xos.Application):
     """Rank 1: apply remote input; send frames at most ``fps`` times per second (default 30)."""
 
-    def __init__(self, fps: float = 30.0) -> None:
+    def __init__(self, fps=30.0):
         super().__init__(headless=True)
         self._fps = max(fps, 1e-3)
         self._min_frame_interval = 1.0 / self._fps
-        self._last_frame_sent_at: Optional[float] = None
+        self._time_until_send = 0.0
 
-    def tick(self) -> None:
+    def tick(self):
         self._apply_remote_input()
-
-        now = time.perf_counter()
-        if self._last_frame_sent_at is not None:
-            if (now - self._last_frame_sent_at) < self._min_frame_interval:
-                return
+        self._time_until_send -= float(getattr(self, "dt", 0.0) or 0.0)
+        if self._time_until_send > 0.0:
+            return
 
         mesh.send(id=KIND_FRAME, to=VIEWER_RANK, stream_frame=self.screen)
-        self._last_frame_sent_at = now
+        self._time_until_send = self._min_frame_interval
 
-    def _apply_remote_input(self) -> None:
+    def _apply_remote_input(self):
         packets = mesh.receive(id=KIND_INPUT, wait=False, latest_only=False)
         if not packets:
             return
@@ -108,7 +101,7 @@ class RemoteStreamer(xos.Application):
         xos.mouse.apply_remote_input(payload)
 
 
-def _coalesce_input(packets: List[Any]) -> Optional[Dict[str, Any]]:
+def _coalesce_input(packets):
     """Last sample wins for position and buttons; scroll sums."""
     if not packets:
         return None
@@ -125,7 +118,7 @@ def _coalesce_input(packets: List[Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def main() -> None:
+def main():
     if RANK not in (VIEWER_RANK, STREAMER_RANK):
         raise RuntimeError(
             f"remote app expects mesh rank {VIEWER_RANK} (viewer) or {STREAMER_RANK} (streamer); got {RANK}"
