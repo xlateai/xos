@@ -162,6 +162,7 @@ impl StandalonePreviewApp {
                     frame_view_zoom_velocity: 0.0,
                     frame_view_center_x: 0.5,
                     frame_view_center_y: 0.5,
+                    f3_fps_label_override: None,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);

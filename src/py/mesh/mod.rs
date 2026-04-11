@@ -177,7 +177,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             vm.new_runtime_error(format!("could not load node identity: {e}"))
         })?;
         let id = std::sync::Arc::new(unlocked);
-        MeshSession::join_with_identity(&mesh_id, mode, id)
+        MeshSession::join_with_identity(&mesh_id, mode, id, None)
     } else {
         MeshSession::join(&mesh_id, mode)
     }
@@ -206,7 +206,7 @@ fn mesh_rank(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "mesh not connected; call xos.mesh.connect()".to_string(),
         ));
     };
-    Ok(vm.ctx.new_int(m.rank as isize).into())
+    Ok(vm.ctx.new_int(m.rank() as isize).into())
 }
 
 fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -239,7 +239,7 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let s = format!(
         "[mesh n={} rank={} id={}] >>> ",
         m.current_num_nodes(),
-        m.rank,
+        m.rank(),
         short
     );
     Ok(vm.ctx.new_str(s).into())

@@ -31,6 +31,9 @@ const MESH_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Application keepalive kind — **not** delivered to [`Inbox`] / Python `receive()`.
 pub const MESH_HEARTBEAT_KIND: &str = "__mesh_heartbeat__";
 
+/// Coordinator → peer: slot ranks were compacted after a disconnect; **not** delivered to [`Inbox`].
+pub const MESH_TOPOLOGY_KIND: &str = "__mesh_topology__";
+
 /// How often each side sends a heartbeat on **open** TCP mesh links (both directions).
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 
@@ -209,7 +212,7 @@ fn clear_disconnected_peer_plain(
             g[idx] = None;
         }
     }
-    recompute_num_nodes(clients, num_nodes);
+    compact_and_notify_host_plain(clients, num_nodes);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -231,7 +234,142 @@ fn clear_disconnected_peer_lan(
             g[idx] = None;
         }
     }
+    compact_and_notify_host_lan(clients, lan_host, num_nodes);
+}
+
+/// Remove gaps in peer slots (ranks must stay 1..=N dense) and push updated rank / `num_nodes` to each peer.
+fn compact_and_notify_host_plain(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    {
+        let mut g = clients.lock().unwrap();
+        let packed: Vec<Option<TcpStream>> = g
+            .iter()
+            .filter_map(|oc| oc.as_ref().and_then(|s| s.try_clone().ok().map(Some)))
+            .collect();
+        *g = packed;
+    }
     recompute_num_nodes(clients, num_nodes);
+    notify_peer_topology_plain(clients, num_nodes);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compact_and_notify_host_lan(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    {
+        let mut cg = clients.lock().unwrap();
+        let mut lg = lan_host.lock().unwrap();
+        let n = cg.len().max(lg.len());
+        let mut new_c: Vec<Option<TcpStream>> = Vec::new();
+        let mut new_l: Vec<Option<LanWireKeys>> = Vec::new();
+        for i in 0..n {
+            match (cg.get(i), lg.get(i)) {
+                (Some(Some(s)), Some(Some(k))) => {
+                    new_c.push(Some(s.try_clone().unwrap()));
+                    new_l.push(Some(k.clone()));
+                }
+                _ => {}
+            }
+        }
+        *cg = new_c;
+        *lg = new_l;
+    }
+    recompute_num_nodes(clients, num_nodes);
+    notify_peer_topology_lan(clients, lan_host, num_nodes);
+}
+
+fn notify_peer_topology_plain(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    let n = num_nodes.load(Ordering::SeqCst);
+    let lines: Vec<(usize, String)> = {
+        let guard = clients.lock().unwrap();
+        let mut out = Vec::new();
+        for (i, oc) in guard.iter().enumerate() {
+            if oc.is_none() {
+                continue;
+            }
+            let rank = (i + 1) as u32;
+            let env = WireEnvelope {
+                v: WIRE_VERSION,
+                from: 0,
+                from_id: String::new(),
+                kind: MESH_TOPOLOGY_KIND.to_string(),
+                to: Some(rank),
+                payload: json!({ "rank": rank, "num_nodes": n }),
+            };
+            if let Ok(line) = wire_line(&env) {
+                out.push((i, line));
+            }
+        }
+        out
+    };
+    for (idx, line) in lines {
+        let Some(w) = clone_client_writer_at(clients, idx) else {
+            continue;
+        };
+        topology_write_plain_no_evict(w, line.as_bytes());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn notify_peer_topology_lan(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    let n = num_nodes.load(Ordering::SeqCst);
+    let lines: Vec<(usize, Vec<u8>)> = {
+        let cg = clients.lock().unwrap();
+        let lk = lan_host.lock().unwrap();
+        let mut out = Vec::new();
+        for (i, oc) in cg.iter().enumerate() {
+            let Some(_) = oc else {
+                continue;
+            };
+            let Some(Some(k)) = lk.get(i) else {
+                continue;
+            };
+            let rank = (i + 1) as u32;
+            let env = WireEnvelope {
+                v: WIRE_VERSION,
+                from: 0,
+                from_id: String::new(),
+                kind: MESH_TOPOLOGY_KIND.to_string(),
+                to: Some(rank),
+                payload: json!({ "rank": rank, "num_nodes": n }),
+            };
+            let Ok(inner) = serde_json::to_string(&env) else {
+                continue;
+            };
+            if let Ok(line) = encrypt_mesh_line(&k.tx, &inner) {
+                out.push((i, line.into_bytes()));
+            }
+        }
+        out
+    };
+    for (idx, line) in lines {
+        let Some(w) = clone_client_writer_at(clients, idx) else {
+            continue;
+        };
+        topology_write_lan_no_evict(w, &line);
+    }
+}
+
+fn topology_write_plain_no_evict(mut w: TcpStream, bytes: &[u8]) {
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
+    let _ = w.write_all(bytes).and_then(|_| w.flush());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn topology_write_lan_no_evict(mut w: TcpStream, bytes: &[u8]) {
+    let _ = w.set_write_timeout(Some(MESH_WRITE_TIMEOUT));
+    let _ = w.write_all(bytes).and_then(|_| w.flush());
 }
 
 fn relay_write_plain_best_effort(
@@ -276,6 +414,27 @@ fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, 
         .saturating_add(1);
     let rank = idx as u32 + 1;
     (idx, rank, num_nodes_after)
+}
+
+/// When `Some(max)`, refuse new TCP peers once the mesh already has `max` nodes (coordinator + clients).
+fn host_has_peer_capacity(
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    max_total_nodes: Option<u32>,
+) -> bool {
+    let Some(max) = max_total_nodes else {
+        return true;
+    };
+    if max <= 1 {
+        return false;
+    }
+    let max_clients = max.saturating_sub(1);
+    let connected = clients
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|oc| oc.is_some())
+        .count() as u32;
+    connected < max_clients
 }
 
 fn clone_client_writer_at(
@@ -351,7 +510,7 @@ impl Inbox {
 }
 
 pub struct MeshSession {
-    pub rank: u32,
+    rank_atomic: Arc<AtomicU32>,
     /// SHA256(SPKI DER) hex for this session’s node (empty in local mode without LAN identity).
     pub node_id: String,
     pub node_name: String,
@@ -380,7 +539,7 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
     let sd = Arc::clone(&session.shutdown);
     match &session.role {
         MeshRole::Host { clients } => {
-            let rank = session.rank;
+            let rank = session.rank();
             let node_id = session.node_id.clone();
             let clients = Arc::clone(clients);
             let num_nodes = Arc::clone(&session.num_nodes);
@@ -415,7 +574,7 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
             }
         }
         MeshRole::Client { stream } => {
-            let rank = session.rank;
+            let rank_a = Arc::clone(&session.rank_atomic);
             let node_id = session.node_id.clone();
             let stream = Arc::clone(stream);
             #[cfg(not(target_arch = "wasm32"))]
@@ -426,6 +585,7 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
+                        let rank = rank_a.load(Ordering::SeqCst);
                         let _ = client_send_heartbeat(rank, &node_id, &stream, lan.as_ref());
                         thread::sleep(HEARTBEAT_INTERVAL);
                     }
@@ -438,6 +598,7 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                         if sd.load(Ordering::SeqCst) != 0 {
                             break;
                         }
+                        let rank = rank_a.load(Ordering::SeqCst);
                         let _ = client_send_heartbeat_wasm(rank, &node_id, &stream);
                         thread::sleep(HEARTBEAT_INTERVAL);
                     }
@@ -452,6 +613,7 @@ fn mesh_session_from_host_listener(
     listener: TcpListener,
     lan_discovery_mesh_id: Option<&str>,
     identity: Option<Arc<UnlockedNodeIdentity>>,
+    max_total_nodes: Option<u32>,
 ) -> Result<MeshSession, String> {
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -492,6 +654,7 @@ fn mesh_session_from_host_listener(
             sd,
             id_c,
             lan_h,
+            max_total_nodes,
         );
     });
 
@@ -501,7 +664,7 @@ fn mesh_session_from_host_listener(
         .unwrap_or((String::new(), String::new()));
 
     let session = MeshSession {
-        rank: 0,
+        rank_atomic: Arc::new(AtomicU32::new(0)),
         node_id,
         node_name,
         num_nodes,
@@ -519,6 +682,7 @@ fn mesh_session_from_host_listener(
 fn mesh_session_from_host_listener(
     listener: TcpListener,
     lan_discovery_mesh_id: Option<&str>,
+    max_total_nodes: Option<u32>,
 ) -> Result<MeshSession, String> {
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -550,11 +714,12 @@ fn mesh_session_from_host_listener(
             clients_a,
             num_nodes_a,
             sd,
+            max_total_nodes,
         );
     });
 
     let session = MeshSession {
-        rank: 0,
+        rank_atomic: Arc::new(AtomicU32::new(0)),
         node_id: String::new(),
         node_name: String::new(),
         num_nodes,
@@ -592,14 +757,17 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
         as u32;
     num_nodes.store(n, Ordering::SeqCst);
 
+    let rank_a = Arc::new(AtomicU32::new(rank));
+    let rank_reader = Arc::clone(&rank_a);
     let inbox_r = Arc::clone(&inbox);
+    let num_r = Arc::clone(&num_nodes);
     let sd_c = Arc::clone(&shutdown);
     thread::spawn(move || {
-        client_read_loop(reader, inbox_r, rank, sd_c, None);
+        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, None);
     });
 
     let session = MeshSession {
-        rank,
+        rank_atomic: rank_a,
         node_id: String::new(),
         node_name: String::new(),
         num_nodes,
@@ -655,11 +823,14 @@ fn finish_client_connection(
         as u32;
     num_nodes.store(n, Ordering::SeqCst);
 
+    let rank_a = Arc::new(AtomicU32::new(rank));
+    let rank_reader = Arc::clone(&rank_a);
     let inbox_r = Arc::clone(&inbox);
+    let num_r = Arc::clone(&num_nodes);
     let sd_c = Arc::clone(&shutdown);
     let lan_reader = lan_client.clone();
     thread::spawn(move || {
-        client_read_loop(reader, inbox_r, rank, sd_c, lan_reader);
+        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, lan_reader);
     });
 
     let (node_id, node_name) = identity
@@ -668,7 +839,7 @@ fn finish_client_connection(
         .unwrap_or((String::new(), String::new()));
 
     let session = MeshSession {
-        rank,
+        rank_atomic: rank_a,
         node_id,
         node_name,
         num_nodes,
@@ -771,6 +942,11 @@ fn mesh_session_from_client_addr(
 }
 
 impl MeshSession {
+    #[inline]
+    pub fn rank(&self) -> u32 {
+        self.rank_atomic.load(Ordering::SeqCst)
+    }
+
     pub fn inbox(&self) -> Arc<Inbox> {
         Arc::clone(&self.inbox)
     }
@@ -783,7 +959,7 @@ impl MeshSession {
                 MeshMode::Local => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                     match TcpListener::bind(loopback) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, None),
+                        Ok(listener) => mesh_session_from_host_listener(listener, None, None),
                         Err(_) => mesh_session_from_client_addr(loopback),
                     }
                 }
@@ -797,7 +973,7 @@ impl MeshSession {
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
                     match TcpListener::bind(any) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
+                        Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id), None),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                             thread::sleep(Duration::from_millis(80));
                             if let Ok(s) = try_mesh_client_once(loopback) {
@@ -822,7 +998,7 @@ impl MeshSession {
                 MeshMode::Local => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                     match TcpListener::bind(loopback) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, None, None),
+                        Ok(listener) => mesh_session_from_host_listener(listener, None, None, None),
                         Err(_) => mesh_session_from_client_addr(loopback, None),
                     }
                 }
@@ -839,6 +1015,7 @@ impl MeshSession {
         mesh_id: &str,
         mode: MeshMode,
         identity: Arc<UnlockedNodeIdentity>,
+        max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
         let port = port_for_mesh_id(mesh_id);
         match mode {
@@ -862,6 +1039,7 @@ impl MeshSession {
                         listener,
                         Some(mesh_id),
                         Some(identity),
+                        max_total_nodes,
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                         thread::sleep(Duration::from_millis(80));
@@ -914,7 +1092,7 @@ impl MeshSession {
     ) -> Result<(), String> {
         let env = WireEnvelope {
             v: WIRE_VERSION,
-            from: self.rank,
+            from: self.rank_atomic.load(Ordering::SeqCst),
             from_id: self.node_id.clone(),
             kind: kind.to_string(),
             to,
@@ -1034,12 +1212,16 @@ fn host_accept_loop(
     clients: Arc<Mutex<Vec<Option<TcpStream>>>>,
     num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
+    max_total_nodes: Option<u32>,
 ) {
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
         }
         let Ok(mut stream) = conn else { continue };
+        if !host_has_peer_capacity(&clients, max_total_nodes) {
+            continue;
+        }
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
         stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
@@ -1086,12 +1268,16 @@ fn host_accept_loop(
     shutdown: Arc<AtomicU32>,
     identity: Option<Arc<UnlockedNodeIdentity>>,
     lan_host: Option<Arc<Mutex<Vec<Option<LanWireKeys>>>>>,
+    max_total_nodes: Option<u32>,
 ) {
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
         }
         let Ok(mut stream) = conn else { continue };
+        if !host_has_peer_capacity(&clients, max_total_nodes) {
+            continue;
+        }
         stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
         stream.set_write_timeout(Some(MESH_WRITE_TIMEOUT)).ok();
         let _ = stream.set_nodelay(true);
@@ -1213,6 +1399,9 @@ fn host_peer_reader(
             continue;
         }
         if env.kind == MESH_HEARTBEAT_KIND {
+            continue;
+        }
+        if env.kind == MESH_TOPOLOGY_KIND {
             continue;
         }
 
@@ -1381,6 +1570,9 @@ fn host_peer_reader_lan(
         if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
+        if env.kind == MESH_TOPOLOGY_KIND {
+            continue;
+        }
 
         if should_deliver_locally(0, env.from, env.to) {
             inbox.push(Packet {
@@ -1400,7 +1592,8 @@ fn host_peer_reader_lan(
 fn client_read_loop(
     mut reader: BufReader<TcpStream>,
     inbox: Arc<Inbox>,
-    my_rank: u32,
+    my_rank: Arc<AtomicU32>,
+    num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
 ) {
     let mut line = String::new();
@@ -1420,7 +1613,17 @@ fn client_read_loop(
         if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
-        if should_deliver_locally(my_rank, env.from, env.to) {
+        if env.kind == MESH_TOPOLOGY_KIND {
+            if let Some(r) = env.payload.get("rank").and_then(|v| v.as_u64()) {
+                my_rank.store(r as u32, Ordering::SeqCst);
+            }
+            if let Some(n) = env.payload.get("num_nodes").and_then(|v| v.as_u64()) {
+                num_nodes.store(n as u32, Ordering::SeqCst);
+            }
+            continue;
+        }
+        let r = my_rank.load(Ordering::SeqCst);
+        if should_deliver_locally(r, env.from, env.to) {
             inbox.push(Packet {
                 from_rank: env.from,
                 from_id: env.from_id.clone(),
@@ -1435,7 +1638,8 @@ fn client_read_loop(
 fn client_read_loop(
     mut reader: BufReader<TcpStream>,
     inbox: Arc<Inbox>,
-    my_rank: u32,
+    my_rank: Arc<AtomicU32>,
+    num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
     lan: Option<LanWireKeys>,
 ) {
@@ -1464,7 +1668,17 @@ fn client_read_loop(
         if env.kind == MESH_HEARTBEAT_KIND {
             continue;
         }
-        if should_deliver_locally(my_rank, env.from, env.to) {
+        if env.kind == MESH_TOPOLOGY_KIND {
+            if let Some(r) = env.payload.get("rank").and_then(|v| v.as_u64()) {
+                my_rank.store(r as u32, Ordering::SeqCst);
+            }
+            if let Some(n) = env.payload.get("num_nodes").and_then(|v| v.as_u64()) {
+                num_nodes.store(n as u32, Ordering::SeqCst);
+            }
+            continue;
+        }
+        let r = my_rank.load(Ordering::SeqCst);
+        if should_deliver_locally(r, env.from, env.to) {
             inbox.push(Packet {
                 from_rank: env.from,
                 from_id: env.from_id.clone(),

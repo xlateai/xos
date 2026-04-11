@@ -348,6 +348,9 @@ pub struct EngineState {
     pub frame_view_center_x: f32,
     /// Normalized viewport center within source frame (0..1).
     pub frame_view_center_y: f32,
+    /// When set, the F3 overlay shows this value as “FPS” instead of `1 / delta_time_seconds`
+    /// (e.g. remote viewer reports actual stream frame rate).
+    pub f3_fps_label_override: Option<f32>,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).

@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2021"
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
 repository = "https://github.com/xlateai/xos"
@@ -72,6 +72,12 @@ rfd = "0.16.0"
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 metal = "0.32.0"
 objc = "0.2"
+
+# Remote desktop: capture + synthetic input (desktop macOS only; not iOS)
+[target.'cfg(target_os = "macos")'.dependencies]
+# CGWindowList-based capture (full desktop); grant Screen Recording for the xos binary.
+xcap = "0.9.4"
+enigo = "0.1"
 
 # -------------------------------------------------------------------
 # WebAssembly target
