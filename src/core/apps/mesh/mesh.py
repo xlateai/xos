@@ -2,8 +2,8 @@
 Mesh chat demo — run `xos app mesh` (or `xos rs mesh`).
 
 - ``mode="local"``: loopback only (same machine).
-- ``mode="lan"``: coordinator listens on all interfaces; peers find it via UDP broadcast on a
-  derived port (same ``id``). No manual IP. Edit ``CHAT_ID`` / ``MODE`` below.
+- ``mode="lan"``: tries **loopback first** (two terminals on one PC), then UDP discovery on Wi‑Fi,
+  then binds as coordinator if alone. Same ``CHAT_ID`` must match. Edit ``CHAT_ID`` / ``MODE`` below.
 """
 
 import xos

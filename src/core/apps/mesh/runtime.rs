@@ -11,6 +11,18 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crate::apps::mesh::state::INPUT_INTERRUPT_REQUESTED;
+use crate::apps::mesh::terminal::INPUT_INTERRUPT;
+
+/// Ctrl+C during `mesh.connect` — same token as [`INPUT_INTERRUPT`] for `KeyboardInterrupt` mapping.
+fn check_join_interrupt() -> Result<(), String> {
+    if INPUT_INTERRUPT_REQUESTED.swap(false, Ordering::SeqCst) {
+        Err(INPUT_INTERRUPT.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::apps::mesh::lan_crypto::{
     client_handshake, decrypt_mesh_line, encrypt_mesh_line, server_handshake, LanWireKeys,
@@ -66,39 +78,51 @@ pub enum MeshMode {
 }
 
 /// Broadcast seek for `mesh_id`; coordinator replies with JSON containing the same `tcp` port.
-fn lan_discover_coordinator(mesh_id: &str, tcp_port: u16) -> Option<SocketAddr> {
+/// Tuned for sub-second discovery on LAN; Ctrl+C aborts between rounds.
+fn lan_discover_coordinator(mesh_id: &str, tcp_port: u16) -> Result<Option<SocketAddr>, String> {
+    const ROUNDS: u32 = 12;
+    const RECV_MS: u64 = 85;
+    const GAP_MS: u64 = 8;
+
     let udp_port = udp_port_for_mesh_id(mesh_id);
-    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
-    sock.set_broadcast(true).ok()?;
-    sock.set_read_timeout(Some(Duration::from_millis(280))).ok()?;
+    let Some(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok() else {
+        return Ok(None);
+    };
+    sock.set_broadcast(true).ok();
+    sock.set_read_timeout(Some(Duration::from_millis(RECV_MS))).ok();
     let seek = json!({"v": 1, "mesh": mesh_id, "seek": true});
     let payload = seek.to_string();
     let bcast: SocketAddr = SocketAddr::from(([255, 255, 255, 255], udp_port));
-    for _ in 0..28 {
+    for _ in 0..ROUNDS {
+        check_join_interrupt()?;
         let _ = sock.send_to(payload.as_bytes(), bcast);
         let mut buf = [0u8; 1024];
         match sock.recv_from(&mut buf) {
             Ok((n, src)) => {
                 let msg = String::from_utf8_lossy(&buf[..n]);
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(msg.trim()) else {
+                    thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
                 };
                 if v.get("v").and_then(|x| x.as_u64()) != Some(1) {
+                    thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
                 }
                 if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id) {
+                    thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
                 }
                 if v.get("tcp").and_then(|x| x.as_u64()) != Some(u64::from(tcp_port)) {
+                    thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
                 }
-                return Some(SocketAddr::new(src.ip(), tcp_port));
+                return Ok(Some(SocketAddr::new(src.ip(), tcp_port)));
             }
             Err(_) => {}
         }
-        thread::sleep(Duration::from_millis(35));
+        thread::sleep(Duration::from_millis(GAP_MS));
     }
-    None
+    Ok(None)
 }
 
 fn lan_discovery_responder_loop(
@@ -486,8 +510,9 @@ fn finish_client_connection(
 
 #[cfg(target_arch = "wasm32")]
 fn try_mesh_client_once(addr: SocketAddr) -> Result<MeshSession, String> {
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(120))
         .map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true);
     finish_client_connection(stream)
 }
 
@@ -496,23 +521,42 @@ fn try_mesh_client_once(
     addr: SocketAddr,
     identity: Option<Arc<UnlockedIdentity>>,
 ) -> Result<MeshSession, String> {
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(120))
         .map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true);
     finish_client_connection(stream, identity)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn mesh_session_from_client_addr(addr: SocketAddr) -> Result<MeshSession, String> {
-    for _ in 0..80 {
-        match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            Ok(stream) => match finish_client_connection(stream) {
-                Ok(s) => return Ok(s),
-                Err(_) => thread::sleep(Duration::from_millis(50)),
-            },
-            Err(_) => thread::sleep(Duration::from_millis(50)),
+    const ATTEMPTS: u32 = 24;
+    const CONNECT_MS: u64 = 120;
+    const PAUSE_MS: u64 = 20;
+
+    let mut last_err: Option<String> = None;
+    for _ in 0..ATTEMPTS {
+        check_join_interrupt()?;
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_MS)) {
+            Ok(stream) => {
+                let _ = stream.set_nodelay(true);
+                match finish_client_connection(stream) {
+                    Ok(s) => return Ok(s),
+                    Err(e) => {
+                        last_err = Some(e);
+                        thread::sleep(Duration::from_millis(PAUSE_MS));
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = Some(e.to_string());
+                thread::sleep(Duration::from_millis(PAUSE_MS));
+            }
         }
     }
-    Err("could not join mesh (coordinator not reachable)".into())
+    Err(match last_err {
+        Some(e) => format!("could not join mesh (coordinator not reachable): {e}"),
+        None => "could not join mesh (coordinator not reachable)".into(),
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -520,16 +564,34 @@ fn mesh_session_from_client_addr(
     addr: SocketAddr,
     identity: Option<Arc<UnlockedIdentity>>,
 ) -> Result<MeshSession, String> {
-    for _ in 0..80 {
-        match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
-            Ok(stream) => match finish_client_connection(stream, identity.clone()) {
-                Ok(s) => return Ok(s),
-                Err(_) => thread::sleep(Duration::from_millis(50)),
-            },
-            Err(_) => thread::sleep(Duration::from_millis(50)),
+    const ATTEMPTS: u32 = 24;
+    const CONNECT_MS: u64 = 120;
+    const PAUSE_MS: u64 = 20;
+
+    let mut last_err: Option<String> = None;
+    for _ in 0..ATTEMPTS {
+        check_join_interrupt()?;
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_MS)) {
+            Ok(stream) => {
+                let _ = stream.set_nodelay(true);
+                match finish_client_connection(stream, identity.clone()) {
+                    Ok(s) => return Ok(s),
+                    Err(e) => {
+                        last_err = Some(e);
+                        thread::sleep(Duration::from_millis(PAUSE_MS));
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = Some(e.to_string());
+                thread::sleep(Duration::from_millis(PAUSE_MS));
+            }
         }
     }
-    Err("could not join mesh (coordinator not reachable)".into())
+    Err(match last_err {
+        Some(e) => format!("could not join mesh (coordinator not reachable): {e}"),
+        None => "could not join mesh (coordinator not reachable)".into(),
+    })
 }
 
 impl MeshSession {
@@ -554,21 +616,17 @@ impl MeshSession {
                     if let Ok(s) = try_mesh_client_once(loopback) {
                         return Ok(s);
                     }
-                    if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
-                        return mesh_session_from_client_addr(remote);
-                    }
-                    thread::sleep(Duration::from_millis(250));
-                    if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
                         return mesh_session_from_client_addr(remote);
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
                     match TcpListener::bind(any) {
                         Ok(listener) => mesh_session_from_host_listener(listener, Some(mesh_id)),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                            thread::sleep(Duration::from_millis(120));
+                            thread::sleep(Duration::from_millis(80));
                             if let Ok(s) = try_mesh_client_once(loopback) {
                                 Ok(s)
-                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
                                 mesh_session_from_client_addr(remote)
                             } else {
                                 mesh_session_from_client_addr(loopback)
@@ -610,15 +668,15 @@ impl MeshSession {
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
             MeshMode::Lan => {
+                check_join_interrupt()?;
+                // 1) Same machine: coordinator listens on 0.0.0.0 — connect via loopback first.
+                // 2) UDP discovery finds a peer on the LAN.
+                // 3) Otherwise become coordinator on 0.0.0.0 (others can discover us).
                 let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
                 }
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
-                    return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
-                }
-                thread::sleep(Duration::from_millis(250));
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
                     return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
                 let any = SocketAddr::from(([0, 0, 0, 0], port));
@@ -629,11 +687,11 @@ impl MeshSession {
                         Some(identity),
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                        thread::sleep(Duration::from_millis(120));
+                        thread::sleep(Duration::from_millis(80));
                         if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity)))
                         {
                             Ok(s)
-                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port) {
+                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
                             mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
                             mesh_session_from_client_addr(loopback, Some(Arc::clone(&identity)))

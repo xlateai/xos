@@ -180,7 +180,13 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         MeshSession::join(&mesh_id, mode)
     }
-    .map_err(|e| vm.new_runtime_error(e))?;
+    .map_err(|e| {
+        if e == INPUT_INTERRUPT {
+            vm.new_exception_empty(vm.ctx.exceptions.keyboard_interrupt.to_owned())
+        } else {
+            vm.new_runtime_error(e)
+        }
+    })?;
     *MESH.lock().unwrap() = Some(std::sync::Arc::new(session));
     Ok(vm.ctx.none())
 }
