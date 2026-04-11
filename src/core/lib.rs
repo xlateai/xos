@@ -186,7 +186,7 @@ pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(app) = apps::get_app(game) {
         #[cfg(not(target_os = "ios"))]
-        if game == "overlay" || game == "remote" {
+        if game == "overlay" {
             return engine::start_overlay_native(app);
         }
         engine::start_native(app)

@@ -1,7 +1,11 @@
-//! Remote desktop preview: two-node LAN mesh (host = viewer, one peer = screen + input).
-//! Run on the **viewer** machine first (`xos app remote`); the **streamer** joins the same mesh id.
+//! Remote desktop preview: two-node LAN mesh (host = viewer, one peer = streamer).
+//! Start the **viewer** first (`xos app remote`), then the **streamer** on the other machine.
 //!
-//! Windows only for this preview: GDI capture + `mouse_event` / `SetCursorPos` on the streamer.
+//! - **Windows**: GDI capture + `SetCursorPos` / `mouse_event` on the streamer.
+//! - **macOS**: [`screenshots`] capture + [`enigo`] mouse on the streamer (grant **Screen Recording**
+//!   in System Settings → Privacy if prompted).
+//!
+//! Normal windowed app (not the overlay host).
 
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
@@ -9,9 +13,17 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 use crate::auth::load_node_identity;
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 use crate::mesh::{MeshMode, MeshSession};
 
 /// Distinct mesh id so this app does not collide with mesh chat defaults.
@@ -24,12 +36,20 @@ const FRAME_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const STREAM_MAX_W: u32 = 1280;
 
 pub struct RemoteApp {
-    #[cfg(target_os = "windows")]
-    win: Option<RemoteWin>,
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "ios"),
+        any(target_os = "windows", target_os = "macos")
+    ))]
+    session: Option<RemoteSession>,
 }
 
-#[cfg(target_os = "windows")]
-struct RemoteWin {
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
+struct RemoteSession {
     mesh: MeshSession,
     last_frame_sent: Option<Instant>,
     pending_scroll: f32,
@@ -41,8 +61,12 @@ struct RemoteWin {
 impl RemoteApp {
     pub fn new() -> Self {
         Self {
-            #[cfg(target_os = "windows")]
-            win: None,
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(target_os = "ios"),
+                any(target_os = "windows", target_os = "macos")
+            ))]
+            session: None,
         }
     }
 }
@@ -200,7 +224,7 @@ mod win {
     }
 
     pub fn apply_remote_input(
-        payload: &Value,
+        payload: &serde_json::Value,
         prev_left: &mut bool,
         prev_right: &mut bool,
     ) {
@@ -254,7 +278,113 @@ mod win {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "macos")]
+mod mac {
+    use super::STREAM_MAX_W;
+    use enigo::{Enigo, MouseButton, MouseControllable};
+    use screenshots::Screen;
+    use serde_json::Value;
+    use std::io::{Cursor, Write};
+
+    fn virtual_screen_bounds() -> (i32, i32, i32, i32) {
+        let Ok(screens) = Screen::all() else {
+            return (0, 0, 0, 0);
+        };
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_r = i32::MIN;
+        let mut max_b = i32::MIN;
+        for s in screens {
+            let d = s.display_info;
+            let x = d.x;
+            let y = d.y;
+            let w = d.width as i32;
+            let h = d.height as i32;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_r = max_r.max(x + w);
+            max_b = max_b.max(y + h);
+        }
+        if min_x == i32::MAX {
+            return (0, 0, 0, 0);
+        }
+        (min_x, min_y, max_r - min_x, max_b - min_y)
+    }
+
+    /// Primary monitor only (multi-monitor: use the first listed screen).
+    pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
+        let screens = Screen::all().ok()?;
+        let screen = screens.first()?;
+        let rgba = screen.capture().ok()?;
+        let vw = rgba.width();
+        let vh = rgba.height();
+        if vw == 0 || vh == 0 {
+            return None;
+        }
+        let scale = (STREAM_MAX_W as f32 / vw as f32).min(1.0f32);
+        let tw = ((vw as f32) * scale).round().max(1.0) as u32;
+        let th = ((vh as f32) * scale).round().max(1.0) as u32;
+        let dyn_img = image::DynamicImage::ImageRgba8(rgba);
+        let resized = dyn_img.resize_exact(tw, th, image::imageops::FilterType::Triangle);
+        let mut buf = Cursor::new(Vec::new());
+        resized
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .ok()?;
+        Some((buf.into_inner(), tw, th))
+    }
+
+    pub fn apply_remote_input(payload: &Value, prev_left: &mut bool, prev_right: &mut bool) {
+        let (vx, vy, vw, vh) = virtual_screen_bounds();
+        if vw <= 0 || vh <= 0 {
+            return;
+        }
+        let nx = payload
+            .get("nx")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let ny = payload
+            .get("ny")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let x = (vx as f64 + nx * f64::from(vw)).round() as i32;
+        let y = (vy as f64 + ny * f64::from(vh)).round() as i32;
+
+        let mut enigo = Enigo::new();
+        enigo.mouse_move_to(x, y);
+
+        let left = payload.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
+        let right = payload.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        if left && !*prev_left {
+            enigo.mouse_down(MouseButton::Left);
+        } else if !left && *prev_left {
+            enigo.mouse_up(MouseButton::Left);
+        }
+        if right && !*prev_right {
+            enigo.mouse_down(MouseButton::Right);
+        } else if !right && *prev_right {
+            enigo.mouse_up(MouseButton::Right);
+        }
+        *prev_left = left;
+        *prev_right = right;
+
+        let scroll = payload.get("scroll").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if scroll.abs() > f64::EPSILON {
+            let delta = (scroll * 3.0).round() as i32;
+            if delta != 0 {
+                enigo.mouse_scroll_y(delta);
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 fn blit_rgba_to_frame(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: usize, dst_h: usize) {
     for dy in 0..dst_h {
         for dx in 0..dst_w {
@@ -269,12 +399,52 @@ fn blit_rgba_to_frame(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: u
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
+fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
+    #[cfg(target_os = "windows")]
+    {
+        win::capture_scaled_jpeg()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mac::capture_scaled_jpeg()
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
+fn apply_remote_input(
+    payload: &serde_json::Value,
+    prev_left: &mut bool,
+    prev_right: &mut bool,
+) {
+    #[cfg(target_os = "windows")]
+    {
+        win::apply_remote_input(payload, prev_left, prev_right);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mac::apply_remote_input(payload, prev_left, prev_right);
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 impl Application for RemoteApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let id = Arc::new(load_node_identity().map_err(|e| format!("{e}"))?);
         let mesh = MeshSession::join_with_identity(REMOTE_MESH_ID, MeshMode::Lan, id, Some(2))?;
-        self.win = Some(RemoteWin {
+        self.session = Some(RemoteSession {
             mesh,
             last_frame_sent: None,
             pending_scroll: 0.0,
@@ -286,29 +456,33 @@ impl Application for RemoteApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        let Some(w) = self.win.as_mut() else {
+        let Some(s) = self.session.as_mut() else {
             fill(&mut state.frame, (24, 28, 32, 255));
             return;
         };
 
-        let n = w.mesh.current_num_nodes();
-        if w.mesh.rank() == 0 {
-            Self::tick_viewer(w, state, n);
+        let n = s.mesh.current_num_nodes();
+        if s.mesh.rank() == 0 {
+            Self::tick_viewer(s, state, n);
         } else {
-            Self::tick_streamer(w, n);
+            Self::tick_streamer(s, n);
         }
     }
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
-        if let Some(w) = self.win.as_mut() {
-            w.pending_scroll += dy;
+        if let Some(s) = self.session.as_mut() {
+            s.pending_scroll += dy;
         }
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 impl RemoteApp {
-    fn tick_viewer(w: &mut RemoteWin, state: &mut EngineState, n: u32) {
+    fn tick_viewer(s: &mut RemoteSession, state: &mut EngineState, n: u32) {
         let shape = state.frame.shape();
         let dst_h = shape[0];
         let dst_w = shape[1];
@@ -317,12 +491,12 @@ impl RemoteApp {
         }
 
         if n < 2 {
-            w.has_frame = false;
+            s.has_frame = false;
             fill(&mut state.frame, (18, 22, 28, 255));
             return;
         }
 
-        if let Ok(Some(packets)) = w.mesh.inbox().receive(KIND_FRAME, false, true) {
+        if let Ok(Some(packets)) = s.mesh.inbox().receive(KIND_FRAME, false, true) {
             if let Some(p) = packets.last() {
                 if let Some(jpeg_b64) = p.body.get("jpeg").and_then(|v| v.as_str()) {
                     use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -334,12 +508,12 @@ impl RemoteApp {
                             let src = rgba.as_raw();
                             let buffer = state.frame_buffer_mut();
                             blit_rgba_to_frame(src, sw, sh, buffer, dst_w, dst_h);
-                            w.has_frame = true;
+                            s.has_frame = true;
                         }
                     }
                 }
             }
-        } else if !w.has_frame {
+        } else if !s.has_frame {
             fill(&mut state.frame, (14, 16, 20, 255));
         }
 
@@ -347,8 +521,8 @@ impl RemoteApp {
         let fh = dst_h.max(1) as f32;
         let nx = (state.mouse.x / fw).clamp(0.0, 1.0);
         let ny = (state.mouse.y / fh).clamp(0.0, 1.0);
-        let scroll = f64::from(w.pending_scroll);
-        w.pending_scroll = 0.0;
+        let scroll = f64::from(s.pending_scroll);
+        s.pending_scroll = 0.0;
         let payload = json!({
             "nx": nx,
             "ny": ny,
@@ -356,21 +530,21 @@ impl RemoteApp {
             "right": state.mouse.is_right_clicking,
             "scroll": scroll,
         });
-        let _ = w.mesh.send_to_json(1, KIND_INPUT, payload);
+        let _ = s.mesh.send_to_json(1, KIND_INPUT, payload);
     }
 
-    fn tick_streamer(w: &mut RemoteWin, n: u32) {
+    fn tick_streamer(s: &mut RemoteSession, n: u32) {
         if n < 2 {
             return;
         }
 
-        while let Ok(Some(packets)) = w.mesh.inbox().receive(KIND_INPUT, false, false) {
+        while let Ok(Some(packets)) = s.mesh.inbox().receive(KIND_INPUT, false, false) {
             for p in packets {
-                win::apply_remote_input(&p.body, &mut w.prev_peer_left, &mut w.prev_peer_right);
+                apply_remote_input(&p.body, &mut s.prev_peer_left, &mut s.prev_peer_right);
             }
         }
 
-        let send = match w.last_frame_sent {
+        let send = match s.last_frame_sent {
             None => true,
             Some(t) => t.elapsed() >= FRAME_MIN_INTERVAL,
         };
@@ -378,7 +552,7 @@ impl RemoteApp {
             return;
         }
 
-        if let Some((jpeg_bytes, fw, fh)) = win::capture_scaled_jpeg() {
+        if let Some((jpeg_bytes, fw, fh)) = capture_scaled_jpeg() {
             use base64::{engine::general_purpose::STANDARD as B64, Engine};
             let jpeg_b64 = B64.encode(jpeg_bytes);
             let payload = json!({
@@ -386,18 +560,26 @@ impl RemoteApp {
                 "w": fw,
                 "h": fh,
             });
-            if w.mesh.send_to_json(0, KIND_FRAME, payload).is_ok() {
-                w.last_frame_sent = Some(Instant::now());
+            if s.mesh.send_to_json(0, KIND_FRAME, payload).is_ok() {
+                s.last_frame_sent = Some(Instant::now());
             }
         }
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(
+    target_arch = "wasm32",
+    target_os = "ios",
+    all(
+        not(target_arch = "wasm32"),
+        not(target_os = "ios"),
+        not(any(target_os = "windows", target_os = "macos"))
+    )
+))]
 impl Application for RemoteApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         Err(
-            "xos app remote is only available on Windows desktop (with `xos login --offline`)."
+            "xos app remote is only available on Windows and macOS desktop (with `xos login --offline` for LAN)."
                 .into(),
         )
     }

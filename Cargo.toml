@@ -73,6 +73,11 @@ rfd = "0.16.0"
 metal = "0.32.0"
 objc = "0.2"
 
+# Remote desktop: capture + synthetic input (desktop macOS only; not iOS)
+[target.'cfg(target_os = "macos")'.dependencies]
+screenshots = "0.8"
+enigo = "0.1"
+
 # -------------------------------------------------------------------
 # WebAssembly target
 # -------------------------------------------------------------------
