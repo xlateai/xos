@@ -758,7 +758,7 @@ impl MeshSession {
                         let Some(k) = k else {
                             return Ok(());
                         };
-                        let line = encrypt_mesh_line(&k.rx, &inner)?;
+                        let line = encrypt_mesh_line(&k.tx, &inner)?;
                         let Some(mut w) = clone_client_writer_at(clients, idx) else {
                             return Ok(());
                         };
@@ -772,7 +772,7 @@ impl MeshSession {
                         let Some(ref k) = lk.get(idx).and_then(|x| x.as_ref()) else {
                             continue;
                         };
-                        let line = encrypt_mesh_line(&k.rx, &inner)?;
+                        let line = encrypt_mesh_line(&k.tx, &inner)?;
                         if let Some(s) = oc {
                             if let Ok(mut w) = s.try_clone() {
                                 w.write_all(line.as_bytes())
@@ -950,7 +950,7 @@ fn host_accept_loop(
             "num_nodes": n,
         });
         let welcome_s = welcome.to_string();
-        let Ok(enc) = encrypt_mesh_line(&keys.rx, &welcome_s) else {
+        let Ok(enc) = encrypt_mesh_line(&keys.tx, &welcome_s) else {
             continue;
         };
         let mut wh = write_half;
@@ -1086,7 +1086,7 @@ fn host_relay_line_lan(
             let Some(k) = k else {
                 return Ok(());
             };
-            let line = encrypt_mesh_line(&k.rx, &inner)?;
+            let line = encrypt_mesh_line(&k.tx, &inner)?;
             let Some(mut w) = clone_client_writer_at(clients, idx) else {
                 return Ok(());
             };
@@ -1107,7 +1107,7 @@ fn host_relay_line_lan(
                 let Some(ref k) = ks.get(idx).and_then(|x| x.as_ref()) else {
                     continue;
                 };
-                let line = encrypt_mesh_line(&k.rx, &inner)?;
+                let line = encrypt_mesh_line(&k.tx, &inner)?;
                 if let Some(s) = oc {
                     if let Ok(mut w) = s.try_clone() {
                         let _ = w.write_all(line.as_bytes());
@@ -1139,7 +1139,7 @@ fn host_peer_reader_lan(
         if shutdown.load(Ordering::SeqCst) != 0 {
             break;
         }
-        let inner = match decrypt_mesh_line(&peer_keys.tx, &line) {
+        let inner = match decrypt_mesh_line(&peer_keys.rx, &line) {
             Ok(s) => s,
             Err(_) => continue,
         };

@@ -37,8 +37,9 @@ struct HsSig {
     sig: String,
 }
 
-/// Encrypt with `tx`, decrypt with `rx` for this side of the connection.
-/// Host→peer payloads use `rx` (h2p); peer→host use `tx` (p2h).
+/// After handshake, both sides hold the same key material; **field meaning depends on role**:
+/// - **Host:** `tx` = AES key for **host→peer** (h2p); `rx` = **peer→host** (p2h).
+/// - **Client:** `tx` = encrypt **peer→host**; `rx` = decrypt **host→peer** (same h2p/p2h bytes as host).
 #[derive(Clone)]
 pub struct LanWireKeys {
     pub tx: Aes256Gcm,
@@ -253,6 +254,6 @@ pub fn decrypt_mesh_line(cipher: &Aes256Gcm, line: &str) -> Result<String, Strin
     let nonce = Nonce::from_slice(&raw[..12]);
     let plain = cipher
         .decrypt(nonce, raw[12..].as_ref())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("LAN mesh decrypt failed (wrong AES key or corrupt ciphertext): {e}"))?;
     String::from_utf8(plain).map_err(|e| e.to_string())
 }
