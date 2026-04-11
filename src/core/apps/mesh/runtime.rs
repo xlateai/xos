@@ -39,6 +39,9 @@ use crate::auth::UnlockedIdentity;
 
 const WIRE_VERSION: u32 = 1;
 
+/// Host→peer relay writes: bound latency on half-dead TCP (default stack timeouts can be seconds each).
+const RELAY_WRITE_TIMEOUT: Duration = Duration::from_millis(450);
+
 #[derive(Clone, Debug)]
 pub struct Packet {
     pub from_rank: u32,
@@ -223,6 +226,34 @@ fn clear_disconnected_peer_lan(
     recompute_num_nodes(clients, num_nodes);
 }
 
+fn relay_write_plain_best_effort(
+    idx: usize,
+    mut w: TcpStream,
+    bytes: &[u8],
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
+        clear_disconnected_peer_plain(idx, clients, num_nodes);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_write_lan_best_effort(
+    idx: usize,
+    mut w: TcpStream,
+    bytes: &[u8],
+    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
+    num_nodes: &Arc<AtomicU32>,
+) {
+    let _ = w.set_write_timeout(Some(RELAY_WRITE_TIMEOUT));
+    if w.write_all(bytes).and_then(|_| w.flush()).is_err() {
+        clear_disconnected_peer_lan(idx, clients, lan_host, num_nodes);
+    }
+}
+
 /// Next peer slot: lowest `None`, or append. Ranks stay dense (1..=N) across disconnect/reconnect.
 /// Returns `(idx, rank, num_nodes_after_this_peer_joins)` before the peer is inserted.
 fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, u32) {
@@ -237,40 +268,6 @@ fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, 
         .saturating_add(1);
     let rank = idx as u32 + 1;
     (idx, rank, num_nodes_after)
-}
-
-/// Snapshot connected client write ends without holding the mutex across blocking I/O (avoids relay deadlock).
-fn clone_all_client_writers(clients: &Arc<Mutex<Vec<Option<TcpStream>>>>) -> Vec<TcpStream> {
-    let guard = clients.lock().unwrap();
-    let mut out = Vec::new();
-    for oc in guard.iter() {
-        if let Some(s) = oc {
-            if let Ok(c) = s.try_clone() {
-                out.push(c);
-            }
-        }
-    }
-    out
-}
-
-fn clone_client_writers_except_sender(
-    clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
-    sender_rank: u32,
-) -> Vec<TcpStream> {
-    let guard = clients.lock().unwrap();
-    let mut out = Vec::new();
-    for (i, oc) in guard.iter().enumerate() {
-        let client_rank = (i + 1) as u32;
-        if client_rank == sender_rank {
-            continue;
-        }
-        if let Some(s) = oc {
-            if let Ok(c) = s.try_clone() {
-                out.push(c);
-            }
-        }
-    }
-    out
 }
 
 fn clone_client_writer_at(
@@ -825,7 +822,7 @@ impl MeshSession {
                             return Ok(());
                         }
                         let idx = (t - 1) as usize;
-                        let (k, mut w) = {
+                        let (k, w) = {
                             let cg = clients.lock().unwrap();
                             let lk = lh.lock().unwrap();
                             let Some(k) = lk.get(idx).and_then(|x| x.clone()) else {
@@ -840,11 +837,10 @@ impl MeshSession {
                             (k, w)
                         };
                         let line = encrypt_mesh_line(&k.tx, &inner)?;
-                        let _ = w.write_all(line.as_bytes());
-                        let _ = w.flush();
+                        relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lh, &self.num_nodes);
                         return Ok(());
                     }
-                    let targets: Vec<(LanWireKeys, TcpStream)> = {
+                    let targets: Vec<(usize, LanWireKeys, TcpStream)> = {
                         let cg = clients.lock().unwrap();
                         let lk = lh.lock().unwrap();
                         let mut out = Vec::new();
@@ -856,17 +852,16 @@ impl MeshSession {
                                 continue;
                             };
                             if let Ok(w) = s.try_clone() {
-                                out.push(((*k).clone(), w));
+                                out.push((idx, (*k).clone(), w));
                             }
                         }
                         out
                     };
-                    for (k, mut w) in targets {
+                    for (idx, k, w) in targets {
                         let Ok(line) = encrypt_mesh_line(&k.tx, &inner) else {
                             continue;
                         };
-                        let _ = w.write_all(line.as_bytes());
-                        let _ = w.flush();
+                        relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lh, &self.num_nodes);
                     }
                     return Ok(());
                 }
@@ -876,16 +871,26 @@ impl MeshSession {
                         return Ok(());
                     }
                     let idx = (t - 1) as usize;
-                    let Some(mut w) = clone_client_writer_at(clients, idx) else {
+                    let Some(w) = clone_client_writer_at(clients, idx) else {
                         return Ok(());
                     };
-                    let _ = w.write_all(line.as_bytes());
-                    let _ = w.flush();
+                    relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, &self.num_nodes);
                 } else {
-                    let writers = clone_all_client_writers(clients);
-                    for mut w in writers {
-                        let _ = w.write_all(line.as_bytes());
-                        let _ = w.flush();
+                    let targets: Vec<(usize, TcpStream)> = {
+                        let guard = clients.lock().unwrap();
+                        let mut out = Vec::new();
+                        for (idx, oc) in guard.iter().enumerate() {
+                            let Some(s) = oc else {
+                                continue;
+                            };
+                            if let Ok(w) = s.try_clone() {
+                                out.push((idx, w));
+                            }
+                        }
+                        out
+                    };
+                    for (idx, w) in targets {
+                        relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, &self.num_nodes);
                     }
                 }
                 Ok(())
@@ -1108,7 +1113,7 @@ fn host_peer_reader(
         }
 
         let Ok(wire) = wire_line(&env) else { continue };
-        host_relay_line(&env, peer_rank, &clients, &wire);
+        host_relay_line(&env, peer_rank, &clients, &num_nodes, &wire);
     }
     clear_disconnected_peer_plain(idx, &clients, &num_nodes);
 }
@@ -1123,6 +1128,7 @@ fn host_relay_line(
     env: &WireEnvelope,
     sender_rank: u32,
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
+    num_nodes: &Arc<AtomicU32>,
     line: &str,
 ) {
     match env.to {
@@ -1131,17 +1137,31 @@ fn host_relay_line(
                 return;
             }
             let idx = (target - 1) as usize;
-            let Some(mut w) = clone_client_writer_at(clients, idx) else {
+            let Some(w) = clone_client_writer_at(clients, idx) else {
                 return;
             };
-            let _ = w.write_all(line.as_bytes());
-            let _ = w.flush();
+            relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, num_nodes);
         }
         None => {
-            let writers = clone_client_writers_except_sender(clients, sender_rank);
-            for mut w in writers {
-                let _ = w.write_all(line.as_bytes());
-                let _ = w.flush();
+            let targets: Vec<(usize, TcpStream)> = {
+                let guard = clients.lock().unwrap();
+                let mut out = Vec::new();
+                for (idx, oc) in guard.iter().enumerate() {
+                    let client_rank = (idx + 1) as u32;
+                    if client_rank == sender_rank {
+                        continue;
+                    }
+                    let Some(s) = oc else {
+                        continue;
+                    };
+                    if let Ok(w) = s.try_clone() {
+                        out.push((idx, w));
+                    }
+                }
+                out
+            };
+            for (idx, w) in targets {
+                relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, num_nodes);
             }
         }
     }
@@ -1153,6 +1173,7 @@ fn host_relay_line_lan(
     sender_rank: u32,
     clients: &Arc<Mutex<Vec<Option<TcpStream>>>>,
     lan_host: &Arc<Mutex<Vec<Option<LanWireKeys>>>>,
+    num_nodes: &Arc<AtomicU32>,
 ) {
     let Ok(inner) = serde_json::to_string(env) else {
         return;
@@ -1163,7 +1184,7 @@ fn host_relay_line_lan(
                 return;
             }
             let idx = (target - 1) as usize;
-            let (k, mut w) = {
+            let (k, w) = {
                 let cg = clients.lock().unwrap();
                 let lk = lan_host.lock().unwrap();
                 let Some(k) = lk.get(idx).and_then(|x| x.clone()) else {
@@ -1180,11 +1201,10 @@ fn host_relay_line_lan(
             let Ok(line) = encrypt_mesh_line(&k.tx, &inner) else {
                 return;
             };
-            let _ = w.write_all(line.as_bytes());
-            let _ = w.flush();
+            relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lan_host, num_nodes);
         }
         None => {
-            let targets: Vec<(LanWireKeys, TcpStream)> = {
+            let targets: Vec<(usize, LanWireKeys, TcpStream)> = {
                 let cg = clients.lock().unwrap();
                 let lk = lan_host.lock().unwrap();
                 let mut out = Vec::new();
@@ -1200,17 +1220,16 @@ fn host_relay_line_lan(
                         continue;
                     };
                     if let Ok(w) = s.try_clone() {
-                        out.push(((*k).clone(), w));
+                        out.push((idx, (*k).clone(), w));
                     }
                 }
                 out
             };
-            for (k, mut w) in targets {
+            for (idx, k, w) in targets {
                 let Ok(line) = encrypt_mesh_line(&k.tx, &inner) else {
                     continue;
                 };
-                let _ = w.write_all(line.as_bytes());
-                let _ = w.flush();
+                relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lan_host, num_nodes);
             }
         }
     }
@@ -1255,7 +1274,7 @@ fn host_peer_reader_lan(
             });
         }
 
-        host_relay_line_lan(&env, peer_rank, &clients, &lan_host);
+        host_relay_line_lan(&env, peer_rank, &clients, &lan_host, &num_nodes);
     }
     clear_disconnected_peer_lan(idx, &clients, &lan_host, &num_nodes);
 }
