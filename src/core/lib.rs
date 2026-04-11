@@ -12,6 +12,7 @@ pub mod tuneable;
 pub mod engine;
 pub mod video;
 pub mod apps;
+pub mod mesh;
 pub mod ui;
 pub mod tensor;
 
@@ -20,6 +21,9 @@ pub mod python_api;
 
 pub mod clipboard;
 pub mod rasterizer;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod auth;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).
 pub fn is_xos_project_root(path: &Path) -> bool {

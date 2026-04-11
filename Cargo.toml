@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
 repository = "https://github.com/xlateai/xos"
@@ -30,14 +30,29 @@ ringbuf = "0.3"
 include_dir = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-crossterm = "0.28"
+uuid = { version = "1", features = ["v4"] }
+# Keep these in the workspace graph; MSVC release `strip` on proc-macro crates can cause E0463
+# (`can't find crate for ...`) for Burn/CubeCL — see profile.release.package.* below.
+darling = "0.21.3"
+variadics_please = "1"
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies
 # -------------------------------------------------------------------
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rand = "0.9.2"
+rand_chacha = "0.3"
+rand_core = "0.6"
 getrandom = "0.3.4"
+# Offline identity + LAN mesh crypto (RSA handshake, AES-GCM wire)
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+argon2 = "0.5"
+aes-gcm = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
+hkdf = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+dirs = "5"
 rand_pcg = "0.9.0"
 rayon = "1.10"
 image = { version = "0.25", features = ["default-formats"] }
@@ -116,3 +131,12 @@ resolver = "2"
 # from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see src/core/patches/gpu-allocator/Cargo.toml).
 [patch.crates-io]
 gpu-allocator = { path = "src/core/patches/gpu-allocator" }
+
+# Windows MSVC + release: stripping proc-macro rlibs/DLLs breaks rustc's ability to load them
+# (E0463), which then breaks downstream crates (e.g. cubecl-ir / darling).
+[profile.release.package.cubecl-macros]
+strip = false
+[profile.release.package.variadics_please]
+strip = false
+[profile.release.package.darling_macro]
+strip = false

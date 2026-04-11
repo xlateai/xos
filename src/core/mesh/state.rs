@@ -1,6 +1,6 @@
 //! Process-local handles for the embedded Python runtime (transport + terminal).
 
-use super::runtime::MeshSession;
+use super::relay::MeshSession;
 use super::terminal::LineEditor;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};

@@ -29,6 +29,14 @@ class Mesh:
     def num_nodes(self):
         return _mesh_num_nodes()
 
+    def node_id(self):
+        """This session’s stable node id (64-char hex = SHA256 of node public key)."""
+        return _mesh_node_id()
+
+    def prompt(self):
+        """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
+        return _mesh_prompt()
+
     def broadcast(self, **kwargs):
         kind = kwargs.pop("id")
         _mesh_broadcast_payload(kind, kwargs)
@@ -71,6 +79,16 @@ class _MeshNode:
         self._mesh.send(id=kind, to=self._rank, **kwargs)
 
 
-def connect(session="default"):
-    _mesh_connect(session)
+def connect(id="default", mode="local"):
+    """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
+    ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, run
+    ``xos login --offline`` first so ``authentication.json`` and ``node_identity.json`` exist;
+    LAN uses the per-machine node keypair from ``node_identity.json`` (no password prompt).
+    """
+    mode = (mode or "local").lower()
+    if mode == "online":
+        raise NotImplementedError("xos.mesh mode 'online' is not implemented yet")
+    if mode not in ("local", "lan"):
+        raise ValueError("xos.mesh.connect: mode must be 'local', 'lan', or 'online'")
+    _mesh_connect(id, mode)
     return Mesh()

@@ -7,6 +7,52 @@ use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
 use xos::python_api::{run_python_app, run_python_interactive};
 
+#[cfg(not(target_arch = "wasm32"))]
+fn login_offline_interactive() -> Result<(), String> {
+    use dialoguer::{Input, Password};
+    use xos::auth::{auth_data_dir, has_identity, login_offline};
+
+    if has_identity() {
+        let p = auth_data_dir()
+            .map(|d| {
+                format!(
+                    "{} + {}",
+                    d.join("authentication.json").display(),
+                    d.join("node_identity.json").display()
+                )
+            })
+            .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
+        return Err(format!(
+            "identity already exists ({p}). Remove with xos login --delete only if you intend to replace this machine's keys."
+        ));
+    }
+    let username: String = Input::new()
+        .with_prompt("Username")
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let password = Password::new()
+        .with_prompt("Password")
+        .with_confirmation("Confirm password", "Passwords do not match")
+        .interact()
+        .map_err(|e| e.to_string())?;
+    let def_name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "machine".to_string());
+    let machine: String = Input::new()
+        .with_prompt(&format!(
+            "Machine name (node_name, shown in LAN mesh) [default: {def_name}]"
+        ))
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let machine = if machine.trim().is_empty() {
+        def_name
+    } else {
+        machine.trim().to_string()
+    };
+    login_offline(username.trim(), &password, &machine).map_err(|e| e.to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "xos")]
 #[command(about = "Experimental OS Window Manager", disable_version_flag = true)]
@@ -45,6 +91,15 @@ enum Commands {
         /// Print the path of this running `xos` / `xpy` / `xrs` executable instead of the repo root
         #[arg(long)]
         exe: bool,
+    },
+    /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
+    Login {
+        /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
+        #[arg(long)]
+        offline: bool,
+        /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
+        #[arg(long)]
+        delete: bool,
     },
 }
 
@@ -145,6 +200,7 @@ fn main() {
                     | "build"
                     | "code"
                     | "path"
+                    | "login"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -172,6 +228,7 @@ fn main() {
                     | "build"
                     | "code"
                     | "path"
+                    | "login"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -257,6 +314,45 @@ fn main() {
                 run_python_app(&path_to_run);
             } else {
                 run_python_interactive();
+            }
+        }
+        Some(Commands::Login {
+            offline,
+            delete,
+        }) => {
+            if delete && offline {
+                eprintln!("❌ use either --delete or --offline, not both");
+                std::process::exit(1);
+            }
+            if delete {
+                use xos::auth::delete_identity;
+                match delete_identity() {
+                    Ok(()) => println!(
+                        "Removed local identity (authentication.json, node_identity.json, legacy identity.json)."
+                    ),
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if offline {
+                match login_offline_interactive() {
+                    Ok(()) => {
+                        println!(
+                            "Saved identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!(
+                    "Online sign-in (browser / OAuth) is not wired up yet.\n\
+                     For offline LAN mesh, run:  xos login --offline\n\
+                     To remove this machine's identity:  xos login --delete"
+                );
             }
         }
         None => {

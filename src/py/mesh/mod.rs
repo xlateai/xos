@@ -1,10 +1,12 @@
-//! `xos.mesh` and `xos.input` — same-machine mesh + terminal line editor (Rust-backed).
+//! `xos.mesh` and `xos.input` — mesh (`local` / `lan`) + terminal line editor (Rust-backed).
 //! Python surface lives in `bootstrap.py` (included at compile time).
 
-use crate::apps::mesh::runtime::{MeshSession, Packet};
-use crate::apps::mesh::state::{LINE_EDITOR, MESH};
-use crate::apps::mesh::terminal::INPUT_INTERRUPT;
+use crate::mesh::{MeshMode, MeshSession, Packet};
+use crate::mesh::state::{LINE_EDITOR, MESH};
+use crate::mesh::terminal::INPUT_INTERRUPT;
 use crate::python_api::runtime::format_python_exception;
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+use crate::auth::{has_identity, load_node_identity};
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
@@ -115,6 +117,7 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
         vm.ctx.new_int(p.from_rank as isize).into(),
         vm,
     )?;
+    dict.set_item("from_id", vm.ctx.new_str(p.from_id.as_str()).into(), vm)?;
     match &p.body {
         serde_json::Value::Object(o) => {
             for (k, v) in o {
@@ -130,12 +133,61 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let session: String = if let Some(s) = args.args.first() {
+    let mesh_id: String = if let Some(s) = args.args.first() {
+        s.clone().try_into_value(vm)?
+    } else if let Some(s) = args.kwargs.get("id") {
         s.clone().try_into_value(vm)?
     } else {
         "default".to_string()
     };
-    let session = MeshSession::join(&session).map_err(|e| vm.new_runtime_error(e))?;
+
+    let mode_str: String = if let Some(s) = args.args.get(1) {
+        s.clone().try_into_value(vm)?
+    } else if let Some(s) = args.kwargs.get("mode") {
+        s.clone().try_into_value(vm)?
+    } else {
+        "local".to_string()
+    };
+    let mode_str = mode_str.trim().to_ascii_lowercase();
+
+    let mode = match mode_str.as_str() {
+        "local" => MeshMode::Local,
+        "lan" => MeshMode::Lan,
+        "online" => {
+            return Err(vm.new_exception_msg(
+                vm.ctx.exceptions.not_implemented_error.to_owned(),
+                "xos.mesh mode 'online' is not implemented yet".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(vm.new_value_error(format!(
+                "xos.mesh.connect: unknown mode {mode_str:?} (use 'local', 'lan', or 'online')"
+            )));
+        }
+    };
+
+    let session = if mode == MeshMode::Lan {
+        if !has_identity() {
+            return Err(vm.new_runtime_error(
+                "xos.mesh.connect(mode='lan') requires a local identity. Run `xos login --offline` first."
+                    .to_string(),
+            ));
+        }
+        let unlocked = load_node_identity().map_err(|e| {
+            vm.new_runtime_error(format!("could not load node identity: {e}"))
+        })?;
+        let id = std::sync::Arc::new(unlocked);
+        MeshSession::join_with_identity(&mesh_id, mode, id)
+    } else {
+        MeshSession::join(&mesh_id, mode)
+    }
+    .map_err(|e| {
+        if e == INPUT_INTERRUPT {
+            vm.new_exception_empty(vm.ctx.exceptions.keyboard_interrupt.to_owned())
+        } else {
+            vm.new_runtime_error(e)
+        }
+    })?;
     *MESH.lock().unwrap() = Some(std::sync::Arc::new(session));
     Ok(vm.ctx.none())
 }
@@ -168,6 +220,45 @@ fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .ctx
         .new_int(m.current_num_nodes() as isize)
         .into())
+}
+
+fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    let short = if m.node_id.len() >= 8 {
+        format!("{}…", &m.node_id[..8])
+    } else if m.node_id.is_empty() {
+        "—".to_string()
+    } else {
+        m.node_id.clone()
+    };
+    let s = format!(
+        "[mesh n={} rank={} id={}] >>> ",
+        m.current_num_nodes(),
+        m.rank,
+        short
+    );
+    Ok(vm.ctx.new_str(s).into())
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    Ok(vm.ctx.new_str(m.node_id.as_str()).into())
+}
+
+#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(vm.new_runtime_error("mesh not available".to_string()))
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
@@ -352,6 +443,12 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm.new_function("_mesh_num_nodes", mesh_num_nodes),
         vm,
     );
+    let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
+    let _ = sub.set_attr(
+        "_mesh_node_id",
+        vm.new_function("_mesh_node_id", mesh_node_id),
+        vm,
+    );
     let _ = sub.set_attr(
         "_mesh_broadcast_payload",
         vm.new_function("_mesh_broadcast_payload", mesh_broadcast_payload),
@@ -378,6 +475,12 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_num_nodes", sub.get_attr("_mesh_num_nodes", vm).unwrap(), vm);
+    let _ = scope
+        .globals
+        .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
+    let _ = scope
+        .globals
+        .set_item("_mesh_node_id", sub.get_attr("_mesh_node_id", vm).unwrap(), vm);
     let _ = scope.globals.set_item(
         "_mesh_broadcast_payload",
         sub.get_attr("_mesh_broadcast_payload", vm).unwrap(),

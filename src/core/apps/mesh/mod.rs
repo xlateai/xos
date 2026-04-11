@@ -1,10 +1,7 @@
-//! Same-machine mesh prototype: TCP on localhost + terminal line editor for clean CLI UX.
-//!
-//! LAN / QUIC / WebRTC / auth can plug in behind the same session + inbox abstraction later.
+//! Mesh app (`xos app mesh`): [`MeshApp`] + [`run_mesh_app`], and `mesh.py` chat demo.
+//! Transport lives in [`crate::mesh`].
 
-mod mesh;
-pub mod runtime;
-pub mod state;
-pub mod terminal;
+mod app;
 
-pub use mesh::{run_mesh_app, MeshApp};
+pub use app::{run_mesh_app, MeshApp};
+pub use crate::mesh::*;
