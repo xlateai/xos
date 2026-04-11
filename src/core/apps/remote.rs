@@ -5,7 +5,8 @@
 //! - **macOS**: [`xcap`] (`CGWindowListCreateImage`) + [`enigo`] mouse on the streamer (grant **Screen
 //!   Recording** for the `xos` binary in System Settings → Privacy → Screen Recording).
 //!
-//! Normal windowed app (not the overlay host).
+//! Normal windowed app (not the overlay host). The streamer sends ~30 JPEGs/s; input events are
+//! coalesced per tick so backlog does not replay stale cursor positions after a pause or slow frame.
 
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
@@ -24,14 +25,14 @@ use crate::auth::load_node_identity;
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos")
 ))]
-use crate::mesh::{MeshMode, MeshSession};
+use crate::mesh::{MeshMode, MeshSession, Packet};
 
 /// Distinct mesh id so this app does not collide with mesh chat defaults.
 const REMOTE_MESH_ID: &str = "xos-remote";
 const KIND_FRAME: &str = "remote_frame";
 const KIND_INPUT: &str = "remote_input";
-/// ~10 fps to keep LAN traffic reasonable for JPEG frames.
-const FRAME_MIN_INTERVAL: Duration = Duration::from_millis(100);
+/// Target stream frame rate (~30 fps); balance bandwidth vs responsiveness.
+const FRAME_MIN_INTERVAL: Duration = Duration::from_nanos(33_333_333);
 /// Max width after downscale before JPEG encode.
 const STREAM_MAX_W: u32 = 1280;
 
@@ -56,6 +57,9 @@ struct RemoteSession {
     prev_peer_left: bool,
     prev_peer_right: bool,
     has_frame: bool,
+    /// Smoothed measured stream FPS for the F3 label (viewer only).
+    remote_fps_ema: f32,
+    last_remote_frame_at: Option<Instant>,
 }
 
 impl RemoteApp {
@@ -463,6 +467,8 @@ impl Application for RemoteApp {
             prev_peer_left: false,
             prev_peer_right: false,
             has_frame: false,
+            remote_fps_ema: 0.0,
+            last_remote_frame_at: None,
         });
         Ok(())
     }
@@ -481,11 +487,36 @@ impl Application for RemoteApp {
         }
     }
 
-    fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32) {
+        if state.paused {
+            return;
+        }
         if let Some(s) = self.session.as_mut() {
             s.pending_scroll += dy;
         }
     }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
+fn coalesce_remote_input_batch(packets: &[Packet]) -> Option<serde_json::Value> {
+    let last = packets.last()?;
+    let mut scroll_sum = 0.0f64;
+    for p in packets {
+        scroll_sum += p
+            .body
+            .get("scroll")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+    }
+    let mut merged = last.body.clone();
+    if let Some(obj) = merged.as_object_mut() {
+        obj.insert("scroll".to_string(), json!(scroll_sum));
+    }
+    Some(merged)
 }
 
 #[cfg(all(
@@ -504,6 +535,7 @@ impl RemoteApp {
 
         if n < 2 {
             s.has_frame = false;
+            state.f3_fps_label_override = None;
             fill(&mut state.frame, (18, 22, 28, 255));
             return;
         }
@@ -521,6 +553,18 @@ impl RemoteApp {
                             let buffer = state.frame_buffer_mut();
                             blit_rgba_to_frame(src, sw, sh, buffer, dst_w, dst_h);
                             s.has_frame = true;
+                            let now = Instant::now();
+                            if let Some(prev) = s.last_remote_frame_at.replace(now) {
+                                let dt = now.duration_since(prev).as_secs_f32().max(1e-4);
+                                let inst = 1.0 / dt;
+                                s.remote_fps_ema = if s.remote_fps_ema <= 1e-6 {
+                                    inst
+                                } else {
+                                    s.remote_fps_ema * 0.82 + inst * 0.18
+                                };
+                            }
+                            state.f3_fps_label_override =
+                                Some(s.remote_fps_ema.clamp(0.0, 120.0));
                         }
                     }
                 }
@@ -550,9 +594,11 @@ impl RemoteApp {
             return;
         }
 
-        while let Ok(Some(packets)) = s.mesh.inbox().receive(KIND_INPUT, false, false) {
-            for p in packets {
-                apply_remote_input(&p.body, &mut s.prev_peer_left, &mut s.prev_peer_right);
+        if let Ok(Some(packets)) = s.mesh.inbox().receive(KIND_INPUT, false, false) {
+            if !packets.is_empty() {
+                if let Some(merged) = coalesce_remote_input_batch(&packets) {
+                    apply_remote_input(&merged, &mut s.prev_peer_left, &mut s.prev_peer_right);
+                }
             }
         }
 

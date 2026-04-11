@@ -293,7 +293,11 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
     let ui_scale = F3Menu::ui_scale(width.min(height));
     let pad = F3Menu::padding_scaled(ui_scale);
     let font_px = BASE_FONT * ui_scale;
-    let fps_display = (1.0 / state.delta_time_seconds.max(1e-5)).round().max(0.0) as u32;
+    let fps_display = if let Some(f) = state.f3_fps_label_override {
+        f.round().clamp(0.0, 999.0) as u32
+    } else {
+        (1.0 / state.delta_time_seconds.max(1e-5)).round().max(0.0) as u32
+    };
 
     {
         let menu = &mut state.f3_menu;
