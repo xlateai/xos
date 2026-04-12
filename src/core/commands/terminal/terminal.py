@@ -123,6 +123,35 @@ def _emit_procs(log_lines: list[str]) -> None:
         )
 
 
+def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
+    out: dict[int, dict] = {}
+    mode_u = (mode or "").upper()
+    try:
+        procs = xos.manager.list_procs() or []
+    except Exception:
+        return out
+    for p in procs:
+        pid = int(p.get("pid", 0) or 0)
+        if pid <= 0:
+            continue
+        channels = p.get("channels", []) or []
+        matched = False
+        for ch in channels:
+            cid = (ch.get("id", "") or "").strip()
+            cmode = (ch.get("mode", "") or "").upper()
+            if cid == channel_id and cmode == mode_u:
+                matched = True
+                break
+        if not matched:
+            continue
+        out[pid] = {
+            "rank": int(p.get("rank", -1) or -1),
+            "label": p.get("label", "xos") or "xos",
+            "node_id": p.get("node_id", "") or "",
+        }
+    return out
+
+
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
     return ((x * height + y) * channels) + ch
 
@@ -238,6 +267,7 @@ def main() -> None:
         last_mesh_nodes = int(mesh.num_nodes())
     except Exception:
         last_mesh_nodes = 1
+    last_local_nodes = _local_channel_nodes(current_channel, current_mode)
 
     try:
         while True:
@@ -334,15 +364,44 @@ def main() -> None:
             except Exception:
                 mesh_nodes = last_mesh_nodes
             if mesh_nodes != last_mesh_nodes:
+                local_nodes_now = _local_channel_nodes(current_channel, current_mode)
+                joined_pids = sorted(set(local_nodes_now.keys()) - set(last_local_nodes.keys()))
+                left_pids = sorted(set(last_local_nodes.keys()) - set(local_nodes_now.keys()))
+                detailed_events = 0
+                for pid in joined_pids:
+                    info = local_nodes_now.get(pid, {})
+                    _append_log_line(
+                        logs,
+                        "[mesh] joined "
+                        f"r{info.get('rank', '?')} {info.get('label', 'xos')} "
+                        f"id={_short_node_id(info.get('node_id', ''))} pid={pid}",
+                    )
+                    detailed_events += 1
+                for pid in left_pids:
+                    info = last_local_nodes.get(pid, {})
+                    _append_log_line(
+                        logs,
+                        "[mesh] left "
+                        f"r{info.get('rank', '?')} {info.get('label', 'xos')} "
+                        f"id={_short_node_id(info.get('node_id', ''))} pid={pid}",
+                    )
+                    detailed_events += 1
+
                 if mesh_nodes > last_mesh_nodes:
                     delta = mesh_nodes - last_mesh_nodes
-                    noun = "node" if delta == 1 else "nodes"
-                    _append_log_line(logs, f"[mesh] +{delta} {noun} joined (now {mesh_nodes})")
+                    remaining = max(0, delta - detailed_events)
+                    if remaining > 0:
+                        noun = "node" if remaining == 1 else "nodes"
+                        _append_log_line(logs, f"[mesh] +{remaining} {noun} joined (remote/unknown) (now {mesh_nodes})")
                 else:
                     delta = last_mesh_nodes - mesh_nodes
-                    noun = "node" if delta == 1 else "nodes"
-                    _append_log_line(logs, f"[mesh] -{delta} {noun} left (now {mesh_nodes})")
+                    remaining = max(0, delta - detailed_events)
+                    if remaining > 0:
+                        noun = "node" if remaining == 1 else "nodes"
+                        _append_log_line(logs, f"[mesh] -{remaining} {noun} left (remote/unknown) (now {mesh_nodes})")
+
                 last_mesh_nodes = mesh_nodes
+                last_local_nodes = local_nodes_now
                 needs_render = True
             try:
                 proc_version = int(xos.manager.version())
@@ -350,6 +409,7 @@ def main() -> None:
                 proc_version = last_proc_version
             if proc_version != last_proc_version:
                 last_proc_version = proc_version
+                last_local_nodes = _local_channel_nodes(current_channel, current_mode)
                 needs_render = True
 
             if needs_render:
