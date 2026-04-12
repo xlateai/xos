@@ -263,10 +263,6 @@ pub fn run_python_file(file_path: &PathBuf) {
 
 /// Run an interactive Python console
 pub fn run_python_interactive() {
-    println!("🐍 Python Interactive Console");
-    println!("`xos` is auto-imported in this session.");
-    println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
-    
     // Create interpreter with xos module
     let interpreter = Interpreter::with_init(Default::default(), |vm| {
         vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
@@ -282,9 +278,9 @@ pub fn run_python_interactive() {
     loop {
         // Print prompt
         if continuation {
-            print!("... ");
+            print!("…> ");
         } else {
-            print!(">>> ");
+            print!("🐍> ");
         }
         io::stdout().flush().unwrap();
         
@@ -292,8 +288,7 @@ pub fn run_python_interactive() {
         let mut line = String::new();
         match stdin.lock().read_line(&mut line) {
             Ok(0) => {
-                // EOF (Ctrl+D)
-                println!("\nExiting...");
+                // EOF (Ctrl+D on Unix, Ctrl+Z+Enter on Windows)
                 break;
             }
             Ok(_) => {
@@ -358,6 +353,10 @@ pub fn run_python_interactive() {
                 }
             }
             Err(e) => {
+                if e.kind() == io::ErrorKind::Interrupted {
+                    // Single Ctrl+C exits interactive mode immediately.
+                    break;
+                }
                 eprintln!("Error reading input: {}", e);
                 break;
             }

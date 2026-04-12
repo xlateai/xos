@@ -7,12 +7,15 @@ MODE = "lan"
 LOOP_SLEEP_SECS = 0.05
 MAX_LOG_LINES = 200
 FOOTER_DEFAULT = "Type /help for help  |  /quit exits terminal"
+FOOTER_XPY = "xpy mode active  |  /xpy exits python mode  |  /help shows commands"
 FOOTER_HELP = [
     "Commands:",
     "  /help   show/hide this help",
     "  /nodes  list observed nodes by rank",
     "  /procs  list local xos-managed processes",
     "  /channels list channels seen on local managed procs",
+    "  /xpy    toggle embedded Python REPL mode",
+    "  /xos <args> run xos CLI command",
     "  /channel <id> switch channel (same mode)",
     "  /lan | /local | /online switch mesh mode",
     "  /clear  clear chat log",
@@ -42,6 +45,83 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
     log_lines.append(line)
     if len(log_lines) > MAX_LOG_LINES:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
+
+
+def _xpy_default_state(log_lines: list[str]) -> dict:
+    def _xpy_print(*args, sep=" ", end="\n"):
+        text = sep.join(str(a) for a in args)
+        chunks = text.splitlines() or [""]
+        for chunk in chunks:
+            _append_log_line(log_lines, f"[xpy] {chunk}")
+        if end and end != "\n":
+            _append_log_line(log_lines, f"[xpy] {end.rstrip()}")
+
+    glb = {
+        "__name__": "__xpy_console__",
+        "__builtins__": __builtins__,
+        "xos": xos,
+        "print": _xpy_print,
+    }
+    return {"globals": glb, "buffer": []}
+
+
+def _xpy_is_incomplete_syntax(err: SyntaxError) -> bool:
+    text = str(err)
+    needles = [
+        "unexpected EOF",
+        "incomplete input",
+        "expected an indented block",
+        "was never closed",
+    ]
+    return any(n in text for n in needles)
+
+
+def _xpy_eval_line(log_lines: list[str], xpy_state: dict, line: str) -> None:
+    buf = xpy_state["buffer"]
+    glb = xpy_state["globals"]
+    if buf or line.strip():
+        buf.append(line)
+    src = "\n".join(buf).rstrip("\n")
+    if not src:
+        return
+
+    try:
+        eval_code = compile(src, "<xpy>", "eval")
+    except SyntaxError:
+        eval_code = None
+    except Exception as e:
+        _append_log_line(log_lines, f"[xpy err] {e}")
+        buf.clear()
+        return
+
+    if eval_code is not None:
+        try:
+            value = eval(eval_code, glb, glb)
+            if value is not None:
+                _append_log_line(log_lines, f"[xpy] {value}")
+        except Exception as e:
+            _append_log_line(log_lines, f"[xpy err] {e}")
+        buf.clear()
+        return
+
+    try:
+        exec_code = compile(src, "<xpy>", "exec")
+    except SyntaxError as e:
+        if _xpy_is_incomplete_syntax(e):
+            return
+        _append_log_line(log_lines, f"[xpy err] {e}")
+        buf.clear()
+        return
+    except Exception as e:
+        _append_log_line(log_lines, f"[xpy err] {e}")
+        buf.clear()
+        return
+
+    try:
+        exec(exec_code, glb, glb)
+    except Exception as e:
+        _append_log_line(log_lines, f"[xpy err] {e}")
+    buf.clear()
 
 
 def _remember_node(known_nodes: dict, rank, node_id: str, label: str = "") -> None:
@@ -147,6 +227,36 @@ def _emit_procs(log_lines: list[str]) -> None:
         )
 
 
+def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
+    cmd = (argline or "").strip()
+    if not cmd:
+        _append_log_line(log_lines, "usage: /xos <cli args>  (example: /xos app whiteboard)")
+        return
+    try:
+        res = xos.manager.run_xos(cmd)
+    except Exception as e:
+        _append_log_line(log_lines, f"[xos err] {e}")
+        return
+
+    shown = res.get("cmd", "")
+    if shown:
+        _append_log_line(log_lines, f"[xos] {shown}")
+    if res.get("detached", False):
+        pid = res.get("pid", "?")
+        _append_log_line(log_lines, f"[xos] launched in background (pid={pid})")
+        return
+
+    code = int(res.get("code", -1) or -1)
+    stdout = (res.get("stdout", "") or "").splitlines()
+    stderr = (res.get("stderr", "") or "").splitlines()
+    for line in stdout:
+        _append_log_line(log_lines, f"[xos out] {line}")
+    for line in stderr:
+        _append_log_line(log_lines, f"[xos err] {line}")
+    if not stdout and not stderr:
+        _append_log_line(log_lines, f"[xos] exited with code {code}")
+
+
 def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
     out: dict[int, dict] = {}
     mode_u = (mode or "").upper()
@@ -199,6 +309,7 @@ def _render(
     mesh_mode: str,
     chat_id: str,
     footer_lines: list[str],
+    input_prompt: str = ">>> ",
 ) -> None:
     frame = xos.terminal.get_frame()
     width, height, channels = frame.shape
@@ -255,9 +366,9 @@ def _render(
         if row >= prompt_row:
             break
         _put(frame, width, height, channels, row, 0, _fit(line, width), "8")
-    _put(frame, width, height, channels, prompt_row, 0, _fit(">>> ", width), "b")
+    _put(frame, width, height, channels, prompt_row, 0, _fit(input_prompt, width), "b")
     try:
-        xos.terminal.set_frame(frame, cursor_x=4, cursor_y=prompt_row)
+        xos.terminal.set_frame(frame, cursor_x=len(input_prompt), cursor_y=prompt_row)
     except Exception as e:
         # Terminal size can change between get_frame() and set_frame() calls.
         # Keep strict validation in Rust, but don't crash the UI loop on this race.
@@ -280,6 +391,16 @@ def _log_line_color(line: str) -> str:
     if s.startswith("channels (") or s.startswith("local managed processes:") or s.startswith("nodes ("):
         return "b"
     if s.startswith("[mesh]"):
+        return "a"
+    if s.startswith("[xpy err]"):
+        return "4"
+    if s.startswith("[xpy]"):
+        return "d"
+    if s.startswith("[xos err]"):
+        return "4"
+    if s.startswith("[xos out]"):
+        return "f"
+    if s.startswith("[xos]"):
         return "a"
     if s.startswith("  +-- active:"):
         return "a"
@@ -304,12 +425,14 @@ def main() -> None:
 
     logs: list[str] = []
     help_expanded = False
+    xpy_mode = False
+    xpy_state = _xpy_default_state(logs)
     known_nodes: dict[int, dict[str, str]] = {}
     _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
     _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
-    _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT])
+    _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT], ">>> ")
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
     try:
         last_proc_version = int(xos.manager.version())
@@ -337,7 +460,20 @@ def main() -> None:
                     _append_log_line(logs, _format_packet(packet))
                 needs_render = True
 
-            line = xos.input("", wait=False)
+            active_prompt = "…> " if (xpy_mode and xpy_state["buffer"]) else ("🐍> " if xpy_mode else ">>> ")
+            active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
+
+            try:
+                line = xos.input("", wait=False)
+            except KeyboardInterrupt:
+                if xpy_mode:
+                    xpy_mode = False
+                    xpy_state["buffer"].clear()
+                    _append_log_line(logs, "[xpy] left interactive python mode (Ctrl+C)")
+                    needs_render = True
+                    line = None
+                else:
+                    raise
             if line is not None:
                 text = line.strip()
                 _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
@@ -349,12 +485,28 @@ def main() -> None:
                         machine_name,
                         current_mode,
                         current_channel,
-                        FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
+                        active_footer,
+                        active_prompt,
                     )
                     break
                 handled = False
                 if text == "/help":
                     help_expanded = not help_expanded
+                    needs_render = True
+                    handled = True
+                if text == "/xpy":
+                    xpy_mode = not xpy_mode
+                    if xpy_mode:
+                        xpy_state = _xpy_default_state(logs)
+                        _append_log_line(logs, "[xpy] entered interactive python mode")
+                    else:
+                        xpy_state["buffer"].clear()
+                        _append_log_line(logs, "[xpy] left interactive python mode")
+                    needs_render = True
+                    handled = True
+                if text.startswith("/xos"):
+                    argline = text[4:].strip()
+                    _emit_xos_cli(logs, argline)
                     needs_render = True
                     handled = True
                 if text == "/nodes":
@@ -402,9 +554,17 @@ def main() -> None:
                         _append_log_line(logs, f"mode switch failed: {e}")
                     needs_render = True
                     handled = True
-                if text and not handled:
-                    mesh.broadcast(id="message", msg=text, sender=machine_name)
-                    _append_log_line(logs, f"[me] {text}")
+                if not handled and (text or (xpy_mode and xpy_state["buffer"])):
+                    if xpy_mode:
+                        if text in ("exit()", "quit()"):
+                            xpy_mode = False
+                            xpy_state["buffer"].clear()
+                            _append_log_line(logs, "[xpy] left interactive python mode")
+                        else:
+                            _xpy_eval_line(logs, xpy_state, line.rstrip("\n"))
+                    else:
+                        mesh.broadcast(id="message", msg=text, sender=machine_name)
+                        _append_log_line(logs, f"[me] {text}")
                     needs_render = True
 
             size_now = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
@@ -465,13 +625,16 @@ def main() -> None:
                 needs_render = True
 
             if needs_render:
+                active_prompt = "…> " if (xpy_mode and xpy_state["buffer"]) else ("🐍> " if xpy_mode else ">>> ")
+                active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
                 _render(
                     mesh,
                     logs,
                     machine_name,
                     current_mode,
                     current_channel,
-                    FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
+                    active_footer,
+                    active_prompt,
                 )
 
             xos.sleep(LOOP_SLEEP_SECS)
