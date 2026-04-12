@@ -1,21 +1,11 @@
-"""
-`xos terminal` prototype.
-
-Simple full-screen mesh console:
-- joins a shared global channel on startup
-- renders a live status bar at the top
-- provides a lightweight mesh chat area at the bottom
-"""
+"""xos terminal: frame/tensor style renderer with text+color channels."""
 
 import xos
 
 MESH_ID = "xos-global"
 MODE = "lan"
-
 LOOP_SLEEP_SECS = 0.05
 MAX_LOG_LINES = 200
-DEFAULT_WIDTH = 120
-DEFAULT_HEIGHT = 30
 
 
 def _short_node_id(node_id: str) -> str:
@@ -36,57 +26,66 @@ def _fit(text: str, width: int) -> str:
     return text[: width - 3] + "..."
 
 
-def _terminal_size() -> tuple[int, int]:
-    try:
-        width = int(xos.terminal.get_width())
-        height = int(xos.terminal.get_height())
-        return max(width, 40), max(height, 10)
-    except Exception:
-        return DEFAULT_WIDTH, DEFAULT_HEIGHT
-
-
-def _push(log_lines: list[str], line: str) -> None:
+def _append_log_line(log_lines: list[str], line: str) -> None:
     log_lines.append(line)
     if len(log_lines) > MAX_LOG_LINES:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
 
 
-def _render(
-    mesh,
-    log_lines: list[str],
-    machine_name: str,
-    mesh_mode: str,
-    chat_id: str,
-) -> None:
-    width, height = _terminal_size()
+def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
+    return ((x * height + y) * channels) + ch
+
+
+def _put(frame, width: int, height: int, channels: int, row: int, col: int, text: str, color: str = "f") -> None:
+    if row < 0 or row >= height or col >= width or channels < 2:
+        return
+    flat = frame._data["_data"]
+    for i, ch in enumerate(text):
+        x = col + i
+        if x >= width:
+            break
+        flat[_idx(x, row, 0, width, height, channels)] = ch
+        flat[_idx(x, row, 1, width, height, channels)] = color
+
+
+def _render(mesh, log_lines: list[str], machine_name: str, mesh_mode: str, chat_id: str) -> None:
+    frame = xos.terminal.get_frame()
+    width, height, channels = frame.shape
 
     nodes = mesh.num_nodes()
     rank = mesh.rank()
     node_id = mesh.node_id()
-    status = (
-        " xos terminal "
-        f"| channel={chat_id} mode={mesh_mode} "
-        f"| nodes={nodes} rank={rank} "
-        f"| machine={machine_name} id={_short_node_id(node_id)} "
-    )
+    node_label = "node" if nodes == 1 else "nodes"
 
-    # Keep the final row for the live input prompt.
-    log_height = max(3, height - 5)
-    visible = log_lines[-log_height:]
-    pad_count = log_height - len(visible)
+    top = _fit(" xos.mesh terminal ", width)
+    _put(frame, width, height, channels, 0, 0, top, "b")
 
-    out = []
-    out.append("\x1b[H\x1b[2J")
-    out.append(f"\x1b[7m{_fit(status, width)}\x1b[0m")
-    out.append("-" * width)
-    out.extend(_fit(line, width) for line in visible)
-    out.extend(" " * width for _ in range(pad_count))
-    out.append("-" * width)
-    out.append(_fit("Type message + Enter  |  /quit exits terminal", width))
-    out.append(_fit("> ", width))
-    print("\n".join(out), end="", flush=True)
-    # Keep caret after the prompt marker.
-    print(f"\x1b[{height};3H", end="", flush=True)
+    left = f"🟢 {chat_id} | {nodes} {node_label} | rank {rank} | id {_short_node_id(node_id)}"
+    right = f"{mesh_mode.upper()} {machine_name}"
+    min_gap = 2
+    max_left = max(0, width - len(right) - min_gap)
+    if len(left) > max_left:
+        left = _fit(left, max_left).rstrip()
+    gap = max(min_gap, width - len(left) - len(right))
+    second = _fit(left + (" " * gap) + right, width)
+    _put(frame, width, height, channels, 1, 0, second, "7")
+
+    sep = "-" * width
+    _put(frame, width, height, channels, 2, 0, sep, "8")
+
+    log_start = 3
+    prompt_row = max(0, height - 1)
+    help_row = max(0, height - 2)
+    bottom_sep = max(0, height - 3)
+    log_height = max(0, bottom_sep - log_start)
+    visible = log_lines[-log_height:] if log_height > 0 else []
+    for i, line in enumerate(visible):
+        _put(frame, width, height, channels, log_start + i, 0, _fit(line, width), "f")
+
+    _put(frame, width, height, channels, bottom_sep, 0, sep, "8")
+    _put(frame, width, height, channels, help_row, 0, _fit("Type message + Enter  |  /quit exits terminal", width), "8")
+    _put(frame, width, height, channels, prompt_row, 0, _fit(">>> ", width), "b")
+    xos.terminal.set_frame(frame, cursor_x=4, cursor_y=prompt_row)
 
 
 def _format_packet(packet) -> str:
@@ -99,19 +98,18 @@ def _format_packet(packet) -> str:
 
 def main() -> None:
     mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
+    machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
     except Exception:
-        machine_name = "machine"
+        pass
+
     logs: list[str] = []
-    _push(
-        logs,
-        f"joined global channel id={MESH_ID!r} mode={MODE!r} as {machine_name}",
-    )
+    _append_log_line(logs, f"joined {MESH_ID!r} in {MODE.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
     _render(mesh, logs, machine_name, MODE, MESH_ID)
-    last_size = _terminal_size()
+    last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
 
     try:
         while True:
@@ -120,27 +118,26 @@ def main() -> None:
             packets = mesh.receive(id="message", wait=False, latest_only=False)
             if packets:
                 for packet in packets:
-                    _push(logs, _format_packet(packet))
+                    _append_log_line(logs, _format_packet(packet))
                 needs_render = True
 
             line = xos.input("", wait=False)
             if line is not None:
                 text = line.strip()
                 if text in ("/quit", "/exit"):
-                    _push(logs, "leaving xos terminal")
+                    _append_log_line(logs, "leaving xos terminal")
                     _render(mesh, logs, machine_name, MODE, MESH_ID)
                     break
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
-                    _push(logs, f"[me] {text}")
+                    _append_log_line(logs, f"[me] {text}")
                     needs_render = True
 
-            current_size = _terminal_size()
-            if current_size != last_size:
-                last_size = current_size
+            size_now = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
+            if size_now != last_size:
+                last_size = size_now
                 needs_render = True
 
-            # Event-driven redraw keeps the prompt stable and prevents flicker.
             if needs_render:
                 _render(mesh, logs, machine_name, MODE, MESH_ID)
 
