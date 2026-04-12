@@ -45,11 +45,6 @@ def _terminal_size() -> tuple[int, int]:
         return DEFAULT_WIDTH, DEFAULT_HEIGHT
 
 
-def _stamp(loop_count: int) -> str:
-    elapsed = loop_count * LOOP_SLEEP_SECS
-    return f"t+{elapsed:0.1f}s"
-
-
 def _push(log_lines: list[str], line: str) -> None:
     log_lines.append(line)
     if len(log_lines) > MAX_LOG_LINES:
@@ -75,7 +70,7 @@ def _render(
         f"| machine={machine_name} id={_short_node_id(node_id)} "
     )
 
-    # Keep the final row for the live `xos.input("chat> ")` prompt.
+    # Keep the final row for the live input prompt.
     log_height = max(3, height - 5)
     visible = log_lines[-log_height:]
     pad_count = log_height - len(visible)
@@ -87,25 +82,23 @@ def _render(
     out.extend(_fit(line, width) for line in visible)
     out.extend(" " * width for _ in range(pad_count))
     out.append("-" * width)
-    out.append(
-        _fit("chat: type message + Enter  |  /quit exits terminal", width)
-    )
+    out.append(_fit("Type message + Enter  |  /quit exits terminal", width))
+    out.append(_fit("> ", width))
     print("\n".join(out), end="", flush=True)
-    # Keep prompt pinned to the bottom line.
-    print(f"\x1b[{height};1H", end="", flush=True)
+    # Keep caret after the prompt marker.
+    print(f"\x1b[{height};3H", end="", flush=True)
 
 
-def _format_packet(packet, loop_count: int) -> str:
+def _format_packet(packet) -> str:
     from_rank = getattr(packet, "from_rank", "?")
     from_id = getattr(packet, "from_id", "") or ""
     sender = getattr(packet, "sender", "") or _short_node_id(from_id)
     text = getattr(packet, "msg", "")
-    return f"[{_stamp(loop_count)}] [{sender} r{from_rank}] {text}"
+    return f"[{sender} r{from_rank}] {text}"
 
 
 def main() -> None:
     mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
-    loop_count = 0
     try:
         machine_name = mesh.node_name() or "machine"
     except Exception:
@@ -113,10 +106,7 @@ def main() -> None:
     logs: list[str] = []
     _push(
         logs,
-        (
-            f"[{_stamp(loop_count)}] joined global channel "
-            f"id={MESH_ID!r} mode={MODE!r} as {machine_name}"
-        ),
+        f"joined global channel id={MESH_ID!r} mode={MODE!r} as {machine_name}",
     )
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
@@ -130,19 +120,19 @@ def main() -> None:
             packets = mesh.receive(id="message", wait=False, latest_only=False)
             if packets:
                 for packet in packets:
-                    _push(logs, _format_packet(packet, loop_count))
+                    _push(logs, _format_packet(packet))
                 needs_render = True
 
-            line = xos.input("chat> ", wait=False)
+            line = xos.input("", wait=False)
             if line is not None:
                 text = line.strip()
                 if text in ("/quit", "/exit"):
-                    _push(logs, f"[{_stamp(loop_count)}] leaving xos terminal")
+                    _push(logs, "leaving xos terminal")
                     _render(mesh, logs, machine_name, MODE, MESH_ID)
                     break
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
-                    _push(logs, f"[{_stamp(loop_count)}] [me] {text}")
+                    _push(logs, f"[me] {text}")
                     needs_render = True
 
             current_size = _terminal_size()
@@ -155,7 +145,6 @@ def main() -> None:
                 _render(mesh, logs, machine_name, MODE, MESH_ID)
 
             xos.sleep(LOOP_SLEEP_SECS)
-            loop_count += 1
     finally:
         print("\x1b[?1049l", end="", flush=True)
 
