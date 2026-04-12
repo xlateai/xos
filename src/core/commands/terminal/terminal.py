@@ -57,23 +57,24 @@ def _render(mesh, log_lines: list[str], machine_name: str, mesh_mode: str, chat_
     node_id = mesh.node_id()
     node_label = "node" if nodes == 1 else "nodes"
 
-    top = _fit(" xos.mesh terminal ", width)
-    _put(frame, width, height, channels, 0, 0, top, "b")
-
-    left = f"🟢 {chat_id} | {nodes} {node_label} | rank {rank} | id {_short_node_id(node_id)}"
-    right = f"{mesh_mode.upper()} {machine_name}"
+    left = (
+        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | "
+        f"rank {rank} | id {_short_node_id(node_id)}"
+    )
+    right = machine_name
     min_gap = 2
     max_left = max(0, width - len(right) - min_gap)
     if len(left) > max_left:
         left = _fit(left, max_left).rstrip()
     gap = max(min_gap, width - len(left) - len(right))
-    second = _fit(left + (" " * gap) + right, width)
-    _put(frame, width, height, channels, 1, 0, second, "7")
+    status = _fit(left + (" " * gap) + right, width)
+    _put(frame, width, height, channels, 0, 0, status, "r")
+    _put(frame, width, height, channels, 0, 0, "o", "a")
 
     sep = "-" * width
-    _put(frame, width, height, channels, 2, 0, sep, "8")
+    _put(frame, width, height, channels, 1, 0, sep, "8")
 
-    log_start = 3
+    log_start = 2
     prompt_row = max(0, height - 1)
     help_row = max(0, height - 2)
     bottom_sep = max(0, height - 3)
