@@ -130,6 +130,9 @@ pub fn execute_python_code(
 import builtins
 import sys
 import xos
+# Ensure `xos` is always present without an explicit user import
+# (for `xpy` and `xos py/python` execution paths).
+globals()["xos"] = xos
 __original_print__ = builtins.print
 __original_import__ = builtins.__import__
 
@@ -261,6 +264,7 @@ pub fn run_python_file(file_path: &PathBuf) {
 /// Run an interactive Python console
 pub fn run_python_interactive() {
     println!("🐍 Python Interactive Console");
+    println!("`xos` is auto-imported in this session.");
     println!("Type 'exit()' or 'quit()' to exit, or press Ctrl+D\n");
     
     // Create interpreter with xos module
