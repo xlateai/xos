@@ -1247,6 +1247,7 @@ fn host_accept_loop(
             guard[idx] = Some(stored);
         }
         recompute_num_nodes(&clients, &num_nodes);
+        notify_peer_topology_plain(&clients, &num_nodes);
 
         let inbox_r = Arc::clone(&inbox);
         let clients_r = Arc::clone(&clients);
@@ -1304,6 +1305,7 @@ fn host_accept_loop(
                 guard[idx] = Some(stored);
             }
             recompute_num_nodes(&clients, &num_nodes);
+            notify_peer_topology_plain(&clients, &num_nodes);
 
             let inbox_r = Arc::clone(&inbox);
             let clients_r = Arc::clone(&clients);
@@ -1353,6 +1355,7 @@ fn host_accept_loop(
             g[idx] = Some(keys.clone());
         }
         recompute_num_nodes(&clients, &num_nodes);
+        notify_peer_topology_lan(&clients, lh, &num_nodes);
 
         let inbox_r = Arc::clone(&inbox);
         let clients_r = Arc::clone(&clients);
