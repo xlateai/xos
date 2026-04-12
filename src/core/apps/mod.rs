@@ -83,4 +83,5 @@ define_apps! {
     Overlay => overlay::OverlayApp,
     Remote => remote::RemoteApp,
     Mesh => mesh::MeshApp,
+    Hang => hang::HangApp,
 }

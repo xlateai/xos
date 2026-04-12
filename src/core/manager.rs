@@ -134,7 +134,7 @@ pub fn bootstrap(label: &str) {
     if BOOTSTRAPPED.swap(true, Ordering::SeqCst) {
         return;
     }
-    println!("hello from watchdog");
+    // println!("hello from watchdog");
     let Ok(session) = MeshSession::join(PROC_MESH_ID, MeshMode::Local) else {
         return;
     };
