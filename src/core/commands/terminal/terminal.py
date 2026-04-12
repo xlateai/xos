@@ -13,7 +13,7 @@ MESH_ID = "xos-global"
 MODE = "lan"
 
 LOOP_SLEEP_SECS = 0.05
-RENDER_EVERY_LOOPS = 4
+IDLE_RENDER_EVERY_LOOPS = 20
 MAX_LOG_LINES = 200
 DEFAULT_WIDTH = 120
 DEFAULT_HEIGHT = 30
@@ -37,6 +37,15 @@ def _fit(text: str, width: int) -> str:
     return text[: width - 3] + "..."
 
 
+def _terminal_size() -> tuple[int, int]:
+    try:
+        width = int(xos.terminal.get_width())
+        height = int(xos.terminal.get_height())
+        return max(width, 40), max(height, 10)
+    except Exception:
+        return DEFAULT_WIDTH, DEFAULT_HEIGHT
+
+
 def _stamp(loop_count: int) -> str:
     elapsed = loop_count * LOOP_SLEEP_SECS
     return f"t+{elapsed:0.1f}s"
@@ -55,10 +64,7 @@ def _render(
     mesh_mode: str,
     chat_id: str,
 ) -> None:
-    # RustPython builds used by older xos binaries may not ship `shutil`,
-    # so keep this renderer dependency-free and fixed-size for compatibility.
-    width = DEFAULT_WIDTH
-    height = DEFAULT_HEIGHT
+    width, height = _terminal_size()
 
     nodes = mesh.num_nodes()
     rank = mesh.rank()
@@ -70,7 +76,7 @@ def _render(
         f"| machine={machine_name} id={_short_node_id(node_id)} "
     )
 
-    # Keep bottom rows clear for the command prompt and typing area.
+    # Keep bottom rows clear for help and prompt input.
     log_height = max(3, height - 5)
     visible = log_lines[-log_height:]
     pad_count = log_height - len(visible)
@@ -85,7 +91,10 @@ def _render(
     out.append(
         _fit("chat: type message + Enter  |  /quit exits terminal", width)
     )
+    out.append(_fit("chat> ", width))
     print("\n".join(out), end="", flush=True)
+    # Place cursor at the input row so typing location is always obvious.
+    print(f"\x1b[{height};7H", end="", flush=True)
 
 
 def _format_packet(packet, loop_count: int) -> str:
@@ -112,32 +121,40 @@ def main() -> None:
         ),
     )
 
-    print("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l", end="", flush=True)
+    print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
+    _render(mesh, logs, machine_name, MODE, MESH_ID)
 
     try:
         while True:
+            needs_render = False
+
             packets = mesh.receive(id="message", wait=False, latest_only=False)
             if packets:
                 for packet in packets:
                     _push(logs, _format_packet(packet, loop_count))
+                needs_render = True
 
-            line = xos.input("chat> ", wait=False)
+            line = xos.input("", wait=False)
             if line is not None:
                 text = line.strip()
                 if text in ("/quit", "/exit"):
                     _push(logs, f"[{_stamp(loop_count)}] leaving xos terminal")
+                    _render(mesh, logs, machine_name, MODE, MESH_ID)
                     break
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
                     _push(logs, f"[{_stamp(loop_count)}] [me] {text}")
+                    needs_render = True
 
-            if (loop_count % RENDER_EVERY_LOOPS) == 0:
+            # Event-driven updates keep the input line stable while typing.
+            # A slow heartbeat still refreshes terminal resize/layout changes.
+            if needs_render or (loop_count % IDLE_RENDER_EVERY_LOOPS) == 0:
                 _render(mesh, logs, machine_name, MODE, MESH_ID)
 
             xos.sleep(LOOP_SLEEP_SECS)
             loop_count += 1
     finally:
-        print("\x1b[?25h\x1b[?1049l", end="", flush=True)
+        print("\x1b[?1049l", end="", flush=True)
 
 
 main()

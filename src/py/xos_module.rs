@@ -997,6 +997,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the system submodule
     let system_module = crate::python_api::system::make_system_module(vm);
     module.set_attr("system", system_module, vm).unwrap();
+
+    // Add terminal helpers for terminal-aware Python apps.
+    let terminal_module = crate::python_api::terminal::make_terminal_module(vm);
+    module.set_attr("terminal", terminal_module, vm).unwrap();
     
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);
