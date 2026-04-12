@@ -276,6 +276,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             vm.new_runtime_error(e)
         }
     })?;
+    crate::manager::register_mesh(&mesh_id, &mode_str);
     *MESH.lock().unwrap() = Some(std::sync::Arc::new(session));
     Ok(vm.ctx.none())
 }

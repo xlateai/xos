@@ -25,11 +25,18 @@ const PROC_HELLO_INTERVAL_MS: u64 = 1200;
 const PROC_STALE_MS: u64 = 5000;
 
 #[derive(Clone, Debug)]
+pub struct ProcChannel {
+    pub id: String,
+    pub mode: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct ProcSnapshot {
     pub pid: u32,
     pub label: String,
     pub rank: u32,
     pub node_id: String,
+    pub channels: Vec<ProcChannel>,
     pub last_seen_ms: u64,
 }
 
@@ -39,6 +46,9 @@ static BOOTSTRAPPED: AtomicBool = AtomicBool::new(false);
 static PROC_SESSION: LazyLock<Mutex<Option<Arc<MeshSession>>>> = LazyLock::new(|| Mutex::new(None));
 #[cfg(not(target_arch = "wasm32"))]
 static PROC_TABLE: LazyLock<Mutex<HashMap<u32, ProcSnapshot>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+#[cfg(not(target_arch = "wasm32"))]
+static SELF_CHANNELS: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,8 +68,25 @@ fn self_snapshot(session: &MeshSession, label: &str) -> ProcSnapshot {
         label: label.to_string(),
         rank: session.rank(),
         node_id: session.node_id.clone(),
+        channels: local_channels(),
         last_seen_ms: now_ms(),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn local_channels() -> Vec<ProcChannel> {
+    let Ok(chs) = SELF_CHANNELS.lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<ProcChannel> = chs
+        .iter()
+        .map(|(id, mode)| ProcChannel {
+            id: id.clone(),
+            mode: mode.clone(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.mode.cmp(&b.mode)));
+    out
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,11 +106,13 @@ fn remember_snapshot(mut snap: ProcSnapshot) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_hello(session: &MeshSession, label: &str) {
+    let channels = local_channels();
     let payload = json!({
         "pid": my_pid(),
         "label": label,
         "rank": session.rank(),
         "node_id": session.node_id,
+        "channels": channels.iter().map(|c| json!({"id": c.id, "mode": c.mode})).collect::<Vec<_>>(),
         "ts_ms": now_ms(),
     });
     let _ = session.broadcast_json(PROC_HELLO_KIND, payload);
@@ -113,11 +142,29 @@ fn handle_incoming(session: Arc<MeshSession>) {
                     .and_then(|v| v.as_str())
                     .unwrap_or(p.from_id.as_str())
                     .to_string();
+                let mut channels: Vec<ProcChannel> = Vec::new();
+                if let Some(arr) = body.get("channels").and_then(|v| v.as_array()) {
+                    for ch in arr {
+                        let Some(id) = ch.get("id").and_then(|v| v.as_str()) else {
+                            continue;
+                        };
+                        let mode = ch
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("local")
+                            .to_string();
+                        channels.push(ProcChannel {
+                            id: id.to_string(),
+                            mode,
+                        });
+                    }
+                }
                 remember_snapshot(ProcSnapshot {
                     pid,
                     label,
                     rank,
                     node_id,
+                    channels,
                     last_seen_ms: now_ms(),
                 });
             }
@@ -138,6 +185,7 @@ pub fn bootstrap(label: &str) {
     let Ok(session) = MeshSession::join(PROC_MESH_ID, MeshMode::Local) else {
         return;
     };
+    register_mesh(PROC_MESH_ID, "local");
     let session = Arc::new(session);
     if let Ok(mut g) = PROC_SESSION.lock() {
         *g = Some(Arc::clone(&session));
@@ -187,6 +235,14 @@ pub fn kill_all() -> Result<(), String> {
     session.broadcast_json(PROC_KILL_KIND, json!({"from_pid": my_pid()}))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn register_mesh(mesh_id: &str, mode: &str) {
+    let Ok(mut chs) = SELF_CHANNELS.lock() else {
+        return;
+    };
+    chs.insert(mesh_id.to_string(), mode.to_string());
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn bootstrap(_label: &str) {}
 
@@ -204,3 +260,6 @@ pub fn num_processes() -> usize {
 pub fn kill_all() -> Result<(), String> {
     Err("process manager not available on wasm".to_string())
 }
+
+#[cfg(target_arch = "wasm32")]
+pub fn register_mesh(_mesh_id: &str, _mode: &str) {}

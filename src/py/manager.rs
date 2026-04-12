@@ -14,6 +14,14 @@ fn manager_list_procs(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         d.set_item("rank", vm.ctx.new_int(p.rank as isize).into(), vm)?;
         d.set_item("node_id", vm.ctx.new_str(p.node_id.as_str()).into(), vm)?;
         d.set_item("last_seen_ms", vm.ctx.new_int(p.last_seen_ms as isize).into(), vm)?;
+        let mut channels = Vec::with_capacity(p.channels.len());
+        for ch in p.channels {
+            let c = vm.ctx.new_dict();
+            c.set_item("id", vm.ctx.new_str(ch.id.as_str()).into(), vm)?;
+            c.set_item("mode", vm.ctx.new_str(ch.mode.as_str()).into(), vm)?;
+            channels.push(c.into());
+        }
+        d.set_item("channels", vm.ctx.new_list(channels).into(), vm)?;
         items.push(d.into());
     }
     Ok(vm.ctx.new_list(items).into())

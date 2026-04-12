@@ -12,7 +12,7 @@ FOOTER_HELP = [
     "  /help   show/hide this help",
     "  /nodes  list observed nodes by rank",
     "  /procs  list local xos-managed processes",
-    "  /channels list channels used in this terminal session",
+    "  /channels list channels seen on local managed procs",
     "  /channel <id> switch channel (same mode)",
     "  /lan | /local | /online switch mesh mode",
     "  /clear  clear chat log",
@@ -70,11 +70,34 @@ def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
         pass
 
 
-def _emit_channels(log_lines: list[str], channels: list[str], current_channel: str, current_mode: str) -> None:
-    _append_log_line(log_lines, "channels (this terminal session):")
-    for ch in channels:
-        marker = "*" if ch == current_channel else " "
-        _append_log_line(log_lines, f" {marker} {ch}")
+def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str) -> None:
+    _append_log_line(log_lines, "channels (local managed processes):")
+    procs = []
+    try:
+        procs = xos.manager.list_procs() or []
+    except Exception as e:
+        _append_log_line(log_lines, f"  error: {e}")
+        return
+
+    channel_counts: dict[str, int] = {}
+    channel_modes: dict[str, set[str]] = {}
+    for p in procs:
+        for ch in p.get("channels", []) or []:
+            cid = (ch.get("id", "") or "").strip()
+            if not cid:
+                continue
+            mode = (ch.get("mode", "local") or "local").upper()
+            channel_counts[cid] = channel_counts.get(cid, 0) + 1
+            channel_modes.setdefault(cid, set()).add(mode)
+
+    if not channel_counts:
+        _append_log_line(log_lines, "  (none)")
+    else:
+        for cid in sorted(channel_counts.keys()):
+            marker = "*" if cid == current_channel else " "
+            modes = ",".join(sorted(channel_modes.get(cid, {"LOCAL"})))
+            count = channel_counts[cid]
+            _append_log_line(log_lines, f" {marker} {cid}  mode={modes}  procs={count}")
     _append_log_line(log_lines, f"active: channel={current_channel!r} mode={current_mode.upper()}")
 
 
@@ -200,7 +223,6 @@ def main() -> None:
 
     logs: list[str] = []
     help_expanded = False
-    known_channels: list[str] = [current_channel]
     known_nodes: dict[int, dict[str, str]] = {}
     _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
     _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
@@ -254,7 +276,7 @@ def main() -> None:
                     needs_render = True
                     handled = True
                 if text == "/channels":
-                    _emit_channels(logs, known_channels, current_channel, current_mode)
+                    _emit_channels(logs, current_channel, current_mode)
                     needs_render = True
                     handled = True
                 if text == "/clear":
@@ -270,8 +292,6 @@ def main() -> None:
                             next_mesh = xos.mesh.connect(id=next_channel, mode=current_mode)
                             mesh = next_mesh
                             current_channel = next_channel
-                            if next_channel not in known_channels:
-                                known_channels.append(next_channel)
                             known_nodes.clear()
                             _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
                             _append_log_line(logs, f"switched to channel {current_channel!r} ({current_mode.upper()})")
