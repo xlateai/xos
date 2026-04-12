@@ -11,6 +11,7 @@ FOOTER_HELP = [
     "Commands:",
     "  /help   show/hide this help",
     "  /nodes  list observed nodes by rank",
+    "  /procs  list local xos-managed processes",
     "  /channels list channels used in this terminal session",
     "  /channel <id> switch channel (same mode)",
     "  /lan | /local | /online switch mesh mode",
@@ -77,6 +78,28 @@ def _emit_channels(log_lines: list[str], channels: list[str], current_channel: s
     _append_log_line(log_lines, f"active: channel={current_channel!r} mode={current_mode.upper()}")
 
 
+def _emit_procs(log_lines: list[str]) -> None:
+    _append_log_line(log_lines, "local managed processes:")
+    procs = []
+    try:
+        procs = xos.manager.list_procs() or []
+    except Exception as e:
+        _append_log_line(log_lines, f"  error: {e}")
+        return
+    if not procs:
+        _append_log_line(log_lines, "  (none)")
+        return
+    for p in procs:
+        rank = p.get("rank", "?")
+        pid = p.get("pid", "?")
+        label = p.get("label", "xos")
+        node_id = p.get("node_id", "")
+        _append_log_line(
+            log_lines,
+            f"  r{rank} pid={pid} {label} id={_short_node_id(node_id)}",
+        )
+
+
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
     return ((x * height + y) * channels) + ch
 
@@ -108,9 +131,13 @@ def _render(
     rank = mesh.rank()
     node_id = mesh.node_id()
     node_label = "node" if nodes == 1 else "nodes"
+    try:
+        proc_count = int(xos.manager.num_procs())
+    except Exception:
+        proc_count = 0
 
     left = (
-        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | "
+        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | procs {proc_count} | "
         f"rank {rank} | id {_short_node_id(node_id)}"
     )
     right = machine_name
@@ -220,6 +247,10 @@ def main() -> None:
                     handled = True
                 if text == "/nodes":
                     _emit_nodes(logs, known_nodes, mesh)
+                    needs_render = True
+                    handled = True
+                if text == "/procs":
+                    _emit_procs(logs)
                     needs_render = True
                     handled = True
                 if text == "/channels":

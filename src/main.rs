@@ -104,6 +104,9 @@ enum Commands {
     /// Open the mesh terminal console (`xos terminal` / `xos term`).
     #[command(name = "terminal", visible_alias = "term")]
     Terminal,
+    /// Broadcast kill to all locally managed xos processes.
+    #[command(name = "kill")]
+    Kill,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -205,6 +208,7 @@ fn main() {
                     | "path"
                     | "login"
                     | "terminal"
+                    | "kill"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -234,6 +238,7 @@ fn main() {
                     | "path"
                     | "login"
                     | "terminal"
+                    | "kill"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -252,6 +257,8 @@ fn main() {
     }
 
     let cli = Cli::parse_from(original_args);
+    let manager_label = exe_stem.as_deref().unwrap_or("xos");
+    xos::manager::bootstrap(manager_label);
 
     if cli.print_version {
         let bin_name = if invoked_as_xpy {
@@ -370,6 +377,13 @@ fn main() {
             };
             let script = root.join("src/core/commands/terminal/terminal.py");
             xos::apps::mesh::run_mesh_python_file(&script);
+        }
+        Some(Commands::Kill) => {
+            if let Err(e) = xos::manager::kill_all() {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+            println!("sent kill signal to local managed processes");
         }
         None => {
             eprintln!("❗ No command provided.\n");
