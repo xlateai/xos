@@ -1,4 +1,9 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyList, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{
+    PyObjectRef, PyResult, VirtualMachine,
+    builtins::{PyBytes, PyDict, PyList, PyModule},
+    function::FuncArgs,
+    PyRef,
+};
 use std::sync::Mutex;
 use crate::python_api::tensors::{tensor_flat_data_list, tensor_shape_tuple};
 use crate::rasterizer::shapes::lines::draw_line_direct;
@@ -1002,6 +1007,73 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+fn blit_rgba_stretch(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: usize, dst_h: usize) {
+    if src.len() != sw * sh * 4 {
+        return;
+    }
+    for dy in 0..dst_h {
+        for dx in 0..dst_w {
+            let sx = (dx * sw) / dst_w.max(1);
+            let sy = (dy * sh) / dst_h.max(1);
+            let si = (sy * sw + sx) * 4;
+            let di = (dy * dst_w + dx) * 4;
+            if si + 3 < src.len() && di + 3 < dst.len() {
+                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+    }
+}
+
+fn frame_object_to_rgba(vm: &VirtualMachine, frame_obj: PyObjectRef) -> PyResult<(usize, usize, Vec<u8>)> {
+    let data_obj = match vm.get_attribute_opt(frame_obj.clone(), "_data") {
+        Ok(Some(d)) => d,
+        Ok(None) | Err(_) => frame_obj,
+    };
+    let dict = data_obj.downcast_ref::<PyDict>().ok_or_else(|| {
+        vm.new_type_error("frame_in_frame: src must be a Frame (e.g. mesh remote_frame)".to_string())
+    })?;
+    let width: usize = dict.get_item("width", vm)?.clone().try_into_value(vm)?;
+    let height: usize = dict.get_item("height", vm)?.clone().try_into_value(vm)?;
+    let tensor = dict.get_item("tensor", vm)?;
+    let tdict = tensor.downcast_ref::<PyDict>().ok_or_else(|| {
+        vm.new_type_error("frame_in_frame: expected tensor dict on Frame".to_string())
+    })?;
+    let data_obj = tdict.get_item("_data", vm)?;
+    if let Some(bytes) = data_obj.downcast_ref::<PyBytes>() {
+        let s = bytes.as_bytes();
+        if s.len() != width * height * 4 {
+            return Err(vm.new_value_error("frame tensor byte length mismatch (expect RGBA)".to_string()));
+        }
+        return Ok((width, height, s.to_vec()));
+    }
+    Err(vm.new_type_error(
+        "frame_in_frame: tensor _data must be bytes (decoded remote frame)".to_string(),
+    ))
+}
+
+/// Stretch-blit a source [`Frame`] (RGBA bytes) into the active engine framebuffer.
+fn frame_in_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error("frame_in_frame(dst, src) expects 2 arguments".to_string()));
+    }
+    let src = args_vec[1].clone();
+    let (sw, sh, src_rgba) = frame_object_to_rgba(vm, src)?;
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let dst_w = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let dst_h = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error(
+            "frame_in_frame: no active framebuffer (call during tick() with the engine)".to_string(),
+        )
+    })?;
+    let dst_len = dst_w.saturating_mul(dst_h).saturating_mul(4);
+    let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, dst_len) };
+    blit_rgba_stretch(&src_rgba, sw, sh, dst, dst_w, dst_h);
+    Ok(vm.ctx.none())
+}
+
 pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.rasterizer", vm.ctx.new_dict(), None);
     module.set_attr("circles", vm.new_function("circles", circles), vm).unwrap();
@@ -1014,5 +1086,8 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("rectangles", vm.new_function("rectangles", rectangles), vm).unwrap();
     module.set_attr("_fill_buffer", vm.new_function("_fill_buffer", fill_buffer), vm).unwrap();
     module.set_attr("text", vm.new_function("text", text), vm).unwrap();
+    module
+        .set_attr("frame_in_frame", vm.new_function("frame_in_frame", frame_in_frame), vm)
+        .unwrap();
     module
 }

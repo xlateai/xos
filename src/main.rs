@@ -101,6 +101,9 @@ enum Commands {
         #[arg(long)]
         delete: bool,
     },
+    /// Open the mesh terminal console (`xos terminal` / `xos term`).
+    #[command(name = "terminal", visible_alias = "term")]
+    Terminal,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -201,6 +204,7 @@ fn main() {
                     | "code"
                     | "path"
                     | "login"
+                    | "terminal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -229,6 +233,7 @@ fn main() {
                     | "code"
                     | "path"
                     | "login"
+                    | "terminal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -354,6 +359,17 @@ fn main() {
                      To remove this machine's identity:  xos login --delete"
                 );
             }
+        }
+        Some(Commands::Terminal) => {
+            let root = match xos::find_xos_project_root() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            };
+            let script = root.join("src/core/commands/terminal/terminal.py");
+            xos::apps::mesh::run_mesh_python_file(&script);
         }
         None => {
             eprintln!("❗ No command provided.\n");

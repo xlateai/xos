@@ -15,7 +15,7 @@ use rustpython_vm::AsObject;
 const MESH_BOOTSTRAP: &str = include_str!("bootstrap.py");
 
 /// Convert a Python value to JSON without importing Python's `json` module (RustPython may omit it).
-fn py_to_json(
+pub(crate) fn py_to_json(
     vm: &VirtualMachine,
     obj: rustpython_vm::PyObjectRef,
 ) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
@@ -132,6 +132,94 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+fn preprocess_remote_frame_send(
+    vm: &VirtualMachine,
+    id: &str,
+    payload_obj: &rustpython_vm::PyObjectRef,
+) -> PyResult<()> {
+    if id != "remote_frame" {
+        return Ok(());
+    }
+    let Some(dict) = payload_obj.downcast_ref::<PyDict>() else {
+        return Ok(());
+    };
+    if !dict.contains_key("stream_frame", vm) {
+        return Ok(());
+    }
+    let _ = dict.del_item("stream_frame", vm);
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        match crate::apps::remote::capture_scaled_jpeg() {
+            Some((jpeg, w, h)) => {
+                use base64::{engine::general_purpose::STANDARD as B64, Engine};
+                let jpeg_b64 = B64.encode(&jpeg);
+                dict.set_item("jpeg", vm.ctx.new_str(jpeg_b64.as_str()).into(), vm)?;
+                dict.set_item("w", vm.ctx.new_int(w as isize).into(), vm)?;
+                dict.set_item("h", vm.ctx.new_int(h as isize).into(), vm)?;
+            }
+            None => {
+                return Err(vm.new_runtime_error(
+                    "remote_frame send: desktop capture failed (permissions / display?)".to_string(),
+                ));
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        return Err(vm.new_runtime_error(
+            "remote_frame with stream_frame is only supported on Windows and macOS".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult {
+    let jpeg_b64 = p
+        .body
+        .get("jpeg")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| vm.new_runtime_error("remote_frame packet missing jpeg".to_string()))?;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    let raw_jpeg = B64.decode(jpeg_b64.as_bytes()).map_err(|e| {
+        vm.new_runtime_error(format!("remote_frame: invalid base64: {e}"))
+    })?;
+    let img = image::load_from_memory(&raw_jpeg).map_err(|e| {
+        vm.new_runtime_error(format!("remote_frame: decode image: {e}"))
+    })?;
+    let rgba = img.to_rgba8();
+    let w = rgba.width() as usize;
+    let h = rgba.height() as usize;
+    let raw = rgba.into_raw();
+    let py_bytes = vm.ctx.new_bytes(raw);
+
+    let tensor_dict = vm.ctx.new_dict();
+    tensor_dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![
+                vm.ctx.new_int(h as isize).into(),
+                vm.ctx.new_int(w as isize).into(),
+                vm.ctx.new_int(4isize).into(),
+            ])
+            .into(),
+        vm,
+    )?;
+    tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
+    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item("_data", py_bytes.into(), vm)?;
+
+    let frame_dict = vm.ctx.new_dict();
+    frame_dict.set_item("width", vm.ctx.new_int(w as isize).into(), vm)?;
+    frame_dict.set_item("height", vm.ctx.new_int(h as isize).into(), vm)?;
+    frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
+
+    let frame_cls = vm.builtins.get_attr("Frame", vm)?;
+    frame_cls.call((frame_dict.clone(),), vm)
+}
+
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mesh_id: String = if let Some(s) = args.args.first() {
         s.clone().try_into_value(vm)?
@@ -245,6 +333,16 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(s).into())
 }
 
+fn mesh_node_name(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    Ok(vm.ctx.new_str(m.node_name.as_str()).into())
+}
+
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
@@ -306,6 +404,9 @@ fn mesh_send_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .get(2)
         .ok_or_else(|| vm.new_type_error("send requires payload dict".to_string()))?
         .clone();
+
+    preprocess_remote_frame_send(vm, &id, &payload_obj)?;
+
     let payload = py_to_json(vm, payload_obj)?;
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
@@ -368,6 +469,9 @@ fn mesh_receive(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     if latest_only {
         let one = packs.into_iter().next().unwrap();
+        if id == "remote_frame" {
+            return remote_frame_packet_to_py_frame(vm, &one);
+        }
         return packet_to_py(vm, &one);
     }
 
@@ -445,6 +549,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     );
     let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
     let _ = sub.set_attr(
+        "_mesh_node_name",
+        vm.new_function("_mesh_node_name", mesh_node_name),
+        vm,
+    );
+    let _ = sub.set_attr(
         "_mesh_node_id",
         vm.new_function("_mesh_node_id", mesh_node_id),
         vm,
@@ -478,6 +587,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_node_name",
+        sub.get_attr("_mesh_node_name", vm).unwrap(),
+        vm,
+    );
     let _ = scope
         .globals
         .set_item("_mesh_node_id", sub.get_attr("_mesh_node_id", vm).unwrap(), vm);

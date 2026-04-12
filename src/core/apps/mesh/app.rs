@@ -5,7 +5,7 @@ use crate::python_api::runtime::{execute_python_code, PrintCallback};
 use rustpython_vm::Interpreter;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 pub struct MeshApp;
@@ -24,7 +24,7 @@ impl Application for MeshApp {
     fn tick(&mut self, _state: &mut EngineState) {}
 }
 
-fn run_mesh_script(resolved_file_path: &PathBuf) {
+fn run_mesh_script(resolved_file_path: &Path) {
     let code = match fs::read_to_string(resolved_file_path) {
         Ok(content) => content,
         Err(e) => {
@@ -96,6 +96,17 @@ fn run_mesh_script(resolved_file_path: &PathBuf) {
     }
 }
 
+pub fn run_mesh_python_file(file_path: &Path) {
+    if !file_path.exists() {
+        eprintln!("❌ mesh script not found: {}", file_path.display());
+        std::process::exit(1);
+    }
+    let resolved = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf());
+    run_mesh_script(&resolved);
+}
+
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 pub fn run_mesh_app() {
     let root = match crate::find_xos_project_root() {
@@ -106,14 +117,7 @@ pub fn run_mesh_app() {
         }
     };
     let script = root.join("src/core/apps/mesh/mesh.py");
-    if !script.exists() {
-        eprintln!("❌ mesh script not found: {}", script.display());
-        std::process::exit(1);
-    }
-    let resolved = script
-        .canonicalize()
-        .unwrap_or_else(|_| script.clone());
-    run_mesh_script(&resolved);
+    run_mesh_python_file(&script);
 }
 
 #[cfg(any(target_arch = "wasm32", target_os = "ios"))]

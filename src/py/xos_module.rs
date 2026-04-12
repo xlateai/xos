@@ -552,6 +552,95 @@ fn xos_sleep(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+fn minecraft_color_to_ansi(code: char) -> Option<&'static str> {
+    match code {
+        '0' => Some("\x1b[30m"), // black
+        '1' => Some("\x1b[34m"), // dark blue
+        '2' => Some("\x1b[32m"), // dark green
+        '3' => Some("\x1b[36m"), // dark aqua
+        '4' => Some("\x1b[31m"), // dark red
+        '5' => Some("\x1b[35m"), // dark purple
+        '6' => Some("\x1b[33m"), // gold
+        '7' => Some("\x1b[37m"), // gray
+        '8' => Some("\x1b[90m"), // dark gray
+        '9' => Some("\x1b[94m"), // blue
+        'a' | 'A' => Some("\x1b[92m"), // green
+        'b' | 'B' => Some("\x1b[96m"), // aqua
+        'c' | 'C' => Some("\x1b[91m"), // red
+        'd' | 'D' => Some("\x1b[95m"), // light purple
+        'e' | 'E' => Some("\x1b[93m"), // yellow
+        'f' | 'F' => Some("\x1b[97m"), // white
+        'l' | 'L' => Some("\x1b[1m"),  // bold
+        'n' | 'N' => Some("\x1b[4m"),  // underline
+        'o' | 'O' => Some("\x1b[3m"),  // italic
+        'm' | 'M' => Some("\x1b[9m"),  // strikethrough
+        'r' | 'R' => Some("\x1b[0m"),  // reset
+        _ => None,
+    }
+}
+
+fn apply_minecraft_colors(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+    let mut used_ansi = false;
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if matches!(chars.peek(), Some('&')) {
+                let _ = chars.next();
+                out.push('&');
+                continue;
+            }
+            out.push(ch);
+            continue;
+        }
+
+        if ch == '&' {
+            if matches!(chars.peek(), Some('&')) {
+                let _ = chars.next();
+                out.push('&');
+                continue;
+            }
+            if let Some(code) = chars.next() {
+                if let Some(ansi) = minecraft_color_to_ansi(code) {
+                    out.push_str(ansi);
+                    used_ansi = true;
+                } else {
+                    out.push('&');
+                    out.push(code);
+                }
+                continue;
+            }
+            out.push('&');
+            continue;
+        }
+
+        out.push(ch);
+    }
+
+    if used_ansi {
+        out.push_str("\x1b[0m");
+    }
+    out
+}
+
+/// xos.colorize("&aHello &rworld") -> ANSI-colored string
+fn xos_colorize(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let text: String = args.bind(vm)?;
+    Ok(vm.ctx.new_str(apply_minecraft_colors(&text)).into())
+}
+
+/// xos.color_print("&4Error: &fdetails")
+/// Supports Minecraft-style `&` codes and escapes (`\\&` or `&&`).
+fn xos_color_print(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let text: String = args.bind(vm)?;
+    let rendered = apply_minecraft_colors(&text);
+    if let Ok(builtin_print) = vm.builtins.get_attr("print", vm) {
+        let _ = builtin_print.call((vm.ctx.new_str(rendered),), vm);
+    }
+    Ok(vm.ctx.none())
+}
+
 /// xos.frame.clear(...) - clear current frame buffer context
 /// Supports:
 /// - clear()
@@ -919,6 +1008,12 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     }
     
     module.set_attr("sleep", vm.new_function("sleep", xos_sleep), vm).unwrap();
+    module
+        .set_attr("colorize", vm.new_function("colorize", xos_colorize), vm)
+        .unwrap();
+    module
+        .set_attr("color_print", vm.new_function("color_print", xos_color_print), vm)
+        .unwrap();
     
     // Add the random submodule
     let random_module = crate::python_api::random::random::make_random_module(vm);
@@ -997,6 +1092,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the system submodule
     let system_module = crate::python_api::system::make_system_module(vm);
     module.set_attr("system", system_module, vm).unwrap();
+
+    // Add terminal helpers for terminal-aware Python apps.
+    let terminal_module = crate::python_api::terminal::make_terminal_module(vm);
+    module.set_attr("terminal", terminal_module, vm).unwrap();
     
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);
@@ -1101,6 +1200,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     }
 
     crate::python_api::mesh::register_mesh(&module, vm);
+    crate::python_api::mouse::register_mouse(&module, vm);
 
     module
 }

@@ -3,5 +3,5 @@
 
 mod app;
 
-pub use app::{run_mesh_app, MeshApp};
+pub use app::{run_mesh_app, run_mesh_python_file, MeshApp};
 pub use crate::mesh::*;
