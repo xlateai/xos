@@ -49,6 +49,16 @@ def _remember_node(known_nodes: dict, rank, node_id: str, label: str = "") -> No
         r = int(rank)
     except Exception:
         return
+    # A node can be re-ranked during failover; keep only its latest rank entry.
+    if node_id:
+        stale_ranks = []
+        for existing_rank, existing in known_nodes.items():
+            if existing_rank == r:
+                continue
+            if (existing.get("id", "") or "") == node_id:
+                stale_ranks.append(existing_rank)
+        for stale_rank in stale_ranks:
+            known_nodes.pop(stale_rank, None)
     info = known_nodes.get(r, {})
     if node_id:
         info["id"] = node_id
