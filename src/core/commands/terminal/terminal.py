@@ -32,6 +32,32 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
 
 
+def _remember_node(known_nodes: dict, rank, node_id: str, label: str = "") -> None:
+    try:
+        r = int(rank)
+    except Exception:
+        return
+    info = known_nodes.get(r, {})
+    if node_id:
+        info["id"] = node_id
+    if label:
+        info["label"] = label
+    known_nodes[r] = info
+
+
+def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
+    _append_log_line(log_lines, "nodes (rank order):")
+    for rank in sorted(known_nodes.keys()):
+        info = known_nodes.get(rank, {})
+        nid = info.get("id", "?")
+        label = info.get("label", "") or "unknown"
+        _append_log_line(log_lines, f"  r{rank}: {label}  id={_short_node_id(nid)}")
+    try:
+        _append_log_line(log_lines, f"reported mesh.num_nodes()={mesh.num_nodes()}")
+    except Exception:
+        pass
+
+
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
     return ((x * height + y) * channels) + ch
 
@@ -106,6 +132,8 @@ def main() -> None:
         pass
 
     logs: list[str] = []
+    known_nodes: dict[int, dict[str, str]] = {}
+    _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
     _append_log_line(logs, f"joined {MESH_ID!r} in {MODE.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
@@ -119,16 +147,27 @@ def main() -> None:
             packets = mesh.receive(id="message", wait=False, latest_only=False)
             if packets:
                 for packet in packets:
+                    _remember_node(
+                        known_nodes,
+                        getattr(packet, "from_rank", None),
+                        getattr(packet, "from_id", "") or "",
+                        getattr(packet, "sender", "") or "",
+                    )
                     _append_log_line(logs, _format_packet(packet))
                 needs_render = True
 
             line = xos.input("", wait=False)
             if line is not None:
                 text = line.strip()
+                _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
                 if text in ("/quit", "/exit"):
                     _append_log_line(logs, "leaving xos terminal")
                     _render(mesh, logs, machine_name, MODE, MESH_ID)
                     break
+                if text == "/nodes":
+                    _emit_nodes(logs, known_nodes, mesh)
+                    needs_render = True
+                    continue
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
                     _append_log_line(logs, f"[me] {text}")
