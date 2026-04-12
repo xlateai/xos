@@ -234,6 +234,10 @@ def main() -> None:
         last_proc_version = int(xos.manager.version())
     except Exception:
         last_proc_version = 0
+    try:
+        last_mesh_nodes = int(mesh.num_nodes())
+    except Exception:
+        last_mesh_nodes = 1
 
     try:
         while True:
@@ -324,6 +328,21 @@ def main() -> None:
             size_now = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
             if size_now != last_size:
                 last_size = size_now
+                needs_render = True
+            try:
+                mesh_nodes = int(mesh.num_nodes())
+            except Exception:
+                mesh_nodes = last_mesh_nodes
+            if mesh_nodes != last_mesh_nodes:
+                if mesh_nodes > last_mesh_nodes:
+                    delta = mesh_nodes - last_mesh_nodes
+                    noun = "node" if delta == 1 else "nodes"
+                    _append_log_line(logs, f"[mesh] +{delta} {noun} joined (now {mesh_nodes})")
+                else:
+                    delta = last_mesh_nodes - mesh_nodes
+                    noun = "node" if delta == 1 else "nodes"
+                    _append_log_line(logs, f"[mesh] -{delta} {noun} left (now {mesh_nodes})")
+                last_mesh_nodes = mesh_nodes
                 needs_render = True
             try:
                 proc_version = int(xos.manager.version())

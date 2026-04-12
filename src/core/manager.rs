@@ -100,6 +100,17 @@ fn prune_locked(table: &mut HashMap<u32, ProcSnapshot>) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn prune_table_now() -> bool {
+    if let Ok(mut table) = PROC_TABLE.lock() {
+        let before = table.len();
+        prune_locked(&mut table);
+        let after = table.len();
+        return before != after;
+    }
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn remember_snapshot(mut snap: ProcSnapshot) {
     snap.last_seen_ms = now_ms();
     if let Ok(mut table) = PROC_TABLE.lock() {
@@ -224,6 +235,9 @@ pub fn bootstrap(label: &str) {
     thread::spawn(move || loop {
         remember_snapshot(self_snapshot(&hb_session, &label_owned));
         emit_hello(&hb_session, &label_owned);
+        if prune_table_now() {
+            PROC_VERSION.fetch_add(1, Ordering::SeqCst);
+        }
         thread::sleep(Duration::from_millis(PROC_HELLO_INTERVAL_MS));
     });
 }
