@@ -13,7 +13,6 @@ MESH_ID = "xos-global"
 MODE = "lan"
 
 LOOP_SLEEP_SECS = 0.05
-IDLE_RENDER_EVERY_LOOPS = 20
 MAX_LOG_LINES = 200
 DEFAULT_WIDTH = 120
 DEFAULT_HEIGHT = 30
@@ -76,13 +75,13 @@ def _render(
         f"| machine={machine_name} id={_short_node_id(node_id)} "
     )
 
-    # Keep bottom rows clear for help and prompt input.
+    # Keep the final row for the live `xos.input("chat> ")` prompt.
     log_height = max(3, height - 5)
     visible = log_lines[-log_height:]
     pad_count = log_height - len(visible)
 
     out = []
-    out.append("\x1b[H")
+    out.append("\x1b[H\x1b[2J")
     out.append(f"\x1b[7m{_fit(status, width)}\x1b[0m")
     out.append("-" * width)
     out.extend(_fit(line, width) for line in visible)
@@ -91,10 +90,9 @@ def _render(
     out.append(
         _fit("chat: type message + Enter  |  /quit exits terminal", width)
     )
-    out.append(_fit("chat> ", width))
     print("\n".join(out), end="", flush=True)
-    # Place cursor at the input row so typing location is always obvious.
-    print(f"\x1b[{height};7H", end="", flush=True)
+    # Keep prompt pinned to the bottom line.
+    print(f"\x1b[{height};1H", end="", flush=True)
 
 
 def _format_packet(packet, loop_count: int) -> str:
@@ -123,6 +121,7 @@ def main() -> None:
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
     _render(mesh, logs, machine_name, MODE, MESH_ID)
+    last_size = _terminal_size()
 
     try:
         while True:
@@ -134,7 +133,7 @@ def main() -> None:
                     _push(logs, _format_packet(packet, loop_count))
                 needs_render = True
 
-            line = xos.input("", wait=False)
+            line = xos.input("chat> ", wait=False)
             if line is not None:
                 text = line.strip()
                 if text in ("/quit", "/exit"):
@@ -146,9 +145,13 @@ def main() -> None:
                     _push(logs, f"[{_stamp(loop_count)}] [me] {text}")
                     needs_render = True
 
-            # Event-driven updates keep the input line stable while typing.
-            # A slow heartbeat still refreshes terminal resize/layout changes.
-            if needs_render or (loop_count % IDLE_RENDER_EVERY_LOOPS) == 0:
+            current_size = _terminal_size()
+            if current_size != last_size:
+                last_size = current_size
+                needs_render = True
+
+            # Event-driven redraw keeps the prompt stable and prevents flicker.
+            if needs_render:
                 _render(mesh, logs, machine_name, MODE, MESH_ID)
 
             xos.sleep(LOOP_SLEEP_SECS)
