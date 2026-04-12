@@ -37,6 +37,12 @@ darling = "0.21.3"
 variadics_please = "1"
 
 # -------------------------------------------------------------------
+# Unix TTY size (`ioctl` TIOCGWINSZ) for xos.terminal.* on macOS/Linux/*BSD
+# -------------------------------------------------------------------
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# -------------------------------------------------------------------
 # Non-WASM native dependencies
 # -------------------------------------------------------------------
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

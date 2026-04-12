@@ -11472,6 +11472,7 @@ dependencies = [
  "image",
  "include_dir",
  "js-sys",
+ "libc",
  "metal 0.32.0",
  "nokhwa",
  "objc",
