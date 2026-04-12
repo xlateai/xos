@@ -7,6 +7,8 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::AtomicU64;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -20,9 +22,9 @@ const PROC_HELLO_KIND: &str = "__xos_proc_hello__";
 #[cfg(not(target_arch = "wasm32"))]
 const PROC_KILL_KIND: &str = "__xos_proc_kill__";
 #[cfg(not(target_arch = "wasm32"))]
-const PROC_HELLO_INTERVAL_MS: u64 = 1200;
+const PROC_HELLO_INTERVAL_MS: u64 = 350;
 #[cfg(not(target_arch = "wasm32"))]
-const PROC_STALE_MS: u64 = 5000;
+const PROC_STALE_MS: u64 = 1200;
 
 #[derive(Clone, Debug)]
 pub struct ProcChannel {
@@ -47,6 +49,8 @@ static PROC_SESSION: LazyLock<Mutex<Option<Arc<MeshSession>>>> = LazyLock::new(|
 #[cfg(not(target_arch = "wasm32"))]
 static PROC_TABLE: LazyLock<Mutex<HashMap<u32, ProcSnapshot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+#[cfg(not(target_arch = "wasm32"))]
+static PROC_VERSION: AtomicU64 = AtomicU64::new(1);
 #[cfg(not(target_arch = "wasm32"))]
 static SELF_CHANNELS: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -99,8 +103,27 @@ fn prune_locked(table: &mut HashMap<u32, ProcSnapshot>) {
 fn remember_snapshot(mut snap: ProcSnapshot) {
     snap.last_seen_ms = now_ms();
     if let Ok(mut table) = PROC_TABLE.lock() {
+        let changed = match table.get(&snap.pid) {
+            Some(old) => {
+                old.label != snap.label
+                    || old.rank != snap.rank
+                    || old.node_id != snap.node_id
+                    || old.channels.len() != snap.channels.len()
+                    || old
+                        .channels
+                        .iter()
+                        .zip(snap.channels.iter())
+                        .any(|(a, b)| a.id != b.id || a.mode != b.mode)
+            }
+            None => true,
+        };
         table.insert(snap.pid, snap);
+        let before = table.len();
         prune_locked(&mut table);
+        let after = table.len();
+        if changed || before != after {
+            PROC_VERSION.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -208,7 +231,12 @@ pub fn bootstrap(label: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_processes() -> Vec<ProcSnapshot> {
     if let Ok(mut table) = PROC_TABLE.lock() {
+        let before = table.len();
         prune_locked(&mut table);
+        let after = table.len();
+        if before != after {
+            PROC_VERSION.fetch_add(1, Ordering::SeqCst);
+        }
         let mut out: Vec<ProcSnapshot> = table.values().cloned().collect();
         out.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.pid.cmp(&b.pid)));
         out
@@ -220,6 +248,11 @@ pub fn list_processes() -> Vec<ProcSnapshot> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn num_processes() -> usize {
     list_processes().len()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn snapshot_version() -> u64 {
+    PROC_VERSION.load(Ordering::SeqCst)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -240,7 +273,14 @@ pub fn register_mesh(mesh_id: &str, mode: &str) {
     let Ok(mut chs) = SELF_CHANNELS.lock() else {
         return;
     };
-    chs.insert(mesh_id.to_string(), mode.to_string());
+    let prev = chs.insert(mesh_id.to_string(), mode.to_string());
+    let changed = match prev {
+        Some(m) => m != mode,
+        None => true,
+    };
+    if changed {
+        PROC_VERSION.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -253,6 +293,11 @@ pub fn list_processes() -> Vec<ProcSnapshot> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn num_processes() -> usize {
+    0
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn snapshot_version() -> u64 {
     0
 }
 

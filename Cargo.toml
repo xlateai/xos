@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.3.12"
+version = "0.3.13"
 edition = "2021"
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
 repository = "https://github.com/xlateai/xos"

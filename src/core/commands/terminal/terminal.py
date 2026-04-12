@@ -230,6 +230,10 @@ def main() -> None:
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
     _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT])
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
+    try:
+        last_proc_version = int(xos.manager.version())
+    except Exception:
+        last_proc_version = 0
 
     try:
         while True:
@@ -320,6 +324,13 @@ def main() -> None:
             size_now = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
             if size_now != last_size:
                 last_size = size_now
+                needs_render = True
+            try:
+                proc_version = int(xos.manager.version())
+            except Exception:
+                proc_version = last_proc_version
+            if proc_version != last_proc_version:
+                last_proc_version = proc_version
                 needs_render = True
 
             if needs_render:
