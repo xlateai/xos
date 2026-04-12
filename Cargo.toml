@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.3.12"
+version = "0.3.13"
 edition = "2021"
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
 repository = "https://github.com/xlateai/xos"
@@ -35,6 +35,12 @@ uuid = { version = "1", features = ["v4"] }
 # (`can't find crate for ...`) for Burn/CubeCL — see profile.release.package.* below.
 darling = "0.21.3"
 variadics_please = "1"
+
+# -------------------------------------------------------------------
+# Unix TTY size (`ioctl` TIOCGWINSZ) for xos.terminal.* on macOS/Linux/*BSD
+# -------------------------------------------------------------------
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # -------------------------------------------------------------------
 # Non-WASM native dependencies

@@ -1096,6 +1096,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add terminal helpers for terminal-aware Python apps.
     let terminal_module = crate::python_api::terminal::make_terminal_module(vm);
     module.set_attr("terminal", terminal_module, vm).unwrap();
+
+    // Add process manager helpers.
+    let manager_module = crate::python_api::manager::make_manager_module(vm);
+    module.set_attr("manager", manager_module, vm).unwrap();
     
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);

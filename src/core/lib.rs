@@ -13,6 +13,7 @@ pub mod engine;
 pub mod video;
 pub mod apps;
 pub mod mesh;
+pub mod manager;
 pub mod ui;
 pub mod tensor;
 
@@ -180,6 +181,7 @@ pub mod py_engine {
 // --- Native startup ---
 #[cfg(not(target_arch = "wasm32"))]
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
+    crate::manager::bootstrap("xos-app");
     if game == "mesh" {
         apps::mesh::run_mesh_app();
         return Ok(());
@@ -304,6 +306,8 @@ fn launch_expo() {
 
 // --- Main logic ---
 pub fn run_game(game: &str, web: bool, react_native: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::manager::bootstrap("xos-run");
     if web {
         println!("🌐 Launching '{game}' in web mode...");
         build_wasm(game);
@@ -421,6 +425,8 @@ struct XosAppArgs {
 
 
 pub fn run<T: engine::Application + 'static>(app: T) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::manager::bootstrap("xos-run");
     let args = XosAppArgs::parse();
 
     let app_name = env!("CARGO_PKG_NAME");

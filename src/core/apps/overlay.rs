@@ -146,6 +146,7 @@ mod win_lens {
 const NEON: (u8, u8, u8) = (57, 255, 20);
 const FRAME_STROKE: i32 = 3;
 /// Sample patch is this many times smaller than the overlay (higher = more zoom).
+#[cfg(target_os = "windows")]
 const ZOOM: f32 = 3.0;
 
 pub struct OverlayApp;
@@ -166,6 +167,7 @@ impl OverlayApp {
         fill_rect_buffer(buffer, fw, fh, w - t, t, w, h - t, c);
     }
 
+    #[cfg(target_os = "windows")]
     fn scale_bgra_to_rgba(
         src: &[u8],
         src_w: usize,

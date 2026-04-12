@@ -38,7 +38,38 @@ fn platform_size() -> Option<(i32, i32)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Real terminal dimensions from the controlling TTY (updates on resize).
+#[cfg(unix)]
+fn platform_size() -> Option<(i32, i32)> {
+    use std::mem::MaybeUninit;
+    use std::os::unix::io::AsRawFd;
+
+    fn ioctl_winsize(fd: std::os::unix::io::RawFd) -> Option<(i32, i32)> {
+        let mut ws = MaybeUninit::<libc::winsize>::uninit();
+        // SAFETY: `TIOCGWINSZ` writes a `winsize` when `fd` refers to a TTY.
+        let ret = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, ws.as_mut_ptr()) };
+        if ret != 0 {
+            return None;
+        }
+        let ws = unsafe { ws.assume_init() };
+        let cols = ws.ws_col as i32;
+        let rows = ws.ws_row as i32;
+        if cols > 0 && rows > 0 {
+            Some((cols, rows))
+        } else {
+            None
+        }
+    }
+
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let stdin = std::io::stdin();
+    ioctl_winsize(stdout.as_raw_fd())
+        .or_else(|| ioctl_winsize(stderr.as_raw_fd()))
+        .or_else(|| ioctl_winsize(stdin.as_raw_fd()))
+}
+
+#[cfg(all(not(unix), not(target_os = "windows")))]
 fn platform_size() -> Option<(i32, i32)> {
     None
 }
