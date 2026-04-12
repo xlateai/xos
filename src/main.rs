@@ -361,8 +361,15 @@ fn main() {
             }
         }
         Some(Commands::Terminal) => {
-            println!("Hello from xos terminal.");
-            println!("Terminal app is currently disabled while policy-safe rollout is in progress.");
+            let root = match xos::find_xos_project_root() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            };
+            let script = root.join("src/core/commands/terminal/terminal.py");
+            xos::apps::mesh::run_mesh_python_file(&script);
         }
         None => {
             eprintln!("❗ No command provided.\n");

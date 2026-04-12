@@ -7,15 +7,13 @@ Simple full-screen mesh console:
 - provides a lightweight mesh chat area at the bottom
 """
 
-import time
-
 import xos
 
 MESH_ID = "xos-global"
 MODE = "lan"
 
-STATUS_REFRESH_SECS = 0.2
 LOOP_SLEEP_SECS = 0.05
+RENDER_EVERY_LOOPS = 4
 MAX_LOG_LINES = 200
 DEFAULT_WIDTH = 120
 DEFAULT_HEIGHT = 30
@@ -39,8 +37,9 @@ def _fit(text: str, width: int) -> str:
     return text[: width - 3] + "..."
 
 
-def _stamp() -> str:
-    return time.strftime("%H:%M:%S")
+def _stamp(loop_count: int) -> str:
+    elapsed = loop_count * LOOP_SLEEP_SECS
+    return f"t+{elapsed:0.1f}s"
 
 
 def _push(log_lines: list[str], line: str) -> None:
@@ -89,16 +88,17 @@ def _render(
     print("\n".join(out), end="", flush=True)
 
 
-def _format_packet(packet) -> str:
+def _format_packet(packet, loop_count: int) -> str:
     from_rank = getattr(packet, "from_rank", "?")
     from_id = getattr(packet, "from_id", "") or ""
     sender = getattr(packet, "sender", "") or _short_node_id(from_id)
     text = getattr(packet, "msg", "")
-    return f"[{_stamp()}] [{sender} r{from_rank}] {text}"
+    return f"[{_stamp(loop_count)}] [{sender} r{from_rank}] {text}"
 
 
 def main() -> None:
     mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
+    loop_count = 0
     try:
         machine_name = mesh.node_name() or "machine"
     except Exception:
@@ -107,37 +107,35 @@ def main() -> None:
     _push(
         logs,
         (
-            f"[{_stamp()}] joined global channel "
+            f"[{_stamp(loop_count)}] joined global channel "
             f"id={MESH_ID!r} mode={MODE!r} as {machine_name}"
         ),
     )
 
     print("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l", end="", flush=True)
 
-    last_render_at = 0.0
     try:
         while True:
             packets = mesh.receive(id="message", wait=False, latest_only=False)
             if packets:
                 for packet in packets:
-                    _push(logs, _format_packet(packet))
+                    _push(logs, _format_packet(packet, loop_count))
 
             line = xos.input("chat> ", wait=False)
             if line is not None:
                 text = line.strip()
                 if text in ("/quit", "/exit"):
-                    _push(logs, f"[{_stamp()}] leaving xos terminal")
+                    _push(logs, f"[{_stamp(loop_count)}] leaving xos terminal")
                     break
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
-                    _push(logs, f"[{_stamp()}] [me] {text}")
+                    _push(logs, f"[{_stamp(loop_count)}] [me] {text}")
 
-            now = time.time()
-            if (now - last_render_at) >= STATUS_REFRESH_SECS:
+            if (loop_count % RENDER_EVERY_LOOPS) == 0:
                 _render(mesh, logs, machine_name, MODE, MESH_ID)
-                last_render_at = now
 
-            time.sleep(LOOP_SLEEP_SECS)
+            xos.sleep(LOOP_SLEEP_SECS)
+            loop_count += 1
     finally:
         print("\x1b[?25h\x1b[?1049l", end="", flush=True)
 
