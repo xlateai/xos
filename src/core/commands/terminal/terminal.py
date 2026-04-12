@@ -59,11 +59,15 @@ def _remember_node(known_nodes: dict, rank, node_id: str, label: str = "") -> No
 
 def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
     _append_log_line(log_lines, "nodes (rank order):")
-    for rank in sorted(known_nodes.keys()):
+    ranks = sorted(known_nodes.keys())
+    if not ranks:
+        _append_log_line(log_lines, "  `-- (none)")
+    for i, rank in enumerate(ranks):
+        branch = "`--" if i == len(ranks) - 1 else "|--"
         info = known_nodes.get(rank, {})
         nid = info.get("id", "?")
         label = info.get("label", "") or "unknown"
-        _append_log_line(log_lines, f"  r{rank}: {label}  id={_short_node_id(nid)}")
+        _append_log_line(log_lines, f"  {branch} r{rank}: {label}  id={_short_node_id(nid)}")
     try:
         _append_log_line(log_lines, f"reported mesh.num_nodes()={mesh.num_nodes()}")
     except Exception:
@@ -91,14 +95,22 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
             channel_modes.setdefault(cid, set()).add(mode)
 
     if not channel_counts:
-        _append_log_line(log_lines, "  (none)")
+        _append_log_line(log_lines, "  `-- (none)")
     else:
-        for cid in sorted(channel_counts.keys()):
+        cids = sorted(channel_counts.keys())
+        for i, cid in enumerate(cids):
+            branch = "`--" if i == len(cids) - 1 else "|--"
             marker = "*" if cid == current_channel else " "
             modes = ",".join(sorted(channel_modes.get(cid, {"LOCAL"})))
             count = channel_counts[cid]
-            _append_log_line(log_lines, f" {marker} {cid}  mode={modes}  procs={count}")
-    _append_log_line(log_lines, f"active: channel={current_channel!r} mode={current_mode.upper()}")
+            _append_log_line(
+                log_lines,
+                f"  {branch} [{marker}] {cid}  mode={modes}  procs={count}",
+            )
+    _append_log_line(
+        log_lines,
+        f"  +-- active: channel={current_channel!r} mode={current_mode.upper()}",
+    )
 
 
 def _emit_procs(log_lines: list[str]) -> None:
@@ -110,16 +122,18 @@ def _emit_procs(log_lines: list[str]) -> None:
         _append_log_line(log_lines, f"  error: {e}")
         return
     if not procs:
-        _append_log_line(log_lines, "  (none)")
+        _append_log_line(log_lines, "  `-- (none)")
         return
-    for p in procs:
+    _append_log_line(log_lines, f"  +-- total: {len(procs)}")
+    for i, p in enumerate(procs):
+        branch = "`--" if i == len(procs) - 1 else "|--"
         rank = p.get("rank", "?")
         pid = p.get("pid", "?")
         label = p.get("label", "xos")
         node_id = p.get("node_id", "")
         _append_log_line(
             log_lines,
-            f"  r{rank} pid={pid} {label} id={_short_node_id(node_id)}",
+            f"  {branch} r{rank} pid={pid} {label} id={_short_node_id(node_id)}",
         )
 
 
@@ -213,7 +227,16 @@ def _render(
     log_height = max(0, bottom_sep - log_start)
     visible = log_lines[-log_height:] if log_height > 0 else []
     for i, line in enumerate(visible):
-        _put(frame, width, height, channels, log_start + i, 0, _fit(line, width), "f")
+        _put(
+            frame,
+            width,
+            height,
+            channels,
+            log_start + i,
+            0,
+            _fit(line, width),
+            _log_line_color(line),
+        )
 
     _put(frame, width, height, channels, bottom_sep, 0, sep, "8")
     shown_footer = footer_lines[-footer_count:] if footer_lines else [FOOTER_DEFAULT]
@@ -238,6 +261,25 @@ def _format_packet(packet) -> str:
     sender = getattr(packet, "sender", "") or _short_node_id(from_id)
     text = getattr(packet, "msg", "")
     return f"[{sender} r{from_rank}] {text}"
+
+
+def _log_line_color(line: str) -> str:
+    s = (line or "").strip()
+    if not s:
+        return "f"
+    if s.startswith("channels (") or s.startswith("local managed processes:") or s.startswith("nodes ("):
+        return "b"
+    if s.startswith("[mesh]"):
+        return "a"
+    if s.startswith("  +-- active:"):
+        return "a"
+    if "[*]" in s:
+        return "a"
+    if s.startswith("  +-- total:"):
+        return "8"
+    if s.startswith("  |--") or s.startswith("  `--"):
+        return "f"
+    return "f"
 
 
 def main() -> None:

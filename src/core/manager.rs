@@ -153,8 +153,39 @@ fn emit_hello(session: &MeshSession, label: &str) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn handle_incoming(session: Arc<MeshSession>) {
+fn reconnect_proc_session(label: &str) -> Option<Arc<MeshSession>> {
+    let Ok(session) = MeshSession::join(PROC_MESH_ID, MeshMode::Local) else {
+        return None;
+    };
+    let session = Arc::new(session);
+    if let Ok(mut g) = PROC_SESSION.lock() {
+        *g = Some(Arc::clone(&session));
+    }
+    remember_snapshot(self_snapshot(&session, label));
+    emit_hello(&session, label);
+    Some(session)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn current_or_reconnect_session(label: &str) -> Option<Arc<MeshSession>> {
+    let current = PROC_SESSION
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().cloned())
+        .filter(|s| s.is_connected());
+    if current.is_some() {
+        return current;
+    }
+    reconnect_proc_session(label)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn handle_incoming(label: String) {
     loop {
+        let Some(session) = current_or_reconnect_session(&label) else {
+            thread::sleep(Duration::from_millis(120));
+            continue;
+        };
         if let Ok(Some(packets)) = session.inbox().receive(PROC_HELLO_KIND, false, false) {
             for p in packets {
                 let body = p.body;
@@ -216,25 +247,19 @@ pub fn bootstrap(label: &str) {
         return;
     }
     // println!("hello from watchdog");
-    let Ok(session) = MeshSession::join(PROC_MESH_ID, MeshMode::Local) else {
+    let Some(_) = reconnect_proc_session(label) else {
         return;
     };
     register_mesh(PROC_MESH_ID, "local");
-    let session = Arc::new(session);
-    if let Ok(mut g) = PROC_SESSION.lock() {
-        *g = Some(Arc::clone(&session));
-    }
-    remember_snapshot(self_snapshot(&session, label));
-    emit_hello(&session, label);
+    let label_for_reader = label.to_string();
+    thread::spawn(move || handle_incoming(label_for_reader));
 
-    let reader_session = Arc::clone(&session);
-    thread::spawn(move || handle_incoming(reader_session));
-
-    let hb_session = Arc::clone(&session);
     let label_owned = label.to_string();
     thread::spawn(move || loop {
-        remember_snapshot(self_snapshot(&hb_session, &label_owned));
-        emit_hello(&hb_session, &label_owned);
+        if let Some(session) = current_or_reconnect_session(&label_owned) {
+            remember_snapshot(self_snapshot(&session, &label_owned));
+            emit_hello(&session, &label_owned);
+        }
         if prune_table_now() {
             PROC_VERSION.fetch_add(1, Ordering::SeqCst);
         }
