@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
-const PROC_MESH_ID: &str = "_xos_procs";
+const PROC_MESH_ID: &str = "_xos_local_procs";
 #[cfg(not(target_arch = "wasm32"))]
 const PROC_HELLO_KIND: &str = "__xos_proc_hello__";
 #[cfg(not(target_arch = "wasm32"))]
