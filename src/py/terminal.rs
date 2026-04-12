@@ -179,6 +179,14 @@ fn set_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if width == 0 || height == 0 {
         return Err(vm.new_value_error("terminal frame tensor width/height must be > 0".to_string()));
     }
+    let (cur_w, cur_h) = terminal_size();
+    let expected_w = cur_w.max(1) as usize;
+    let expected_h = cur_h.max(1) as usize;
+    if width != expected_w || height != expected_h {
+        return Err(vm.new_value_error(format!(
+            "terminal frame shape mismatch: got ({width}, {height}, {channels}), expected ({expected_w}, {expected_h}, >=2)"
+        )));
+    }
 
     let flat_obj = frame_data.get_item("_data", vm)?;
     let Some(flat_list) = flat_obj.downcast_ref::<PyList>() else {

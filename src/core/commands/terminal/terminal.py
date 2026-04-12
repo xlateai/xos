@@ -6,6 +6,13 @@ MESH_ID = "xos-global"
 MODE = "lan"
 LOOP_SLEEP_SECS = 0.05
 MAX_LOG_LINES = 200
+FOOTER_DEFAULT = "Type /help for help  |  /quit exits terminal"
+FOOTER_HELP = [
+    "Commands:",
+    "  /help   show/hide this help",
+    "  /nodes  list observed nodes by rank",
+    "  /quit   exit terminal",
+]
 
 
 def _short_node_id(node_id: str) -> str:
@@ -74,7 +81,14 @@ def _put(frame, width: int, height: int, channels: int, row: int, col: int, text
         flat[_idx(x, row, 1, width, height, channels)] = color
 
 
-def _render(mesh, log_lines: list[str], machine_name: str, mesh_mode: str, chat_id: str) -> None:
+def _render(
+    mesh,
+    log_lines: list[str],
+    machine_name: str,
+    mesh_mode: str,
+    chat_id: str,
+    footer_lines: list[str],
+) -> None:
     frame = xos.terminal.get_frame()
     width, height, channels = frame.shape
 
@@ -102,17 +116,29 @@ def _render(mesh, log_lines: list[str], machine_name: str, mesh_mode: str, chat_
 
     log_start = 2
     prompt_row = max(0, height - 1)
-    help_row = max(0, height - 2)
-    bottom_sep = max(0, height - 3)
+    footer_count = max(1, len(footer_lines))
+    footer_start = max(0, prompt_row - footer_count)
+    bottom_sep = max(0, footer_start - 1)
     log_height = max(0, bottom_sep - log_start)
     visible = log_lines[-log_height:] if log_height > 0 else []
     for i, line in enumerate(visible):
         _put(frame, width, height, channels, log_start + i, 0, _fit(line, width), "f")
 
     _put(frame, width, height, channels, bottom_sep, 0, sep, "8")
-    _put(frame, width, height, channels, help_row, 0, _fit("Type message + Enter  |  /quit exits terminal", width), "8")
+    shown_footer = footer_lines[-footer_count:] if footer_lines else [FOOTER_DEFAULT]
+    for i, line in enumerate(shown_footer):
+        row = footer_start + i
+        if row >= prompt_row:
+            break
+        _put(frame, width, height, channels, row, 0, _fit(line, width), "8")
     _put(frame, width, height, channels, prompt_row, 0, _fit(">>> ", width), "b")
-    xos.terminal.set_frame(frame, cursor_x=4, cursor_y=prompt_row)
+    try:
+        xos.terminal.set_frame(frame, cursor_x=4, cursor_y=prompt_row)
+    except Exception as e:
+        # Terminal size can change between get_frame() and set_frame() calls.
+        # Keep strict validation in Rust, but don't crash the UI loop on this race.
+        if "terminal frame shape mismatch" not in str(e):
+            raise
 
 
 def _format_packet(packet) -> str:
@@ -132,12 +158,13 @@ def main() -> None:
         pass
 
     logs: list[str] = []
+    help_expanded = False
     known_nodes: dict[int, dict[str, str]] = {}
     _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
     _append_log_line(logs, f"joined {MESH_ID!r} in {MODE.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
-    _render(mesh, logs, machine_name, MODE, MESH_ID)
+    _render(mesh, logs, machine_name, MODE, MESH_ID, [FOOTER_DEFAULT])
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
 
     try:
@@ -162,12 +189,21 @@ def main() -> None:
                 _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
                 if text in ("/quit", "/exit"):
                     _append_log_line(logs, "leaving xos terminal")
-                    _render(mesh, logs, machine_name, MODE, MESH_ID)
+                    _render(
+                        mesh,
+                        logs,
+                        machine_name,
+                        MODE,
+                        MESH_ID,
+                        FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
+                    )
                     break
+                if text == "/help":
+                    help_expanded = not help_expanded
+                    needs_render = True
                 if text == "/nodes":
                     _emit_nodes(logs, known_nodes, mesh)
                     needs_render = True
-                    continue
                 if text:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
                     _append_log_line(logs, f"[me] {text}")
@@ -179,7 +215,14 @@ def main() -> None:
                 needs_render = True
 
             if needs_render:
-                _render(mesh, logs, machine_name, MODE, MESH_ID)
+                _render(
+                    mesh,
+                    logs,
+                    machine_name,
+                    MODE,
+                    MESH_ID,
+                    FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
+                )
 
             xos.sleep(LOOP_SLEEP_SECS)
     finally:
