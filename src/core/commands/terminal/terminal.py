@@ -232,6 +232,12 @@ def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
     if not cmd:
         _append_log_line(log_lines, "usage: /xos <cli args>  (example: /xos app whiteboard)")
         return
+    if not hasattr(xos.manager, "run_xos"):
+        _append_log_line(
+            log_lines,
+            "[xos err] this xos terminal runtime is missing run_xos; restart terminal after recompiling xos",
+        )
+        return
     try:
         res = xos.manager.run_xos(cmd)
     except Exception as e:
@@ -244,7 +250,7 @@ def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
     if res.get("detached", False):
         pid = res.get("pid", "?")
         _append_log_line(log_lines, f"[xos] launched in background (pid={pid})")
-        return
+        return pid
 
     code = int(res.get("code", -1) or -1)
     stdout = (res.get("stdout", "") or "").splitlines()
@@ -255,6 +261,7 @@ def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
         _append_log_line(log_lines, f"[xos err] {line}")
     if not stdout and not stderr:
         _append_log_line(log_lines, f"[xos] exited with code {code}")
+    return None
 
 
 def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
@@ -427,6 +434,7 @@ def main() -> None:
     help_expanded = False
     xpy_mode = False
     xpy_state = _xpy_default_state(logs)
+    launched_pids: list[int] = []
     known_nodes: dict[int, dict[str, str]] = {}
     _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
     _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
@@ -460,20 +468,46 @@ def main() -> None:
                     _append_log_line(logs, _format_packet(packet))
                 needs_render = True
 
-            active_prompt = "…> " if (xpy_mode and xpy_state["buffer"]) else ("🐍> " if xpy_mode else ">>> ")
+            active_prompt = "....> " if (xpy_mode and xpy_state["buffer"]) else ("xpy> " if xpy_mode else ">>> ")
             active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
 
             try:
                 line = xos.input("", wait=False)
             except KeyboardInterrupt:
+                # Interrupt priority: active xpy -> spawned child process -> terminal exit.
                 if xpy_mode:
                     xpy_mode = False
                     xpy_state["buffer"].clear()
                     _append_log_line(logs, "[xpy] left interactive python mode (Ctrl+C)")
                     needs_render = True
                     line = None
+                elif launched_pids:
+                    pid = int(launched_pids.pop())
+                    if hasattr(xos.manager, "kill_pid"):
+                        try:
+                            ok = bool(xos.manager.kill_pid(pid))
+                            if ok:
+                                _append_log_line(logs, f"[xos] stopped pid={pid} (Ctrl+C)")
+                            else:
+                                _append_log_line(logs, f"[xos err] could not stop pid={pid} (Ctrl+C)")
+                        except Exception as e:
+                            _append_log_line(logs, f"[xos err] kill_pid({pid}) failed: {e}")
+                    else:
+                        _append_log_line(logs, f"[xos err] kill_pid unavailable; cannot stop pid={pid}")
+                    needs_render = True
+                    line = None
                 else:
-                    raise
+                    _append_log_line(logs, "leaving xos terminal (Ctrl+C)")
+                    _render(
+                        mesh,
+                        logs,
+                        machine_name,
+                        current_mode,
+                        current_channel,
+                        active_footer,
+                        active_prompt,
+                    )
+                    break
             if line is not None:
                 text = line.strip()
                 _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
@@ -506,7 +540,9 @@ def main() -> None:
                     handled = True
                 if text.startswith("/xos"):
                     argline = text[4:].strip()
-                    _emit_xos_cli(logs, argline)
+                    spawned = _emit_xos_cli(logs, argline)
+                    if isinstance(spawned, int) and spawned > 0:
+                        launched_pids.append(spawned)
                     needs_render = True
                     handled = True
                 if text == "/nodes":
@@ -625,7 +661,7 @@ def main() -> None:
                 needs_render = True
 
             if needs_render:
-                active_prompt = "…> " if (xpy_mode and xpy_state["buffer"]) else ("🐍> " if xpy_mode else ">>> ")
+                active_prompt = "....> " if (xpy_mode and xpy_state["buffer"]) else ("xpy> " if xpy_mode else ">>> ")
                 active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
                 _render(
                     mesh,

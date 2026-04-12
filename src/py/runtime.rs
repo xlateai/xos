@@ -280,7 +280,7 @@ pub fn run_python_interactive() {
         if continuation {
             print!("…> ");
         } else {
-            print!("🐍> ");
+            print!("🐍 > ");
         }
         io::stdout().flush().unwrap();
         

@@ -104,11 +104,41 @@ fn manager_run_xos(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("run_xos is not available on wasm".to_string()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn manager_kill_pid(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let pid: i64 = args
+        .args
+        .first()
+        .ok_or_else(|| vm.new_type_error("kill_pid requires a pid".to_string()))?
+        .clone()
+        .try_into_value(vm)?;
+    if pid <= 0 {
+        return Err(vm.new_value_error("kill_pid: pid must be > 0".to_string()));
+    }
+    #[cfg(target_os = "windows")]
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .map_err(|e| vm.new_runtime_error(format!("kill_pid failed: {e}")))?;
+    #[cfg(not(target_os = "windows"))]
+    let status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .map_err(|e| vm.new_runtime_error(format!("kill_pid failed: {e}")))?;
+    Ok(vm.ctx.new_bool(status.success()).into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn manager_kill_pid(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(vm.new_runtime_error("kill_pid is not available on wasm".to_string()))
+}
+
 pub fn make_manager_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.manager", vm.ctx.new_dict(), None);
     let _ = module.set_attr("num_procs", vm.new_function("num_procs", manager_num_procs), vm);
     let _ = module.set_attr("version", vm.new_function("version", manager_version), vm);
     let _ = module.set_attr("list_procs", vm.new_function("list_procs", manager_list_procs), vm);
     let _ = module.set_attr("run_xos", vm.new_function("run_xos", manager_run_xos), vm);
+    let _ = module.set_attr("kill_pid", vm.new_function("kill_pid", manager_kill_pid), vm);
     module
 }
