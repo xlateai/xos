@@ -11,6 +11,10 @@ FOOTER_HELP = [
     "Commands:",
     "  /help   show/hide this help",
     "  /nodes  list observed nodes by rank",
+    "  /channels list channels used in this terminal session",
+    "  /channel <id> switch channel (same mode)",
+    "  /lan | /local | /online switch mesh mode",
+    "  /clear  clear chat log",
     "  /quit   exit terminal",
 ]
 
@@ -63,6 +67,14 @@ def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
         _append_log_line(log_lines, f"reported mesh.num_nodes()={mesh.num_nodes()}")
     except Exception:
         pass
+
+
+def _emit_channels(log_lines: list[str], channels: list[str], current_channel: str, current_mode: str) -> None:
+    _append_log_line(log_lines, "channels (this terminal session):")
+    for ch in channels:
+        marker = "*" if ch == current_channel else " "
+        _append_log_line(log_lines, f" {marker} {ch}")
+    _append_log_line(log_lines, f"active: channel={current_channel!r} mode={current_mode.upper()}")
 
 
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
@@ -150,7 +162,9 @@ def _format_packet(packet) -> str:
 
 
 def main() -> None:
-    mesh = xos.mesh.connect(id=MESH_ID, mode=MODE)
+    current_channel = MESH_ID
+    current_mode = MODE
+    mesh = xos.mesh.connect(id=current_channel, mode=current_mode)
     machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
@@ -159,12 +173,13 @@ def main() -> None:
 
     logs: list[str] = []
     help_expanded = False
+    known_channels: list[str] = [current_channel]
     known_nodes: dict[int, dict[str, str]] = {}
     _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
-    _append_log_line(logs, f"joined {MESH_ID!r} in {MODE.upper()} as {machine_name}")
+    _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
-    _render(mesh, logs, machine_name, MODE, MESH_ID, [FOOTER_DEFAULT])
+    _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT])
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
 
     try:
@@ -193,18 +208,60 @@ def main() -> None:
                         mesh,
                         logs,
                         machine_name,
-                        MODE,
-                        MESH_ID,
+                        current_mode,
+                        current_channel,
                         FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
                     )
                     break
+                handled = False
                 if text == "/help":
                     help_expanded = not help_expanded
                     needs_render = True
+                    handled = True
                 if text == "/nodes":
                     _emit_nodes(logs, known_nodes, mesh)
                     needs_render = True
-                if text:
+                    handled = True
+                if text == "/channels":
+                    _emit_channels(logs, known_channels, current_channel, current_mode)
+                    needs_render = True
+                    handled = True
+                if text == "/clear":
+                    logs.clear()
+                    needs_render = True
+                    handled = True
+                if text.startswith("/channel "):
+                    next_channel = text.split(None, 1)[1].strip()
+                    if not next_channel:
+                        _append_log_line(logs, "usage: /channel <id>")
+                    else:
+                        try:
+                            next_mesh = xos.mesh.connect(id=next_channel, mode=current_mode)
+                            mesh = next_mesh
+                            current_channel = next_channel
+                            if next_channel not in known_channels:
+                                known_channels.append(next_channel)
+                            known_nodes.clear()
+                            _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                            _append_log_line(logs, f"switched to channel {current_channel!r} ({current_mode.upper()})")
+                        except Exception as e:
+                            _append_log_line(logs, f"channel switch failed: {e}")
+                    needs_render = True
+                    handled = True
+                if text in ("/lan", "/local", "/online"):
+                    next_mode = text[1:]
+                    try:
+                        next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
+                        mesh = next_mesh
+                        current_mode = next_mode
+                        known_nodes.clear()
+                        _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                        _append_log_line(logs, f"switched to {current_mode.upper()} on {current_channel!r}")
+                    except Exception as e:
+                        _append_log_line(logs, f"mode switch failed: {e}")
+                    needs_render = True
+                    handled = True
+                if text and not handled:
                     mesh.broadcast(id="message", msg=text, sender=machine_name)
                     _append_log_line(logs, f"[me] {text}")
                     needs_render = True
@@ -219,8 +276,8 @@ def main() -> None:
                     mesh,
                     logs,
                     machine_name,
-                    MODE,
-                    MESH_ID,
+                    current_mode,
+                    current_channel,
                     FOOTER_HELP if help_expanded else [FOOTER_DEFAULT],
                 )
 
