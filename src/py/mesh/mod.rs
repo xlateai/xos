@@ -333,6 +333,16 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(s).into())
 }
 
+fn mesh_node_name(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let Some(m) = g.as_ref() else {
+        return Err(vm.new_runtime_error(
+            "mesh not connected; call xos.mesh.connect()".to_string(),
+        ));
+    };
+    Ok(vm.ctx.new_str(m.node_name.as_str()).into())
+}
+
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
@@ -539,6 +549,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     );
     let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
     let _ = sub.set_attr(
+        "_mesh_node_name",
+        vm.new_function("_mesh_node_name", mesh_node_name),
+        vm,
+    );
+    let _ = sub.set_attr(
         "_mesh_node_id",
         vm.new_function("_mesh_node_id", mesh_node_id),
         vm,
@@ -572,6 +587,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_node_name",
+        sub.get_attr("_mesh_node_name", vm).unwrap(),
+        vm,
+    );
     let _ = scope
         .globals
         .set_item("_mesh_node_id", sub.get_attr("_mesh_node_id", vm).unwrap(), vm);

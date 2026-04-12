@@ -78,7 +78,7 @@ class RemoteViewer(xos.Application):
 class RemoteStreamer(xos.Application):
     """Rank 1: apply remote input; send frames at most ``fps`` times per second (default 30)."""
 
-    def __init__(self, fps=30.0):
+    def __init__(self, fps=60.0):
         super().__init__(headless=True)
         self._fps = max(fps, 1e-3)
         self._min_frame_interval = 1.0 / self._fps

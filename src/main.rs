@@ -101,6 +101,9 @@ enum Commands {
         #[arg(long)]
         delete: bool,
     },
+    /// Open the mesh terminal console (`xos terminal` / `xos term`).
+    #[command(name = "terminal", visible_alias = "term")]
+    Terminal,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -201,6 +204,7 @@ fn main() {
                     | "code"
                     | "path"
                     | "login"
+                    | "terminal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -229,6 +233,7 @@ fn main() {
                     | "code"
                     | "path"
                     | "login"
+                    | "terminal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -354,6 +359,10 @@ fn main() {
                      To remove this machine's identity:  xos login --delete"
                 );
             }
+        }
+        Some(Commands::Terminal) => {
+            println!("Hello from xos terminal.");
+            println!("Terminal app is currently disabled while policy-safe rollout is in progress.");
         }
         None => {
             eprintln!("❗ No command provided.\n");

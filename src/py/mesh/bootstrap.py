@@ -33,6 +33,10 @@ class Mesh:
         """This session’s stable node id (64-char hex = SHA256 of node public key)."""
         return _mesh_node_id()
 
+    def node_name(self):
+        """Friendly machine name from offline identity (`node_identity.json`)."""
+        return _mesh_node_name()
+
     def prompt(self):
         """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
         return _mesh_prompt()
