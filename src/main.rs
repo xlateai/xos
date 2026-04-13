@@ -95,9 +95,6 @@ enum Commands {
     },
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
-        /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
-        #[arg(long)]
-        offline: bool,
         /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
@@ -359,14 +356,7 @@ fn main() {
                 run_python_interactive();
             }
         }
-        Some(Commands::Login {
-            offline,
-            delete,
-        }) => {
-            if delete && offline {
-                eprintln!("❌ use either --delete or --offline, not both");
-                std::process::exit(1);
-            }
+        Some(Commands::Login { delete }) => {
             if delete {
                 use xos::auth::delete_identity;
                 match delete_identity() {
@@ -378,7 +368,7 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-            } else if offline {
+            } else {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
@@ -390,12 +380,6 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-            } else {
-                println!(
-                    "Online sign-in (browser / OAuth) is not wired up yet.\n\
-                     For offline LAN mesh, run:  xos login --offline\n\
-                     To remove this machine's identity:  xos login --delete"
-                );
             }
         }
         Some(Commands::Terminal) => {
@@ -416,18 +400,35 @@ fn main() {
             }
             println!("xos daemon offline");
         }
-        Some(Commands::Status) => match daemon::daemon_status() {
-            Ok(s) if s.online => {
-                println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
+        Some(Commands::Status) => {
+            match daemon::daemon_status() {
+                Ok(s) if s.online => {
+                    println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
+                }
+                Ok(_) => {
+                    println!("daemon: offline");
+                }
+                Err(e) => {
+                    eprintln!("❌ failed to read daemon status: {e}");
+                    std::process::exit(1);
+                }
             }
-            Ok(_) => {
-                println!("daemon: offline");
-            }
-            Err(e) => {
-                eprintln!("❌ failed to read daemon status: {e}");
+
+            xos::manager::bootstrap("xos-status");
+            let root = match xos::find_xos_project_root() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            };
+            let script = root.join("src/core/commands/status/status.py");
+            if !script.exists() {
+                eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);
             }
-        },
+            run_python_app(&script);
+        }
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {
                 eprintln!("❌ daemon error: {e}");
