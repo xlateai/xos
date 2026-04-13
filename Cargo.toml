@@ -122,8 +122,8 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = []
-## Whisper in CTranslate2 format. Default load path (baked at compile time): `src/core/engine/audio/transcription/models/whisper-small-ct2/`. Optional override: `XOS_WHISPER_CT2_PATH`. Build: `--features whisper_ct2`. Desktop only (not iOS / WASM).
+default = ["whisper_ct2"]
+## Whisper in CTranslate2 format. On by default for `cargo build` / `xos compile`. Default load path (baked at compile time): `src/core/engine/audio/transcription/models/whisper-small-ct2/`. Optional override: `XOS_WHISPER_CT2_PATH`. Disable with `--no-default-features` if needed. Desktop only (not iOS / WASM).
 whisper_ct2 = ["dep:ct2rs"]
 
 [lib]

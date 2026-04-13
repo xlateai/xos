@@ -8,6 +8,15 @@ Put the converter output here so `xos` can load it **without** `XOS_WHISPER_CT2_
 
 The first run downloads OpenAI weights from Hugging Face; you only need a Python environment for the **one-time** conversion.
 
+## Rust build (`cargo` / `xos compile`) — not Python
+
+Transcription uses **`ct2rs`** (native CTranslate2). Cargo will compile **`sentencepiece-sys`** and other native code; that path needs **`cmake`** and a **C/C++ compiler** on your PATH.
+
+- **macOS:** `brew install cmake` (and Xcode Command Line Tools if you do not already have them). If the build says `is cmake not installed?`, CMake is missing or not on `PATH`.
+- **Windows:** Install [CMake](https://cmake.org/download/) and a C++ build environment (e.g. Visual Studio “Desktop development with C++”).
+
+Python is **not** used when building or running `xos app transcribe` with this stack—only for the optional **weight conversion** step above.
+
 ## Windows (PowerShell)
 
 From the **repository root** (the directory that contains `Cargo.toml`):
@@ -26,12 +35,11 @@ $out = Join-Path $PWD "src\core\engine\audio\transcription\models\whisper-small-
 ct2-transformers-converter --model openai/whisper-small --output_dir $out
 ```
 
-Then build xOS with Whisper enabled:
+Then build and run (Whisper CT2 is a **default** feature; use `--no-default-features` to omit it):
 
 ```powershell
-cargo build --features whisper_ct2 --release
-$env:XOS_WHISPER_CT2_PATH = ""   # optional; leave unset to use bundled path above
-cargo run --features whisper_ct2 -- app transcribe
+cargo build --release
+cargo run -- app transcribe
 ```
 
 ## Optional: other model or output location
@@ -42,3 +50,5 @@ cargo run --features whisper_ct2 -- app transcribe
 ## macOS / Linux
 
 Same `pip` / `ct2-transformers-converter` lines; use `$PWD/src/core/engine/audio/transcription/models/whisper-small-ct2` for `--output_dir`.
+
+After weights are in place: `cargo build --release` then `cargo run -- app transcribe` (install **CMake** first; see “Rust build” above).
