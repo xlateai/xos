@@ -47,6 +47,22 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
 
 
+def _identity_label(default_machine: str = "machine") -> str:
+    username = ""
+    node_name = default_machine
+    try:
+        username = (xos.auth.username() or "").strip()
+    except Exception:
+        username = ""
+    try:
+        node_name = (xos.auth.node_name() or "").strip() or default_machine
+    except Exception:
+        node_name = default_machine
+    if username:
+        return f"{username}@{node_name}"
+    return node_name
+
+
 def _safe_list_procs() -> list[dict]:
     try:
         return xos.manager.list_procs() or []
@@ -458,6 +474,7 @@ def main() -> None:
         machine_name = mesh.node_name() or "machine"
     except Exception:
         pass
+    display_name = _identity_label(machine_name)
 
     logs: list[str] = []
     help_expanded = False
@@ -465,14 +482,14 @@ def main() -> None:
     xpy_state = _xpy_default_state(logs)
     launched_pids: list[int] = []
     known_nodes: dict[int, dict[str, str]] = {}
-    _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
-    _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
+    _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
+    _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {display_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
     _render(
         mesh,
         logs,
-        machine_name,
+        display_name,
         current_mode,
         current_channel,
         [FOOTER_DEFAULT],
@@ -538,7 +555,7 @@ def main() -> None:
                     _render(
                         mesh,
                         logs,
-                        machine_name,
+                        display_name,
                         current_mode,
                         current_channel,
                         active_footer,
@@ -553,20 +570,20 @@ def main() -> None:
                     _render(
                         mesh,
                         logs,
-                        machine_name,
+                        display_name,
                         current_mode,
                         current_channel,
                         active_footer,
                         active_prompt,
                     )
                     continue
-                _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                 if text in ("/quit", "/exit"):
                     _append_log_line(logs, "leaving xos terminal")
                     _render(
                         mesh,
                         logs,
-                        machine_name,
+                        display_name,
                         current_mode,
                         current_channel,
                         active_footer,
@@ -620,8 +637,9 @@ def main() -> None:
                             next_mesh = xos.mesh.connect(id=next_channel, mode=current_mode)
                             mesh = next_mesh
                             current_channel = next_channel
+                            display_name = _identity_label(machine_name)
                             known_nodes.clear()
-                            _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                            _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                             _append_log_line(logs, f"switched to channel {current_channel!r} ({current_mode.upper()})")
                         except Exception as e:
                             _append_log_line(logs, f"channel switch failed: {e}")
@@ -633,8 +651,9 @@ def main() -> None:
                         next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
                         mesh = next_mesh
                         current_mode = next_mode
+                        display_name = _identity_label(machine_name)
                         known_nodes.clear()
-                        _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                        _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                         _append_log_line(logs, f"switched to {current_mode.upper()} on {current_channel!r}")
                     except Exception as e:
                         _append_log_line(logs, f"mode switch failed: {e}")
@@ -649,7 +668,7 @@ def main() -> None:
                         else:
                             _xpy_eval_line(logs, xpy_state, line.rstrip("\n"))
                     else:
-                        mesh.broadcast(id="message", msg=text, sender=machine_name)
+                        mesh.broadcast(id="message", msg=text, sender=display_name)
                         _append_log_line(logs, f"[me] {text}")
                     needs_render = True
 
@@ -716,7 +735,7 @@ def main() -> None:
                 _render(
                     mesh,
                     logs,
-                    machine_name,
+                    display_name,
                     current_mode,
                     current_channel,
                     active_footer,

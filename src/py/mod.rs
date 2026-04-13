@@ -20,6 +20,7 @@ pub mod mesh;
 pub mod mouse;
 pub mod terminal;
 pub mod manager;
+pub mod auth;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 
