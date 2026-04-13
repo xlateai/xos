@@ -311,6 +311,12 @@ fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .into())
 }
 
+fn mesh_is_connected(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let g = MESH.lock().unwrap();
+    let connected = g.as_ref().map(|m| m.is_connected()).unwrap_or(false);
+    Ok(vm.ctx.new_bool(connected).into())
+}
+
 fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
@@ -548,6 +554,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm.new_function("_mesh_num_nodes", mesh_num_nodes),
         vm,
     );
+    let _ = sub.set_attr(
+        "_mesh_is_connected",
+        vm.new_function("_mesh_is_connected", mesh_is_connected),
+        vm,
+    );
     let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
     let _ = sub.set_attr(
         "_mesh_node_name",
@@ -585,6 +596,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
     let _ = scope
         .globals
         .set_item("_mesh_num_nodes", sub.get_attr("_mesh_num_nodes", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_is_connected",
+        sub.get_attr("_mesh_is_connected", vm).unwrap(),
+        vm,
+    );
     let _ = scope
         .globals
         .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);

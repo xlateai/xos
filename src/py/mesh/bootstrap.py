@@ -23,31 +23,49 @@ def _wrap_receive_result(r):
 
 
 class Mesh:
+    def __init__(self, mesh_id, mode):
+        self._mesh_id = mesh_id
+        self._mode = mode
+
+    def _ensure_connected(self):
+        if _mesh_is_connected():
+            return
+        _mesh_connect(self._mesh_id, self._mode)
+
+    def _call(self, fn, *args):
+        self._ensure_connected()
+        try:
+            return fn(*args)
+        except Exception:
+            # If coordinator changed between pre-check and call, reconnect and retry once.
+            self._ensure_connected()
+            return fn(*args)
+
     def rank(self):
-        return _mesh_rank()
+        return self._call(_mesh_rank)
 
     def num_nodes(self):
-        return _mesh_num_nodes()
+        return self._call(_mesh_num_nodes)
 
     def node_id(self):
         """This session’s stable node id (64-char hex = SHA256 of node public key)."""
-        return _mesh_node_id()
+        return self._call(_mesh_node_id)
 
     def node_name(self):
         """Friendly machine name from offline identity (`node_identity.json`)."""
-        return _mesh_node_name()
+        return self._call(_mesh_node_name)
 
     def prompt(self):
         """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
-        return _mesh_prompt()
+        return self._call(_mesh_prompt)
 
     def broadcast(self, **kwargs):
         kind = kwargs.pop("id")
-        _mesh_broadcast_payload(kind, kwargs)
+        self._call(_mesh_broadcast_payload, kind, kwargs)
 
     def send(self, to=None, **kwargs):
         kind = kwargs.pop("id")
-        _mesh_send_payload(kind, to, kwargs)
+        self._call(_mesh_send_payload, kind, to, kwargs)
 
     def receive(self, *args, **kwargs):
         wait = kwargs.pop("wait", True)
@@ -66,7 +84,7 @@ class Mesh:
             raise TypeError(
                 "receive() got unexpected keyword arguments: %s" % (tuple(kwargs.keys()),)
             )
-        r = _mesh_receive(kind, wait, latest_only)
+        r = self._call(_mesh_receive, kind, wait, latest_only)
         return _wrap_receive_result(r)
 
     def node(self, rank):
@@ -95,4 +113,4 @@ def connect(id="default", mode="local"):
     if mode not in ("local", "lan"):
         raise ValueError("xos.mesh.connect: mode must be 'local', 'lan', or 'online'")
     _mesh_connect(id, mode)
-    return Mesh()
+    return Mesh(id, mode)

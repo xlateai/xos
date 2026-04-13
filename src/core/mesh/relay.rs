@@ -515,6 +515,7 @@ pub struct MeshSession {
     pub node_id: String,
     pub node_name: String,
     pub num_nodes: Arc<AtomicU32>,
+    connected: Arc<AtomicU32>,
     inbox: Arc<Inbox>,
     role: MeshRole,
     shutdown: Arc<AtomicU32>,
@@ -619,6 +620,7 @@ fn mesh_session_from_host_listener(
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let inbox = Arc::new(Inbox::new());
     let num_nodes = Arc::new(AtomicU32::new(1));
+    let connected = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
     let clients: Arc<Mutex<Vec<Option<TcpStream>>>> = Arc::new(Mutex::new(Vec::new()));
     let lan_host = if identity.is_some() {
@@ -668,6 +670,7 @@ fn mesh_session_from_host_listener(
         node_id,
         node_name,
         num_nodes,
+        connected,
         inbox,
         role: MeshRole::Host { clients },
         shutdown,
@@ -688,6 +691,7 @@ fn mesh_session_from_host_listener(
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let inbox = Arc::new(Inbox::new());
     let num_nodes = Arc::new(AtomicU32::new(1));
+    let connected = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
     let clients: Arc<Mutex<Vec<Option<TcpStream>>>> = Arc::new(Mutex::new(Vec::new()));
     num_nodes.store(1, Ordering::SeqCst);
@@ -723,6 +727,7 @@ fn mesh_session_from_host_listener(
         node_id: String::new(),
         node_name: String::new(),
         num_nodes,
+        connected,
         inbox,
         role: MeshRole::Host { clients },
         shutdown,
@@ -735,6 +740,7 @@ fn mesh_session_from_host_listener(
 fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let inbox = Arc::new(Inbox::new());
     let num_nodes = Arc::new(AtomicU32::new(1));
+    let connected = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
 
     stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
@@ -762,8 +768,9 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let inbox_r = Arc::clone(&inbox);
     let num_r = Arc::clone(&num_nodes);
     let sd_c = Arc::clone(&shutdown);
+    let connected_r = Arc::clone(&connected);
     thread::spawn(move || {
-        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, None);
+        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, connected_r, None);
     });
 
     let session = MeshSession {
@@ -771,6 +778,7 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
         node_id: String::new(),
         node_name: String::new(),
         num_nodes,
+        connected,
         inbox,
         role: MeshRole::Client {
             stream: Arc::new(Mutex::new(stream)),
@@ -788,6 +796,7 @@ fn finish_client_connection(
 ) -> Result<MeshSession, String> {
     let inbox = Arc::new(Inbox::new());
     let num_nodes = Arc::new(AtomicU32::new(1));
+    let connected = Arc::new(AtomicU32::new(1));
     let shutdown = Arc::new(AtomicU32::new(0));
 
     stream.set_read_timeout(Some(MESH_READ_TIMEOUT)).ok();
@@ -828,9 +837,18 @@ fn finish_client_connection(
     let inbox_r = Arc::clone(&inbox);
     let num_r = Arc::clone(&num_nodes);
     let sd_c = Arc::clone(&shutdown);
+    let connected_r = Arc::clone(&connected);
     let lan_reader = lan_client.clone();
     thread::spawn(move || {
-        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, lan_reader);
+        client_read_loop(
+            reader,
+            inbox_r,
+            rank_reader,
+            num_r,
+            sd_c,
+            connected_r,
+            lan_reader,
+        );
     });
 
     let (node_id, node_name) = identity
@@ -843,6 +861,7 @@ fn finish_client_connection(
         node_id,
         node_name,
         num_nodes,
+        connected,
         inbox,
         role: MeshRole::Client {
             stream: Arc::new(Mutex::new(stream)),
@@ -949,6 +968,11 @@ impl MeshSession {
 
     pub fn inbox(&self) -> Arc<Inbox> {
         Arc::clone(&self.inbox)
+    }
+
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::SeqCst) != 0
     }
 
     pub fn join(mesh_id: &str, mode: MeshMode) -> Result<Self, String> {
@@ -1188,12 +1212,24 @@ impl MeshSession {
                 if let Some(ref k) = self.lan_client {
                     let inner = Self::wire_inner(&env)?;
                     let line = encrypt_mesh_line(&k.tx, &inner)?;
-                    s.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                    return s.flush().map_err(|e| e.to_string());
+                    s.write_all(line.as_bytes()).map_err(|e| {
+                        self.connected.store(0, Ordering::SeqCst);
+                        e.to_string()
+                    })?;
+                    return s.flush().map_err(|e| {
+                        self.connected.store(0, Ordering::SeqCst);
+                        e.to_string()
+                    });
                 }
                 let line = Self::serialize_env(&env)?;
-                s.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-                s.flush().map_err(|e| e.to_string())
+                s.write_all(line.as_bytes()).map_err(|e| {
+                    self.connected.store(0, Ordering::SeqCst);
+                    e.to_string()
+                })?;
+                s.flush().map_err(|e| {
+                    self.connected.store(0, Ordering::SeqCst);
+                    e.to_string()
+                })
             }
         }
     }
@@ -1598,6 +1634,7 @@ fn client_read_loop(
     my_rank: Arc<AtomicU32>,
     num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
+    connected: Arc<AtomicU32>,
 ) {
     let mut line = String::new();
     loop {
@@ -1635,6 +1672,9 @@ fn client_read_loop(
             });
         }
     }
+    if shutdown.load(Ordering::SeqCst) == 0 {
+        connected.store(0, Ordering::SeqCst);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1644,6 +1684,7 @@ fn client_read_loop(
     my_rank: Arc<AtomicU32>,
     num_nodes: Arc<AtomicU32>,
     shutdown: Arc<AtomicU32>,
+    connected: Arc<AtomicU32>,
     lan: Option<LanWireKeys>,
 ) {
     let mut line = String::new();
@@ -1689,5 +1730,8 @@ fn client_read_loop(
                 body: env.payload.clone(),
             });
         }
+    }
+    if shutdown.load(Ordering::SeqCst) == 0 {
+        connected.store(0, Ordering::SeqCst);
     }
 }
