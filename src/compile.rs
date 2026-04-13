@@ -279,7 +279,7 @@ pub fn xos_compile_command(verbose: bool) -> bool {
     }
 }
 
-pub fn compile_ios_rust() {
+pub fn compile_ios_rust() -> bool {
     println!("🦀 Compiling Rust library for iOS...");
 
     let project_root = find_project_root();
@@ -287,7 +287,7 @@ pub fn compile_ios_rust() {
 
     if !script_path.exists() {
         eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
-        std::process::exit(1);
+        return false;
     }
 
     let mut compile_cmd = Command::new("bash");
@@ -301,10 +301,11 @@ pub fn compile_ios_rust() {
         .expect("Failed to run src/ios/build-ios.sh");
     if !status.success() {
         eprintln!("❌ iOS compile failed. Exiting.");
-        std::process::exit(1);
+        return false;
     }
 
     println!("✅ Rust library compiled successfully.");
+    true
 }
 
 /// CocoaPods step for the iOS app; used by [`compile_ios`].
@@ -353,7 +354,9 @@ pub fn compile_ios_swift() {
 /// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`compile_ios_rust`].
 #[allow(dead_code)]
 pub fn compile_ios() {
-    compile_ios_rust();
+    if !compile_ios_rust() {
+        std::process::exit(1);
+    }
     compile_ios_swift();
 
     println!("📱 Next steps:");

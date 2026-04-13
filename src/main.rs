@@ -1,4 +1,5 @@
 mod compile;
+mod daemon;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::{self, IsTerminal};
@@ -107,6 +108,11 @@ enum Commands {
     /// Broadcast kill to all locally managed xos processes.
     #[command(name = "kill")]
     Kill,
+    /// Print daemon status without auto-starting.
+    #[command(name = "status")]
+    Status,
+    #[command(name = "daemon-internal", hide = true)]
+    DaemonInternal,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -209,6 +215,8 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "status"
+                    | "daemon-internal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -239,6 +247,8 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "status"
+                    | "daemon-internal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -257,9 +267,6 @@ fn main() {
     }
 
     let cli = Cli::parse_from(original_args);
-    let manager_label = exe_stem.as_deref().unwrap_or("xos");
-    xos::manager::bootstrap(manager_label);
-
     if cli.print_version {
         let bin_name = if invoked_as_xpy {
             "xpy"
@@ -290,11 +297,35 @@ fn main() {
         _ => None,
     };
 
+    let should_ensure_daemon = matches!(
+        &cli.command,
+        Some(Commands::Rs { .. })
+            | Some(Commands::Py { .. })
+            | Some(Commands::Login { .. })
+            | Some(Commands::Terminal)
+    );
+    if should_ensure_daemon {
+        if let Err(e) = daemon::ensure_daemon_running() {
+            eprintln!("❌ failed to start xos daemon: {e}");
+            std::process::exit(1);
+        }
+    }
+
     match cli.command {
         Some(Commands::Compile { ios }) => {
-            if ios {
-                compile::compile_ios_rust();
-            } else if !compile::xos_compile_command(true) {
+            if let Err(e) = daemon::stop_daemon() {
+                eprintln!("⚠️ failed to stop daemon before compile: {e}");
+            }
+            let compile_ok = if ios {
+                compile::compile_ios_rust()
+            } else {
+                compile::xos_compile_command(true)
+            };
+            if let Err(e) = daemon::ensure_daemon_running() {
+                eprintln!("❌ compile finished, but failed to restart daemon: {e}");
+                std::process::exit(1);
+            }
+            if !compile_ok {
                 std::process::exit(1);
             }
         }
@@ -379,11 +410,28 @@ fn main() {
             xos::apps::mesh::run_mesh_python_file(&script);
         }
         Some(Commands::Kill) => {
-            if let Err(e) = xos::manager::kill_all() {
-                eprintln!("❌ {e}");
+            if let Err(e) = daemon::stop_daemon() {
+                eprintln!("⚠️ failed to stop daemon: {e}");
+            }
+            println!("xos daemon offline");
+        }
+        Some(Commands::Status) => match daemon::daemon_status() {
+            Ok(s) if s.online => {
+                println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
+            }
+            Ok(_) => {
+                println!("daemon: offline");
+            }
+            Err(e) => {
+                eprintln!("❌ failed to read daemon status: {e}");
                 std::process::exit(1);
             }
-            println!("sent kill signal to local managed processes");
+        },
+        Some(Commands::DaemonInternal) => {
+            if let Err(e) = daemon::run_daemon_forever() {
+                eprintln!("❌ daemon error: {e}");
+                std::process::exit(1);
+            }
         }
         None => {
             eprintln!("❗ No command provided.\n");
