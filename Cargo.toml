@@ -86,6 +86,8 @@ objc = "0.2"
 # CGWindowList-based capture (full desktop); grant Screen Recording for the xos binary.
 xcap = "0.9.4"
 enigo = "0.1"
+# System audio capture for input device list (ScreenCaptureKit; macOS 13+).
+screencapturekit = { version = "1.5.4", features = ["macos_13_0"] }
 
 # -------------------------------------------------------------------
 # WebAssembly target

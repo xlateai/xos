@@ -27,7 +27,7 @@ impl Application for Waveform {
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
 
         if input_devices.is_empty() {
-            return Err("⚠️ No audio input devices (microphones) found.".to_string());
+            return Err("⚠️ No audio input devices found. On Windows, built-in entries named “… (system audio)” capture the mix for each output. On macOS/Linux, use a mic or a virtual loopback device (e.g. BlackHole).".to_string());
         }
 
         #[cfg(target_os = "ios")]
@@ -52,9 +52,12 @@ impl Application for Waveform {
 
         #[cfg(not(target_os = "ios"))]
         {
-            let device_names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
+            let device_names: Vec<String> = input_devices
+                .iter()
+                .map(|d| d.input_menu_label())
+                .collect();
             let selection = Select::new()
-                .with_prompt("Select microphone")
+                .with_prompt("Select input device (mic or loopback for system audio)")
                 .items(&device_names)
                 .default(0)
                 .interact()

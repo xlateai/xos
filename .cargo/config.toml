@@ -15,7 +15,18 @@ rustflags = [
     "-C", "link-arg=-miphoneos-version-min=15.1",
 ]
 
+# ScreenCaptureKit / Swift FFI (e.g. screencapturekit) links libswift_Concurrency.dylib; without
+# these, `cargo install` binaries fail at launch: "Library not loaded ... Reason: no LC_RPATH's found".
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/usr/lib/swift/macosx",
+]
 
-
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+    "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/usr/lib/swift/macosx",
+]
 
 

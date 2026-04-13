@@ -1,4 +1,7 @@
-//! Microphone (audio input) module consolidating all platforms
+//! Audio **input** capture (module name: `microphone` for history).
+//!
+//! Handles all platform input endpoints: physical microphones, headsets, and virtual
+//! devices that present system/loopback audio as an input (driver-dependent).
 //! 
 //! This module provides audio input functionality across:
 //! - macOS/Linux (native) using CPAL
@@ -90,6 +93,19 @@ impl AudioBuffer {
         
         // Update last access time
         *self.last_access.lock().unwrap() = Instant::now();
+    }
+
+    /// Interleaved `channels`-wide PCM (e.g. ScreenCaptureKit).
+    pub(crate) fn push_interleaved_f32(&self, samples: &[f32], channels: u16) {
+        let c = channels as usize;
+        if c == 0 {
+            return;
+        }
+        for chunk in samples.chunks(c) {
+            if chunk.len() == c {
+                self.push_sample_batch(chunk);
+            }
+        }
     }
 
     /// Add samples to the buffer from FFI (iOS)
@@ -272,21 +288,43 @@ mod native {
     use super::*;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
+    use std::sync::Arc;
+    #[cfg(target_os = "macos")]
+    use screencapturekit::stream::sc_stream::SCStream;
 
     /// Audio listener to capture audio from a device
-    #[derive(Clone)]
     pub struct AudioListener {
-        /// The audio buffer
         buffer: AudioBuffer,
-        /// The audio stream
-        stream: Arc<Stream>,
-        /// The device being listened to
+        /// CPAL capture, or `None` when using macOS ScreenCaptureKit system audio.
+        cpal_stream: Option<Arc<Stream>>,
+        #[cfg(target_os = "macos")]
+        sck_stream: Option<Arc<SCStream>>,
         device_name: String,
     }
 
     impl AudioListener {
         /// Create a new listener for the specified device
         pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
+            #[cfg(target_os = "macos")]
+            if audio_device.macos_sck_system_audio {
+                let sample_rate = 48_000u32;
+                let channels = 2u16;
+                let capacity = (buffer_duration_secs * sample_rate as f32) as usize;
+                let buffer = AudioBuffer::new(capacity, sample_rate, channels);
+                let sck = crate::engine::audio::macos_sck::build_system_audio_stream(buffer.clone())
+                    .map_err(|e| {
+                        format!(
+                            "{e} — enable Screen Recording for this app in System Settings → Privacy & Security."
+                        )
+                    })?;
+                return Ok(Self {
+                    buffer,
+                    cpal_stream: None,
+                    sck_stream: Some(Arc::new(sck)),
+                    device_name: audio_device.name.clone(),
+                });
+            }
+
             let device = &audio_device.device_cpal;
 
             // Get device name
@@ -295,8 +333,13 @@ mod native {
                 Err(_) => return Err("Could not get device name".to_string()),
             };
             
-            // Get default config for the device
-            let default_config = if audio_device.is_input {
+            // Get default config: normal inputs use capture defaults; Windows WASAPI loopback uses
+            // the **output** mix format on a render device (cpal sets AUDCLNT_STREAMFLAGS_LOOPBACK).
+            let default_config = if audio_device.wasapi_loopback {
+                device
+                    .default_output_config()
+                    .map_err(|e| format!("Failed to get output config for system audio capture: {e}"))?
+            } else if audio_device.is_input {
                 match device.default_input_config() {
                     Ok(config) => config,
                     Err(_) => {
@@ -407,7 +450,9 @@ mod native {
             
             Ok(Self {
                 buffer,
-                stream: Arc::new(stream),
+                cpal_stream: Some(Arc::new(stream)),
+                #[cfg(target_os = "macos")]
+                sck_stream: None,
                 device_name,
             })
         }
@@ -424,13 +469,30 @@ mod native {
         
         /// Pause the audio stream
         pub fn pause(&self) -> Result<(), String> {
-            self.stream.pause().map_err(|e| format!("Failed to pause stream: {}", e))
+            #[cfg(target_os = "macos")]
+            if let Some(s) = &self.sck_stream {
+                return s
+                    .stop_capture()
+                    .map_err(|e| format!("ScreenCaptureKit: {e:?}"));
+            }
+            if let Some(s) = &self.cpal_stream {
+                return s.pause().map_err(|e| format!("Failed to pause stream: {}", e));
+            }
+            Err("No audio capture stream".to_string())
         }
         
         /// Resume/start the audio stream
         pub fn record(&self) -> Result<(), String> {
-            // Play the stream (safe to call multiple times)
-            self.stream.play().map_err(|e| format!("Failed to resume stream: {}", e))
+            #[cfg(target_os = "macos")]
+            if let Some(s) = &self.sck_stream {
+                return s
+                    .start_capture()
+                    .map_err(|e| format!("ScreenCaptureKit: {e:?}"));
+            }
+            if let Some(s) = &self.cpal_stream {
+                return s.play().map_err(|e| format!("Failed to resume stream: {}", e));
+            }
+            Err("No audio capture stream".to_string())
         }
         
         /// Get samples separated by channel
@@ -448,6 +510,8 @@ mod native {
             name,
             is_input: true,
             is_output: false,
+            wasapi_loopback: false,
+            macos_sck_system_audio: false,
             device_cpal: device,
         })
     }
@@ -465,6 +529,38 @@ mod native {
                         name,
                         is_input: true,
                         is_output: false,
+                        wasapi_loopback: false,
+                        macos_sck_system_audio: false,
+                        device_cpal: device,
+                    });
+                }
+            }
+        }
+
+        // macOS 13+: system mix via ScreenCaptureKit (listed as "System audio").
+        #[cfg(target_os = "macos")]
+        if let Some(device) = host.default_input_device() {
+            audio_devices.push(AudioDevice {
+                name: "System audio".to_string(),
+                is_input: true,
+                is_output: false,
+                wasapi_loopback: false,
+                macos_sck_system_audio: true,
+                device_cpal: device,
+            });
+        }
+
+        // Windows: each output device can be opened as a loopback capture stream (system audio).
+        #[cfg(target_os = "windows")]
+        if let Ok(output_devices) = host.output_devices() {
+            for device in output_devices {
+                if let Ok(name) = device.name() {
+                    audio_devices.push(AudioDevice {
+                        name: format!("{name} (system audio)"),
+                        is_input: true,
+                        is_output: false,
+                        wasapi_loopback: true,
+                        macos_sck_system_audio: false,
                         device_cpal: device,
                     });
                 }
@@ -796,7 +892,7 @@ mod wasm {
         }
 
         pub fn device_name(&self) -> &str {
-            "Web Microphone"
+            "Web audio input"
         }
 
         pub fn duration(&self) -> f32 {
@@ -895,7 +991,7 @@ pub fn print_input_devices() {
     println!("XOS Audio: {} input device(s) detected", devices.len());
     
     for (i, device) in devices.iter().enumerate() {
-        println!("  {}: {}", i+1, device);
+        println!("  {}: {}", i+1, device.input_menu_label());
     }
 }
 

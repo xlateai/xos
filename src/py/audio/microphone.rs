@@ -27,6 +27,10 @@ pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let dict = vm.ctx.new_dict();
         dict.set_item("id", vm.ctx.new_int(i).into(), vm)?;
         dict.set_item("name", vm.ctx.new_str(device.name.clone()).into(), vm)?;
+        dict.set_item(
+            "label",
+            vm.ctx.new_str(device.input_menu_label()).into(),
+            vm)?;
         device_dicts.push(dict.into());
     }
     
@@ -73,7 +77,10 @@ pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             .collect();
         
         if input_devices.is_empty() {
-            return Err(vm.new_runtime_error("No audio input devices (microphones) found".to_string()));
+            return Err(vm.new_runtime_error(
+                "No audio input devices found (on Windows, expect “… (system audio)” entries for each output)"
+                    .to_string(),
+            ));
         }
         
         if device_id >= input_devices.len() {

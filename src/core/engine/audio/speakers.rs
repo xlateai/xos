@@ -1,4 +1,4 @@
-//! Speakers (audio output) module consolidating all platforms
+//! Audio **output** / playback (module name: `speakers` for history).
 //! 
 //! This module provides audio output functionality across:
 //! - macOS/Linux (native) using CPAL
@@ -394,6 +394,8 @@ mod native {
             name,
             is_input: false,
             is_output: true,
+            wasapi_loopback: false,
+            macos_sck_system_audio: false,
             device_cpal: device,
         })
     }
@@ -411,6 +413,8 @@ mod native {
                         name,
                         is_input: false,
                         is_output: true,
+                        wasapi_loopback: false,
+                        macos_sck_system_audio: false,
                         device_cpal: device,
                     });
                 }

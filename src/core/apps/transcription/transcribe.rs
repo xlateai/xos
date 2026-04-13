@@ -28,7 +28,7 @@ impl TranscribeApp {
         }
     }
 
-    fn pause_mic(&self) {
+    fn pause_input(&self) {
         if let Some(l) = &self.listener {
             let _ = l.pause();
         }
@@ -56,7 +56,7 @@ impl TranscribeApp {
 
 impl Drop for TranscribeApp {
     fn drop(&mut self) {
-        self.pause_mic();
+        self.pause_input();
         if self.live_stdout_line {
             println!();
         }
@@ -72,7 +72,7 @@ impl Application for TranscribeApp {
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
 
         if input_devices.is_empty() {
-            return Err("No audio input devices found. On macOS, pick a mic or a loopback driver (e.g. BlackHole) so system audio appears as an input.".to_string());
+            return Err("No audio input devices found. On Windows, choose “… (system audio)” for built-in capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS).".to_string());
         }
 
         #[cfg(target_os = "ios")]
@@ -106,7 +106,10 @@ impl Application for TranscribeApp {
 
         #[cfg(not(target_os = "ios"))]
         {
-            let names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
+            let names: Vec<String> = input_devices
+                .iter()
+                .map(|d| d.input_menu_label())
+                .collect();
             let selection = Select::new()
                 .with_prompt("Select audio input (mic or loopback for system mix)")
                 .items(&names)
@@ -167,13 +170,13 @@ impl Application for TranscribeApp {
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         if ch == '\u{1b}' {
-            self.pause_mic();
+            self.pause_input();
             crate::engine::native_engine::request_exit();
         }
     }
 
     fn prepare_shutdown(&mut self, _state: &mut EngineState) {
-        self.pause_mic();
+        self.pause_input();
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
