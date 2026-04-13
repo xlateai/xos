@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
-use xos::python_api::{run_python_app, run_python_interactive};
+use xos::python_api::{run_python_app, run_python_file, run_python_interactive};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_interactive() -> Result<(), String> {
@@ -427,7 +427,7 @@ fn main() {
                 eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);
             }
-            run_python_app(&script);
+            run_python_file(&script);
         }
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {

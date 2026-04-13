@@ -1,6 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mesh::{MeshMode, MeshSession};
 #[cfg(not(target_arch = "wasm32"))]
+use crate::auth::{has_identity, load_node_identity};
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -154,7 +156,21 @@ fn emit_hello(session: &MeshSession, label: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn reconnect_proc_session(label: &str) -> Option<Arc<MeshSession>> {
-    let Ok(session) = MeshSession::join(PROC_MESH_ID, MeshMode::Local) else {
+    let session_result = if has_identity() {
+        match load_node_identity() {
+            Ok(identity) => MeshSession::join_with_identity(
+                PROC_MESH_ID,
+                MeshMode::Lan,
+                Arc::new(identity),
+                None,
+            )
+            .or_else(|_| MeshSession::join(PROC_MESH_ID, MeshMode::Local)),
+            Err(_) => MeshSession::join(PROC_MESH_ID, MeshMode::Local),
+        }
+    } else {
+        MeshSession::join(PROC_MESH_ID, MeshMode::Local)
+    };
+    let Ok(session) = session_result else {
         return None;
     };
     let session = Arc::new(session);
