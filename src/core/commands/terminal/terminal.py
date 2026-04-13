@@ -184,7 +184,12 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
 
     channel_counts: dict[str, int] = {}
     channel_modes: dict[str, set[str]] = {}
+    channel_proc_rows: dict[str, list[dict]] = {}
     for p in procs:
+        pid = int(p.get("pid", 0) or 0)
+        rank = int(p.get("rank", -1) or -1)
+        label = p.get("label", "xos") or "xos"
+        node_id = p.get("node_id", "") or ""
         for ch in p.get("channels", []) or []:
             cid = (ch.get("id", "") or "").strip()
             if not cid:
@@ -192,6 +197,16 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
             mode = (ch.get("mode", "local") or "local").upper()
             channel_counts[cid] = channel_counts.get(cid, 0) + 1
             channel_modes.setdefault(cid, set()).add(mode)
+            rows = channel_proc_rows.setdefault(cid, [])
+            if not any(int(row.get("pid", 0) or 0) == pid for row in rows):
+                rows.append(
+                    {
+                        "pid": pid,
+                        "rank": rank,
+                        "label": label,
+                        "node_id": node_id,
+                    }
+                )
 
     if not channel_counts:
         _append_log_line(log_lines, "  `-- (none)")
@@ -206,6 +221,18 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
                 log_lines,
                 f"  {branch} [{marker}] {cid}  mode={modes}  procs={count}",
             )
+            proc_rows = sorted(
+                channel_proc_rows.get(cid, []),
+                key=lambda row: (int(row.get("rank", -1) or -1), int(row.get("pid", 0) or 0)),
+            )
+            for j, row in enumerate(proc_rows):
+                pbranch = "   `--" if j == len(proc_rows) - 1 else "   |--"
+                _append_log_line(
+                    log_lines,
+                    "      "
+                    f"{pbranch} r{row.get('rank', '?')} pid={row.get('pid', '?')} "
+                    f"{row.get('label', 'xos')} id={_short_node_id(row.get('node_id', '') or '')}",
+                )
     _append_log_line(
         log_lines,
         f"  +-- active: channel={current_channel!r} mode={current_mode.upper()}",
@@ -333,14 +360,17 @@ def _render(
     nodes = mesh.num_nodes()
     rank = mesh.rank()
     node_id = mesh.node_id()
-    node_label = "node" if nodes == 1 else "nodes"
+    machine_label = "machine" if nodes == 1 else "machines"
+    terminal_count = len(_local_channel_nodes(chat_id, mesh_mode))
+    terminal_label = "terminal" if terminal_count == 1 else "terminals"
     try:
         proc_count = int(xos.manager.num_procs())
     except Exception:
         proc_count = 0
 
     left = (
-        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | procs {proc_count} | "
+        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {machine_label} | "
+        f"{terminal_count} {terminal_label} | procs {proc_count} | "
         f"rank {rank} | id {_short_node_id(node_id)}"
     )
     right = machine_name
