@@ -320,6 +320,7 @@ def _put(frame, width: int, height: int, channels: int, row: int, col: int, text
 
 def _render(
     mesh,
+    global_mesh,
     log_lines: list[str],
     machine_name: str,
     mesh_mode: str,
@@ -330,18 +331,22 @@ def _render(
     frame = xos.terminal.get_frame()
     width, height, channels = frame.shape
 
-    nodes = mesh.num_nodes()
+    terminal_count = int(mesh.num_nodes())
     rank = mesh.rank()
     node_id = mesh.node_id()
-    node_label = "node" if nodes == 1 else "nodes"
     try:
-        proc_count = int(xos.manager.num_procs())
+        nodes = int(global_mesh.num_nodes()) if global_mesh else terminal_count
     except Exception:
-        proc_count = 0
+        nodes = terminal_count
+    node_label = "node" if nodes == 1 else "nodes"
+    terminal_label = "terminal" if terminal_count == 1 else "terminals"
+    process_count = terminal_count
+    process_label = "process" if process_count == 1 else "processes"
 
     left = (
-        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | procs {proc_count} | "
-        f"rank {rank} | id {_short_node_id(node_id)}"
+        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | "
+        f"{terminal_count} {terminal_label} | {process_count} {process_label} | "
+        f"term rank {rank} | id {_short_node_id(node_id)}"
     )
     right = machine_name
     min_gap = 2
@@ -433,6 +438,11 @@ def main() -> None:
     current_channel = MESH_ID
     current_mode = MODE
     mesh = xos.mesh.connect(id=current_channel, mode=current_mode)
+    global_mesh = None
+    try:
+        global_mesh = xos.mesh.connect(id="global", mode=current_mode)
+    except Exception:
+        global_mesh = None
     machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
@@ -449,7 +459,16 @@ def main() -> None:
     _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
-    _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT], ">>> ")
+    _render(
+        mesh,
+        global_mesh,
+        logs,
+        machine_name,
+        current_mode,
+        current_channel,
+        [FOOTER_DEFAULT],
+        ">>> ",
+    )
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
     try:
         last_proc_version = int(xos.manager.version())
@@ -459,6 +478,10 @@ def main() -> None:
         last_mesh_nodes = int(mesh.num_nodes())
     except Exception:
         last_mesh_nodes = 1
+    try:
+        last_global_nodes = int(global_mesh.num_nodes()) if global_mesh else last_mesh_nodes
+    except Exception:
+        last_global_nodes = last_mesh_nodes
     last_local_nodes = _local_channel_nodes(current_channel, current_mode)
 
     try:
@@ -509,6 +532,7 @@ def main() -> None:
                     _append_log_line(logs, "leaving xos terminal (Ctrl+C)")
                     _render(
                         mesh,
+                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -524,6 +548,7 @@ def main() -> None:
                     # Redraw once to undo any cursor/newline side effects from input handling.
                     _render(
                         mesh,
+                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -537,6 +562,7 @@ def main() -> None:
                     _append_log_line(logs, "leaving xos terminal")
                     _render(
                         mesh,
+                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -604,6 +630,10 @@ def main() -> None:
                     try:
                         next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
                         mesh = next_mesh
+                        try:
+                            global_mesh = xos.mesh.connect(id="global", mode=next_mode)
+                        except Exception:
+                            global_mesh = None
                         current_mode = next_mode
                         known_nodes.clear()
                         _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
@@ -674,6 +704,13 @@ def main() -> None:
                 last_local_nodes = local_nodes_now
                 needs_render = True
             try:
+                global_nodes = int(global_mesh.num_nodes()) if global_mesh else mesh_nodes
+            except Exception:
+                global_nodes = last_global_nodes
+            if global_nodes != last_global_nodes:
+                last_global_nodes = global_nodes
+                needs_render = True
+            try:
                 proc_version = int(xos.manager.version())
             except Exception:
                 proc_version = last_proc_version
@@ -687,6 +724,7 @@ def main() -> None:
                 active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
                 _render(
                     mesh,
+                    global_mesh,
                     logs,
                     machine_name,
                     current_mode,
