@@ -345,6 +345,39 @@ def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
     return out
 
 
+def _count_global_nodes_from_procs(mode: str = "lan") -> int:
+    mode_u = (mode or "").upper()
+    procs = _safe_list_procs()
+    nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
+    return max(1, nodes)
+
+
+def _connect_mesh_with_lan_bridge(channel_id: str, mode: str, log_lines: list[str] | None = None):
+    mesh = xos.mesh.connect(id=channel_id, mode=mode)
+    if (mode or "").lower() != "lan":
+        return mesh
+
+    # If LAN daemons already see >1 machine but this terminal channel is isolated,
+    # retry a few times to attach to a remote terminal coordinator.
+    for attempt in range(3):
+        try:
+            terminal_nodes = int(mesh.num_nodes())
+        except Exception:
+            terminal_nodes = 1
+        global_nodes = _count_global_nodes_from_procs(mode)
+        if terminal_nodes > 1 or global_nodes <= 1:
+            return mesh
+
+        if log_lines is not None and attempt == 0:
+            _append_log_line(
+                log_lines,
+                "[mesh] detected remote daemon(s); retrying terminal LAN join...",
+            )
+        xos.sleep(0.08)
+        mesh = xos.mesh.connect(id=channel_id, mode=mode)
+    return mesh
+
+
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
     return ((x * height + y) * channels) + ch
 
@@ -489,7 +522,7 @@ def _log_line_color(line: str) -> str:
 def main() -> None:
     current_channel = MESH_ID
     current_mode = MODE
-    mesh = xos.mesh.connect(id=current_channel, mode=current_mode)
+    mesh = _connect_mesh_with_lan_bridge(current_channel, current_mode)
     machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
@@ -645,7 +678,7 @@ def main() -> None:
                         _append_log_line(logs, "usage: /channel <id>")
                     else:
                         try:
-                            next_mesh = xos.mesh.connect(id=next_channel, mode=current_mode)
+                            next_mesh = _connect_mesh_with_lan_bridge(next_channel, current_mode, logs)
                             mesh = next_mesh
                             current_channel = next_channel
                             display_name = _identity_label(machine_name)
@@ -659,7 +692,7 @@ def main() -> None:
                 if text in ("/lan", "/local", "/online"):
                     next_mode = text[1:]
                     try:
-                        next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
+                        next_mesh = _connect_mesh_with_lan_bridge(current_channel, next_mode, logs)
                         mesh = next_mesh
                         current_mode = next_mode
                         display_name = _identity_label(machine_name)
