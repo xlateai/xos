@@ -70,9 +70,13 @@ pub(super) fn lan_discover_coordinator(
                 }
                 match expected_aid {
                     Some(aid) => {
-                        if v.get("aid").and_then(|x| x.as_str()) != Some(aid) {
-                            thread::sleep(Duration::from_millis(GAP_MS));
-                            continue;
+                        let reply_aid = v.get("aid").and_then(|x| x.as_str());
+                        // Compatibility path for older responders that do not include `aid` yet.
+                        if let Some(reply_aid) = reply_aid {
+                            if reply_aid != aid {
+                                thread::sleep(Duration::from_millis(GAP_MS));
+                                continue;
+                            }
                         }
                     }
                     None => {
@@ -128,8 +132,12 @@ pub(super) fn lan_discovery_responder_loop(
                 }
                 match account_aid.as_deref() {
                     Some(aid) => {
-                        if v.get("aid").and_then(|x| x.as_str()) != Some(aid) {
-                            continue;
+                        let seek_aid = v.get("aid").and_then(|x| x.as_str());
+                        // Compatibility path for older seekers that do not include `aid` yet.
+                        if let Some(seek_aid) = seek_aid {
+                            if seek_aid != aid {
+                                continue;
+                            }
                         }
                     }
                     None => {
