@@ -33,9 +33,22 @@ fn read_pid_file() -> Result<Option<u32>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let pid = text.trim().parse::<u32>().map_err(|e| e.to_string())?;
-    Ok(Some(pid))
+    let raw = fs::read(path).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&raw);
+    let token = text
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|part| !part.is_empty());
+    let Some(pid_text) = token else {
+        clear_pid_file();
+        return Ok(None);
+    };
+    match pid_text.parse::<u32>() {
+        Ok(pid) => Ok(Some(pid)),
+        Err(_) => {
+            clear_pid_file();
+            Ok(None)
+        }
+    }
 }
 
 fn write_pid_file(pid: u32) -> Result<(), String> {

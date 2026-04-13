@@ -193,7 +193,7 @@ def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
         pass
 
 
-def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str) -> None:
+def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str, mesh=None) -> None:
     _append_log_line(log_lines, "channels (local managed processes):")
     procs = _safe_list_procs()
 
@@ -207,6 +207,17 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
             mode = (ch.get("mode", "local") or "local").upper()
             channel_counts[cid] = channel_counts.get(cid, 0) + 1
             channel_modes.setdefault(cid, set()).add(mode)
+
+    # The active terminal channel should reflect the live mesh view immediately,
+    # even if local process snapshots are briefly stale after rank failover.
+    if mesh is not None:
+        try:
+            live = int(mesh.num_nodes())
+            if live > 0:
+                channel_counts[current_channel] = max(channel_counts.get(current_channel, 0), live)
+                channel_modes.setdefault(current_channel, set()).add(current_mode.upper())
+        except Exception:
+            pass
 
     if not channel_counts:
         _append_log_line(log_lines, "  `-- (none)")
@@ -331,10 +342,13 @@ def _render(
 
     mode_u = (mesh_mode or "").upper()
     procs = _safe_list_procs()
-    process_count = len(procs)
-    terminal_count = sum(1 for p in procs if _proc_has_channel(p, chat_id, mode_u))
+    try:
+        terminal_count = int(mesh.num_nodes())
+    except Exception:
+        terminal_count = 1
     if terminal_count <= 0:
         terminal_count = 1
+    process_count = terminal_count
     rank = mesh.rank()
     node_id = mesh.node_id()
     nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
@@ -590,7 +604,7 @@ def main() -> None:
                     needs_render = True
                     handled = True
                 if text == "/channels":
-                    _emit_channels(logs, current_channel, current_mode)
+                    _emit_channels(logs, current_channel, current_mode, mesh)
                     needs_render = True
                     handled = True
                 if text == "/clear":
