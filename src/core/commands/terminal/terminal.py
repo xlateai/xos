@@ -47,6 +47,26 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
 
 
+def _safe_list_procs() -> list[dict]:
+    try:
+        return xos.manager.list_procs() or []
+    except Exception:
+        return []
+
+
+def _proc_has_channel(proc: dict, channel_id: str, mode_u: str | None = None) -> bool:
+    for ch in proc.get("channels", []) or []:
+        cid = (ch.get("id", "") or "").strip()
+        if cid != channel_id:
+            continue
+        if mode_u is None:
+            return True
+        cmode = (ch.get("mode", "") or "").upper()
+        if cmode == mode_u:
+            return True
+    return False
+
+
 def _xpy_default_state(log_lines: list[str]) -> dict:
     def _xpy_print(*args, sep=" ", end="\n"):
         text = sep.join(str(a) for a in args)
@@ -175,12 +195,7 @@ def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
 
 def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str) -> None:
     _append_log_line(log_lines, "channels (local managed processes):")
-    procs = []
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception as e:
-        _append_log_line(log_lines, f"  error: {e}")
-        return
+    procs = _safe_list_procs()
 
     channel_counts: dict[str, int] = {}
     channel_modes: dict[str, set[str]] = {}
@@ -214,12 +229,7 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
 
 def _emit_procs(log_lines: list[str]) -> None:
     _append_log_line(log_lines, "local managed processes:")
-    procs = []
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception as e:
-        _append_log_line(log_lines, f"  error: {e}")
-        return
+    procs = _safe_list_procs()
     if not procs:
         _append_log_line(log_lines, "  `-- (none)")
         return
@@ -276,23 +286,12 @@ def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
 def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
     out: dict[int, dict] = {}
     mode_u = (mode or "").upper()
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception:
-        return out
+    procs = _safe_list_procs()
     for p in procs:
         pid = int(p.get("pid", 0) or 0)
         if pid <= 0:
             continue
-        channels = p.get("channels", []) or []
-        matched = False
-        for ch in channels:
-            cid = (ch.get("id", "") or "").strip()
-            cmode = (ch.get("mode", "") or "").upper()
-            if cid == channel_id and cmode == mode_u:
-                matched = True
-                break
-        if not matched:
+        if not _proc_has_channel(p, channel_id, mode_u):
             continue
         out[pid] = {
             "rank": int(p.get("rank", -1) or -1),
@@ -320,7 +319,6 @@ def _put(frame, width: int, height: int, channels: int, row: int, col: int, text
 
 def _render(
     mesh,
-    global_mesh,
     log_lines: list[str],
     machine_name: str,
     mesh_mode: str,
@@ -331,16 +329,19 @@ def _render(
     frame = xos.terminal.get_frame()
     width, height, channels = frame.shape
 
-    terminal_count = int(mesh.num_nodes())
+    mode_u = (mesh_mode or "").upper()
+    procs = _safe_list_procs()
+    process_count = len(procs)
+    terminal_count = sum(1 for p in procs if _proc_has_channel(p, chat_id, mode_u))
+    if terminal_count <= 0:
+        terminal_count = 1
     rank = mesh.rank()
     node_id = mesh.node_id()
-    try:
-        nodes = int(global_mesh.num_nodes()) if global_mesh else terminal_count
-    except Exception:
-        nodes = terminal_count
+    nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
+    if nodes <= 0:
+        nodes = 1
     node_label = "node" if nodes == 1 else "nodes"
     terminal_label = "terminal" if terminal_count == 1 else "terminals"
-    process_count = terminal_count
     process_label = "process" if process_count == 1 else "processes"
 
     left = (
@@ -438,11 +439,6 @@ def main() -> None:
     current_channel = MESH_ID
     current_mode = MODE
     mesh = xos.mesh.connect(id=current_channel, mode=current_mode)
-    global_mesh = None
-    try:
-        global_mesh = xos.mesh.connect(id="global", mode=current_mode)
-    except Exception:
-        global_mesh = None
     machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
@@ -461,7 +457,6 @@ def main() -> None:
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
     _render(
         mesh,
-        global_mesh,
         logs,
         machine_name,
         current_mode,
@@ -478,10 +473,6 @@ def main() -> None:
         last_mesh_nodes = int(mesh.num_nodes())
     except Exception:
         last_mesh_nodes = 1
-    try:
-        last_global_nodes = int(global_mesh.num_nodes()) if global_mesh else last_mesh_nodes
-    except Exception:
-        last_global_nodes = last_mesh_nodes
     last_local_nodes = _local_channel_nodes(current_channel, current_mode)
 
     try:
@@ -532,7 +523,6 @@ def main() -> None:
                     _append_log_line(logs, "leaving xos terminal (Ctrl+C)")
                     _render(
                         mesh,
-                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -548,7 +538,6 @@ def main() -> None:
                     # Redraw once to undo any cursor/newline side effects from input handling.
                     _render(
                         mesh,
-                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -562,7 +551,6 @@ def main() -> None:
                     _append_log_line(logs, "leaving xos terminal")
                     _render(
                         mesh,
-                        global_mesh,
                         logs,
                         machine_name,
                         current_mode,
@@ -630,10 +618,6 @@ def main() -> None:
                     try:
                         next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
                         mesh = next_mesh
-                        try:
-                            global_mesh = xos.mesh.connect(id="global", mode=next_mode)
-                        except Exception:
-                            global_mesh = None
                         current_mode = next_mode
                         known_nodes.clear()
                         _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
@@ -704,13 +688,6 @@ def main() -> None:
                 last_local_nodes = local_nodes_now
                 needs_render = True
             try:
-                global_nodes = int(global_mesh.num_nodes()) if global_mesh else mesh_nodes
-            except Exception:
-                global_nodes = last_global_nodes
-            if global_nodes != last_global_nodes:
-                last_global_nodes = global_nodes
-                needs_render = True
-            try:
                 proc_version = int(xos.manager.version())
             except Exception:
                 proc_version = last_proc_version
@@ -724,7 +701,6 @@ def main() -> None:
                 active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
                 _render(
                     mesh,
-                    global_mesh,
                     logs,
                     machine_name,
                     current_mode,

@@ -175,20 +175,25 @@ pub fn run_daemon_forever() -> Result<(), String> {
         running_for_handler.store(false, Ordering::SeqCst);
     });
 
+    xos::manager::bootstrap("xos-daemon");
+
     #[cfg(not(target_arch = "wasm32"))]
-    let _global_mesh = {
+    let (_global_mesh, global_mode) = {
         use xos::mesh::{MeshMode, MeshSession};
         match xos::auth::load_node_identity() {
-            Ok(identity) => MeshSession::join_with_identity(
+            Ok(identity) => match MeshSession::join_with_identity(
                 GLOBAL_MESH_ID,
                 MeshMode::Lan,
                 Arc::new(identity),
                 None,
-            )
-            .or_else(|_| MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local))?,
-            Err(_) => MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?,
+            ) {
+                Ok(s) => (s, "lan"),
+                Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
+            },
+            Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
         }
     };
+    xos::manager::register_mesh(GLOBAL_MESH_ID, global_mode);
 
     while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(500));

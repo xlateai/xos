@@ -399,6 +399,7 @@ fn main() {
             }
         }
         Some(Commands::Terminal) => {
+            xos::manager::bootstrap("xos-terminal");
             let root = match xos::find_xos_project_root() {
                 Ok(p) => p,
                 Err(e) => {
