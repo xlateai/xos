@@ -1,10 +1,18 @@
 # Whisper → CTranslate2 weights (local only)
 
-Put the converter output here so `xos` can load it **without** `XOS_WHISPER_CT2_PATH`:
+Put the converter output here so `xos` can load it **without** `XOS_WHISPER_CT2_PATH`.
 
-`transcription/models/whisper-small-ct2/model.bin`  
-`transcription/models/whisper-small-ct2/config.json`  
-`transcription/models/whisper-small-ct2/vocabulary.json`
+**Required files** (same folder; `ct2rs` opens these paths):
+
+| File | Role |
+|------|------|
+| `model.bin` | CTranslate2 weights |
+| `config.json` | CT2 model config |
+| `vocabulary.json` | CT2 vocabulary |
+| `tokenizer.json` | Hugging Face tokenizer (Rust `tokenizers` crate) |
+| `preprocessor_config.json` | Mel / STFT settings for the frontend |
+
+`model.bin` alone is not enough: without `tokenizer.json` you get **“failed to load a tokenizer” / OS error 2**; without `preprocessor_config.json`, load fails when reading mel config.
 
 The first run downloads OpenAI weights from Hugging Face; you only need a Python environment for the **one-time** conversion.
 
@@ -28,18 +36,21 @@ python -m pip install -U pip
 pip install "ctranslate2>=4.3" "transformers[torch]" accelerate sentencepiece safetensors
 ```
 
-Convert `openai/whisper-small` into this repo path (adjust drive/path if your clone lives elsewhere):
+Convert `openai/whisper-small` into this repo path (adjust drive/path if your clone lives elsewhere). **`--copy_files` is required** so `tokenizer.json` and `preprocessor_config.json` are present for Rust:
 
 ```powershell
 $out = Join-Path $PWD "src\core\engine\audio\transcription\models\whisper-small-ct2"
-ct2-transformers-converter --model openai/whisper-small --output_dir $out
+ct2-transformers-converter --model openai/whisper-small --output_dir $out `
+  --copy_files tokenizer.json preprocessor_config.json special_tokens_map.json
 ```
+
+If you already converted without `--copy_files`, delete or rename the old `$out` and re-run the command above, or copy the missing files from the Hugging Face model cache into `$out`.
 
 Then build and run (Whisper CT2 is a **default** feature; use `--no-default-features` to omit it):
 
 ```powershell
 cargo build --release
-cargo run -- app transcribe
+cargo run -- app transcribe   # terminal only; Ctrl+C to exit
 ```
 
 ## Optional: other model or output location
@@ -49,6 +60,12 @@ cargo run -- app transcribe
 
 ## macOS / Linux
 
-Same `pip` / `ct2-transformers-converter` lines; use `$PWD/src/core/engine/audio/transcription/models/whisper-small-ct2` for `--output_dir`.
+Same `pip` install, then (from repo root):
 
-After weights are in place: `cargo build --release` then `cargo run -- app transcribe` (install **CMake** first; see “Rust build” above).
+```bash
+out="$PWD/src/core/engine/audio/transcription/models/whisper-small-ct2"
+ct2-transformers-converter --model openai/whisper-small --output_dir "$out" \
+  --copy_files tokenizer.json preprocessor_config.json special_tokens_map.json
+```
+
+After weights are in place: `cargo build --release` then `cargo run -- app transcribe` — **no window**; output streams to the terminal (Ctrl+C to stop). Install **CMake** first; see “Rust build” above.

@@ -1,15 +1,13 @@
 use crate::engine::audio::{self, transcription::TranscriptionEngine};
 use crate::engine::{Application, EngineState};
-use crate::rasterizer::fill;
-use crate::ui::UiText;
 #[cfg(not(target_os = "ios"))]
 use dialoguer::Select;
-
-const BG: (u8, u8, u8, u8) = (12, 14, 20, 255);
 
 pub struct TranscribeApp {
     listener: Option<audio::AudioListener>,
     engine: TranscriptionEngine,
+    /// Last text printed to the console (avoid spamming identical lines).
+    last_console_out: String,
 }
 
 impl TranscribeApp {
@@ -17,12 +15,15 @@ impl TranscribeApp {
         Self {
             listener: None,
             engine: TranscriptionEngine::new(),
+            last_console_out: String::new(),
         }
     }
 }
 
 impl Application for TranscribeApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+        crate::print("Transcribe (terminal) — Ctrl+C to stop.\n");
+
         let all_devices = audio::devices();
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
 
@@ -33,7 +34,7 @@ impl Application for TranscribeApp {
         #[cfg(target_os = "ios")]
         {
             let device = input_devices.first().ok_or("No input devices available")?;
-            crate::print(&format!("Transcribe: using {}", device.name));
+            crate::print(&format!("Using input: {}\n", device.name));
             #[cfg(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -68,7 +69,7 @@ impl Application for TranscribeApp {
                 .get(selection)
                 .ok_or_else(|| "Selected device not found".to_string())?;
 
-            crate::print(&format!("Transcribe: using {}", device.name));
+            crate::print(&format!("Using input: {}\n", device.name));
 
             #[cfg(all(
                 feature = "whisper_ct2",
@@ -92,46 +93,26 @@ impl Application for TranscribeApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        fill(&mut state.frame, (BG.0, BG.1, BG.2, BG.3));
-
-        let shape = state.frame.shape();
-        let height = shape[0] as usize;
-        let width = shape[1] as usize;
-
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        let font_px = 18.0_f32 * state.f3_ui_scale_multiplier();
-
         if let Some(listener) = &self.listener {
             let channels = listener.get_samples_by_channel();
             let sr = listener.buffer().sample_rate();
             self.engine.process_snapshot(sr, &channels);
         }
 
-        let text = if self.listener.is_some() {
+        let line = if self.listener.is_some() {
             self.engine.full_display()
         } else {
             "No audio listener.".to_string()
         };
 
-        let buf = state.frame_buffer_mut();
-        let ui = UiText {
-            text,
-            x1_norm: 0.05,
-            y1_norm: 0.05,
-            x2_norm: 0.95,
-            y2_norm: 0.95,
-            color: (235, 238, 245, 255),
-            hitboxes: false,
-            baselines: false,
-            font_size_px: font_px.max(10.0),
-        };
-
-        if let Err(e) = ui.render(buf, width, height) {
-            crate::print(&format!("Transcribe: UiText render error: {e}"));
+        if line != self.last_console_out {
+            self.last_console_out = line.clone();
+            crate::print("────────────────────────────────────────\n");
+            crate::print(&format!("{}\n", line));
         }
+
+        // Keep frame delta / F3 state coherent for the headless host (no GPU work).
+        let _ = state;
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}

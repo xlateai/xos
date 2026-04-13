@@ -190,6 +190,11 @@ pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
         if game == "overlay" {
             return engine::start_overlay_native(app);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if game == "transcribe" {
+            // Terminal-only: no window; Ctrl+C exits (see `start_headless_native`).
+            return engine::start_headless_native(app, 256, 256);
+        }
         engine::start_native(app)
     } else {
         Err(format!("App '{}' not found", game).into())

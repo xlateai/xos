@@ -98,16 +98,32 @@ fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     use ct2rs::{Config, Whisper};
     const ENV: &str = "XOS_WHISPER_CT2_PATH";
 
+    /// Files `ct2rs::Whisper` loads from the model directory (see `models/README.md`).
+    const REQUIRED_FILES: &[&str] = &[
+        "model.bin",
+        "config.json",
+        "vocabulary.json",
+        "tokenizer.json",
+        "preprocessor_config.json",
+    ];
+
     let bundled = default_bundled_ct2_model_dir();
     let path: PathBuf = match std::env::var(ENV) {
         Ok(raw) if !raw.trim().is_empty() => PathBuf::from(raw.trim()),
         _ => bundled.clone(),
     };
 
-    if !path.join("model.bin").is_file() {
+    let mut missing = Vec::new();
+    for name in REQUIRED_FILES {
+        if !path.join(name).is_file() {
+            missing.push(*name);
+        }
+    }
+    if !missing.is_empty() {
         let msg = format!(
-            "Whisper CT2 weights not found.\n\nExpected: {}/model.bin (plus config.json, vocabulary.json).\n\nConvert once on any machine with Python (see models/README.md), or set {} to another converted directory.",
+            "Whisper CT2 model directory is incomplete: {}\n\nMissing: {}\n\n`ct2rs` needs Hugging Face tokenizer + preprocessor files, not only `model.bin`. Re-run the converter with `--copy_files` (see models/README.md), or set {} to a complete directory.",
             path.display(),
+            missing.join(", "),
             ENV
         );
         return (None, msg);
