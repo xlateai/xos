@@ -274,15 +274,17 @@ impl TranscriptionEngine {
                         }
                     }
                 }
+                // Omit per-tick RMS here so console output only changes when the transcript changes
+                // or decode cadence metadata changes (RMS still available via last_level_rms()).
                 self.caption = format!(
-                    "{}\n\n—\nStream {sample_rate} Hz → {} Hz mono · RMS ≈ {:.4} · decode every {:.1}s",
+                    "{}\n({} Hz → {} Hz mono · decode every {:.1}s)",
                     if self.transcript.is_empty() {
                         "(no speech in this window yet)"
                     } else {
                         self.transcript.as_str()
                     },
+                    sample_rate,
                     whisper.sampling_rate(),
-                    self.last_rms,
                     self.decode_interval.as_secs_f32(),
                 );
                 return;
@@ -317,10 +319,11 @@ impl TranscriptionEngine {
                 bundled.display()
             );
 
+            let rms_q = (self.last_rms * 100.0).round() / 100.0;
             self.caption = format!(
-                "{activity}.\nStream: {sample_rate} Hz → model prep typically {wh} Hz mono.\nRMS ≈ {:.4} (rolling tail).\n\n{whisper_note}",
-                self.last_rms,
+                "{activity}. Stream {sample_rate} Hz → {wh} Hz mono · RMS ≈ {rms_q:.2}\n{whisper_note}",
                 wh = WHISPER_SAMPLE_RATE,
+                whisper_note = whisper_note,
             );
         }
     }

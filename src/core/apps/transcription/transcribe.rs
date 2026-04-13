@@ -6,8 +6,8 @@ use dialoguer::Select;
 pub struct TranscribeApp {
     listener: Option<audio::AudioListener>,
     engine: TranscriptionEngine,
-    /// Last text printed to the console (avoid spamming identical lines).
-    last_console_out: String,
+    /// Last caption printed (excludes device line — device is printed once in setup).
+    last_caption_out: String,
 }
 
 impl TranscribeApp {
@@ -15,14 +15,14 @@ impl TranscribeApp {
         Self {
             listener: None,
             engine: TranscriptionEngine::new(),
-            last_console_out: String::new(),
+            last_caption_out: String::new(),
         }
     }
 }
 
 impl Application for TranscribeApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        crate::print("Transcribe (terminal) — Ctrl+C to stop.\n");
+        crate::print("transcribe: terminal mode (Ctrl+C to stop)\n");
 
         let all_devices = audio::devices();
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
@@ -34,7 +34,6 @@ impl Application for TranscribeApp {
         #[cfg(target_os = "ios")]
         {
             let device = input_devices.first().ok_or("No input devices available")?;
-            crate::print(&format!("Using input: {}\n", device.name));
             #[cfg(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -49,6 +48,11 @@ impl Application for TranscribeApp {
             let buffer_duration = 3.0_f32;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;
+            crate::print(&format!(
+                "transcribe: {} @ {} Hz\n",
+                device.name,
+                listener.buffer().sample_rate()
+            ));
             self.engine
                 .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
             self.listener = Some(listener);
@@ -69,8 +73,6 @@ impl Application for TranscribeApp {
                 .get(selection)
                 .ok_or_else(|| "Selected device not found".to_string())?;
 
-            crate::print(&format!("Using input: {}\n", device.name));
-
             #[cfg(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -85,6 +87,11 @@ impl Application for TranscribeApp {
             let buffer_duration = 3.0_f32;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;
+            crate::print(&format!(
+                "transcribe: {} @ {} Hz\n",
+                device.name,
+                listener.buffer().sample_rate()
+            ));
             self.engine
                 .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
             self.listener = Some(listener);
@@ -99,16 +106,15 @@ impl Application for TranscribeApp {
             self.engine.process_snapshot(sr, &channels);
         }
 
-        let line = if self.listener.is_some() {
-            self.engine.full_display()
+        let caption = if self.listener.is_some() {
+            self.engine.caption().to_string()
         } else {
             "No audio listener.".to_string()
         };
 
-        if line != self.last_console_out {
-            self.last_console_out = line.clone();
-            crate::print("────────────────────────────────────────\n");
-            crate::print(&format!("{}\n", line));
+        if caption != self.last_caption_out {
+            self.last_caption_out = caption.clone();
+            crate::print(&format!("{caption}\n"));
         }
 
         // Keep frame delta / F3 state coherent for the headless host (no GPU work).
