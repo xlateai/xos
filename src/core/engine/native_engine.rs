@@ -252,12 +252,14 @@ impl ApplicationHandler for AppState {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         // Check if Ctrl+C was pressed
         if SHOULD_EXIT.load(Ordering::Relaxed) {
+            self.app.prepare_shutdown(&mut self.engine_state);
             event_loop.exit();
             return;
         }
         
         match event {
             WindowEvent::CloseRequested => {
+                self.app.prepare_shutdown(&mut self.engine_state);
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -527,6 +529,7 @@ impl ApplicationHandler for AppState {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Check if Ctrl+C was pressed
         if SHOULD_EXIT.load(Ordering::Relaxed) {
+            self.app.prepare_shutdown(&mut self.engine_state);
             event_loop.exit();
             return;
         }
@@ -686,10 +689,10 @@ fn run_native_event_loop(
     app: Box<dyn Application>,
     launch_mode: NativeLaunchMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    SHOULD_EXIT.store(false, Ordering::Relaxed);
     // Install Ctrl+C handler for clean shutdown
     let should_exit = SHOULD_EXIT.clone();
     ctrlc::set_handler(move || {
-        println!("\nReceived Ctrl+C, shutting down gracefully...");
         should_exit.store(true, Ordering::Relaxed);
     })
     .expect("Error setting Ctrl+C handler");
