@@ -28,6 +28,7 @@ use std::fmt;
 // Import platform-specific submodules
 pub mod microphone;
 pub mod speakers;
+pub mod transcription;
 
 // Re-export key types for convenience
 pub use microphone::{AudioListener, default_input, all_input_devices, print_input_devices};

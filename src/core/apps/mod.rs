@@ -1,5 +1,8 @@
 use crate::engine::Application;
 
+/// Implementation lives under [`transcription`]; the CLI subcommand is `transcribe` via [`transcribe`].
+pub mod transcription;
+
 #[macro_export]
 macro_rules! define_apps {
     ( $( $Variant:ident => $file:ident :: $Struct:ident ),* $(,)? ) => {
@@ -84,4 +87,5 @@ define_apps! {
     Remote => remote::RemoteApp,
     Mesh => mesh::MeshApp,
     Hang => hang::HangApp,
+    Transcribe => transcribe::TranscribeApp,
 }
