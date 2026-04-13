@@ -57,7 +57,10 @@ fn login_offline_interactive() -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_reset_interactive() -> Result<(), String> {
     use dialoguer::{Input, Password};
-    use xos::auth::{has_identity, load_identity, load_node_identity, reset_offline_identity};
+    use xos::auth::{
+        has_identity, load_identity, load_node_identity, node_id_from_public_pem,
+        reset_offline_identity,
+    };
 
     if !has_identity() {
         return Err("no identity exists yet. Use `xos login` first.".to_string());
@@ -101,7 +104,26 @@ fn login_offline_reset_interactive() -> Result<(), String> {
         machine.trim().to_string()
     };
 
-    reset_offline_identity(username.trim(), &password, &machine).map_err(|e| e.to_string())
+    let before_key = load_identity()
+        .ok()
+        .and_then(|id| node_id_from_public_pem(id.public_pem.as_str()).ok());
+    reset_offline_identity(username.trim(), &password, &machine).map_err(|e| e.to_string())?;
+    let after_key = load_identity()
+        .ok()
+        .and_then(|id| node_id_from_public_pem(id.public_pem.as_str()).ok());
+
+    if let (Some(before), Some(after)) = (&before_key, &after_key) {
+        if before == after {
+            return Err(
+                "reset completed but authentication key fingerprint did not change".to_string(),
+            );
+        }
+        let b = if before.len() > 12 { &before[..12] } else { before };
+        let a = if after.len() > 12 { &after[..12] } else { after };
+        println!("authentication key rotated: {b}... -> {a}...");
+    }
+
+    Ok(())
 }
 
 #[derive(Parser)]

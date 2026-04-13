@@ -12,9 +12,14 @@ use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use x25519_dalek::{EphemeralSecret, PublicKey};
-use crate::auth::{node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity};
+use crate::auth::{load_identity, node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity};
 
-const HS_VER: u32 = 2;
+const HS_VER: u32 = 3;
+
+fn local_account_fingerprint() -> Result<String, String> {
+    let account = load_identity().map_err(|e| e.to_string())?;
+    node_id_from_public_pem(account.public_pem.as_str()).map_err(|e| e.to_string())
+}
 
 fn expect_node_id(nid: &str, pk_pem: &str) -> Result<(), String> {
     let exp = node_id_from_public_pem(pk_pem).map_err(|e| e.to_string())?;
@@ -29,6 +34,8 @@ struct HsClientHello {
     hs: u32,
     /// Friendly machine name.
     nn: String,
+    /// Account identity fingerprint (SHA256(SPKI DER) of account public key).
+    aid: String,
     /// SHA256(SPKI DER) hex of `pk` — redundant but lets peers route before parsing PEM.
     nid: String,
     pk: String,
@@ -40,6 +47,8 @@ struct HsClientHello {
 struct HsServerHello {
     hs: u32,
     nn: String,
+    /// Account identity fingerprint (must match client `aid`).
+    aid: String,
     nid: String,
     pk: String,
     ec: String,
@@ -94,6 +103,7 @@ pub fn client_handshake(
     stream: TcpStream,
     id: &UnlockedNodeIdentity,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
+    let aid = local_account_fingerprint()?;
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
 
@@ -106,6 +116,7 @@ pub fn client_handshake(
     let hello = HsClientHello {
         hs: HS_VER,
         nn: id.node_name.clone(),
+        aid: aid.clone(),
         nid,
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_pub.as_bytes()),
@@ -125,6 +136,9 @@ pub fn client_handshake(
     let srv: HsServerHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
     if srv.hs != HS_VER {
         return Err("LAN handshake: bad server hello".to_string());
+    }
+    if srv.aid != aid {
+        return Err("LAN handshake: account identity mismatch (different login)".to_string());
     }
     expect_node_id(&srv.nid, &srv.pk)?;
     let ec_s_bytes = B64.decode(&srv.ec).map_err(|e| e.to_string())?;
@@ -174,6 +188,7 @@ pub fn server_handshake(
     stream: TcpStream,
     id: &UnlockedNodeIdentity,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
+    let aid = local_account_fingerprint()?;
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
 
@@ -185,6 +200,9 @@ pub fn server_handshake(
     let cli: HsClientHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
     if cli.hs != HS_VER {
         return Err("LAN handshake: bad client hello".to_string());
+    }
+    if cli.aid != aid {
+        return Err("LAN handshake: account identity mismatch (different login)".to_string());
     }
     expect_node_id(&cli.nid, &cli.pk)?;
     let pk_c = RsaPublicKey::from_public_key_pem(cli.pk.as_str()).map_err(|e| e.to_string())?;
@@ -203,6 +221,7 @@ pub fn server_handshake(
     let hello = HsServerHello {
         hs: HS_VER,
         nn: id.node_name.clone(),
+        aid,
         nid: id.node_id(),
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_s.as_bytes()),
