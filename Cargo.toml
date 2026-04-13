@@ -123,7 +123,7 @@ console_error_panic_hook = "0.1"
 
 [features]
 default = []
-## Whisper in CTranslate2 format (`model.bin`, `config.json`, `vocabulary.json`). One-time convert: `ct2-transformers-converter --model openai/whisper-small --output_dir whisper-small-ct2`. Then `export XOS_WHISPER_CT2_PATH=/path/to/whisper-small-ct2` and build with `--features whisper_ct2`. Desktop only (not iOS / WASM).
+## Whisper in CTranslate2 format. Default load path (baked at compile time): `src/core/engine/audio/transcription/models/whisper-small-ct2/`. Optional override: `XOS_WHISPER_CT2_PATH`. Build: `--features whisper_ct2`. Desktop only (not iOS / WASM).
 whisper_ct2 = ["dep:ct2rs"]
 
 [lib]

@@ -1,22 +1,31 @@
 //! Live transcription: resampling helpers + optional Whisper via CTranslate2 (`ct2rs`).
 //!
-//! **CTranslate2 model layout** (from `ct2-transformers-converter`): `model.bin`, `config.json`,
-//! `vocabulary.json` in one directory. Set `XOS_WHISPER_CT2_PATH` to that directory.
+//! **Bundled model location** (no env var required): at compile time the repo root is fixed via
+//! `CARGO_MANIFEST_DIR`, so we load from
+//! `src/core/engine/audio/transcription/models/whisper-small-ct2/` when it contains `model.bin`.
+//! Optional override: `XOS_WHISPER_CT2_PATH` → any directory produced by `ct2-transformers-converter`.
 //!
 //! Build with **`--features whisper_ct2`** (desktop only; long compile). Without the feature,
 //! [`TranscriptionEngine`] stays on the RMS / placeholder path.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-use std::path::Path;
 
 /// Sample rate expected by Whisper / CT2.
 pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
+
+/// Folder name under [`bundled_models_root`] for the default converted checkpoint.
+pub const DEFAULT_WHISPER_CT2_DIR_NAME: &str = "whisper-small-ct2";
+
+/// `.../transcription/models` (contains per-model folders like [`DEFAULT_WHISPER_CT2_DIR_NAME`]).
+pub fn bundled_models_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/engine/audio/transcription/models")
+}
+
+/// Default CT2 model directory: `transcription/models/whisper-small-ct2/`.
+pub fn default_bundled_ct2_model_dir() -> PathBuf {
+    bundled_models_root().join(DEFAULT_WHISPER_CT2_DIR_NAME)
+}
 
 /// Linear resample mono `input` (at `input_rate` Hz) to `output_rate` Hz into `out`.
 pub fn resample_linear_mono(input_rate: u32, input: &[f32], output_rate: u32, out: &mut Vec<f32>) {
@@ -88,22 +97,31 @@ fn rms_tail(mono: &[f32], tail_max: usize) -> f32 {
 fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     use ct2rs::{Config, Whisper};
     const ENV: &str = "XOS_WHISPER_CT2_PATH";
-    let Ok(raw) = std::env::var(ENV) else {
-        return (
-            None,
-            format!("Set {ENV} to a converted model directory (containing model.bin). Build with --features whisper_ct2."),
-        );
+
+    let bundled = default_bundled_ct2_model_dir();
+    let path: PathBuf = match std::env::var(ENV) {
+        Ok(raw) if !raw.trim().is_empty() => PathBuf::from(raw.trim()),
+        _ => bundled.clone(),
     };
-    let path = Path::new(raw.trim());
+
     if !path.join("model.bin").is_file() {
-        return (
-            None,
-            format!("{ENV}={path:?} must contain model.bin (run ct2-transformers-converter once)."),
+        let msg = format!(
+            "Whisper CT2 weights not found.\n\nExpected: {}/model.bin (plus config.json, vocabulary.json).\n\nConvert once on any machine with Python (see models/README.md), or set {} to another converted directory.",
+            path.display(),
+            ENV
         );
+        return (None, msg);
     }
-    match Whisper::new(path, Config::default()) {
+
+    match Whisper::new(&path, Config::default()) {
         Ok(w) => (Some(w), String::new()),
-        Err(e) => (None, format!("Failed to load Whisper CT2 model: {e}")),
+        Err(e) => (
+            None,
+            format!(
+                "Found model.bin at {} but failed to load: {e}",
+                path.display()
+            ),
+        ),
     }
 }
 
@@ -277,7 +295,11 @@ impl TranscriptionEngine {
                 "quiet (try speaking or use a loopback input for system audio)"
             };
 
-            let whisper_note = "Enable Whisper+CT2: cargo build --features whisper_ct2 and set XOS_WHISPER_CT2_PATH to converted weights (model.bin, config.json, vocabulary.json).";
+            let bundled = default_bundled_ct2_model_dir();
+            let whisper_note = format!(
+                "Enable Whisper+CT2: cargo build --features whisper_ct2, then place converted weights under:\n{}\n(see transcription/models/README.md). Optional override: XOS_WHISPER_CT2_PATH.",
+                bundled.display()
+            );
 
             self.caption = format!(
                 "{activity}.\nStream: {sample_rate} Hz → model prep typically {wh} Hz mono.\nRMS ≈ {:.4} (rolling tail).\n\n{whisper_note}",
