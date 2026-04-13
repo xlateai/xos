@@ -84,6 +84,13 @@ def _proc_has_channel(proc: dict, channel_id: str, mode_u: str | None = None) ->
 
 
 def _is_local_daemon_active(procs: list[dict], local_node_id: str) -> bool:
+    # Source of truth: daemon pid file + live pid check (same path used by `xos status`).
+    try:
+        if hasattr(xos.auth, "daemon_online"):
+            return bool(xos.auth.daemon_online())
+    except Exception:
+        pass
+    # Fallback for older binaries without the auth binding.
     for p in procs:
         if (p.get("label", "") or "") != "xos-daemon":
             continue
