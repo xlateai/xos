@@ -75,7 +75,25 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
 
 #[cfg(not(windows))]
 fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
-    let _ = fs::copy(src, dest)?;
+    // On macOS/Linux, avoid in-place overwrite of a running executable.
+    // Writing directly to `dest` can truncate the file while the current
+    // process image is still mapped. Copy to a sibling temp file first,
+    // then atomically rename into place.
+    let parent = dest
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "dest has no parent"))?;
+    let dest_name = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "dest file name"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = parent.join(format!(".{dest_name}.tmp-{stamp}"));
+
+    fs::copy(src, &tmp)?;
+    fs::rename(&tmp, dest)?;
     Ok(())
 }
 
