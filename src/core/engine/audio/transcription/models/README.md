@@ -50,7 +50,7 @@ Then build and run (Whisper CT2 is a **default** feature; use `--no-default-feat
 
 ```powershell
 cargo build --release
-cargo run -- app transcribe   # terminal only; Ctrl+C to exit
+cargo run -- app transcribe   # window + waveform; transcript on stdout
 ```
 
 ## Optional: other model or output location
@@ -68,4 +68,4 @@ ct2-transformers-converter --model openai/whisper-small --output_dir "$out" \
   --copy_files tokenizer.json preprocessor_config.json special_tokens_map.json
 ```
 
-After weights are in place: `cargo build --release` then `cargo run -- app transcribe` — **no window**; output streams to the terminal (Ctrl+C to stop). Install **CMake** first; see “Rust build” above.
+After weights are in place: `cargo build --release` then `cargo run -- app transcribe` — opens a **small window** with a **live waveform** strip; **transcript text** is printed to **stdout** as it changes (Ctrl+C or close window to quit; **Esc** also requests exit). Install **CMake** first; see “Rust build” above.

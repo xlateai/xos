@@ -236,6 +236,10 @@ impl TranscriptionEngine {
         self.device_hint = format!("Input: {name} @ {sample_rate} Hz");
     }
 
+    pub fn device_hint(&self) -> &str {
+        &self.device_hint
+    }
+
     pub fn caption(&self) -> &str {
         &self.caption
     }
