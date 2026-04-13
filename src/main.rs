@@ -403,7 +403,9 @@ fn main() {
 
     match cli.command {
         Some(Commands::Compile { ios }) => {
-            let _ = xos::manager::kill_global();
+            if !xos::manager::stop_global_daemon_blocking() {
+                eprintln!("⚠️ global daemon did not stop cleanly before compile");
+            }
             let compile_ok = if ios {
                 compile::compile_ios_rust();
                 true

@@ -348,6 +348,59 @@ pub fn kill_global() -> Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn force_kill_pid(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn stop_global_daemon_blocking() -> bool {
+    let _ = kill_global();
+    for _ in 0..40 {
+        if !has_live_global_daemon() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let pids: Vec<u32> = list_processes()
+        .into_iter()
+        .filter(|p| {
+            p.channels
+                .iter()
+                .any(|ch| ch.id == GLOBAL_CHANNEL_ID && ch.mode == GLOBAL_CHANNEL_MODE)
+        })
+        .map(|p| p.pid)
+        .collect();
+    for pid in pids {
+        let _ = force_kill_pid(pid);
+    }
+    for _ in 0..20 {
+        if !has_live_global_daemon() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    !has_live_global_daemon()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn kill_scope(scope: &str) -> Result<(), String> {
     let Some(session) = PROC_SESSION
         .lock()
@@ -377,19 +430,6 @@ pub fn register_mesh(mesh_id: &str, mode: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn global_daemon_executable() -> Option<PathBuf> {
-    let release = crate::find_xos_project_root()
-        .ok()
-        .map(|root| {
-            root.join("target").join("release").join(if cfg!(windows) {
-                "xos.exe"
-            } else {
-                "xos"
-            })
-        })
-        .filter(|p| p.is_file());
-    if release.is_some() {
-        return release;
-    }
     std::env::current_exe().ok().filter(|p| p.is_file())
 }
 
@@ -469,6 +509,11 @@ pub fn kill_all() -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 pub fn kill_global() -> Result<(), String> {
     Err("process manager not available on wasm".to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn stop_global_daemon_blocking() -> bool {
+    false
 }
 
 #[cfg(target_arch = "wasm32")]
