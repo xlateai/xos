@@ -301,10 +301,12 @@ fn salt_for_username(username: &str) -> [u8; 16] {
         .expect("sha256 first 16 bytes")
 }
 
-/// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen): Argon2id(password, salt(username)).
+/// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen):
+/// Argon2id(SHA256(password), salt(username)).
 fn derive_rsa_seed(password: &[u8], username: &str, m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
     let salt = salt_for_username(username);
-    derive_aes_key(password, &salt, m, t, p)
+    let password_hash = Sha256::digest(password);
+    derive_aes_key(password_hash.as_ref(), &salt, m, t, p)
 }
 
 fn rsa_deterministic_from_password(
@@ -377,6 +379,108 @@ pub fn login_offline(username: &str, password: &str, node_name: &str) -> Result<
 
     let (node_priv, node_pub_pem) = generate_node_rsa()?;
     write_node_identity_file(nn, &node_priv, &node_pub_pem)?;
+
+    Ok(())
+}
+
+fn restore_file_from_backup(path: &PathBuf, backup: &Option<Vec<u8>>) {
+    match backup {
+        Some(bytes) => {
+            let _ = fs::write(path, bytes);
+        }
+        None => {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Replace existing `authentication.json` + `node_identity.json` atomically enough for CLI reset.
+/// The previous file contents are loaded first and restored on partial failure.
+pub fn reset_offline_identity(username: &str, password: &str, node_name: &str) -> Result<(), AuthError> {
+    let dir = auth_data_dir()?;
+    fs::create_dir_all(&dir).map_err(|e| AuthError::Io(e.to_string()))?;
+    migrate_legacy_identity_file()?;
+
+    let auth_path = authentication_json_path()?;
+    let node_path = node_identity_json_path()?;
+
+    let auth_backup = if auth_path.exists() {
+        Some(fs::read(&auth_path).map_err(|e| AuthError::Io(e.to_string()))?)
+    } else {
+        None
+    };
+    let node_backup = if node_path.exists() {
+        Some(fs::read(&node_path).map_err(|e| AuthError::Io(e.to_string()))?)
+    } else {
+        None
+    };
+
+    let nn = node_name.trim();
+    if nn.is_empty() {
+        return Err(AuthError::InvalidFile(
+            "machine name (node_name) cannot be empty".to_string(),
+        ));
+    }
+    if password.is_empty() {
+        return Err(AuthError::InvalidFile(
+            "password cannot be empty".to_string(),
+        ));
+    }
+
+    let u = username.trim();
+    // Reset account identity deterministically from username+password so matching creds across
+    // machines produce the same account key material.
+    let (private, public_pem) = rsa_deterministic_from_password(
+        password.as_bytes(),
+        u,
+        V4_ARGON_M,
+        V4_ARGON_T,
+        V4_ARGON_P,
+    )?;
+    let private_pem = private
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
+    let stored_auth = StoredIdentityV4 {
+        format: AUTH_FORMAT_V4.to_string(),
+        username: u.to_string(),
+        private_key_pem: private_pem,
+        public_key_pem: public_pem,
+    };
+
+    let (node_priv, node_pub_pem) = generate_node_rsa()?;
+    let node_private_pem = node_priv
+        .to_pkcs8_pem(LineEnding::LF)
+        .map_err(|e| AuthError::Crypto(e.to_string()))?
+        .to_string();
+    let stored_node = StoredNodeIdentity {
+        format: NODE_FORMAT_V1.to_string(),
+        node_name: nn.to_string(),
+        private_key_pem: node_private_pem,
+        public_key_pem: node_pub_pem,
+    };
+
+    let auth_json =
+        serde_json::to_string_pretty(&stored_auth).map_err(|e| AuthError::Io(e.to_string()))?;
+    let node_json =
+        serde_json::to_string_pretty(&stored_node).map_err(|e| AuthError::Io(e.to_string()))?;
+
+    if let Err(e) = fs::write(&auth_path, auth_json) {
+        restore_file_from_backup(&auth_path, &auth_backup);
+        return Err(AuthError::Io(e.to_string()));
+    }
+    if let Err(e) = fs::write(&node_path, node_json) {
+        restore_file_from_backup(&auth_path, &auth_backup);
+        restore_file_from_backup(&node_path, &node_backup);
+        return Err(AuthError::Io(e.to_string()));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&auth_path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(&node_path, fs::Permissions::from_mode(0o600));
+    }
 
     Ok(())
 }

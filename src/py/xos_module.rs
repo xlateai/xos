@@ -1100,6 +1100,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add process manager helpers.
     let manager_module = crate::python_api::manager::make_manager_module(vm);
     module.set_attr("manager", manager_module, vm).unwrap();
+
+    // Add auth helpers.
+    let auth_module = crate::python_api::auth::make_auth_module(vm);
+    module.set_attr("auth", auth_module, vm).unwrap();
     
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);

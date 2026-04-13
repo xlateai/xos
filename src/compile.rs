@@ -75,7 +75,25 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
 
 #[cfg(not(windows))]
 fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
-    let _ = fs::copy(src, dest)?;
+    // On macOS/Linux, avoid in-place overwrite of a running executable.
+    // Writing directly to `dest` can truncate the file while the current
+    // process image is still mapped. Copy to a sibling temp file first,
+    // then atomically rename into place.
+    let parent = dest
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "dest has no parent"))?;
+    let dest_name = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "dest file name"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = parent.join(format!(".{dest_name}.tmp-{stamp}"));
+
+    fs::copy(src, &tmp)?;
+    fs::rename(&tmp, dest)?;
     Ok(())
 }
 
@@ -279,7 +297,7 @@ pub fn xos_compile_command(verbose: bool) -> bool {
     }
 }
 
-pub fn compile_ios_rust() {
+pub fn compile_ios_rust() -> bool {
     println!("🦀 Compiling Rust library for iOS...");
 
     let project_root = find_project_root();
@@ -287,7 +305,7 @@ pub fn compile_ios_rust() {
 
     if !script_path.exists() {
         eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
-        std::process::exit(1);
+        return false;
     }
 
     let mut compile_cmd = Command::new("bash");
@@ -301,10 +319,11 @@ pub fn compile_ios_rust() {
         .expect("Failed to run src/ios/build-ios.sh");
     if !status.success() {
         eprintln!("❌ iOS compile failed. Exiting.");
-        std::process::exit(1);
+        return false;
     }
 
     println!("✅ Rust library compiled successfully.");
+    true
 }
 
 /// CocoaPods step for the iOS app; used by [`compile_ios`].
@@ -353,7 +372,9 @@ pub fn compile_ios_swift() {
 /// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`compile_ios_rust`].
 #[allow(dead_code)]
 pub fn compile_ios() {
-    compile_ios_rust();
+    if !compile_ios_rust() {
+        std::process::exit(1);
+    }
     compile_ios_swift();
 
     println!("📱 Next steps:");

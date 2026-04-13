@@ -1,11 +1,12 @@
 mod compile;
+mod daemon;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
-use xos::python_api::{run_python_app, run_python_interactive};
+use xos::python_api::{run_python_app, run_python_file, run_python_interactive};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_interactive() -> Result<(), String> {
@@ -23,7 +24,7 @@ fn login_offline_interactive() -> Result<(), String> {
             })
             .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
         return Err(format!(
-            "identity already exists ({p}). Remove with xos login --delete only if you intend to replace this machine's keys."
+            "identity already exists ({p}). Use xos login --reset to replace credentials, or xos login --delete to remove identity."
         ));
     }
     let username: String = Input::new()
@@ -51,6 +52,58 @@ fn login_offline_interactive() -> Result<(), String> {
         machine.trim().to_string()
     };
     login_offline(username.trim(), &password, &machine).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn login_offline_reset_interactive() -> Result<(), String> {
+    use dialoguer::{Input, Password};
+    use xos::auth::{has_identity, load_identity, load_node_identity, reset_offline_identity};
+
+    if !has_identity() {
+        return Err("no identity exists yet. Use `xos login` first.".to_string());
+    }
+
+    let default_username = load_identity()
+        .map(|id| id.username)
+        .unwrap_or_else(|_| "".to_string());
+    let default_machine = load_node_identity()
+        .map(|id| id.node_name)
+        .or_else(|_| std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")))
+        .unwrap_or_else(|_| "machine".to_string());
+
+    let username: String = if default_username.trim().is_empty() {
+        Input::new()
+            .with_prompt("Username")
+            .interact_text()
+            .map_err(|e| e.to_string())?
+    } else {
+        Input::new()
+            .with_prompt("Username")
+            .default(default_username)
+            .interact_text()
+            .map_err(|e| e.to_string())?
+    };
+    let password = Password::new()
+        .with_prompt("Password")
+        .with_confirmation("Confirm password", "Passwords do not match")
+        .interact()
+        .map_err(|e| e.to_string())?;
+    let machine: String = Input::new()
+        .with_prompt(&format!(
+            "Machine name (node_name, shown in LAN mesh) [default: {default_machine}]"
+        ))
+        .default(default_machine.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let machine = if machine.trim().is_empty() {
+        default_machine
+    } else {
+        machine.trim().to_string()
+    };
+
+    reset_offline_identity(username.trim(), &password, &machine).map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[derive(Parser)]
@@ -94,12 +147,12 @@ enum Commands {
     },
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
-        /// Offline-only bootstrap: keep working on an isolated LAN without internet (placeholder).
-        #[arg(long)]
-        offline: bool,
         /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
+        /// Replace existing credentials safely (requires an existing identity).
+        #[arg(long)]
+        reset: bool,
     },
     /// Open the mesh terminal console (`xos terminal` / `xos term`).
     #[command(name = "terminal", visible_alias = "term")]
@@ -107,6 +160,11 @@ enum Commands {
     /// Broadcast kill to all locally managed xos processes.
     #[command(name = "kill")]
     Kill,
+    /// Print daemon status without auto-starting.
+    #[command(name = "status")]
+    Status,
+    #[command(name = "daemon-internal", hide = true)]
+    DaemonInternal,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -209,6 +267,8 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "status"
+                    | "daemon-internal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -239,6 +299,8 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "status"
+                    | "daemon-internal"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -257,9 +319,6 @@ fn main() {
     }
 
     let cli = Cli::parse_from(original_args);
-    let manager_label = exe_stem.as_deref().unwrap_or("xos");
-    xos::manager::bootstrap(manager_label);
-
     if cli.print_version {
         let bin_name = if invoked_as_xpy {
             "xpy"
@@ -290,11 +349,34 @@ fn main() {
         _ => None,
     };
 
+    let should_ensure_daemon = matches!(
+        &cli.command,
+        Some(Commands::Rs { .. })
+            | Some(Commands::Py { .. })
+            | Some(Commands::Terminal)
+    );
+    if should_ensure_daemon {
+        if let Err(e) = daemon::ensure_daemon_running() {
+            eprintln!("❌ failed to start xos daemon: {e}");
+            std::process::exit(1);
+        }
+    }
+
     match cli.command {
         Some(Commands::Compile { ios }) => {
-            if ios {
-                compile::compile_ios_rust();
-            } else if !compile::xos_compile_command(true) {
+            if let Err(e) = daemon::stop_daemon() {
+                eprintln!("⚠️ failed to stop daemon before compile: {e}");
+            }
+            let compile_ok = if ios {
+                compile::compile_ios_rust()
+            } else {
+                compile::xos_compile_command(true)
+            };
+            if let Err(e) = daemon::ensure_daemon_running() {
+                eprintln!("❌ compile finished, but failed to restart daemon: {e}");
+                std::process::exit(1);
+            }
+            if !compile_ok {
                 std::process::exit(1);
             }
         }
@@ -328,15 +410,13 @@ fn main() {
                 run_python_interactive();
             }
         }
-        Some(Commands::Login {
-            offline,
-            delete,
-        }) => {
-            if delete && offline {
-                eprintln!("❌ use either --delete or --offline, not both");
+        Some(Commands::Login { delete, reset }) => {
+            if delete && reset {
+                eprintln!("❌ use either --delete or --reset, not both");
                 std::process::exit(1);
             }
             if delete {
+                let _ = daemon::stop_daemon();
                 use xos::auth::delete_identity;
                 match delete_identity() {
                     Ok(()) => println!(
@@ -347,7 +427,20 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-            } else if offline {
+            } else if reset {
+                let _ = daemon::stop_daemon();
+                match login_offline_reset_interactive() {
+                    Ok(()) => {
+                        println!(
+                            "Reset identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA)."
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
@@ -359,15 +452,10 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-            } else {
-                println!(
-                    "Online sign-in (browser / OAuth) is not wired up yet.\n\
-                     For offline LAN mesh, run:  xos login --offline\n\
-                     To remove this machine's identity:  xos login --delete"
-                );
             }
         }
         Some(Commands::Terminal) => {
+            xos::manager::bootstrap("xos-terminal");
             let root = match xos::find_xos_project_root() {
                 Ok(p) => p,
                 Err(e) => {
@@ -379,11 +467,45 @@ fn main() {
             xos::apps::mesh::run_mesh_python_file(&script);
         }
         Some(Commands::Kill) => {
-            if let Err(e) = xos::manager::kill_all() {
-                eprintln!("❌ {e}");
+            if let Err(e) = daemon::stop_daemon() {
+                eprintln!("⚠️ failed to stop daemon: {e}");
+            }
+            println!("xos daemon offline");
+        }
+        Some(Commands::Status) => {
+            match daemon::daemon_status() {
+                Ok(s) if s.online => {
+                    println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
+                }
+                Ok(_) => {
+                    println!("daemon: offline");
+                }
+                Err(e) => {
+                    eprintln!("❌ failed to read daemon status: {e}");
+                    std::process::exit(1);
+                }
+            }
+
+            xos::manager::bootstrap("xos-status");
+            let root = match xos::find_xos_project_root() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            };
+            let script = root.join("src/core/commands/status/status.py");
+            if !script.exists() {
+                eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);
             }
-            println!("sent kill signal to local managed processes");
+            run_python_file(&script);
+        }
+        Some(Commands::DaemonInternal) => {
+            if let Err(e) = daemon::run_daemon_forever() {
+                eprintln!("❌ daemon error: {e}");
+                std::process::exit(1);
+            }
         }
         None => {
             eprintln!("❗ No command provided.\n");

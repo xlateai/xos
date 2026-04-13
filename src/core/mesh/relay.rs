@@ -20,7 +20,7 @@ use super::lan_crypto::{
     client_handshake, decrypt_mesh_line, encrypt_mesh_line, server_handshake, LanWireKeys,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::auth::UnlockedNodeIdentity;
+use crate::auth::{load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
 
 const WIRE_VERSION: u32 = 2;
 
@@ -634,8 +634,14 @@ fn mesh_session_from_host_listener(
         let mid = mid.to_string();
         let udp_port = udp_port_for_mesh_id(&mid);
         let sd_udp = Arc::clone(&shutdown);
+        let account_aid = if identity.is_some() {
+            let auth = load_identity().map_err(|e| e.to_string())?;
+            Some(node_id_from_public_pem(auth.public_pem.as_str()).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         thread::spawn(move || {
-            lan_discovery_responder_loop(mid, tcp_port, udp_port, sd_udp);
+            lan_discovery_responder_loop(mid, tcp_port, udp_port, account_aid, sd_udp);
         });
     }
 
@@ -992,7 +998,7 @@ impl MeshSession {
                     if let Ok(s) = try_mesh_client_once(loopback) {
                         return Ok(s);
                     }
-                    if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                    if let Some(remote) = lan_discover_coordinator(mesh_id, port, None)? {
                         return mesh_session_from_client_addr(remote);
                     }
                     let any = SocketAddr::from(([0, 0, 0, 0], port));
@@ -1002,7 +1008,7 @@ impl MeshSession {
                             thread::sleep(Duration::from_millis(80));
                             if let Ok(s) = try_mesh_client_once(loopback) {
                                 Ok(s)
-                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                            } else if let Some(remote) = lan_discover_coordinator(mesh_id, port, None)? {
                                 mesh_session_from_client_addr(remote)
                             } else {
                                 mesh_session_from_client_addr(loopback)
@@ -1042,6 +1048,10 @@ impl MeshSession {
         max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
         let port = port_for_mesh_id(mesh_id);
+        let account_aid = {
+            let auth = load_identity().map_err(|e| e.to_string())?;
+            node_id_from_public_pem(auth.public_pem.as_str()).map_err(|e| e.to_string())?
+        };
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
             MeshMode::Lan => {
@@ -1054,7 +1064,7 @@ impl MeshSession {
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
                 }
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                if let Some(remote) = lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))? {
                     return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
                 let any = SocketAddr::from(([0, 0, 0, 0], port));
@@ -1069,7 +1079,9 @@ impl MeshSession {
                         thread::sleep(Duration::from_millis(80));
                         if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                             Ok(s)
-                        } else if let Some(remote) = lan_discover_coordinator(mesh_id, port)? {
+                        } else if let Some(remote) =
+                            lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))?
+                        {
                             mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
                             mesh_session_from_client_addr(loopback, Some(Arc::clone(&identity)))

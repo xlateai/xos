@@ -47,6 +47,59 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
         del log_lines[: len(log_lines) - MAX_LOG_LINES]
 
 
+def _identity_label(default_machine: str = "machine") -> str:
+    username = ""
+    node_name = default_machine
+    try:
+        username = (xos.auth.username() or "").strip()
+    except Exception:
+        username = ""
+    try:
+        node_name = (xos.auth.node_name() or "").strip() or default_machine
+    except Exception:
+        node_name = default_machine
+    if username:
+        return f"{username}@{node_name}"
+    return node_name
+
+
+def _safe_list_procs() -> list[dict]:
+    try:
+        return xos.manager.list_procs() or []
+    except Exception:
+        return []
+
+
+def _proc_has_channel(proc: dict, channel_id: str, mode_u: str | None = None) -> bool:
+    for ch in proc.get("channels", []) or []:
+        cid = (ch.get("id", "") or "").strip()
+        if cid != channel_id:
+            continue
+        if mode_u is None:
+            return True
+        cmode = (ch.get("mode", "") or "").upper()
+        if cmode == mode_u:
+            return True
+    return False
+
+
+def _is_local_daemon_active(procs: list[dict], local_node_id: str) -> bool:
+    # Source of truth: daemon pid file + live pid check (same path used by `xos status`).
+    try:
+        if hasattr(xos.auth, "daemon_online"):
+            return bool(xos.auth.daemon_online())
+    except Exception:
+        pass
+    # Fallback for older binaries without the auth binding.
+    for p in procs:
+        if (p.get("label", "") or "") != "xos-daemon":
+            continue
+        if local_node_id and (p.get("node_id", "") or "") != local_node_id:
+            continue
+        return True
+    return False
+
+
 def _xpy_default_state(log_lines: list[str]) -> dict:
     def _xpy_print(*args, sep=" ", end="\n"):
         text = sep.join(str(a) for a in args)
@@ -173,14 +226,9 @@ def _emit_nodes(log_lines: list[str], known_nodes: dict, mesh) -> None:
         pass
 
 
-def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str) -> None:
+def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str, mesh=None) -> None:
     _append_log_line(log_lines, "channels (local managed processes):")
-    procs = []
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception as e:
-        _append_log_line(log_lines, f"  error: {e}")
-        return
+    procs = _safe_list_procs()
 
     channel_counts: dict[str, int] = {}
     channel_modes: dict[str, set[str]] = {}
@@ -192,6 +240,17 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
             mode = (ch.get("mode", "local") or "local").upper()
             channel_counts[cid] = channel_counts.get(cid, 0) + 1
             channel_modes.setdefault(cid, set()).add(mode)
+
+    # The active terminal channel should reflect the live mesh view immediately,
+    # even if local process snapshots are briefly stale after rank failover.
+    if mesh is not None:
+        try:
+            live = int(mesh.num_nodes())
+            if live > 0:
+                channel_counts[current_channel] = max(channel_counts.get(current_channel, 0), live)
+                channel_modes.setdefault(current_channel, set()).add(current_mode.upper())
+        except Exception:
+            pass
 
     if not channel_counts:
         _append_log_line(log_lines, "  `-- (none)")
@@ -214,12 +273,7 @@ def _emit_channels(log_lines: list[str], current_channel: str, current_mode: str
 
 def _emit_procs(log_lines: list[str]) -> None:
     _append_log_line(log_lines, "local managed processes:")
-    procs = []
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception as e:
-        _append_log_line(log_lines, f"  error: {e}")
-        return
+    procs = _safe_list_procs()
     if not procs:
         _append_log_line(log_lines, "  `-- (none)")
         return
@@ -276,23 +330,12 @@ def _emit_xos_cli(log_lines: list[str], argline: str) -> None:
 def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
     out: dict[int, dict] = {}
     mode_u = (mode or "").upper()
-    try:
-        procs = xos.manager.list_procs() or []
-    except Exception:
-        return out
+    procs = _safe_list_procs()
     for p in procs:
         pid = int(p.get("pid", 0) or 0)
         if pid <= 0:
             continue
-        channels = p.get("channels", []) or []
-        matched = False
-        for ch in channels:
-            cid = (ch.get("id", "") or "").strip()
-            cmode = (ch.get("mode", "") or "").upper()
-            if cid == channel_id and cmode == mode_u:
-                matched = True
-                break
-        if not matched:
+        if not _proc_has_channel(p, channel_id, mode_u):
             continue
         out[pid] = {
             "rank": int(p.get("rank", -1) or -1),
@@ -300,6 +343,39 @@ def _local_channel_nodes(channel_id: str, mode: str) -> dict[int, dict]:
             "node_id": p.get("node_id", "") or "",
         }
     return out
+
+
+def _count_global_nodes_from_procs(mode: str = "lan") -> int:
+    mode_u = (mode or "").upper()
+    procs = _safe_list_procs()
+    nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
+    return max(1, nodes)
+
+
+def _connect_mesh_with_lan_bridge(channel_id: str, mode: str, log_lines: list[str] | None = None):
+    mesh = xos.mesh.connect(id=channel_id, mode=mode)
+    if (mode or "").lower() != "lan":
+        return mesh
+
+    # If LAN daemons already see >1 machine but this terminal channel is isolated,
+    # retry a few times to attach to a remote terminal coordinator.
+    for attempt in range(3):
+        try:
+            terminal_nodes = int(mesh.num_nodes())
+        except Exception:
+            terminal_nodes = 1
+        global_nodes = _count_global_nodes_from_procs(mode)
+        if terminal_nodes > 1 or global_nodes <= 1:
+            return mesh
+
+        if log_lines is not None and attempt == 0:
+            _append_log_line(
+                log_lines,
+                "[mesh] detected remote daemon(s); retrying terminal LAN join...",
+            )
+        xos.sleep(0.08)
+        mesh = xos.mesh.connect(id=channel_id, mode=mode)
+    return mesh
 
 
 def _idx(x: int, y: int, ch: int, width: int, height: int, channels: int) -> int:
@@ -330,18 +406,32 @@ def _render(
     frame = xos.terminal.get_frame()
     width, height, channels = frame.shape
 
-    nodes = mesh.num_nodes()
+    mode_u = (mesh_mode or "").upper()
+    procs = _safe_list_procs()
+    try:
+        terminal_count = int(mesh.num_nodes())
+    except Exception:
+        terminal_count = 1
+    if terminal_count <= 0:
+        terminal_count = 1
+    process_count = terminal_count
     rank = mesh.rank()
     node_id = mesh.node_id()
+    nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
+    if nodes <= 0:
+        nodes = 1
+    daemon_active = _is_local_daemon_active(procs, node_id)
+    daemon_icon = "●"
+    daemon_word = "online" if daemon_active else "offline"
+    daemon_color = "a" if daemon_active else "e"
     node_label = "node" if nodes == 1 else "nodes"
-    try:
-        proc_count = int(xos.manager.num_procs())
-    except Exception:
-        proc_count = 0
+    terminal_label = "terminal" if terminal_count == 1 else "terminals"
+    process_label = "process" if process_count == 1 else "processes"
 
     left = (
-        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | procs {proc_count} | "
-        f"rank {rank} | id {_short_node_id(node_id)}"
+        f"{daemon_icon} {chat_id} | daemon {daemon_word} | {mesh_mode.upper()} | {nodes} {node_label} | "
+        f"{terminal_count} {terminal_label} | {process_count} {process_label} | "
+        f"term rank {rank} | id {_short_node_id(node_id)}"
     )
     right = machine_name
     min_gap = 2
@@ -351,7 +441,7 @@ def _render(
     gap = max(min_gap, width - len(left) - len(right))
     status = _fit(left + (" " * gap) + right, width)
     _put(frame, width, height, channels, 0, 0, status, "r")
-    _put(frame, width, height, channels, 0, 0, "o", "a")
+    _put(frame, width, height, channels, 0, 0, daemon_icon, daemon_color)
 
     sep = "-" * width
     _put(frame, width, height, channels, 1, 0, sep, "8")
@@ -432,12 +522,13 @@ def _log_line_color(line: str) -> str:
 def main() -> None:
     current_channel = MESH_ID
     current_mode = MODE
-    mesh = xos.mesh.connect(id=current_channel, mode=current_mode)
+    mesh = _connect_mesh_with_lan_bridge(current_channel, current_mode)
     machine_name = "machine"
     try:
         machine_name = mesh.node_name() or "machine"
     except Exception:
         pass
+    display_name = _identity_label(machine_name)
 
     logs: list[str] = []
     help_expanded = False
@@ -445,11 +536,19 @@ def main() -> None:
     xpy_state = _xpy_default_state(logs)
     launched_pids: list[int] = []
     known_nodes: dict[int, dict[str, str]] = {}
-    _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
-    _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {machine_name}")
+    _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
+    _append_log_line(logs, f"joined {current_channel!r} in {current_mode.upper()} as {display_name}")
 
     print("\x1b[?1049h\x1b[2J\x1b[H", end="", flush=True)
-    _render(mesh, logs, machine_name, current_mode, current_channel, [FOOTER_DEFAULT], ">>> ")
+    _render(
+        mesh,
+        logs,
+        display_name,
+        current_mode,
+        current_channel,
+        [FOOTER_DEFAULT],
+        ">>> ",
+    )
     last_size = (int(xos.terminal.get_width()), int(xos.terminal.get_height()))
     try:
         last_proc_version = int(xos.manager.version())
@@ -510,7 +609,7 @@ def main() -> None:
                     _render(
                         mesh,
                         logs,
-                        machine_name,
+                        display_name,
                         current_mode,
                         current_channel,
                         active_footer,
@@ -520,25 +619,15 @@ def main() -> None:
             if line is not None:
                 text = line.strip()
                 if text == "":
-                    # In normal chat mode, blank Enter should be a pure no-op.
-                    # Redraw once to undo any cursor/newline side effects from input handling.
-                    _render(
-                        mesh,
-                        logs,
-                        machine_name,
-                        current_mode,
-                        current_channel,
-                        active_footer,
-                        active_prompt,
-                    )
+                    # Pure no-op; avoid unnecessary redraw flicker on blank Enter.
                     continue
-                _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                 if text in ("/quit", "/exit"):
                     _append_log_line(logs, "leaving xos terminal")
                     _render(
                         mesh,
                         logs,
-                        machine_name,
+                        display_name,
                         current_mode,
                         current_channel,
                         active_footer,
@@ -576,7 +665,7 @@ def main() -> None:
                     needs_render = True
                     handled = True
                 if text == "/channels":
-                    _emit_channels(logs, current_channel, current_mode)
+                    _emit_channels(logs, current_channel, current_mode, mesh)
                     needs_render = True
                     handled = True
                 if text == "/clear":
@@ -589,11 +678,12 @@ def main() -> None:
                         _append_log_line(logs, "usage: /channel <id>")
                     else:
                         try:
-                            next_mesh = xos.mesh.connect(id=next_channel, mode=current_mode)
+                            next_mesh = _connect_mesh_with_lan_bridge(next_channel, current_mode, logs)
                             mesh = next_mesh
                             current_channel = next_channel
+                            display_name = _identity_label(machine_name)
                             known_nodes.clear()
-                            _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                            _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                             _append_log_line(logs, f"switched to channel {current_channel!r} ({current_mode.upper()})")
                         except Exception as e:
                             _append_log_line(logs, f"channel switch failed: {e}")
@@ -602,11 +692,12 @@ def main() -> None:
                 if text in ("/lan", "/local", "/online"):
                     next_mode = text[1:]
                     try:
-                        next_mesh = xos.mesh.connect(id=current_channel, mode=next_mode)
+                        next_mesh = _connect_mesh_with_lan_bridge(current_channel, next_mode, logs)
                         mesh = next_mesh
                         current_mode = next_mode
+                        display_name = _identity_label(machine_name)
                         known_nodes.clear()
-                        _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
+                        _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                         _append_log_line(logs, f"switched to {current_mode.upper()} on {current_channel!r}")
                     except Exception as e:
                         _append_log_line(logs, f"mode switch failed: {e}")
@@ -621,7 +712,7 @@ def main() -> None:
                         else:
                             _xpy_eval_line(logs, xpy_state, line.rstrip("\n"))
                     else:
-                        mesh.broadcast(id="message", msg=text, sender=machine_name)
+                        mesh.broadcast(id="message", msg=text, sender=display_name)
                         _append_log_line(logs, f"[me] {text}")
                     needs_render = True
 
@@ -679,8 +770,10 @@ def main() -> None:
                 proc_version = last_proc_version
             if proc_version != last_proc_version:
                 last_proc_version = proc_version
-                last_local_nodes = _local_channel_nodes(current_channel, current_mode)
-                needs_render = True
+                local_nodes_now = _local_channel_nodes(current_channel, current_mode)
+                if local_nodes_now != last_local_nodes:
+                    last_local_nodes = local_nodes_now
+                    needs_render = True
 
             if needs_render:
                 active_prompt = ">>> "
@@ -688,7 +781,7 @@ def main() -> None:
                 _render(
                     mesh,
                     logs,
-                    machine_name,
+                    display_name,
                     current_mode,
                     current_channel,
                     active_footer,

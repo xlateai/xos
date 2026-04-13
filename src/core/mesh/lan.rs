@@ -34,6 +34,7 @@ pub(super) fn udp_port_for_mesh_id(mesh_id: &str) -> u16 {
 pub(super) fn lan_discover_coordinator(
     mesh_id: &str,
     tcp_port: u16,
+    expected_aid: Option<&str>,
 ) -> Result<Option<SocketAddr>, String> {
     const ROUNDS: u32 = 6;
     const RECV_MS: u64 = 50;
@@ -45,7 +46,7 @@ pub(super) fn lan_discover_coordinator(
     };
     sock.set_broadcast(true).ok();
     sock.set_read_timeout(Some(Duration::from_millis(RECV_MS))).ok();
-    let seek = json!({"v": 1, "mesh": mesh_id, "seek": true});
+    let seek = json!({"v": 1, "mesh": mesh_id, "seek": true, "aid": expected_aid});
     let payload = seek.to_string();
     let bcast: SocketAddr = SocketAddr::from(([255, 255, 255, 255], udp_port));
     for _ in 0..ROUNDS {
@@ -67,6 +68,24 @@ pub(super) fn lan_discover_coordinator(
                     thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
                 }
+                match expected_aid {
+                    Some(aid) => {
+                        let reply_aid = v.get("aid").and_then(|x| x.as_str());
+                        // Compatibility path for older responders that do not include `aid` yet.
+                        if let Some(reply_aid) = reply_aid {
+                            if reply_aid != aid {
+                                thread::sleep(Duration::from_millis(GAP_MS));
+                                continue;
+                            }
+                        }
+                    }
+                    None => {
+                        if v.get("aid").is_some() {
+                            thread::sleep(Duration::from_millis(GAP_MS));
+                            continue;
+                        }
+                    }
+                }
                 if v.get("tcp").and_then(|x| x.as_u64()) != Some(u64::from(tcp_port)) {
                     thread::sleep(Duration::from_millis(GAP_MS));
                     continue;
@@ -84,6 +103,7 @@ pub(super) fn lan_discovery_responder_loop(
     mesh_id: String,
     tcp_port: u16,
     udp_port: u16,
+    account_aid: Option<String>,
     shutdown: Arc<AtomicU32>,
 ) {
     let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, udp_port)) else {
@@ -110,7 +130,23 @@ pub(super) fn lan_discovery_responder_loop(
                 if v.get("mesh").and_then(|x| x.as_str()) != Some(mesh_id.as_str()) {
                     continue;
                 }
-                let reply = json!({"v": 1, "mesh": mesh_id.as_str(), "tcp": tcp_port});
+                match account_aid.as_deref() {
+                    Some(aid) => {
+                        let seek_aid = v.get("aid").and_then(|x| x.as_str());
+                        // Compatibility path for older seekers that do not include `aid` yet.
+                        if let Some(seek_aid) = seek_aid {
+                            if seek_aid != aid {
+                                continue;
+                            }
+                        }
+                    }
+                    None => {
+                        if v.get("aid").is_some() {
+                            continue;
+                        }
+                    }
+                }
+                let reply = json!({"v": 1, "mesh": mesh_id.as_str(), "aid": account_aid, "tcp": tcp_port});
                 let _ = sock.send_to(reply.to_string().as_bytes(), src);
             }
             Err(_) => {}
