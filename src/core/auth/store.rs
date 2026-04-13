@@ -301,10 +301,12 @@ fn salt_for_username(username: &str) -> [u8; 16] {
         .expect("sha256 first 16 bytes")
 }
 
-/// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen): Argon2id(password, salt(username)).
+/// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen):
+/// Argon2id(SHA256(password), salt(username)).
 fn derive_rsa_seed(password: &[u8], username: &str, m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
     let salt = salt_for_username(username);
-    derive_aes_key(password, &salt, m, t, p)
+    let password_hash = Sha256::digest(password);
+    derive_aes_key(password_hash.as_ref(), &salt, m, t, p)
 }
 
 fn rsa_deterministic_from_password(
