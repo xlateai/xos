@@ -2,7 +2,7 @@
 
 import xos
 
-MESH_ID = "xos-global"
+MESH_ID = "terminal"
 MODE = "lan"
 LOOP_SLEEP_SECS = 0.05
 MAX_LOG_LINES = 200
