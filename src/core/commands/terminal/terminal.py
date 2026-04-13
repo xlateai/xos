@@ -83,6 +83,16 @@ def _proc_has_channel(proc: dict, channel_id: str, mode_u: str | None = None) ->
     return False
 
 
+def _is_local_daemon_active(procs: list[dict], local_node_id: str) -> bool:
+    for p in procs:
+        if (p.get("label", "") or "") != "xos-daemon":
+            continue
+        if local_node_id and (p.get("node_id", "") or "") != local_node_id:
+            continue
+        return True
+    return False
+
+
 def _xpy_default_state(log_lines: list[str]) -> dict:
     def _xpy_print(*args, sep=" ", end="\n"):
         text = sep.join(str(a) for a in args)
@@ -370,12 +380,16 @@ def _render(
     nodes = sum(1 for p in procs if _proc_has_channel(p, "global", mode_u))
     if nodes <= 0:
         nodes = 1
+    daemon_active = _is_local_daemon_active(procs, node_id)
+    daemon_icon = "●"
+    daemon_word = "online" if daemon_active else "offline"
+    daemon_color = "a" if daemon_active else "e"
     node_label = "node" if nodes == 1 else "nodes"
     terminal_label = "terminal" if terminal_count == 1 else "terminals"
     process_label = "process" if process_count == 1 else "processes"
 
     left = (
-        f"o {chat_id} | {mesh_mode.upper()} | {nodes} {node_label} | "
+        f"{daemon_icon} {chat_id} | daemon {daemon_word} | {mesh_mode.upper()} | {nodes} {node_label} | "
         f"{terminal_count} {terminal_label} | {process_count} {process_label} | "
         f"term rank {rank} | id {_short_node_id(node_id)}"
     )
@@ -387,7 +401,7 @@ def _render(
     gap = max(min_gap, width - len(left) - len(right))
     status = _fit(left + (" " * gap) + right, width)
     _put(frame, width, height, channels, 0, 0, status, "r")
-    _put(frame, width, height, channels, 0, 0, "o", "a")
+    _put(frame, width, height, channels, 0, 0, daemon_icon, daemon_color)
 
     sep = "-" * width
     _put(frame, width, height, channels, 1, 0, sep, "8")
@@ -565,17 +579,7 @@ def main() -> None:
             if line is not None:
                 text = line.strip()
                 if text == "":
-                    # In normal chat mode, blank Enter should be a pure no-op.
-                    # Redraw once to undo any cursor/newline side effects from input handling.
-                    _render(
-                        mesh,
-                        logs,
-                        display_name,
-                        current_mode,
-                        current_channel,
-                        active_footer,
-                        active_prompt,
-                    )
+                    # Pure no-op; avoid unnecessary redraw flicker on blank Enter.
                     continue
                 _remember_node(known_nodes, mesh.rank(), mesh.node_id(), display_name)
                 if text in ("/quit", "/exit"):
@@ -726,8 +730,10 @@ def main() -> None:
                 proc_version = last_proc_version
             if proc_version != last_proc_version:
                 last_proc_version = proc_version
-                last_local_nodes = _local_channel_nodes(current_channel, current_mode)
-                needs_render = True
+                local_nodes_now = _local_channel_nodes(current_channel, current_mode)
+                if local_nodes_now != last_local_nodes:
+                    last_local_nodes = local_nodes_now
+                    needs_render = True
 
             if needs_render:
                 active_prompt = ">>> "
