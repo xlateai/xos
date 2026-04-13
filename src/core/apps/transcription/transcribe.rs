@@ -34,7 +34,18 @@ impl Application for TranscribeApp {
         {
             let device = input_devices.first().ok_or("No input devices available")?;
             crate::print(&format!("Transcribe: using {}", device.name));
-            let buffer_duration = 3.0;
+            #[cfg(all(
+                feature = "whisper_ct2",
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            let buffer_duration = 10.0_f32;
+            #[cfg(not(all(
+                feature = "whisper_ct2",
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )))]
+            let buffer_duration = 3.0_f32;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;
             self.engine
@@ -59,7 +70,18 @@ impl Application for TranscribeApp {
 
             crate::print(&format!("Transcribe: using {}", device.name));
 
-            let buffer_duration = 3.0;
+            #[cfg(all(
+                feature = "whisper_ct2",
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            let buffer_duration = 10.0_f32;
+            #[cfg(not(all(
+                feature = "whisper_ct2",
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            )))]
+            let buffer_duration = 3.0_f32;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;
             self.engine

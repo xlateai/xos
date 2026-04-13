@@ -71,6 +71,8 @@ ctrlc = "3.4"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
+# CTranslate2 (vendored C++ build via ct2rs). Enable with `--features whisper_ct2` (long compile).
+ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy", "openblas"], optional = true }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -118,6 +120,11 @@ web-sys = { version = "0.3", features = [
   "console",
 ] }
 console_error_panic_hook = "0.1"
+
+[features]
+default = []
+## Whisper in CTranslate2 format (`model.bin`, `config.json`, `vocabulary.json`). One-time convert: `ct2-transformers-converter --model openai/whisper-small --output_dir whisper-small-ct2`. Then `export XOS_WHISPER_CT2_PATH=/path/to/whisper-small-ct2` and build with `--features whisper_ct2`. Desktop only (not iOS / WASM).
+whisper_ct2 = ["dep:ct2rs"]
 
 [lib]
 path = "src/core/lib.rs"
