@@ -563,4 +563,7 @@ pub trait Application {
     }
     fn on_key_shortcut(&mut self, _state: &mut EngineState, _shortcut: crate::engine::keyboard::shortcuts::ShortcutAction) {}
     fn on_screen_size_change(&mut self, _state: &mut EngineState, _width: u32, _height: u32) {}
+
+    /// Called when the window is closing or Ctrl+C requested exit — stop I/O that can block drop.
+    fn prepare_shutdown(&mut self, _state: &mut EngineState) {}
 }

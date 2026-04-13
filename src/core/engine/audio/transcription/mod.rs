@@ -1,30 +1,52 @@
 //! Live transcription: resampling helpers + optional Whisper via CTranslate2 (`ct2rs`).
 //!
 //! **Bundled model location** (no env var required): at compile time the repo root is fixed via
-//! `CARGO_MANIFEST_DIR`, so we load from
-//! `src/core/engine/audio/transcription/models/whisper-small-ct2/` when it contains `model.bin`.
+//! `CARGO_MANIFEST_DIR`. We prefer `whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete.
 //! Optional override: `XOS_WHISPER_CT2_PATH` → any directory produced by `ct2-transformers-converter`.
+//! **`XOS_WHISPER_LANG`**: ISO code passed to Whisper (default `en`) to skip slow per-decode language detection.
 //!
 //! Build with **`--features whisper_ct2`** (desktop only; long compile). Without the feature,
 //! [`TranscriptionEngine`] stays on the RMS / placeholder path.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Sample rate expected by Whisper / CT2.
 pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
-/// Folder name under [`bundled_models_root`] for the default converted checkpoint.
-pub const DEFAULT_WHISPER_CT2_DIR_NAME: &str = "whisper-small-ct2";
+/// Preferred bundled folders (first match with all required files wins).
+pub const BUNDLED_WHISPER_CT2_DIR_NAMES: &[&str] = &["whisper-tiny-ct2", "whisper-small-ct2"];
 
-/// `.../transcription/models` (contains per-model folders like [`DEFAULT_WHISPER_CT2_DIR_NAME`]).
+/// `.../transcription/models` (contains per-model folders).
 pub fn bundled_models_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/engine/audio/transcription/models")
 }
 
-/// Default CT2 model directory: `transcription/models/whisper-small-ct2/`.
+/// Files expected in a converted CT2 Whisper directory (`ct2rs` + HF tokenizer).
+pub const WHISPER_CT2_REQUIRED_FILES: &[&str] = &[
+    "model.bin",
+    "config.json",
+    "vocabulary.json",
+    "tokenizer.json",
+    "preprocessor_config.json",
+];
+
+/// First bundled directory under [`bundled_models_root`] that contains all [`WHISPER_CT2_REQUIRED_FILES`],
+/// else `whisper-tiny-ct2/` as the path to create or point `XOS_WHISPER_CT2_PATH` at.
 pub fn default_bundled_ct2_model_dir() -> PathBuf {
-    bundled_models_root().join(DEFAULT_WHISPER_CT2_DIR_NAME)
+    let root = bundled_models_root();
+    for name in BUNDLED_WHISPER_CT2_DIR_NAMES {
+        let p = root.join(name);
+        if WHISPER_CT2_REQUIRED_FILES
+            .iter()
+            .all(|f| p.join(f).is_file())
+        {
+            return p;
+        }
+    }
+    root.join(BUNDLED_WHISPER_CT2_DIR_NAMES[0])
 }
 
 /// Linear resample mono `input` (at `input_rate` Hz) to `output_rate` Hz into `out`.
@@ -98,23 +120,13 @@ fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     use ct2rs::{Config, Whisper};
     const ENV: &str = "XOS_WHISPER_CT2_PATH";
 
-    /// Files `ct2rs::Whisper` loads from the model directory (see `models/README.md`).
-    const REQUIRED_FILES: &[&str] = &[
-        "model.bin",
-        "config.json",
-        "vocabulary.json",
-        "tokenizer.json",
-        "preprocessor_config.json",
-    ];
-
-    let bundled = default_bundled_ct2_model_dir();
     let path: PathBuf = match std::env::var(ENV) {
         Ok(raw) if !raw.trim().is_empty() => PathBuf::from(raw.trim()),
-        _ => bundled.clone(),
+        _ => default_bundled_ct2_model_dir(),
     };
 
     let mut missing = Vec::new();
-    for name in REQUIRED_FILES {
+    for name in WHISPER_CT2_REQUIRED_FILES {
         if !path.join(name).is_file() {
             missing.push(*name);
         }
@@ -141,6 +153,48 @@ fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     }
 }
 
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>, Receiver<String>) {
+    let lang = std::env::var("XOS_WHISPER_LANG")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "en".into());
+    let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
+    let (result_tx, result_rx) = mpsc::channel::<String>();
+    thread::Builder::new()
+        .name("xos-whisper-decode".into())
+        .spawn(move || {
+            use ct2rs::WhisperOptions;
+            let mut opts = WhisperOptions::default();
+            opts.beam_size = 1;
+            let lang_ref = lang.as_str();
+            while let Ok(buf) = job_rx.recv() {
+                let line = match whisper.generate(&buf, Some(lang_ref), false, &opts) {
+                    Ok(parts) => parts.join(" ").trim().to_string(),
+                    Err(e) => format!("(Whisper error: {e})"),
+                };
+                if result_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("spawn whisper decode thread");
+    (job_tx, result_rx)
+}
+
+/// Max seconds of input audio passed to Whisper per decode (tail of the ring buffer).
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_INPUT_TAIL_SECS: u32 = 4;
+
 /// Transcription: RMS placeholder, or Whisper+CTranslate2 when `whisper_ct2` is enabled.
 pub struct TranscriptionEngine {
     caption: String,
@@ -153,7 +207,13 @@ pub struct TranscriptionEngine {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    whisper: Option<ct2rs::Whisper>,
+    decode_job_tx: Option<SyncSender<Vec<f32>>>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    decode_result_rx: Option<Receiver<String>>,
     #[cfg(all(
         feature = "whisper_ct2",
         not(target_os = "ios"),
@@ -184,6 +244,12 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32")
     ))]
     ct2_hint: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    whisper_meta_printed: bool,
 }
 
 impl TranscriptionEngine {
@@ -195,8 +261,16 @@ impl TranscriptionEngine {
         ))]
         {
             let (whisper, ct2_hint) = try_load_whisper_ct2();
-            let caption = if whisper.is_some() {
-                "Listening (Whisper CT2)…".to_string()
+            let decode_interval = Duration::from_millis(240);
+            let (decode_job_tx, decode_result_rx) = match whisper {
+                Some(w) => {
+                    let (tx, rx) = spawn_whisper_decode_thread(w);
+                    (Some(tx), Some(rx))
+                }
+                None => (None, None),
+            };
+            let caption = if decode_job_tx.is_some() {
+                String::new()
             } else if ct2_hint.is_empty() {
                 "Waiting for audio…".to_string()
             } else {
@@ -208,12 +282,14 @@ impl TranscriptionEngine {
                 emit_interval: Duration::from_millis(400),
                 last_rms: 0.0,
                 device_hint: String::new(),
-                whisper,
+                decode_job_tx,
+                decode_result_rx,
                 resample_buf: Vec::new(),
-                last_decode: Instant::now(),
-                decode_interval: Duration::from_millis(2800),
+                last_decode: Instant::now() - decode_interval,
+                decode_interval,
                 transcript: String::new(),
                 ct2_hint,
+                whisper_meta_printed: false,
             };
         }
         #[cfg(not(all(
@@ -241,6 +317,14 @@ impl TranscriptionEngine {
     }
 
     pub fn caption(&self) -> &str {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if self.decode_job_tx.is_some() {
+            return &self.transcript;
+        }
         &self.caption
     }
 
@@ -260,37 +344,49 @@ impl TranscriptionEngine {
             not(target_arch = "wasm32")
         ))]
         {
-            use ct2rs::WhisperOptions;
-            if let Some(ref whisper) = self.whisper {
-                resample_to_whisper_rate(sample_rate, &mono, &mut self.resample_buf);
-                let min_samples = whisper.sampling_rate() / 2;
+            if self.decode_job_tx.is_some() {
+                while let Ok(line) = self
+                    .decode_result_rx
+                    .as_ref()
+                    .expect("paired with decode_job_tx")
+                    .try_recv()
+                {
+                    self.transcript = line;
+                }
+
+                let max_in = (sample_rate as usize)
+                    .saturating_mul(WHISPER_INPUT_TAIL_SECS as usize)
+                    .min(mono.len());
+                let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
+                resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
+
+                let min_samples = WHISPER_SAMPLE_RATE as usize / 2;
                 if self.last_decode.elapsed() >= self.decode_interval
                     && self.resample_buf.len() >= min_samples
                 {
-                    self.last_decode = Instant::now();
-                    let opts = WhisperOptions::default();
-                    match whisper.generate(&self.resample_buf, None, false, &opts) {
-                        Ok(parts) => {
-                            self.transcript = parts.join(" ").trim().to_string();
-                        }
-                        Err(e) => {
-                            self.transcript = format!("(Whisper error: {e})");
-                        }
+                    let job_tx = self
+                        .decode_job_tx
+                        .as_ref()
+                        .expect("checked decode_job_tx.is_some()");
+                    if job_tx.try_send(self.resample_buf.clone()).is_ok() {
+                        self.last_decode = Instant::now();
                     }
                 }
-                // Omit per-tick RMS here so console output only changes when the transcript changes
-                // or decode cadence metadata changes (RMS still available via last_level_rms()).
-                self.caption = format!(
-                    "{}\n({} Hz → {} Hz mono · decode every {:.1}s)",
-                    if self.transcript.is_empty() {
-                        "(no speech in this window yet)"
-                    } else {
-                        self.transcript.as_str()
-                    },
-                    sample_rate,
-                    whisper.sampling_rate(),
-                    self.decode_interval.as_secs_f32(),
-                );
+
+                if !self.whisper_meta_printed {
+                    self.whisper_meta_printed = true;
+                    let lg = std::env::var("XOS_WHISPER_LANG")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or_else(|| "en".into());
+                    eprintln!(
+                        "transcribe: Whisper ~{:.2}s cadence · last {}s → 16 kHz · lang={} · greedy beam (stdout = live line)",
+                        self.decode_interval.as_secs_f32(),
+                        WHISPER_INPUT_TAIL_SECS,
+                        lg.trim()
+                    );
+                }
+
                 return;
             }
             if !self.ct2_hint.is_empty() && self.last_emit.elapsed() >= self.emit_interval {

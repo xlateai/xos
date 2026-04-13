@@ -13,6 +13,8 @@ pub struct TranscribeApp {
     engine: TranscriptionEngine,
     wave: WaveformCanvas,
     last_caption_out: String,
+    /// True after we drew the rolling transcript with `\r` — need a final newline on exit.
+    live_stdout_line: bool,
 }
 
 impl TranscribeApp {
@@ -22,16 +24,42 @@ impl TranscribeApp {
             engine: TranscriptionEngine::new(),
             wave: WaveformCanvas::new(),
             last_caption_out: String::new(),
+            live_stdout_line: false,
         }
     }
 
-    fn log_caption_to_stdout(&mut self, caption: &str) {
-        if caption == self.last_caption_out {
+    fn pause_mic(&self) {
+        if let Some(l) = &self.listener {
+            let _ = l.pause();
+        }
+    }
+
+    fn log_transcript_line_to_stdout(&mut self, line: &str) {
+        if line.is_empty() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                let _ = io::stdout().flush();
+                self.live_stdout_line = false;
+            }
+            self.last_caption_out.clear();
             return;
         }
-        self.last_caption_out = caption.to_string();
-        println!("{caption}");
+        if line == self.last_caption_out {
+            return;
+        }
+        self.last_caption_out = line.to_string();
+        print!("\r\x1b[2K{}", line);
         let _ = io::stdout().flush();
+        self.live_stdout_line = true;
+    }
+}
+
+impl Drop for TranscribeApp {
+    fn drop(&mut self) {
+        self.pause_mic();
+        if self.live_stdout_line {
+            println!();
+        }
     }
 }
 
@@ -55,7 +83,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 10.0_f32;
+            let buffer_duration = 5.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -95,7 +123,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 10.0_f32;
+            let buffer_duration = 5.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -128,19 +156,24 @@ impl Application for TranscribeApp {
             (l.get_samples_by_channel(), l.buffer().sample_rate())
         };
 
-        self.engine.process_snapshot(sr, &channels);
-
-        let caption = self.engine.caption().to_string();
-        self.log_caption_to_stdout(&caption);
-
         let l = self.listener.as_ref().expect("checked above");
         self.wave.tick_draw(state, l);
+
+        self.engine.process_snapshot(sr, &channels);
+
+        let line = self.engine.caption().to_string();
+        self.log_transcript_line_to_stdout(&line);
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         if ch == '\u{1b}' {
+            self.pause_mic();
             crate::engine::native_engine::request_exit();
         }
+    }
+
+    fn prepare_shutdown(&mut self, _state: &mut EngineState) {
+        self.pause_mic();
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
