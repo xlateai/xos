@@ -1,12 +1,11 @@
 mod compile;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
-use xos::python_api::{run_python_app, run_python_interactive};
+use xos::python_api::{run_python_app, run_python_file, run_python_interactive};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_interactive() -> Result<(), String> {
@@ -177,104 +176,6 @@ fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
         Some(repo_relative)
     } else {
         None
-    }
-}
-
-fn short_node_id(node_id: &str) -> String {
-    if node_id.is_empty() {
-        "?".to_string()
-    } else if node_id.len() <= 12 {
-        node_id.to_string()
-    } else {
-        format!("{}...", &node_id[..12])
-    }
-}
-
-fn print_status() {
-    println!("machines (terminal mesh):");
-    if !xos::auth::has_identity() {
-        println!("  `-- unavailable: LAN identity missing (run `xos login --offline`)");
-    } else {
-        match xos::auth::load_node_identity().map_err(|e| e.to_string()).and_then(|id| {
-            xos::mesh::MeshSession::join_with_identity(
-                "terminal",
-                xos::mesh::MeshMode::Lan,
-                std::sync::Arc::new(id),
-                None,
-            )
-        }) {
-            Ok(mesh) => {
-                let machines = mesh.current_num_nodes() as usize;
-                let machine_word = if machines == 1 { "machine" } else { "machines" };
-                println!("  +-- total: {machines} {machine_word}");
-                println!(
-                    "  `-- channel='terminal' mode=LAN rank={} id={}",
-                    mesh.rank(),
-                    short_node_id(&mesh.node_id)
-                );
-            }
-            Err(e) => {
-                println!("  `-- unavailable: {e}");
-            }
-        }
-    }
-
-    let procs = xos::manager::list_processes();
-    let mut channels: BTreeMap<String, (BTreeSet<String>, Vec<(u32, u32, String, String)>)> =
-        BTreeMap::new();
-    for p in &procs {
-        for ch in &p.channels {
-            let entry = channels
-                .entry(ch.id.clone())
-                .or_insert_with(|| (BTreeSet::new(), Vec::new()));
-            entry.0.insert(ch.mode.to_ascii_uppercase());
-            if !entry.1.iter().any(|(pid, _, _, _)| *pid == p.pid) {
-                entry
-                    .1
-                    .push((p.pid, p.rank, p.label.clone(), p.node_id.clone()));
-            }
-        }
-    }
-
-    println!("channels (local managed processes):");
-    if channels.is_empty() {
-        println!("  `-- (none)");
-    } else {
-        let total_channels = channels.len();
-        for (i, (channel_id, (modes, rows))) in channels.iter_mut().enumerate() {
-            rows.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-            let branch = if i + 1 == total_channels { "`--" } else { "|--" };
-            let mode_text = modes.iter().cloned().collect::<Vec<_>>().join(",");
-            println!(
-                "  {branch} {channel_id}  mode={}  procs={}",
-                mode_text,
-                rows.len()
-            );
-            for (j, (pid, rank, label, node_id)) in rows.iter().enumerate() {
-                let proc_branch = if j + 1 == rows.len() { "`--" } else { "|--" };
-                println!(
-                    "      {proc_branch} r{rank} pid={pid} {label} id={}",
-                    short_node_id(node_id)
-                );
-            }
-        }
-    }
-
-    println!("local managed processes:");
-    if procs.is_empty() {
-        println!("  `-- (none)");
-        return;
-    }
-    println!("  +-- total: {}", procs.len());
-    for (i, p) in procs.iter().enumerate() {
-        let branch = if i + 1 == procs.len() { "`--" } else { "|--" };
-        println!(
-            "  {branch} r{} pid={} {} id={}",
-            p.rank,
-            p.pid,
-            p.label,
-            short_node_id(&p.node_id)
-        );
     }
 }
 
@@ -507,7 +408,15 @@ fn main() {
             println!("sent kill signal to local managed processes");
         }
         Some(Commands::Status) => {
-            print_status();
+            let root = match xos::find_xos_project_root() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            };
+            let script = root.join("src/core/commands/status/status.py");
+            run_python_file(&script);
         }
         Some(Commands::GlobalDaemon) => {
             if let Err(e) = xos::manager::run_global_daemon("xos-global-daemon") {
