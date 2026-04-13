@@ -107,6 +107,8 @@ enum Commands {
     /// Broadcast kill to all locally managed xos processes.
     #[command(name = "kill")]
     Kill,
+    #[command(name = "global-daemon", hide = true)]
+    GlobalDaemon,
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -209,6 +211,7 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "global-daemon"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -239,6 +242,7 @@ fn main() {
                     | "login"
                     | "terminal"
                     | "kill"
+                    | "global-daemon"
                     | "-h"
                     | "--help"
                     | "-v"
@@ -259,6 +263,9 @@ fn main() {
     let cli = Cli::parse_from(original_args);
     let manager_label = exe_stem.as_deref().unwrap_or("xos");
     xos::manager::bootstrap(manager_label);
+    if !matches!(cli.command, Some(Commands::GlobalDaemon)) {
+        xos::manager::ensure_global_daemon_running();
+    }
 
     if cli.print_version {
         let bin_name = if invoked_as_xpy {
@@ -292,9 +299,17 @@ fn main() {
 
     match cli.command {
         Some(Commands::Compile { ios }) => {
-            if ios {
+            let _ = xos::manager::kill_global();
+            let compile_ok = if ios {
                 compile::compile_ios_rust();
+                true
             } else if !compile::xos_compile_command(true) {
+                false
+            } else {
+                true
+            };
+            xos::manager::ensure_global_daemon_running();
+            if !compile_ok {
                 std::process::exit(1);
             }
         }
@@ -384,6 +399,12 @@ fn main() {
                 std::process::exit(1);
             }
             println!("sent kill signal to local managed processes");
+        }
+        Some(Commands::GlobalDaemon) => {
+            if let Err(e) = xos::manager::run_global_daemon("xos-global-daemon") {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
         }
         None => {
             eprintln!("❗ No command provided.\n");

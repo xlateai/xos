@@ -5,6 +5,10 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::process::{Command, Stdio};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::AtomicU64;
@@ -25,6 +29,14 @@ const PROC_KILL_KIND: &str = "__xos_proc_kill__";
 const PROC_HELLO_INTERVAL_MS: u64 = 350;
 #[cfg(not(target_arch = "wasm32"))]
 const PROC_STALE_MS: u64 = 1200;
+#[cfg(not(target_arch = "wasm32"))]
+const GLOBAL_CHANNEL_ID: &str = "global";
+#[cfg(not(target_arch = "wasm32"))]
+const GLOBAL_CHANNEL_MODE: &str = "local";
+#[cfg(not(target_arch = "wasm32"))]
+const GLOBAL_DAEMON_CMD: &str = "global-daemon";
+#[cfg(not(target_arch = "wasm32"))]
+const GLOBAL_DAEMON_ENV: &str = "XOS_GLOBAL_DAEMON";
 
 #[derive(Clone, Debug)]
 pub struct ProcChannel {
@@ -180,6 +192,31 @@ fn current_or_reconnect_session(label: &str) -> Option<Arc<MeshSession>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_global_channel_proc() -> bool {
+    SELF_CHANNELS
+        .lock()
+        .ok()
+        .map(|chs| chs.contains_key(GLOBAL_CHANNEL_ID))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_exit_for_kill(body: &serde_json::Value) -> bool {
+    let scope = body
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("all")
+        .trim()
+        .to_ascii_lowercase();
+    let global_proc = is_global_channel_proc();
+    match scope.as_str() {
+        "global_only" => global_proc,
+        "non_global" => !global_proc,
+        _ => true,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_incoming(label: String) {
     loop {
         let Some(session) = current_or_reconnect_session(&label) else {
@@ -234,8 +271,14 @@ fn handle_incoming(label: String) {
                 });
             }
         }
-        if let Ok(Some(_)) = session.inbox().receive(PROC_KILL_KIND, false, true) {
-            std::process::exit(0);
+        if let Ok(Some(packets)) = session.inbox().receive(PROC_KILL_KIND, false, true) {
+            let should_exit = packets
+                .last()
+                .map(|p| should_exit_for_kill(&p.body))
+                .unwrap_or(true);
+            if should_exit {
+                std::process::exit(0);
+            }
         }
         thread::sleep(Duration::from_millis(80));
     }
@@ -296,6 +339,16 @@ pub fn snapshot_version() -> u64 {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn kill_all() -> Result<(), String> {
+    kill_scope("non_global")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn kill_global() -> Result<(), String> {
+    kill_scope("global_only")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn kill_scope(scope: &str) -> Result<(), String> {
     let Some(session) = PROC_SESSION
         .lock()
         .map_err(|_| "manager session lock poisoned".to_string())?
@@ -304,7 +357,7 @@ pub fn kill_all() -> Result<(), String> {
     else {
         return Err("manager mesh is not initialized".to_string());
     };
-    session.broadcast_json(PROC_KILL_KIND, json!({"from_pid": my_pid()}))
+    session.broadcast_json(PROC_KILL_KIND, json!({"from_pid": my_pid(), "scope": scope}))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -319,6 +372,74 @@ pub fn register_mesh(mesh_id: &str, mode: &str) {
     };
     if changed {
         PROC_VERSION.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn global_daemon_executable() -> Option<PathBuf> {
+    let release = crate::find_xos_project_root()
+        .ok()
+        .map(|root| {
+            root.join("target").join("release").join(if cfg!(windows) {
+                "xos.exe"
+            } else {
+                "xos"
+            })
+        })
+        .filter(|p| p.is_file());
+    if release.is_some() {
+        return release;
+    }
+    std::env::current_exe().ok().filter(|p| p.is_file())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn has_live_global_daemon() -> bool {
+    list_processes().into_iter().any(|p| {
+        p.pid != my_pid()
+            && p.channels
+                .iter()
+                .any(|ch| ch.id == GLOBAL_CHANNEL_ID && ch.mode == GLOBAL_CHANNEL_MODE)
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ensure_global_daemon_running() {
+    if std::env::var_os(GLOBAL_DAEMON_ENV).is_some() {
+        return;
+    }
+    if has_live_global_daemon() {
+        return;
+    }
+    let Some(exe) = global_daemon_executable() else {
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg(GLOBAL_DAEMON_CMD)
+        .env(GLOBAL_DAEMON_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let _ = cmd.spawn();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_global_daemon(label: &str) -> Result<(), String> {
+    bootstrap(label);
+    loop {
+        if has_live_global_daemon() {
+            return Ok(());
+        }
+        if let Ok(_session) = MeshSession::join(GLOBAL_CHANNEL_ID, MeshMode::Local) {
+            register_mesh(GLOBAL_CHANNEL_ID, GLOBAL_CHANNEL_MODE);
+            loop {
+                if has_live_global_daemon() {
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
     }
 }
 
@@ -346,4 +467,17 @@ pub fn kill_all() -> Result<(), String> {
 }
 
 #[cfg(target_arch = "wasm32")]
+pub fn kill_global() -> Result<(), String> {
+    Err("process manager not available on wasm".to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn register_mesh(_mesh_id: &str, _mode: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+pub fn ensure_global_daemon_running() {}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_global_daemon(_label: &str) -> Result<(), String> {
+    Err("process manager not available on wasm".to_string())
+}
