@@ -351,7 +351,6 @@ fn main() {
         &cli.command,
         Some(Commands::Rs { .. })
             | Some(Commands::Py { .. })
-            | Some(Commands::Login { .. })
             | Some(Commands::Terminal)
     );
     if should_ensure_daemon {
@@ -415,6 +414,7 @@ fn main() {
                 std::process::exit(1);
             }
             if delete {
+                let _ = daemon::stop_daemon();
                 use xos::auth::delete_identity;
                 match delete_identity() {
                     Ok(()) => println!(
@@ -426,6 +426,7 @@ fn main() {
                     }
                 }
             } else if reset {
+                let _ = daemon::stop_daemon();
                 match login_offline_reset_interactive() {
                     Ok(()) => {
                         println!(
