@@ -519,6 +519,19 @@ def main() -> None:
                     break
             if line is not None:
                 text = line.strip()
+                if text == "":
+                    # In normal chat mode, blank Enter should be a pure no-op.
+                    # Redraw once to undo any cursor/newline side effects from input handling.
+                    _render(
+                        mesh,
+                        logs,
+                        machine_name,
+                        current_mode,
+                        current_channel,
+                        active_footer,
+                        active_prompt,
+                    )
+                    continue
                 _remember_node(known_nodes, mesh.rank(), mesh.node_id(), machine_name)
                 if text in ("/quit", "/exit"):
                     _append_log_line(logs, "leaving xos terminal")
