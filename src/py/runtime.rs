@@ -278,7 +278,7 @@ pub fn run_python_interactive() {
     loop {
         // Print prompt
         if continuation {
-            print!("…> ");
+            print!("... ");
         } else {
             print!("🐍 > ");
         }

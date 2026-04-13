@@ -50,11 +50,20 @@ def _append_log_line(log_lines: list[str], line: str) -> None:
 def _xpy_default_state(log_lines: list[str]) -> dict:
     def _xpy_print(*args, sep=" ", end="\n"):
         text = sep.join(str(a) for a in args)
-        chunks = text.splitlines() or [""]
+        chunks = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        emitted = False
         for chunk in chunks:
-            _append_log_line(log_lines, f"[xpy] {chunk}")
+            chunk = chunk.strip("\r\n")
+            if chunk.strip() == "":
+                continue
+            _append_log_line(log_lines, f"[🐍] {chunk}")
+            emitted = True
+        if not emitted and text.strip():
+            _append_log_line(log_lines, f"[🐍] {text.strip()}")
         if end and end != "\n":
-            _append_log_line(log_lines, f"[xpy] {end.rstrip()}")
+            suffix = end.rstrip()
+            if suffix:
+                _append_log_line(log_lines, f"[🐍] {suffix}")
 
     glb = {
         "__name__": "__xpy_console__",
@@ -90,7 +99,7 @@ def _xpy_eval_line(log_lines: list[str], xpy_state: dict, line: str) -> None:
     except SyntaxError:
         eval_code = None
     except Exception as e:
-        _append_log_line(log_lines, f"[xpy err] {e}")
+        _append_log_line(log_lines, f"[🐍 err] {e}")
         buf.clear()
         return
 
@@ -98,9 +107,9 @@ def _xpy_eval_line(log_lines: list[str], xpy_state: dict, line: str) -> None:
         try:
             value = eval(eval_code, glb, glb)
             if value is not None:
-                _append_log_line(log_lines, f"[xpy] {value}")
+                _append_log_line(log_lines, f"[🐍] {value}")
         except Exception as e:
-            _append_log_line(log_lines, f"[xpy err] {e}")
+            _append_log_line(log_lines, f"[🐍 err] {e}")
         buf.clear()
         return
 
@@ -109,18 +118,18 @@ def _xpy_eval_line(log_lines: list[str], xpy_state: dict, line: str) -> None:
     except SyntaxError as e:
         if _xpy_is_incomplete_syntax(e):
             return
-        _append_log_line(log_lines, f"[xpy err] {e}")
+        _append_log_line(log_lines, f"[🐍 err] {e}")
         buf.clear()
         return
     except Exception as e:
-        _append_log_line(log_lines, f"[xpy err] {e}")
+        _append_log_line(log_lines, f"[🐍 err] {e}")
         buf.clear()
         return
 
     try:
         exec(exec_code, glb, glb)
     except Exception as e:
-        _append_log_line(log_lines, f"[xpy err] {e}")
+        _append_log_line(log_lines, f"[🐍 err] {e}")
     buf.clear()
 
 
@@ -399,10 +408,10 @@ def _log_line_color(line: str) -> str:
         return "b"
     if s.startswith("[mesh]"):
         return "a"
-    if s.startswith("[xpy err]"):
-        return "4"
-    if s.startswith("[xpy]"):
-        return "d"
+    if s.startswith("[🐍 err]"):
+        return "f"
+    if s.startswith("[🐍]"):
+        return "f"
     if s.startswith("[xos err]"):
         return "4"
     if s.startswith("[xos out]"):
@@ -468,7 +477,7 @@ def main() -> None:
                     _append_log_line(logs, _format_packet(packet))
                 needs_render = True
 
-            active_prompt = "....> " if (xpy_mode and xpy_state["buffer"]) else ("xpy> " if xpy_mode else ">>> ")
+            active_prompt = ">>> "
             active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
 
             try:
@@ -478,7 +487,7 @@ def main() -> None:
                 if xpy_mode:
                     xpy_mode = False
                     xpy_state["buffer"].clear()
-                    _append_log_line(logs, "[xpy] left interactive python mode (Ctrl+C)")
+                    _append_log_line(logs, "🐍 xpy disabled (Ctrl+C)")
                     needs_render = True
                     line = None
                 elif launched_pids:
@@ -532,10 +541,10 @@ def main() -> None:
                     xpy_mode = not xpy_mode
                     if xpy_mode:
                         xpy_state = _xpy_default_state(logs)
-                        _append_log_line(logs, "[xpy] entered interactive python mode")
+                        _append_log_line(logs, "🐍 xpy enabled")
                     else:
                         xpy_state["buffer"].clear()
-                        _append_log_line(logs, "[xpy] left interactive python mode")
+                        _append_log_line(logs, "🐍 xpy disabled")
                     needs_render = True
                     handled = True
                 if text.startswith("/xos"):
@@ -595,7 +604,7 @@ def main() -> None:
                         if text in ("exit()", "quit()"):
                             xpy_mode = False
                             xpy_state["buffer"].clear()
-                            _append_log_line(logs, "[xpy] left interactive python mode")
+                            _append_log_line(logs, "🐍 xpy disabled")
                         else:
                             _xpy_eval_line(logs, xpy_state, line.rstrip("\n"))
                     else:
@@ -661,7 +670,7 @@ def main() -> None:
                 needs_render = True
 
             if needs_render:
-                active_prompt = "....> " if (xpy_mode and xpy_state["buffer"]) else ("xpy> " if xpy_mode else ">>> ")
+                active_prompt = ">>> "
                 active_footer = FOOTER_HELP if help_expanded else ([FOOTER_XPY] if xpy_mode else [FOOTER_DEFAULT])
                 _render(
                     mesh,
