@@ -428,8 +428,15 @@ pub fn reset_offline_identity(username: &str, password: &str, node_name: &str) -
     }
 
     let u = username.trim();
-    // Reset must always rotate account key material, even if username/password are reused.
-    let (private, public_pem) = generate_node_rsa()?;
+    // Reset account identity deterministically from username+password so matching creds across
+    // machines produce the same account key material.
+    let (private, public_pem) = rsa_deterministic_from_password(
+        password.as_bytes(),
+        u,
+        V4_ARGON_M,
+        V4_ARGON_T,
+        V4_ARGON_P,
+    )?;
     let private_pem = private
         .to_pkcs8_pem(LineEnding::LF)
         .map_err(|e| AuthError::Crypto(e.to_string()))?
