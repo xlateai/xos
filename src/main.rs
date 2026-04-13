@@ -24,7 +24,7 @@ fn login_offline_interactive() -> Result<(), String> {
             })
             .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
         return Err(format!(
-            "identity already exists ({p}). Remove with xos login --delete only if you intend to replace this machine's keys."
+            "identity already exists ({p}). Use xos login --reset to replace credentials, or xos login --delete to remove identity."
         ));
     }
     let username: String = Input::new()
@@ -52,6 +52,56 @@ fn login_offline_interactive() -> Result<(), String> {
         machine.trim().to_string()
     };
     login_offline(username.trim(), &password, &machine).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn login_offline_reset_interactive() -> Result<(), String> {
+    use dialoguer::{Input, Password};
+    use xos::auth::{has_identity, load_identity, load_node_identity, reset_offline_identity};
+
+    if !has_identity() {
+        return Err("no identity exists yet. Use `xos login` first.".to_string());
+    }
+
+    let default_username = load_identity()
+        .map(|id| id.username)
+        .unwrap_or_else(|_| "".to_string());
+    let default_machine = load_node_identity()
+        .map(|id| id.node_name)
+        .or_else(|_| std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")))
+        .unwrap_or_else(|_| "machine".to_string());
+
+    let username: String = if default_username.trim().is_empty() {
+        Input::new()
+            .with_prompt("Username")
+            .interact_text()
+            .map_err(|e| e.to_string())?
+    } else {
+        Input::new()
+            .with_prompt("Username")
+            .default(default_username)
+            .interact_text()
+            .map_err(|e| e.to_string())?
+    };
+    let password = Password::new()
+        .with_prompt("Password")
+        .with_confirmation("Confirm password", "Passwords do not match")
+        .interact()
+        .map_err(|e| e.to_string())?;
+    let machine: String = Input::new()
+        .with_prompt(&format!(
+            "Machine name (node_name, shown in LAN mesh) [default: {default_machine}]"
+        ))
+        .default(default_machine.clone())
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let machine = if machine.trim().is_empty() {
+        default_machine
+    } else {
+        machine.trim().to_string()
+    };
+
+    reset_offline_identity(username.trim(), &password, &machine).map_err(|e| e.to_string())
 }
 
 #[derive(Parser)]
@@ -98,6 +148,9 @@ enum Commands {
         /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
+        /// Replace existing credentials safely (requires an existing identity).
+        #[arg(long)]
+        reset: bool,
     },
     /// Open the mesh terminal console (`xos terminal` / `xos term`).
     #[command(name = "terminal", visible_alias = "term")]
@@ -356,13 +409,29 @@ fn main() {
                 run_python_interactive();
             }
         }
-        Some(Commands::Login { delete }) => {
+        Some(Commands::Login { delete, reset }) => {
+            if delete && reset {
+                eprintln!("❌ use either --delete or --reset, not both");
+                std::process::exit(1);
+            }
             if delete {
                 use xos::auth::delete_identity;
                 match delete_identity() {
                     Ok(()) => println!(
                         "Removed local identity (authentication.json, node_identity.json, legacy identity.json)."
                     ),
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else if reset {
+                match login_offline_reset_interactive() {
+                    Ok(()) => {
+                        println!(
+                            "Reset identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA)."
+                        );
+                    }
                     Err(e) => {
                         eprintln!("❌ {e}");
                         std::process::exit(1);
