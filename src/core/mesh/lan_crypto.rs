@@ -15,6 +15,11 @@ use x25519_dalek::{EphemeralSecret, PublicKey};
 use crate::auth::{load_identity, node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity};
 
 const HS_VER: u32 = 3;
+const HS_VER_PRE_ACCOUNT: u32 = 2;
+
+fn supported_hs(ver: u32) -> bool {
+    ver == HS_VER || ver == HS_VER_PRE_ACCOUNT
+}
 
 fn local_account_fingerprint() -> Result<String, String> {
     let account = load_identity().map_err(|e| e.to_string())?;
@@ -35,7 +40,8 @@ struct HsClientHello {
     /// Friendly machine name.
     nn: String,
     /// Account identity fingerprint (SHA256(SPKI DER) of account public key).
-    aid: String,
+    #[serde(default)]
+    aid: Option<String>,
     /// SHA256(SPKI DER) hex of `pk` — redundant but lets peers route before parsing PEM.
     nid: String,
     pk: String,
@@ -48,7 +54,8 @@ struct HsServerHello {
     hs: u32,
     nn: String,
     /// Account identity fingerprint (must match client `aid`).
-    aid: String,
+    #[serde(default)]
+    aid: Option<String>,
     nid: String,
     pk: String,
     ec: String,
@@ -116,7 +123,7 @@ pub fn client_handshake(
     let hello = HsClientHello {
         hs: HS_VER,
         nn: id.node_name.clone(),
-        aid: aid.clone(),
+        aid: Some(aid.clone()),
         nid,
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_pub.as_bytes()),
@@ -134,10 +141,14 @@ pub fn client_handshake(
         return Err("connection closed during LAN handshake".to_string());
     }
     let srv: HsServerHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if srv.hs != HS_VER {
+    if !supported_hs(srv.hs) {
         return Err("LAN handshake: bad server hello".to_string());
     }
-    if srv.aid != aid {
+    if let Some(peer_aid) = srv.aid.as_deref() {
+        if peer_aid != aid {
+            return Err("LAN handshake: account identity mismatch (different login)".to_string());
+        }
+    } else if srv.hs >= HS_VER {
         return Err("LAN handshake: account identity mismatch (different login)".to_string());
     }
     expect_node_id(&srv.nid, &srv.pk)?;
@@ -170,7 +181,7 @@ pub fn client_handshake(
     buf.clear();
     reader.read_line(&mut buf).map_err(|e| e.to_string())?;
     let srv_sig: HsSig = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if srv_sig.hs != HS_VER {
+    if !supported_hs(srv_sig.hs) {
         return Err("LAN handshake: bad server sig".to_string());
     }
     let sig_bytes = B64.decode(&srv_sig.sig).map_err(|e| e.to_string())?;
@@ -198,10 +209,14 @@ pub fn server_handshake(
         return Err("connection closed during LAN handshake".to_string());
     }
     let cli: HsClientHello = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if cli.hs != HS_VER {
+    if !supported_hs(cli.hs) {
         return Err("LAN handshake: bad client hello".to_string());
     }
-    if cli.aid != aid {
+    if let Some(peer_aid) = cli.aid.as_deref() {
+        if peer_aid != aid {
+            return Err("LAN handshake: account identity mismatch (different login)".to_string());
+        }
+    } else if cli.hs >= HS_VER {
         return Err("LAN handshake: account identity mismatch (different login)".to_string());
     }
     expect_node_id(&cli.nid, &cli.pk)?;
@@ -221,7 +236,7 @@ pub fn server_handshake(
     let hello = HsServerHello {
         hs: HS_VER,
         nn: id.node_name.clone(),
-        aid,
+        aid: Some(aid),
         nid: id.node_id(),
         pk: id.public_pem.clone(),
         ec: B64.encode(ec_s.as_bytes()),
@@ -236,7 +251,7 @@ pub fn server_handshake(
     buf.clear();
     reader.read_line(&mut buf).map_err(|e| e.to_string())?;
     let cli_sig: HsSig = serde_json::from_str(buf.trim()).map_err(|e| e.to_string())?;
-    if cli_sig.hs != HS_VER {
+    if !supported_hs(cli_sig.hs) {
         return Err("LAN handshake: bad client sig".to_string());
     }
     let sig_bytes = B64.decode(&cli_sig.sig).map_err(|e| e.to_string())?;
