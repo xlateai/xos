@@ -339,7 +339,7 @@ pub fn snapshot_version() -> u64 {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn kill_all() -> Result<(), String> {
-    kill_scope("non_global")
+    kill_scope("all")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
