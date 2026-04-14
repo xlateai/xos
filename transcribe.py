@@ -18,10 +18,11 @@ try:
         # transcribe the audio
         transcription, was_committed, is_new = transcriber.transcribe()
         if is_new:
-            color = "&a" if was_committed else "&8"
-            xos.print_color(color + transcription)
             if was_committed:
+                xos.print_color("&a" + transcription)
                 full_transcription.append(transcription)
+            else:
+                xos.print_color("[*] &8" + transcription)
 
 except KeyboardInterrupt:
     pass
