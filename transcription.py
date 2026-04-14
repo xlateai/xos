@@ -28,9 +28,9 @@ def print_final_summary(events, last_draft):
     print(f"--- final joined at None boundaries ({len(commits)} commits) ---")
     if commits:
         joined = " ".join(commits)
-        xos.color_print("&3" + escape_minecraft_ampersands(joined) + "&r")
+        xos.print_color("&3" + escape_minecraft_ampersands(joined) + "&r")
     else:
-        xos.color_print("&3(no commits — no None-terminated segments)&r")
+        xos.print_color("&3(no commits — no None-terminated segments)&r")
     if isinstance(last_draft, str) and last_draft.strip():
         tail = last_draft.strip()
         if not commits or commits[-1].lower() != tail.lower():

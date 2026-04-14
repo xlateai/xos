@@ -72,6 +72,22 @@ class _Transcriber:
     def __init__(self, ptr):
         self._ptr = ptr
 
+    def transcribe(self, poll_interval=0.03):
+        """
+        Block until the engine has something to report, then return ``(transcription, was_committed)``.
+
+        Polls ``_transcriber_transcribe_step`` (like ``iterate``) with ``poll_interval`` between
+        tries. ``transcription`` is live caption while ``was_committed`` is false, or the finalized
+        phrase when true. On a commit tick, only the committed text is returned; any fresh partial
+        shows up on a later call after more audio has been processed.
+        """
+        import xos
+        while True:
+            t, c = xos.audio._transcriber_transcribe_step(self._ptr)
+            if t != "" or c:
+                return (t, c)
+            xos.sleep(poll_interval)
+
     def iterate(self, poll_interval=0.03):
         import xos
         while True:
@@ -118,6 +134,57 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
         })
         .collect::<Vec<_>>();
     Ok(vm.ctx.new_list(py_list).into())
+}
+
+/// One transcription poll: returns `(transcription, was_committed)`.
+///
+/// `transcription` is the live caption while building an utterance; on ticks where a phrase
+/// commits it is that finalized phrase. `was_committed` is true iff at least one commit
+/// occurred this poll.
+pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let mut map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get_mut(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
+    let channels = listener.get_samples_by_channel();
+    let sr = listener.buffer().sample_rate();
+    state.engine.process_snapshot(sr, &channels);
+
+    let events = state.engine.drain_iter_events();
+    let mut new_commits: Vec<String> = Vec::new();
+    let mut prev: Option<String> = None;
+    for e in events {
+        match e {
+            None => {
+                if let Some(t) = prev.take() {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        new_commits.push(t);
+                    }
+                }
+            }
+            Some(s) => prev = Some(s),
+        }
+    }
+
+    let was_committed = !new_commits.is_empty();
+    let transcription = if was_committed {
+        new_commits.join("\n")
+    } else {
+        state.engine.caption().trim().to_string()
+    };
+
+    Ok(vm
+        .ctx
+        .new_tuple(vec![
+            vm.ctx.new_str(transcription).into(),
+            vm.ctx.new_bool(was_committed).into(),
+        ])
+        .into())
 }
 
 pub fn transcriber_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {

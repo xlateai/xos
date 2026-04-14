@@ -68,6 +68,12 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("_microphone_get_sample_rate", vm.new_function("_microphone_get_sample_rate", microphone::microphone_get_sample_rate), vm).unwrap();
     module.set_attr("_microphone_cleanup", vm.new_function("_microphone_cleanup", microphone::microphone_cleanup), vm).unwrap();
     module.set_attr("_transcriber_next_events", vm.new_function("_transcriber_next_events", transcription::transcriber_next_events), vm).unwrap();
+    module.set_attr(
+        "_transcriber_transcribe_step",
+        vm.new_function("_transcriber_transcribe_step", transcription::transcriber_transcribe_step),
+        vm,
+    )
+    .unwrap();
     module.set_attr("_transcriber_cleanup", vm.new_function("_transcriber_cleanup", transcription::transcriber_cleanup), vm).unwrap();
     
     // --- Speaker API ---
