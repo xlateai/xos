@@ -21,6 +21,13 @@ mod sample;
 ))]
 mod vad;
 
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod merge;
+
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,
@@ -193,8 +200,8 @@ impl TranscriptionEngine {
     }
 
     /// `ingested_frames`: [`AudioBuffer::ingested_frame_count`] from the same listener (monotonic
-    /// multichannel frames). Enables **non-overlapping** 1 s windows at 16 kHz. Use `0` if missing
-    /// (engine skips this poll to avoid duplicate audio).
+    /// multichannel frames). Feeds a 16 kHz FIFO with **overlapping** ASR windows. Use `0` if
+    /// missing (engine skips this poll to avoid duplicate audio).
     pub fn process_snapshot(
         &mut self,
         sample_rate: u32,
@@ -328,39 +335,46 @@ impl TranscriptionEngine {
     }
 
     fn process_filled_windows(engine: &mut TranscriptionEngine, w: &whisper::Whisper) {
+        let win = sample::ASR_WINDOW_SAMPLES;
+        let hop = sample::ASR_HOP_SAMPLES;
+
         while engine.stream_16k.len() > sample::MAX_STREAM_16K {
             let over = engine.stream_16k.len() - sample::MAX_STREAM_16K;
-            let win = sample::WINDOW_16K;
-            let drop = ((over + win - 1) / win) * win;
-            let drop = drop.max(win).min(engine.stream_16k.len());
+            let drop = ((over + hop - 1) / hop) * hop;
+            let drop = drop.max(hop).min(engine.stream_16k.len());
             engine.stream_16k.drain(0..drop);
         }
 
-        let win = sample::WINDOW_16K;
         const MAX_CHUNKS_PER_TICK: usize = 6;
         let mut chunks = 0usize;
         while chunks < MAX_CHUNKS_PER_TICK && engine.stream_16k.len() >= win {
-            let chunk: Vec<f32> = engine.stream_16k.drain(0..win).collect();
+            let chunk: Vec<f32> = engine.stream_16k[0..win].to_vec();
             chunks += 1;
 
             engine.last_level_rms = sample::rms_all(&chunk);
             if engine.last_level_rms < sample::CHUNK_SILENCE_RMS {
                 engine.finish_utterance_commit();
+                let advance = hop.min(engine.stream_16k.len());
+                if advance > 0 {
+                    engine.stream_16k.drain(0..advance);
+                }
                 continue;
             }
 
             if let Ok(t) = w.transcribe_chunk(&chunk) {
                 if !t.is_empty() {
-                    if !engine.utterance_buf.is_empty() {
-                        engine.utterance_buf.push(' ');
-                    }
-                    engine.utterance_buf.push_str(&t);
+                    engine.utterance_buf = merge::merge_word_overlap(&engine.utterance_buf, &t);
                     engine.caption.clone_from(&engine.utterance_buf);
                     engine
                         .pending_iter_events
                         .push(Some(engine.caption.clone()));
                     engine.transcript_epoch = engine.transcript_epoch.saturating_add(1);
                 }
+            }
+
+            let advance = hop.min(engine.stream_16k.len());
+            if advance > 0 {
+                engine.stream_16k.drain(0..advance);
             }
         }
     }

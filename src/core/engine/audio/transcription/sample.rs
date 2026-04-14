@@ -1,4 +1,4 @@
-//! Mono downmix, linear resample, RMS, and **non-overlapping** 16 kHz chunk helpers.
+//! Mono downmix, linear resample, RMS, and sliding-window helpers at 16 kHz.
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
@@ -6,8 +6,11 @@
 ))]
 
 pub const WHISPER_HZ: u32 = 16_000;
-/// One decode / VAD unit at 16 kHz (no overlap between consecutive windows).
-pub const WINDOW_16K: usize = WHISPER_HZ as usize;
+/// Whisper input length per decode (2.5 s — more context than 1 s; overlaps with next hop).
+pub const ASR_WINDOW_SAMPLES: usize = (WHISPER_HZ as usize * 5) / 2;
+/// After each decode, advance the FIFO by this many samples (1 s). Overlap =
+/// `ASR_WINDOW_SAMPLES - ASR_HOP_SAMPLES` (1.5 s when window is 2.5 s).
+pub const ASR_HOP_SAMPLES: usize = WHISPER_HZ as usize;
 /// RMS over a full 1 s window below this ⇒ treat as silence (no ASR; flush utterance).
 pub const CHUNK_SILENCE_RMS: f32 = 0.009;
 /// Trim oldest 16 kHz samples if the FIFO grows past this (slow polls / huge backlog).
