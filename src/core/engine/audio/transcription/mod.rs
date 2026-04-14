@@ -165,6 +165,42 @@ fn overlap_stable_into_latest(stable: &str, latest: &str) -> String {
     format!("{stable} {}", l[overlap..].join(" "))
 }
 
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn fold_overlap_longer_into(acc: &mut String, add: &str) {
+    if add.is_empty() {
+        return;
+    }
+    let m1 = overlap_stable_into_latest(acc, add);
+    let m2 = overlap_stable_into_latest(add, acc);
+    let pick = if m1.split_whitespace().count() >= m2.split_whitespace().count() {
+        m1
+    } else {
+        m2
+    };
+    if pick.split_whitespace().count() > acc.split_whitespace().count() {
+        *acc = pick;
+    }
+}
+
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn clean_is_anchor_prefix_words(anchor: &str, clean: &str) -> bool {
+    let cw = clean.split_whitespace().count();
+    cw > 0 && common_prefix_word_count(anchor, clean) == cw
+}
+
+/// True if `clean` is a same-phrase continuation (overlap extension or strict prefix regression).
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn hypothesis_continues_anchor(anchor: &str, clean: &str) -> bool {
+    if anchor.is_empty() {
+        return true;
+    }
+    if clean_is_anchor_prefix_words(anchor, clean) {
+        return true;
+    }
+    let merged = overlap_stable_into_latest(anchor, clean);
+    merged.split_whitespace().count() > anchor.split_whitespace().count()
+}
+
 fn has_repeated_ngram(words: &[&str], n: usize, repeats: usize) -> bool {
     if n == 0 || repeats < 2 || words.len() < n * repeats {
         return false;
@@ -293,10 +329,12 @@ fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>
     (job_tx, result_rx)
 }
 
+/// Sliding-window decode length at 16 kHz. Larger = more stable wording / less “prefix fell
+/// off the cliff”, at higher CPU cost per decode.
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_INPUT_TAIL_SECS: u32 = 6;
+const WHISPER_INPUT_TAIL_SECS: u32 = 12;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(80);
+const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(90);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 12;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
@@ -304,17 +342,17 @@ const WHISPER_VOICE_ON_RMS: f32 = 0.013;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_END_SILENCE: Duration = Duration::from_millis(620);
+const WHISPER_END_SILENCE: Duration = Duration::from_millis(900);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(1600);
+const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2000);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1200);
+/// Mid-utterance `None`: commit when a new decode clearly starts a different line (no
+/// suffix/prefix stitch and not a shorter re-prefix of what we already have).
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_NEW_SENTENCE_MIN_PREV_WORDS: usize = 8;
+const WHISPER_RESTART_MIN_ANCHOR_WORDS: usize = 12;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_NEW_SENTENCE_MIN_NEW_WORDS: usize = 3;
-#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_NEW_SENTENCE_MAX_SHARED_PREFIX: usize = 2;
+const WHISPER_RESTART_MIN_CLEAN_WORDS: usize = 8;
 
 pub struct TranscriptionEngine {
     caption: String,
@@ -355,6 +393,9 @@ pub struct TranscriptionEngine {
     last_committed_text: String,
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     block_stale_until: Instant,
+    /// Longest merged live line this utterance; `live_transcript` can regress on bad decodes.
+    #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+    utterance_best: String,
 }
 
 impl TranscriptionEngine {
@@ -402,6 +443,7 @@ impl TranscriptionEngine {
                 awaiting_final_commit: false,
                 last_committed_text: String::new(),
                 block_stale_until: Instant::now(),
+                utterance_best: String::new(),
             };
         }
         #[cfg(not(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32"))))]
@@ -440,11 +482,15 @@ impl TranscriptionEngine {
     pub fn flush_live_to_stdout_commits(&mut self) {
         #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
         {
-            let candidate = if !self.stable_transcript.is_empty() {
+            let mut candidate = if !self.stable_transcript.is_empty() {
                 self.stable_transcript.clone()
             } else {
                 self.live_transcript.clone()
             };
+            fold_overlap_longer_into(&mut candidate, &self.utterance_best);
+            for h in self.hypotheses.iter() {
+                fold_overlap_longer_into(&mut candidate, h);
+            }
             self.try_push_stdout_commit(&candidate);
         }
     }
@@ -467,13 +513,42 @@ impl TranscriptionEngine {
         self.pending_iter_events.push(None);
         self.last_committed_text = t;
         self.block_stale_until = Instant::now() + WHISPER_POST_COMMIT_STALE_BLOCK;
+        self.utterance_best.clear();
         true
     }
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-    fn reset_phrase_state(&mut self) {
+    /// Commit current phrase and start `clean` fresh when the model jumps to a new line.
+    fn maybe_commit_phrase_restart(&mut self, clean: &str) -> bool {
+        let anchor = if !self.utterance_best.is_empty() {
+            self.utterance_best.as_str()
+        } else {
+            self.live_transcript.as_str()
+        };
+        let aw = anchor.split_whitespace().count();
+        let cw = clean.split_whitespace().count();
+        if aw < WHISPER_RESTART_MIN_ANCHOR_WORDS || cw < WHISPER_RESTART_MIN_CLEAN_WORDS {
+            return false;
+        }
+        if hypothesis_continues_anchor(anchor, clean) {
+            return false;
+        }
+        let mut to_commit = if !self.utterance_best.is_empty() {
+            self.utterance_best.clone()
+        } else {
+            self.live_transcript.clone()
+        };
+        fold_overlap_longer_into(&mut to_commit, &self.stable_transcript);
+        for h in self.hypotheses.iter() {
+            fold_overlap_longer_into(&mut to_commit, h);
+        }
+        if !self.try_push_stdout_commit(&to_commit) {
+            return false;
+        }
         self.live_transcript.clear();
         self.stable_transcript.clear();
         self.hypotheses.clear();
+        self.ingest_hypothesis(clean.to_string());
+        true
     }
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     fn ingest_hypothesis(&mut self, text: String) {
@@ -485,34 +560,21 @@ impl TranscriptionEngine {
             return;
         }
         if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
-            let committed_words = self.last_committed_text.split_whitespace().count();
+            let cw = self.last_committed_text.split_whitespace().count();
             let clean_words = clean.split_whitespace().count();
             let common = common_prefix_word_count(&self.last_committed_text, &clean);
-            let threshold = committed_words.min(clean_words).max(4);
-            if common >= threshold {
-                return;
+            // Do not drop decodes that *continue* after the text we already committed; those
+            // share a long common prefix by definition and were incorrectly suppressed.
+            let extends_committed = clean_words > cw && common >= cw;
+            if !extends_committed {
+                let threshold = cw.min(clean_words).max(4);
+                if common >= threshold {
+                    return;
+                }
             }
         }
-        // If the model abruptly diverges from a long in-progress sentence, treat this as
-        // a sentence rollover: commit previous best now and start a new draft stream.
-        let live_words = self.live_transcript.split_whitespace().count();
-        let clean_words = clean.split_whitespace().count();
-        let shared_prefix = common_prefix_word_count(&self.live_transcript, &clean);
-        if live_words >= WHISPER_NEW_SENTENCE_MIN_PREV_WORDS
-            && clean_words >= WHISPER_NEW_SENTENCE_MIN_NEW_WORDS
-            && shared_prefix <= WHISPER_NEW_SENTENCE_MAX_SHARED_PREFIX
-            && !self.live_transcript.is_empty()
-        {
-            let best = if !self.stable_transcript.is_empty() {
-                self.stable_transcript.clone()
-            } else {
-                self.live_transcript.clone()
-            };
-            let committed = self.try_push_stdout_commit(&best);
-            if committed {
-                self.reset_phrase_state();
-                self.block_stale_until = Instant::now() + Duration::from_millis(350);
-            }
+        if self.maybe_commit_phrase_restart(&clean) {
+            return;
         }
         self.hypotheses.push_back(clean.clone());
         while self.hypotheses.len() > 3 {
@@ -533,6 +595,9 @@ impl TranscriptionEngine {
             }
         }
         let next = overlap_stable_into_latest(&self.stable_transcript, &clean);
+        if next.split_whitespace().count() > self.utterance_best.split_whitespace().count() {
+            self.utterance_best = next.clone();
+        }
         if next != self.live_transcript {
             self.live_transcript = next.clone();
             self.pending_iter_events.push(Some(next));
@@ -604,14 +669,13 @@ impl TranscriptionEngine {
                 } else {
                     self.live_transcript.clone()
                 };
-                if let Some(longest_recent) = self
-                    .hypotheses
-                    .iter()
-                    .max_by_key(|h| h.split_whitespace().count())
-                {
-                    if longest_recent.split_whitespace().count() > best.split_whitespace().count() {
-                        best = longest_recent.clone();
-                    }
+                fold_overlap_longer_into(&mut best, &self.utterance_best);
+                // Fold recent hypotheses in by overlap-merge only. Taking the raw longest
+                // hypothesis by word count is wrong for sliding windows: the tail of the clip
+                // is often a long mid-utterance fragment with no word-overlap to the prefix
+                // we already stitched into `live_transcript`.
+                for h in self.hypotheses.iter() {
+                    fold_overlap_longer_into(&mut best, h);
                 }
                 self.try_push_stdout_commit(&best);
                 // Avoid printing the same finalized line both as commit and live line.

@@ -11,27 +11,56 @@ def pick_system_audio_input():
     return None
 
 
+def committed_sentences_at_none(events):
+    """
+    Rust contract: each commit is Some(canonical) immediately followed by None.
+    Return those canonical strings in order (no word-level stitching).
+    """
+    out = []
+    prev = None
+    for e in events:
+        if e is None:
+            if isinstance(prev, str) and prev.strip():
+                out.append(prev.strip())
+            prev = None
+        else:
+            prev = e
+    return out
+
+
+def escape_minecraft_ampersands(text):
+    return text.replace("&", "&&")
+
+
+def print_final_summary(events, last_draft):
+    commits = committed_sentences_at_none(events)
+    print()
+    print(f"--- final joined at None boundaries ({len(commits)} commits) ---")
+    if commits:
+        joined = " ".join(commits)
+        xos.color_print("&3" + escape_minecraft_ampersands(joined) + "&r")
+    else:
+        xos.color_print("&3(no commits — no None-terminated segments)&r")
+    if isinstance(last_draft, str) and last_draft.strip():
+        tail = last_draft.strip()
+        if not commits or commits[-1].lower() != tail.lower():
+            print()
+            print("--- open tail (no trailing None yet; not part of cyan join) ---")
+            print(tail)
+    print("--- end ---")
+
+
 audio = xos.audio.Microphone(device_id=pick_system_audio_input(), buffer_duration=10.0)
 transcriber = xos.audio.transcription(audio, size="tiny")
-committed_statements = []
+event_log = []
 last_statement = None
-printed_live = ""
 
-for statement in transcriber.iterate():
-    print(statement)
-
-    if statement is None:
-        if last_statement:
-            committed_statements.append(last_statement)
-            # xos.print(last_statement)
-            # printed_live = ""
-        # last_statement = None
-        # continue
-
-    # Live draft update (same line, no commit yet)
-    # if statement != printed_live:
-        # xos.print("\r" + statement, end="")
-        # printed_live = statement
-
-
-    last_statement = statement
+try:
+    for statement in transcriber.iterate():
+        event_log.append(statement)
+        print(statement)
+        last_statement = statement
+except KeyboardInterrupt:
+    pass
+finally:
+    print_final_summary(event_log, last_statement)
