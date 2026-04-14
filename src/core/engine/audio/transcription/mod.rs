@@ -111,11 +111,98 @@ fn rms_tail(mono: &[f32], tail_max: usize) -> f32 {
     (acc / slice.len() as f32).sqrt()
 }
 
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn word_prefix_consensus(a: &str, b: &str) -> String {
+    let mut out = Vec::new();
+    for (wa, wb) in a.split_whitespace().zip(b.split_whitespace()) {
+        if wa.eq_ignore_ascii_case(wb) {
+            out.push(wa);
+        } else {
+            break;
+        }
+    }
+    out.join(" ")
+}
+
+fn render_live_from_stable(stable: &str, latest: &str) -> String {
+    let stable_norm = normalize_whitespace(stable);
+    let latest_norm = normalize_whitespace(latest);
+    if stable_norm.is_empty() {
+        return latest_norm;
+    }
+    let stable_words: Vec<&str> = stable_norm.split_whitespace().collect();
+    let latest_words: Vec<&str> = latest_norm.split_whitespace().collect();
+    let mut idx = 0usize;
+    while idx < stable_words.len() && idx < latest_words.len() {
+        if !stable_words[idx].eq_ignore_ascii_case(latest_words[idx]) {
+            break;
+        }
+        idx += 1;
+    }
+    if idx == 0 {
+        return latest_norm;
+    }
+    if idx >= latest_words.len() {
+        return stable_norm;
+    }
+    let tail = latest_words[idx..].join(" ");
+    format!("{stable_norm} {tail}")
+}
+
+/// Common Whisper outputs on near-silence; skip committing these to scrollback.
 #[cfg(all(
     feature = "whisper_ct2",
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+fn whisper_spurious_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.chars().count() < 2 {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    const JUNK: &[&str] = &[
+        "you",
+        "uh",
+        "um",
+        "uhh",
+        "umm",
+        "hmm",
+        "hm",
+        "mmm",
+        "mhm",
+        "ah",
+        "oh",
+        "thanks for watching",
+        "thank you.",
+        "thank you",
+        "thanks",
+        "bye",
+        "music",
+        "[music]",
+        "[ silence ]",
+        "[silence]",
+    ];
+    if JUNK.contains(&lower.as_str()) {
+        return true;
+    }
+    // Very short single-token noise (beyond blocklist)
+    if !t.contains(' ') && t.chars().count() <= 2 {
+        return true;
+    }
+    false
+}
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+/// Loads **one** CT2 Whisper model; paired with [`spawn_whisper_decode_thread`] there is only a
+/// single decode worker (no duplicate models).
 fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     use ct2rs::{Config, Whisper};
     const ENV: &str = "XOS_WHISPER_CT2_PATH";
@@ -158,6 +245,7 @@ fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+/// One OS thread, one `Whisper` value — serial `generate` calls only.
 fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>, Receiver<String>) {
     let lang = std::env::var("XOS_WHISPER_LANG")
         .ok()
@@ -195,8 +283,40 @@ fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>
 ))]
 const WHISPER_INPUT_TAIL_SECS: u32 = 8;
 
-/// RMS below this (on the level meter tail) counts as silence for committing a phrase to stdout.
-const WHISPER_SILENCE_COMMIT_RMS: f32 = 0.012;
+/// RMS (tail) above this → treat as speech; allow decode jobs.
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_VOICE_ON_RMS: f32 = 0.015;
+/// RMS below this for [`WHISPER_VOICE_QUIET_BEFORE_MUTE`] → stop decoding (no sliding-window silence runs).
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_VOICE_OFF_RMS: f32 = 0.011;
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_VOICE_QUIET_BEFORE_MUTE: Duration = Duration::from_millis(450);
+/// After gate-off, keep accepting decode results briefly so short utterances are not dropped.
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_RESULT_GRACE_AFTER_VOICE_OFF: Duration = Duration::from_millis(1200);
+/// Minimum buffered audio required to submit a decode job.
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 5;
 
 /// Transcription: RMS placeholder, or Whisper+CTranslate2 when `whisper_ct2` is enabled.
 pub struct TranscriptionEngine {
@@ -246,6 +366,18 @@ pub struct TranscriptionEngine {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
+    stable_transcript: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    last_hypothesis: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     ct2_hint: String,
     #[cfg(all(
         feature = "whisper_ct2",
@@ -255,9 +387,18 @@ pub struct TranscriptionEngine {
     whisper_meta_printed: bool,
     /// Lines to print with `println!` (full scrollback); live rolling line uses [`Self::caption`].
     pending_stdout: Vec<String>,
-    silence_accum: Duration,
     last_snapshot: Instant,
     live_unchanged_since: Instant,
+    /// When false: no new decode jobs, decode results discarded (avoids silence hallucinations).
+    voice_decode_enabled: bool,
+    quiet_for_voice_off: Duration,
+    last_stdout_commit_key: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    accept_results_until: Instant,
 }
 
 impl TranscriptionEngine {
@@ -296,12 +437,17 @@ impl TranscriptionEngine {
                 last_decode: Instant::now() - decode_interval,
                 decode_interval,
                 transcript: String::new(),
+                stable_transcript: String::new(),
+                last_hypothesis: String::new(),
                 ct2_hint,
                 whisper_meta_printed: false,
                 pending_stdout: Vec::new(),
-                silence_accum: Duration::ZERO,
                 last_snapshot: Instant::now(),
                 live_unchanged_since: Instant::now(),
+                voice_decode_enabled: false,
+                quiet_for_voice_off: Duration::ZERO,
+                last_stdout_commit_key: String::new(),
+                accept_results_until: Instant::now(),
             };
         }
         #[cfg(not(all(
@@ -373,9 +519,32 @@ impl TranscriptionEngine {
         ))]
         {
             if !self.transcript.is_empty() {
-                self.pending_stdout.push(std::mem::take(&mut self.transcript));
+                let t = std::mem::take(&mut self.transcript);
+                self.try_push_stdout_commit(&t);
+            }
+            if !self.stable_transcript.is_empty() {
+                let stable = std::mem::take(&mut self.stable_transcript);
+                self.try_push_stdout_commit(&stable);
             }
         }
+    }
+
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    fn try_push_stdout_commit(&mut self, line: &str) {
+        let t = line.trim();
+        if t.is_empty() || whisper_spurious_line(t) {
+            return;
+        }
+        let key = t.to_lowercase();
+        if self.last_stdout_commit_key == key {
+            return;
+        }
+        self.last_stdout_commit_key = key;
+        self.pending_stdout.push(t.to_string());
     }
 
     pub fn process_snapshot(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
@@ -391,6 +560,42 @@ impl TranscriptionEngine {
         ))]
         {
             if self.decode_job_tx.is_some() {
+                let dt = self.last_snapshot.elapsed();
+                self.last_snapshot = Instant::now();
+
+                let was_voice = self.voice_decode_enabled;
+                if self.last_rms >= WHISPER_VOICE_ON_RMS {
+                    self.voice_decode_enabled = true;
+                    self.quiet_for_voice_off = Duration::ZERO;
+                    self.accept_results_until =
+                        Instant::now() + WHISPER_RESULT_GRACE_AFTER_VOICE_OFF;
+                    if !was_voice {
+                        self.last_decode =
+                            Instant::now() - self.decode_interval;
+                    }
+                } else if self.last_rms < WHISPER_VOICE_OFF_RMS {
+                    self.quiet_for_voice_off =
+                        self.quiet_for_voice_off.saturating_add(dt);
+                    if self.quiet_for_voice_off >= WHISPER_VOICE_QUIET_BEFORE_MUTE {
+                        if self.voice_decode_enabled && !self.transcript.is_empty() {
+                            let t = if self.stable_transcript.is_empty() {
+                                self.transcript.clone()
+                            } else {
+                                self.stable_transcript.clone()
+                            };
+                            self.try_push_stdout_commit(&t);
+                        }
+                        self.voice_decode_enabled = false;
+                        self.transcript.clear();
+                        self.stable_transcript.clear();
+                        self.last_hypothesis.clear();
+                        self.live_unchanged_since = Instant::now();
+                        self.accept_results_until =
+                            Instant::now() + WHISPER_RESULT_GRACE_AFTER_VOICE_OFF;
+                        self.quiet_for_voice_off = Duration::ZERO;
+                    }
+                }
+
                 let mut decoded_new = false;
                 while let Ok(line) = self
                     .decode_result_rx
@@ -398,39 +603,44 @@ impl TranscriptionEngine {
                     .expect("paired with decode_job_tx")
                     .try_recv()
                 {
-                    self.transcript = line;
-                    decoded_new = true;
+                    let clean = normalize_whitespace(&line);
+                    if clean.is_empty() {
+                        continue;
+                    }
+                    if self.voice_decode_enabled {
+                        if self.last_hypothesis.is_empty() {
+                            self.last_hypothesis = clean.clone();
+                            self.transcript = clean;
+                        } else {
+                            let consensus = word_prefix_consensus(&self.last_hypothesis, &clean);
+                            if !consensus.is_empty() {
+                                self.stable_transcript = consensus;
+                            }
+                            self.last_hypothesis = clean.clone();
+                            self.transcript =
+                                render_live_from_stable(&self.stable_transcript, &clean);
+                        }
+                        decoded_new = true;
+                    } else if Instant::now() <= self.accept_results_until {
+                        self.try_push_stdout_commit(&clean);
+                    }
                 }
                 if decoded_new {
                     self.live_unchanged_since = Instant::now();
                 }
 
-                let dt = self.last_snapshot.elapsed();
-                self.last_snapshot = Instant::now();
-                if self.last_rms < WHISPER_SILENCE_COMMIT_RMS {
-                    self.silence_accum = self.silence_accum.saturating_add(dt);
-                } else {
-                    self.silence_accum = Duration::ZERO;
-                }
-
-                let commit_live = |engine: &mut Self| {
-                    if !engine.transcript.is_empty() {
-                        engine
-                            .pending_stdout
-                            .push(std::mem::take(&mut engine.transcript));
-                        engine.live_unchanged_since = Instant::now();
-                        engine.silence_accum = Duration::ZERO;
-                    }
-                };
-
-                const SILENCE_COMMIT: Duration = Duration::from_millis(400);
-                const STABLE_COMMIT: Duration = Duration::from_millis(1200);
-                if !self.transcript.is_empty() {
-                    if self.silence_accum >= SILENCE_COMMIT {
-                        commit_live(self);
-                    } else if self.live_unchanged_since.elapsed() >= STABLE_COMMIT {
-                        commit_live(self);
-                    }
+                const STABLE_COMMIT: Duration = Duration::from_millis(1800);
+                if self.voice_decode_enabled
+                    && !self.transcript.is_empty()
+                    && self.live_unchanged_since.elapsed() >= STABLE_COMMIT
+                {
+                    let t = if self.stable_transcript.is_empty() {
+                        self.transcript.clone()
+                    } else {
+                        self.stable_transcript.clone()
+                    };
+                    self.try_push_stdout_commit(&t);
+                    self.live_unchanged_since = Instant::now();
                 }
 
                 let max_in = (sample_rate as usize)
@@ -439,9 +649,9 @@ impl TranscriptionEngine {
                 let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
                 resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
 
-                let min_samples = WHISPER_SAMPLE_RATE as usize / 2;
-                if self.last_decode.elapsed() >= self.decode_interval
-                    && self.resample_buf.len() >= min_samples
+                if self.voice_decode_enabled
+                    && self.last_decode.elapsed() >= self.decode_interval
+                    && self.resample_buf.len() >= WHISPER_MIN_DECODE_SAMPLES
                 {
                     let job_tx = self
                         .decode_job_tx
@@ -459,7 +669,7 @@ impl TranscriptionEngine {
                         .filter(|s| !s.trim().is_empty())
                         .unwrap_or_else(|| "en".into());
                     eprintln!(
-                        "transcribe: Whisper ~{:.2}s cadence · last {}s → 16 kHz · lang={} · greedy beam · stdout: committed lines + rolling live",
+                        "transcribe: one Whisper model · ~{:.2}s cadence · last {}s → 16 kHz · lang={} · decode only when voice (RMS) · stdout: commits + live",
                         self.decode_interval.as_secs_f32(),
                         WHISPER_INPUT_TAIL_SECS,
                         lg.trim()
