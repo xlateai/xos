@@ -275,9 +275,9 @@ const WHISPER_VOICE_ON_RMS: f32 = 0.013;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_END_SILENCE: Duration = Duration::from_millis(700);
+const WHISPER_END_SILENCE: Duration = Duration::from_millis(850);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(1400);
+const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2200);
 
 pub struct TranscriptionEngine {
     caption: String,
@@ -288,6 +288,7 @@ pub struct TranscriptionEngine {
     last_rms: f32,
     device_hint: String,
     pending_stdout: Vec<String>,
+    pending_iter_events: Vec<Option<String>>,
     last_stdout_commit_key: String,
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     decode_job_tx: Option<SyncSender<Vec<f32>>>,
@@ -340,6 +341,7 @@ impl TranscriptionEngine {
                 last_rms: 0.0,
                 device_hint: String::new(),
                 pending_stdout: Vec::new(),
+                pending_iter_events: Vec::new(),
                 last_stdout_commit_key: String::new(),
                 decode_job_tx,
                 decode_result_rx,
@@ -364,6 +366,7 @@ impl TranscriptionEngine {
                 last_rms: 0.0,
                 device_hint: String::new(),
                 pending_stdout: Vec::new(),
+                pending_iter_events: Vec::new(),
                 last_stdout_commit_key: String::new(),
             }
         }
@@ -382,6 +385,9 @@ impl TranscriptionEngine {
     }
     pub fn last_level_rms(&self) -> f32 { self.last_rms }
     pub fn drain_stdout_commits(&mut self) -> Vec<String> { std::mem::take(&mut self.pending_stdout) }
+    pub fn drain_iter_events(&mut self) -> Vec<Option<String>> {
+        std::mem::take(&mut self.pending_iter_events)
+    }
 
     pub fn flush_live_to_stdout_commits(&mut self) {
         #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
@@ -396,17 +402,19 @@ impl TranscriptionEngine {
     }
 
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-    fn try_push_stdout_commit(&mut self, line: &str) {
+    fn try_push_stdout_commit(&mut self, line: &str) -> bool {
         let t = normalize_ws(line);
         if t.is_empty() || whisper_spurious_line(&t) || looks_degenerate(&t) {
-            return;
+            return false;
         }
         let key = t.to_ascii_lowercase();
         if self.last_stdout_commit_key == key {
-            return;
+            return false;
         }
         self.last_stdout_commit_key = key;
         self.pending_stdout.push(t);
+        self.pending_iter_events.push(None);
+        true
     }
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     fn reset_phrase_state(&mut self) {
@@ -438,7 +446,11 @@ impl TranscriptionEngine {
                 self.stable_transcript = prefix;
             }
         }
-        self.live_transcript = overlap_stable_into_latest(&self.stable_transcript, &clean);
+        let next = overlap_stable_into_latest(&self.stable_transcript, &clean);
+        if next != self.live_transcript {
+            self.live_transcript = next.clone();
+            self.pending_iter_events.push(Some(next));
+        }
     }
 
     pub fn process_snapshot(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
@@ -497,7 +509,7 @@ impl TranscriptionEngine {
             }
 
             if self.awaiting_final_commit && Instant::now() > self.accept_results_until {
-                let best = if self.live_transcript.split_whitespace().count()
+                let mut best = if self.live_transcript.split_whitespace().count()
                     >= self.stable_transcript.split_whitespace().count() + 2
                 {
                     self.live_transcript.clone()
@@ -506,9 +518,18 @@ impl TranscriptionEngine {
                 } else {
                     self.live_transcript.clone()
                 };
+                if let Some(longest_recent) = self
+                    .hypotheses
+                    .iter()
+                    .max_by_key(|h| h.split_whitespace().count())
+                {
+                    if longest_recent.split_whitespace().count() > best.split_whitespace().count() {
+                        best = longest_recent.clone();
+                    }
+                }
                 self.try_push_stdout_commit(&best);
-                // Keep final line visible until next phrase starts.
-                self.live_transcript = best;
+                // Avoid printing the same finalized line both as commit and live line.
+                self.live_transcript.clear();
                 self.awaiting_final_commit = false;
                 self.stable_transcript.clear();
                 self.hypotheses.clear();

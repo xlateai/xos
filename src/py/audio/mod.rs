@@ -2,6 +2,7 @@ use rustpython_vm::{VirtualMachine, builtins::PyModule, PyRef};
 
 mod microphone;
 mod speakers;
+mod transcription;
 
 // Re-export cleanup functions for use by other modules
 pub use microphone::cleanup_all_microphones_rust;
@@ -15,6 +16,7 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("get_input_devices", vm.new_function("get_input_devices", microphone::get_input_devices), vm).unwrap();
     module.set_attr("Microphone", vm.new_function("Microphone", microphone::microphone_new), vm).unwrap();
     module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", microphone::cleanup_all_microphones), vm).unwrap();
+    module.set_attr("transcription", vm.new_function("transcription", transcription::transcription_new), vm).unwrap();
     
     // Internal microphone functions
     module.set_attr("_microphone_get_batch", vm.new_function("_microphone_get_batch", microphone::microphone_get_batch), vm).unwrap();
@@ -26,6 +28,8 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("_microphone_record", vm.new_function("_microphone_record", microphone::microphone_record), vm).unwrap();
     module.set_attr("_microphone_get_sample_rate", vm.new_function("_microphone_get_sample_rate", microphone::microphone_get_sample_rate), vm).unwrap();
     module.set_attr("_microphone_cleanup", vm.new_function("_microphone_cleanup", microphone::microphone_cleanup), vm).unwrap();
+    module.set_attr("_transcriber_next_events", vm.new_function("_transcriber_next_events", transcription::transcriber_next_events), vm).unwrap();
+    module.set_attr("_transcriber_cleanup", vm.new_function("_transcriber_cleanup", transcription::transcriber_cleanup), vm).unwrap();
     
     // --- Speaker API ---
     module.set_attr("get_output_devices", vm.new_function("get_output_devices", speakers::get_output_devices), vm).unwrap();
