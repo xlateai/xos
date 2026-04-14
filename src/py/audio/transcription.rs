@@ -129,8 +129,10 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
         .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
     let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
     let channels = listener.get_samples_by_channel();
-    let sr = listener.buffer().sample_rate();
-    state.engine.process_snapshot(sr, &channels);
+    let buf = listener.buffer();
+    let sr = buf.sample_rate();
+    let ingested = buf.ingested_frame_count();
+    state.engine.process_snapshot(sr, &channels, ingested);
     let events = state.engine.drain_iter_events();
     let py_list = events
         .into_iter()
@@ -158,8 +160,10 @@ pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyRes
         .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
     let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
     let channels = listener.get_samples_by_channel();
-    let sr = listener.buffer().sample_rate();
-    state.engine.process_snapshot(sr, &channels);
+    let buf = listener.buffer();
+    let sr = buf.sample_rate();
+    let ingested = buf.ingested_frame_count();
+    state.engine.process_snapshot(sr, &channels, ingested);
 
     let events = state.engine.drain_iter_events();
     let mut new_commits: Vec<String> = Vec::new();

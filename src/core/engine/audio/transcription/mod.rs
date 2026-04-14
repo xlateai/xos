@@ -14,13 +14,6 @@ mod whisper;
 ))]
 mod sample;
 
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
-use std::time::Instant;
-
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,
@@ -39,13 +32,19 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    last_decode: Option<Instant>,
+    last_ingested_frames: Option<u64>,
     #[cfg(all(
         feature = "whisper_ct2",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    silence_start: Option<Instant>,
+    stream_16k: Vec<f32>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    utterance_buf: String,
     #[cfg(all(
         feature = "whisper_ct2",
         not(target_arch = "wasm32"),
@@ -83,8 +82,9 @@ impl TranscriptionEngine {
                 pending_stdout: Vec::new(),
                 pending_iter_events: Vec::new(),
                 whisper,
-                last_decode: None,
-                silence_start: None,
+                last_ingested_frames: None,
+                stream_16k: Vec::new(),
+                utterance_buf: String::new(),
                 last_level_rms: 0.0,
                 load_note,
             };
@@ -165,32 +165,41 @@ impl TranscriptionEngine {
             not(target_os = "ios")
         ))]
         {
-            let line = self.caption.trim().to_string();
+            let line = self.utterance_buf.trim().to_string();
             if line.is_empty() {
                 return;
             }
             self.pending_iter_events.push(Some(line.clone()));
             self.pending_iter_events.push(None);
             self.pending_stdout.push(line);
+            self.utterance_buf.clear();
             self.caption.clear();
             self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         }
     }
 
-    pub fn process_snapshot(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
+    /// `ingested_frames`: [`AudioBuffer::ingested_frame_count`] from the same listener (monotonic
+    /// multichannel frames). Enables **non-overlapping** 1 s windows at 16 kHz. Use `0` if missing
+    /// (engine skips this poll to avoid duplicate audio).
+    pub fn process_snapshot(
+        &mut self,
+        sample_rate: u32,
+        channels: &[Vec<f32>],
+        ingested_frames: u64,
+    ) {
         #[cfg(all(
             feature = "whisper_ct2",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
-        self.process_snapshot_live(sample_rate, channels);
+        self.process_snapshot_live(sample_rate, channels, ingested_frames);
         #[cfg(not(all(
             feature = "whisper_ct2",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         )))]
         {
-            let _ = (sample_rate, channels);
+            let _ = (sample_rate, channels, ingested_frames);
         }
     }
 
@@ -209,72 +218,123 @@ impl TranscriptionEngine {
     not(target_os = "ios")
 ))]
 impl TranscriptionEngine {
-    fn process_snapshot_live(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
-        let Some(w) = &self.whisper else {
+    fn finish_utterance_commit(&mut self) {
+        let line = self.utterance_buf.trim();
+        if line.is_empty() {
+            return;
+        }
+        let line = line.to_string();
+        self.pending_iter_events.push(Some(line.clone()));
+        self.pending_iter_events.push(None);
+        self.pending_stdout.push(line);
+        self.utterance_buf.clear();
+        self.caption.clear();
+        self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+    }
+
+    fn process_snapshot_live(
+        &mut self,
+        sample_rate: u32,
+        channels: &[Vec<f32>],
+        ingested_frames: u64,
+    ) {
+        if channels.is_empty() || channels[0].is_empty() || ingested_frames == 0 {
+            return;
+        }
+
+        let Some(model) = self.whisper.take() else {
             return;
         };
 
-        let mono = sample::downmix_mono(channels);
-        if mono.is_empty() {
-            return;
-        }
-        let mono_16k = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
-        if mono_16k.is_empty() {
+        if self.last_ingested_frames.is_none() {
+            self.last_ingested_frames = Some(ingested_frames);
+            self.whisper = Some(model);
             return;
         }
 
-        let tail_frames =
-            ((sample::RMS_TAIL_MS as usize) * (sample::WHISPER_HZ as usize) / 1000).max(1);
-        self.last_level_rms = sample::rms_tail(&mono_16k, tail_frames);
-
-        let now = Instant::now();
-        let voiced = self.last_level_rms >= sample::SILENCE_RMS;
-        if voiced {
-            self.silence_start = None;
-        } else if self.silence_start.is_none() {
-            self.silence_start = Some(now);
+        let prev = self.last_ingested_frames.expect("initialized above");
+        if ingested_frames < prev {
+            self.stream_16k.clear();
+            self.utterance_buf.clear();
+            self.caption.clear();
+            self.last_ingested_frames = Some(ingested_frames);
+            let mono = sample::downmix_mono(channels);
+            if mono.is_empty() {
+                self.whisper = Some(model);
+                return;
+            }
+            let m = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
+            self.stream_16k.extend_from_slice(&m);
+            Self::process_filled_windows(self, &model);
+            self.whisper = Some(model);
+            return;
         }
 
-        let min_samples = (sample::WHISPER_HZ as f32 * 0.45) as usize;
-        let tail_cap = ((sample::TAIL_SECS * sample::WHISPER_HZ as f32) as usize)
-            .max(min_samples)
-            .min(w.n_samples());
+        let delta = ingested_frames.saturating_sub(prev);
+        self.last_ingested_frames = Some(ingested_frames);
+        if delta == 0 {
+            self.whisper = Some(model);
+            return;
+        }
 
-        let mut bumped = false;
-        let should_decode = mono_16k.len() >= min_samples
-            && self
-                .last_decode
-                .map(|t| now.duration_since(t) >= sample::MIN_DECODE_GAP)
-                .unwrap_or(true);
+        let ch_len = channels[0].len();
+        if delta as usize > ch_len {
+            self.stream_16k.clear();
+            let mono = sample::downmix_mono(channels);
+            if !mono.is_empty() {
+                let m = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
+                self.stream_16k.extend_from_slice(&m);
+            }
+        } else {
+            let take = (delta as usize).min(ch_len);
+            let mono_new = sample::downmix_tail_frames(channels, take);
+            if mono_new.is_empty() {
+                self.whisper = Some(model);
+                return;
+            }
+            let m = sample::resample_linear(&mono_new, sample_rate, sample::WHISPER_HZ);
+            self.stream_16k.extend_from_slice(&m);
+        }
 
-        if should_decode {
-            self.last_decode = Some(now);
-            if let Ok(t) = w.transcribe_tail(&mono_16k, tail_cap) {
-                if !t.is_empty() && t != self.caption {
-                    self.caption = t;
-                    self.pending_iter_events
-                        .push(Some(self.caption.clone()));
-                    bumped = true;
+        Self::process_filled_windows(self, &model);
+        self.whisper = Some(model);
+    }
+
+    fn process_filled_windows(engine: &mut TranscriptionEngine, w: &whisper::Whisper) {
+        while engine.stream_16k.len() > sample::MAX_STREAM_16K {
+            let over = engine.stream_16k.len() - sample::MAX_STREAM_16K;
+            let win = sample::WINDOW_16K;
+            let drop = ((over + win - 1) / win) * win;
+            let drop = drop.max(win).min(engine.stream_16k.len());
+            engine.stream_16k.drain(0..drop);
+        }
+
+        let win = sample::WINDOW_16K;
+        const MAX_CHUNKS_PER_TICK: usize = 6;
+        let mut chunks = 0usize;
+        while chunks < MAX_CHUNKS_PER_TICK && engine.stream_16k.len() >= win {
+            let chunk: Vec<f32> = engine.stream_16k.drain(0..win).collect();
+            chunks += 1;
+
+            engine.last_level_rms = sample::rms_all(&chunk);
+            if engine.last_level_rms < sample::CHUNK_SILENCE_RMS {
+                engine.finish_utterance_commit();
+                continue;
+            }
+
+            if let Ok(t) = w.transcribe_chunk(&chunk) {
+                if !t.is_empty() {
+                    if !engine.utterance_buf.is_empty() {
+                        engine.utterance_buf.push(' ');
+                    }
+                    engine.utterance_buf.push_str(&t);
+                    engine.caption.clone_from(&engine.utterance_buf);
+                    engine
+                        .pending_iter_events
+                        .push(Some(engine.caption.clone()));
+                    engine.transcript_epoch = engine.transcript_epoch.saturating_add(1);
                 }
             }
-        }
-
-        let silence_ok = self
-            .silence_start
-            .map(|t| now.duration_since(t) >= sample::SILENCE_HOLD)
-            .unwrap_or(false);
-        if silence_ok && !self.caption.trim().is_empty() {
-            let line = self.caption.trim().to_string();
-            self.pending_iter_events.push(Some(line.clone()));
-            self.pending_iter_events.push(None);
-            self.pending_stdout.push(line);
-            self.caption.clear();
-            self.silence_start = None;
-            bumped = true;
-        }
-
-        if bumped {
-            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         }
     }
 }

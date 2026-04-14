@@ -42,9 +42,10 @@ impl Whisper {
         })
     }
 
-    /// Max samples the model accepts per segment (Whisper preprocessor `n_samples`).
-    pub fn n_samples(&self) -> usize {
-        self.inner.n_samples()
+    /// Decode one contiguous chunk (e.g. exactly one 1 s window at 16 kHz).
+    #[inline]
+    pub fn transcribe_chunk(&self, mono_16k: &[f32]) -> Result<String, String> {
+        self.transcribe_tail(mono_16k, mono_16k.len().max(1))
     }
 
     /// Decode up to `max_take` **most recent** samples (16 kHz mono, [-1, 1]).

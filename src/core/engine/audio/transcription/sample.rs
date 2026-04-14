@@ -1,18 +1,17 @@
-//! Mono downmix, linear resample, and RMS on the tail of a buffer (live transcription helpers).
+//! Mono downmix, linear resample, RMS, and **non-overlapping** 16 kHz chunk helpers.
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 
-use std::time::Duration;
-
 pub const WHISPER_HZ: u32 = 16_000;
-pub const TAIL_SECS: f32 = 5.0;
-pub const MIN_DECODE_GAP: Duration = Duration::from_millis(280);
-pub const SILENCE_RMS: f32 = 0.014;
-pub const SILENCE_HOLD: Duration = Duration::from_millis(420);
-pub const RMS_TAIL_MS: u32 = 200;
+/// One decode / VAD unit at 16 kHz (no overlap between consecutive windows).
+pub const WINDOW_16K: usize = WHISPER_HZ as usize;
+/// RMS over a full 1 s window below this ⇒ treat as silence (no ASR; flush utterance).
+pub const CHUNK_SILENCE_RMS: f32 = 0.009;
+/// Trim oldest 16 kHz samples if the FIFO grows past this (slow polls / huge backlog).
+pub const MAX_STREAM_16K: usize = WHISPER_HZ as usize * 45;
 
 pub fn downmix_mono(channels: &[Vec<f32>]) -> Vec<f32> {
     if channels.is_empty() {
@@ -57,12 +56,39 @@ pub fn resample_linear(mono: &[f32], from_hz: u32, to_hz: u32) -> Vec<f32> {
     out
 }
 
-pub fn rms_tail(samples: &[f32], tail: usize) -> f32 {
+/// Last `frame_count` frames per channel (oldest→newest order), averaged to mono at device rate.
+pub fn downmix_tail_frames(channels: &[Vec<f32>], frame_count: usize) -> Vec<f32> {
+    if channels.is_empty() || frame_count == 0 {
+        return Vec::new();
+    }
+    let n = channels[0].len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let take = frame_count.min(n);
+    let start = n - take;
+    if channels.len() == 1 {
+        return channels[0][start..].to_vec();
+    }
+    let mut out = Vec::with_capacity(take);
+    for idx in start..n {
+        let mut s = 0.0f32;
+        for ch in channels {
+            if idx < ch.len() {
+                s += ch[idx];
+            }
+        }
+        out.push(s / channels.len() as f32);
+    }
+    out
+}
+
+/// RMS over the entire slice (e.g. one 1 s chunk at 16 kHz).
+pub fn rms_all(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let start = samples.len().saturating_sub(tail);
-    let slice = &samples[start..];
-    let e = slice.iter().map(|x| x * x).sum::<f32>() / slice.len() as f32;
+    let e = samples.iter().map(|x| x * x).sum::<f32>() / samples.len() as f32;
     e.sqrt()
 }
+

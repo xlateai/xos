@@ -162,15 +162,20 @@ impl Application for TranscribeApp {
             return;
         }
 
-        let (channels, sr) = {
+        let (channels, sr, ingested) = {
             let l = self.listener.as_ref().expect("checked above");
-            (l.get_samples_by_channel(), l.buffer().sample_rate())
+            let buf = l.buffer();
+            (
+                l.get_samples_by_channel(),
+                buf.sample_rate(),
+                buf.ingested_frame_count(),
+            )
         };
 
         let l = self.listener.as_ref().expect("checked above");
         self.wave.tick_draw(state, l);
 
-        self.engine.process_snapshot(sr, &channels);
+        self.engine.process_snapshot(sr, &channels, ingested);
 
         for line in self.engine.drain_stdout_commits() {
             if self.live_stdout_line {
