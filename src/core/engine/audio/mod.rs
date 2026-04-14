@@ -175,6 +175,27 @@ impl AudioDevice {
 /// Note: On some platforms, a single physical device (like AirPods) will appear twice:
 /// once as an input device and once as an output device. This is intentional as they
 /// require separate device handles for input vs output operations.
+/// Prefer ScreenCaptureKit **System audio** (macOS), WASAPI **loopback** (Windows), or any
+/// input whose name looks like a virtual loopback / stereo mix driver.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub fn preferred_system_audio_input_device() -> Option<AudioDevice> {
+    let list = all_input_devices();
+    if let Some(d) = list
+        .iter()
+        .find(|d| d.wasapi_loopback || d.macos_sck_system_audio)
+    {
+        return Some(d.clone());
+    }
+    list.iter()
+        .find(|d| {
+            matches!(
+                d.input_kind_hint(),
+                Some(InputDeviceKind::LoopbackOrVirtual)
+            )
+        })
+        .cloned()
+}
+
 pub fn devices() -> Vec<AudioDevice> {
     let mut all_devices = Vec::new();
     

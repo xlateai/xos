@@ -1,16 +1,6 @@
 import xos
 
 
-def pick_system_audio_input():
-    devices = xos.audio.get_input_devices()
-    for i, d in enumerate(devices):
-        label = str(d.get("label", "")).lower()
-        name = str(d.get("name", "")).lower()
-        if "system audio" in label or "loopback" in label or "stereo mix" in name:
-            return i
-    return None
-
-
 def committed_sentences_at_none(events):
     """
     Rust contract: each commit is Some(canonical) immediately followed by None.
@@ -50,7 +40,7 @@ def print_final_summary(events, last_draft):
     print("--- end ---")
 
 
-audio = xos.audio.Microphone(device_id=pick_system_audio_input(), buffer_duration=10.0)
+audio = xos.audio.system(buffer_duration=10.0)
 transcriber = xos.audio.transcription(audio, size="tiny")
 event_log = []
 last_statement = None

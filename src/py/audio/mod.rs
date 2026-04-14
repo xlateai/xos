@@ -27,6 +27,7 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // --- Microphone API ---
     module.set_attr("get_input_devices", vm.new_function("get_input_devices", microphone::get_input_devices), vm).unwrap();
     module.set_attr("Microphone", vm.new_function("Microphone", microphone::microphone_new), vm).unwrap();
+    module.set_attr("system", vm.new_function("system", microphone::microphone_system), vm).unwrap();
     module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", microphone::cleanup_all_microphones), vm).unwrap();
     module.set_attr("transcription", vm.new_function("transcription", transcription::transcription_new), vm).unwrap();
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -43,8 +44,8 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
             .unwrap();
         module
             .set_attr(
-                "_recording_close",
-                vm.new_function("_recording_close", recording::recording_close),
+                "_recording_finish",
+                vm.new_function("_recording_finish", recording::recording_finish),
                 vm,
             )
             .unwrap();

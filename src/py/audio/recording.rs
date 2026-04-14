@@ -15,10 +15,14 @@ struct PyRecorder {
     encoder: Mutex<Option<RecorderMp3>>,
 }
 
+/// LAME expects PCM in multiples of 1152 samples per channel for each `encode` call.
 struct RecorderMp3 {
     enc: mp3lame_encoder::Encoder,
     file: File,
     scratch_mp3: Vec<u8>,
+    stereo: bool,
+    pending_l: Vec<i16>,
+    pending_r: Vec<i16>,
 }
 
 static RECORDERS: OnceLock<Mutex<HashMap<usize, Box<PyRecorder>>>> = OnceLock::new();
@@ -53,13 +57,14 @@ fn encode_pcm_chunk(
     left: &[i16],
     right: Option<&[i16]>,
 ) -> Result<(), String> {
-    if left.is_empty() {
-        return Ok(());
+    debug_assert_eq!(left.len(), PCM_CHUNK);
+    if let Some(r) = right {
+        debug_assert_eq!(r.len(), PCM_CHUNK);
     }
     scratch_mp3.clear();
     scratch_mp3.reserve(mp3lame_encoder::max_required_buffer_size(left.len()));
     let n = match right {
-        Some(r) if r.len() == left.len() => {
+        Some(r) => {
             let input = DualPcm { left, right: r };
             enc.encode(input, scratch_mp3.spare_capacity_mut())
                 .map_err(|e| format!("encode: {e}"))?
@@ -76,6 +81,81 @@ fn encode_pcm_chunk(
     file.write_all(scratch_mp3)
         .map_err(|e| format!("write mp3: {e}"))?;
     Ok(())
+}
+
+impl RecorderMp3 {
+    fn append_samples(&mut self, left: &[i16], right: Option<&[i16]>) -> Result<(), String> {
+        self.pending_l.extend_from_slice(left);
+        if self.stereo {
+            let r = right.ok_or("internal error: stereo without right channel")?;
+            self.pending_r.extend_from_slice(r);
+        }
+        self.encode_pending_full_frames()
+    }
+
+    fn encode_pending_full_frames(&mut self) -> Result<(), String> {
+        while self.pending_l.len() >= PCM_CHUNK {
+            let l = &self.pending_l[..PCM_CHUNK];
+            let r = if self.stereo {
+                Some(&self.pending_r[..PCM_CHUNK])
+            } else {
+                None
+            };
+            encode_pcm_chunk(
+                &mut self.enc,
+                &mut self.scratch_mp3,
+                &mut self.file,
+                l,
+                r,
+            )?;
+            self.pending_l.drain(..PCM_CHUNK);
+            if self.stereo {
+                self.pending_r.drain(..PCM_CHUNK);
+            }
+        }
+        Ok(())
+    }
+
+    /// Zero-pad the last partial frame, encode it, then flush the encoder.
+    fn finalize(&mut self) -> Result<(), String> {
+        self.encode_pending_full_frames()?;
+        if !self.pending_l.is_empty() {
+            self.pending_l.resize(PCM_CHUNK, 0);
+            if self.stereo {
+                self.pending_r.resize(PCM_CHUNK, 0);
+            }
+            let r = if self.stereo {
+                Some(self.pending_r.as_slice())
+            } else {
+                None
+            };
+            encode_pcm_chunk(
+                &mut self.enc,
+                &mut self.scratch_mp3,
+                &mut self.file,
+                self.pending_l.as_slice(),
+                r,
+            )?;
+            self.pending_l.clear();
+            self.pending_r.clear();
+        }
+
+        self.scratch_mp3.clear();
+        self.scratch_mp3
+            .reserve(mp3lame_encoder::max_required_buffer_size(PCM_CHUNK * 2));
+        let flush_n = self
+            .enc
+            .flush::<FlushNoGap>(self.scratch_mp3.spare_capacity_mut())
+            .map_err(|e| format!("flush mp3: {e}"))?;
+        unsafe {
+            self.scratch_mp3.set_len(flush_n);
+        }
+        self.file
+            .write_all(&self.scratch_mp3)
+            .map_err(|e| format!("write final mp3: {e}"))?;
+        self.file.sync_all().map_err(|e| format!("sync: {e}"))?;
+        Ok(())
+    }
 }
 
 pub fn recording_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -125,20 +205,27 @@ class Recording:
     def __init__(self, ptr):
         self._ptr = ptr
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.finish()
+        return False
+
     def record(self, poll_interval=0.02):
         import xos
         while True:
             xos.audio._recording_step(self._ptr)
             xos.sleep(poll_interval)
 
-    def close(self):
+    def finish(self):
         if self._ptr != 0:
             import xos
-            xos.audio._recording_close(self._ptr)
+            xos.audio._recording_finish(self._ptr)
             self._ptr = 0
 
     def __del__(self):
-        self.close()
+        self.finish()
 
 _recording_instance = Recording({})
 "#,
@@ -190,13 +277,16 @@ pub fn recording_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             enc,
             file,
             scratch_mp3: Vec::with_capacity(8192),
+            stereo: ch == 2,
+            pending_l: Vec::new(),
+            pending_r: Vec::new(),
         });
     }
 
     let inner = guard.as_mut().expect("just set");
     let frames = drained[0].len();
-    let left_f: Vec<i16> = drained[0].iter().copied().map(f32_to_i16).collect();
-    let right_f: Option<Vec<i16>> = if ch == 2 {
+    let left_i16: Vec<i16> = drained[0].iter().copied().map(f32_to_i16).collect();
+    let right_i16: Option<Vec<i16>> = if ch == 2 {
         if drained.len() < 2 || drained[1].len() != frames {
             return Err(vm.new_runtime_error("stereo channel length mismatch".to_string()));
         }
@@ -205,22 +295,15 @@ pub fn recording_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         None
     };
 
-    let right_slice = right_f.as_ref().map(|v| v.as_slice());
-    for off in (0..frames).step_by(PCM_CHUNK) {
-        let end = (off + PCM_CHUNK).min(frames);
-        let l = &left_f[off..end];
-        match right_slice {
-            Some(r) => encode_pcm_chunk(&mut inner.enc, &mut inner.scratch_mp3, &mut inner.file, l, Some(&r[off..end]))
-                .map_err(|e| vm.new_runtime_error(e))?,
-            None => encode_pcm_chunk(&mut inner.enc, &mut inner.scratch_mp3, &mut inner.file, l, None)
-                .map_err(|e| vm.new_runtime_error(e))?,
-        }
-    }
+    let right_slice = right_i16.as_ref().map(|v| v.as_slice());
+    inner
+        .append_samples(left_i16.as_slice(), right_slice)
+        .map_err(|e| vm.new_runtime_error(e))?;
 
     Ok(vm.ctx.none())
 }
 
-pub fn recording_close(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+pub fn recording_finish(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let ptr: usize = args.bind(vm)?;
     let mut map = recorders()
         .lock()
@@ -234,22 +317,9 @@ pub fn recording_close(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .map_err(|_| vm.new_runtime_error("recording encoder lock poisoned".to_string()))?;
     if let Some(mut inner) = guard.take() {
-        inner.scratch_mp3.clear();
         inner
-            .scratch_mp3
-            .reserve(mp3lame_encoder::max_required_buffer_size(PCM_CHUNK * 2));
-        let flush_n = inner
-            .enc
-            .flush::<FlushNoGap>(inner.scratch_mp3.spare_capacity_mut())
-            .map_err(|e| vm.new_runtime_error(format!("flush mp3: {e}")))?;
-        unsafe {
-            inner.scratch_mp3.set_len(flush_n);
-        }
-        inner
-            .file
-            .write_all(&inner.scratch_mp3)
-            .map_err(|e| vm.new_runtime_error(format!("write final mp3: {e}")))?;
-        inner.file.sync_all().map_err(|e| vm.new_runtime_error(format!("sync: {e}")))?;
+            .finalize()
+            .map_err(|e| vm.new_runtime_error(e))?;
     }
 
     Ok(vm.ctx.none())
@@ -265,20 +335,7 @@ pub fn cleanup_all_recordings_rust() {
             continue;
         };
         if let Some(mut inner) = guard.take() {
-            inner.scratch_mp3.clear();
-            inner
-                .scratch_mp3
-                .reserve(mp3lame_encoder::max_required_buffer_size(PCM_CHUNK * 2));
-            if let Ok(flush_n) = inner
-                .enc
-                .flush::<FlushNoGap>(inner.scratch_mp3.spare_capacity_mut())
-            {
-                unsafe {
-                    inner.scratch_mp3.set_len(flush_n);
-                }
-                let _ = inner.file.write_all(&inner.scratch_mp3);
-                let _ = inner.file.sync_all();
-            }
+            let _ = inner.finalize();
         }
     }
 }

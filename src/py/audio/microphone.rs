@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs, PyObjectRef, AsObject};
+use rustpython_vm::{AsObject, PyResult, VirtualMachine, function::FuncArgs, PyObjectRef};
 use crate::engine::audio;
 use std::sync::Mutex;
 use std::collections::HashSet;
@@ -39,10 +39,42 @@ pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(list.into())
 }
 
+fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
+    if args.args.len() > 1 {
+        Ok(args.args[1].clone().try_into_value::<f64>(vm)? as f32)
+    } else if let Some(duration_arg) = args.kwargs.get("buffer_duration") {
+        Ok(duration_arg.clone().try_into_value::<f64>(vm)? as f32)
+    } else {
+        Ok(1.0)
+    }
+}
+
+fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
+    if !args.args.is_empty() {
+        Ok(args.args[0].clone().try_into_value::<f64>(vm)? as f32)
+    } else if let Some(d) = args.kwargs.get("buffer_duration") {
+        Ok(d.clone().try_into_value::<f64>(vm)? as f32)
+    } else {
+        Ok(10.0)
+    }
+}
+
+/// Build `Microphone` Python object from a resolved [`audio::AudioDevice`].
+pub fn microphone_from_resolved_device(device: &audio::AudioDevice, buffer_duration: f32, vm: &VirtualMachine) -> PyResult {
+    let listener = audio::AudioListener::new(device, buffer_duration)
+        .map_err(|e| vm.new_runtime_error(format!("Failed to initialize microphone: {e}")))?;
+    listener
+        .record()
+        .map_err(|e| vm.new_runtime_error(format!("Failed to start recording: {e}")))?;
+    let listener_ptr = Box::into_raw(Box::new(listener)) as usize;
+    if let Ok(mut mics) = get_active_microphones().lock() {
+        mics.insert(listener_ptr);
+    }
+    install_microphone_python_wrapper(listener_ptr, vm)
+}
+
 /// xos.audio.Microphone(device_id=None, buffer_duration=1.0) - Create microphone instance
 pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    // Parse arguments - handle both positional and keyword args
-    // device_id can be None (use default), or a specific device index
     let device_id_opt: Option<usize> = if !args.args.is_empty() {
         if args.args[0].is(&vm.ctx.none) {
             None
@@ -56,63 +88,62 @@ pub fn microphone_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             Some(device_id_arg.clone().try_into_value::<usize>(vm)?)
         }
     } else {
-        None // Default to None (use system default)
+        None
     };
-    
-    let buffer_duration = if args.args.len() > 1 {
-        args.args[1].clone().try_into_value::<f64>(vm)? as f32
-    } else if let Some(duration_arg) = args.kwargs.get("buffer_duration") {
-        duration_arg.clone().try_into_value::<f64>(vm)? as f32
-    } else {
-        1.0
-    };
-    
-    // Get the device to use
+
+    let buffer_duration = parse_mic_buffer_duration(&args, vm)?;
+
     let device = if let Some(device_id) = device_id_opt {
-        // Specific device requested
         let all_devices = audio::devices();
-        let input_devices: Vec<_> = all_devices
-            .into_iter()
-            .filter(|d| d.is_input)
-            .collect();
-        
+        let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
+
         if input_devices.is_empty() {
             return Err(vm.new_runtime_error(
                 "No audio input devices found (on Windows, expect “… (system audio)” entries for each output)"
                     .to_string(),
             ));
         }
-        
+
         if device_id >= input_devices.len() {
-            return Err(vm.new_runtime_error(format!("Invalid device_id: {}. Only {} device(s) available.", device_id, input_devices.len())));
+            return Err(vm.new_runtime_error(format!(
+                "Invalid device_id: {}. Only {} device(s) available.",
+                device_id,
+                input_devices.len()
+            )));
         }
-        
+
         input_devices[device_id].clone()
     } else {
-        // Use default input device
         audio::default_input()
             .ok_or_else(|| vm.new_runtime_error("No default input device found".to_string()))?
     };
-    
-    let device = &device;
-    
-    // Create AudioListener
-    let listener = audio::AudioListener::new(device, buffer_duration)
-        .map_err(|e| vm.new_runtime_error(format!("Failed to initialize microphone: {}", e)))?;
-    
-    // Start recording
-    listener.record()
-        .map_err(|e| vm.new_runtime_error(format!("Failed to start recording: {}", e)))?;
-    
-    // Store the listener in a Box and get a raw pointer
-    let listener_ptr = Box::into_raw(Box::new(listener)) as usize;
-    
-    // Register this microphone in the global registry
-    if let Ok(mut mics) = get_active_microphones().lock() {
-        mics.insert(listener_ptr);
+
+    microphone_from_resolved_device(&device, buffer_duration, vm)
+}
+
+/// xos.audio.system(buffer_duration=10.0) — prefer system / loopback input (macOS ScreenCaptureKit, Windows loopback, virtual cables).
+pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    {
+        let _ = args;
+        return Err(vm.new_runtime_error(
+            "xos.audio.system is only available on desktop (macOS / Linux / Windows)".to_string(),
+        ));
     }
-    
-    // Create a Python class with pause/record methods for instant control
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let buffer_duration = parse_system_buffer_duration(&args, vm)?;
+        let device = audio::preferred_system_audio_input_device().ok_or_else(|| {
+            vm.new_runtime_error(
+                "No system or loopback input found. On macOS use “System audio”; on Windows use a “(system audio)” capture device; or install a virtual cable (e.g. BlackHole)."
+                    .to_string(),
+            )
+        })?;
+        microphone_from_resolved_device(&device, buffer_duration, vm)
+    }
+}
+
+fn install_microphone_python_wrapper(listener_ptr: usize, vm: &VirtualMachine) -> PyResult {
     let code = format!(r#"
 class Microphone:
     def __init__(self, listener_ptr):
