@@ -22,5 +22,4 @@ try:
 except KeyboardInterrupt:
     pass
 finally:
-    recorder1.finish()
-    recorder2.finish()
+    recorder.finish()
