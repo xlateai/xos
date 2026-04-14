@@ -1,9 +1,9 @@
 import xos
 
+
 audio = xos.audio.system(buffer_duration=10.0)
-recorder1 = xos.audio.recording(audio, "test1.mp3")
-recorder2 = xos.audio.recording(audio, "test2.mp3")
 transcriber = xos.audio.transcription(audio, size="tiny")
+recorder = xos.audio.recording(audio, "test.mp3")
 
 try:
     while True:
@@ -11,9 +11,8 @@ try:
         xos.sleep(0.02)
 
         # record the audio
-        recorder1.record(wait=False)
-        recorder2.record(wait=False)
-
+        recorder.record(wait=False)
+        
         # transcribe the audio
         transcription, was_committed, is_new = transcriber.transcribe()
         if is_new:

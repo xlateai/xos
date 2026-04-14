@@ -6,6 +6,8 @@ use std::sync::{Mutex, OnceLock};
 struct PyTranscriber {
     listener_ptr: usize,
     engine: TranscriptionEngine,
+    /// Last [`TranscriptionEngine::transcript_epoch`] seen from [`transcriber_transcribe_step`].
+    last_yield_epoch: u64,
 }
 
 static ACTIVE_TRANSCRIBERS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
@@ -57,7 +59,11 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener = unsafe { &*(listener_ptr as *const AudioListener) };
     engine.set_device_hint("python-mic", listener.buffer().sample_rate());
 
-    let boxed = Box::new(PyTranscriber { listener_ptr, engine });
+    let boxed = Box::new(PyTranscriber {
+        listener_ptr,
+        engine,
+        last_yield_epoch: 0,
+    });
     let ptr = (&*boxed as *const PyTranscriber) as usize;
     if let Ok(mut map) = transcribers().lock() {
         map.insert(ptr, boxed);
@@ -74,19 +80,15 @@ class _Transcriber:
 
     def transcribe(self, poll_interval=0.03):
         """
-        Block until the engine has something to report, then return ``(transcription, was_committed)``.
+        One poll of the transcription engine. Returns ``(transcription, was_committed, is_new)``.
 
-        Polls ``_transcriber_transcribe_step`` (like ``iterate``) with ``poll_interval`` between
-        tries. ``transcription`` is live caption while ``was_committed`` is false, or the finalized
-        phrase when true. On a commit tick, only the committed text is returned; any fresh partial
-        shows up on a later call after more audio has been processed.
+        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step``. ``is_new``
+        is driven by the engine's ``transcript_epoch`` (no string equality): false when the
+        epoch is unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved;
+        callers can sleep between polls (see ``record.py``).
         """
         import xos
-        while True:
-            t, c = xos.audio._transcriber_transcribe_step(self._ptr)
-            if t != "" or c:
-                return (t, c)
-            xos.sleep(poll_interval)
+        return xos.audio._transcriber_transcribe_step(self._ptr)
 
     def iterate(self, poll_interval=0.03):
         import xos
@@ -136,11 +138,12 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
     Ok(vm.ctx.new_list(py_list).into())
 }
 
-/// One transcription poll: returns `(transcription, was_committed)`.
+/// One transcription poll: returns `(transcription, was_committed, is_new)`.
 ///
 /// `transcription` is the live caption while building an utterance; on ticks where a phrase
 /// commits it is that finalized phrase. `was_committed` is true iff at least one commit
-/// occurred this poll.
+/// occurred this poll. `is_new` compares [`TranscriptionEngine::transcript_epoch`] to the last
+/// seen value (bumped when the engine queues live or commit iterator events).
 pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let ptr: usize = args.bind(vm)?;
     let mut map = transcribers()
@@ -178,11 +181,16 @@ pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyRes
         state.engine.caption().trim().to_string()
     };
 
+    let epoch = state.engine.transcript_epoch();
+    let is_new = epoch != state.last_yield_epoch;
+    state.last_yield_epoch = epoch;
+
     Ok(vm
         .ctx
         .new_tuple(vec![
             vm.ctx.new_str(transcription).into(),
             vm.ctx.new_bool(was_committed).into(),
+            vm.ctx.new_bool(is_new).into(),
         ])
         .into())
 }

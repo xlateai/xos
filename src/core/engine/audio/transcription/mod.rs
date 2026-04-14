@@ -355,6 +355,8 @@ const WHISPER_RESTART_MIN_ANCHOR_WORDS: usize = 12;
 const WHISPER_RESTART_MIN_CLEAN_WORDS: usize = 8;
 
 pub struct TranscriptionEngine {
+    /// Incremented whenever live or commit text is queued for `drain_iter_events` / Python.
+    transcript_epoch: u64,
     caption: String,
     #[allow(dead_code)]
     last_emit: Instant,
@@ -415,6 +417,7 @@ impl TranscriptionEngine {
                 None => (None, None),
             };
             return Self {
+                transcript_epoch: 0,
                 caption: if decode_job_tx.is_some() {
                     String::new()
                 } else if hint.is_empty() {
@@ -450,6 +453,7 @@ impl TranscriptionEngine {
         {
             let _ = preferred_size;
             Self {
+                transcript_epoch: 0,
                 caption: "Waiting for audio…".to_string(),
                 last_emit: Instant::now(),
                 emit_interval: Duration::from_millis(400),
@@ -464,6 +468,14 @@ impl TranscriptionEngine {
 
     pub fn set_device_hint(&mut self, name: &str, sample_rate: u32) {
         self.device_hint = format!("Input: {name} @ {sample_rate} Hz");
+    }
+    /// Monotonic counter bumped when transcript output for iterators / `transcribe` changes.
+    pub fn transcript_epoch(&self) -> u64 {
+        self.transcript_epoch
+    }
+    #[inline]
+    fn bump_transcript_epoch(&mut self) {
+        self.transcript_epoch = self.transcript_epoch.wrapping_add(1);
     }
     pub fn device_hint(&self) -> &str { &self.device_hint }
     pub fn caption(&self) -> &str {
@@ -511,6 +523,7 @@ impl TranscriptionEngine {
         // non-None event immediately before the None commit marker.
         self.pending_iter_events.push(Some(t.clone()));
         self.pending_iter_events.push(None);
+        self.bump_transcript_epoch();
         self.last_committed_text = t;
         self.block_stale_until = Instant::now() + WHISPER_POST_COMMIT_STALE_BLOCK;
         self.utterance_best.clear();
@@ -601,6 +614,7 @@ impl TranscriptionEngine {
         if next != self.live_transcript {
             self.live_transcript = next.clone();
             self.pending_iter_events.push(Some(next));
+            self.bump_transcript_epoch();
         }
     }
 
@@ -712,6 +726,7 @@ impl TranscriptionEngine {
                 bundled.display(),
                 wh = WHISPER_SAMPLE_RATE
             );
+            self.bump_transcript_epoch();
         }
     }
 
