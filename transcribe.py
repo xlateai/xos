@@ -31,3 +31,4 @@ finally:
     print("\n".join(full_transcription))
     print("-------------------------------------------")
     recorder.finish()
+    transcriber.finish()

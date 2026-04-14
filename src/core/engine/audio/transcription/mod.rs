@@ -198,7 +198,19 @@ fn hypothesis_continues_anchor(anchor: &str, clean: &str) -> bool {
         return true;
     }
     let merged = overlap_stable_into_latest(anchor, clean);
-    merged.split_whitespace().count() > anchor.split_whitespace().count()
+    if merged.split_whitespace().count() > anchor.split_whitespace().count() {
+        return true;
+    }
+    // Sliding-window re-decodes often shift wording without growing word count; treat strong
+    // shared-prefix overlap as the same utterance to avoid a burst of mid-sentence commits.
+    let aw = anchor.split_whitespace().count();
+    let cw = clean.split_whitespace().count();
+    let common = common_prefix_word_count(anchor, clean);
+    let m = aw.min(cw);
+    if m >= 8 && common * 10 >= m * 7 {
+        return true;
+    }
+    false
 }
 
 fn has_repeated_ngram(words: &[&str], n: usize, repeats: usize) -> bool {
@@ -337,22 +349,27 @@ const WHISPER_INPUT_TAIL_SECS: u32 = 12;
 const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(90);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 12;
+/// After each 16 kHz chunk is **successfully queued**, trim this fraction of its length from the
+/// **start** of the *next* resampled chunk so consecutive jobs are mostly disjoint (sliding tail
+/// minus heavy prefix overlap). Tune down if you hear word loss at chunk joins.
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+const WHISPER_NEXT_CHUNK_TRIM_FRAC: f64 = 0.88;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_ON_RMS: f32 = 0.013;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_END_SILENCE: Duration = Duration::from_millis(900);
+const WHISPER_END_SILENCE: Duration = Duration::from_millis(1500);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2000);
+const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2600);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1200);
+const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1400);
 /// Mid-utterance `None`: commit when a new decode clearly starts a different line (no
 /// suffix/prefix stitch and not a shorter re-prefix of what we already have).
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESTART_MIN_ANCHOR_WORDS: usize = 12;
+const WHISPER_RESTART_MIN_ANCHOR_WORDS: usize = 22;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESTART_MIN_CLEAN_WORDS: usize = 8;
+const WHISPER_RESTART_MIN_CLEAN_WORDS: usize = 14;
 
 pub struct TranscriptionEngine {
     /// Incremented whenever live or commit text is queued for `drain_iter_events` / Python.
@@ -398,6 +415,9 @@ pub struct TranscriptionEngine {
     /// Longest merged live line this utterance; `live_transcript` can regress on bad decodes.
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     utterance_best: String,
+    /// 16 kHz samples to drop from the start of the next `resample_buf` (overlap vs previous job).
+    #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+    whisper_trim_next_prefix_16k: usize,
 }
 
 impl TranscriptionEngine {
@@ -447,6 +467,7 @@ impl TranscriptionEngine {
                 last_committed_text: String::new(),
                 block_stale_until: Instant::now(),
                 utterance_best: String::new(),
+                whisper_trim_next_prefix_16k: 0,
             };
         }
         #[cfg(not(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32"))))]
@@ -524,9 +545,14 @@ impl TranscriptionEngine {
         self.pending_iter_events.push(Some(t.clone()));
         self.pending_iter_events.push(None);
         self.bump_transcript_epoch();
-        self.last_committed_text = t;
+        self.last_committed_text = t.clone();
         self.block_stale_until = Instant::now() + WHISPER_POST_COMMIT_STALE_BLOCK;
+        // Flush sliding-window text state so the next live line is not stitched onto committed text.
         self.utterance_best.clear();
+        self.live_transcript.clear();
+        self.stable_transcript.clear();
+        self.hypotheses.clear();
+        self.whisper_trim_next_prefix_16k = 0;
         true
     }
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
@@ -660,6 +686,17 @@ impl TranscriptionEngine {
             let max_in = (sample_rate as usize).saturating_mul(WHISPER_INPUT_TAIL_SECS as usize).min(mono.len());
             let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
             resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
+            // Drop most of the previous window from the head of this chunk so Whisper sees fresh
+            // audio instead of almost the same 12 s slice every ~90 ms.
+            let trim = self.whisper_trim_next_prefix_16k;
+            self.whisper_trim_next_prefix_16k = 0;
+            if trim > 0 && !self.resample_buf.is_empty() {
+                let max_trim = self.resample_buf.len().saturating_sub(WHISPER_MIN_DECODE_SAMPLES);
+                let t = trim.min(max_trim);
+                if t > 0 {
+                    self.resample_buf.drain(..t);
+                }
+            }
             let allow_trailing_decode = !self.voice_active
                 && self.awaiting_final_commit
                 && Instant::now() <= self.accept_results_until;
@@ -668,8 +705,11 @@ impl TranscriptionEngine {
                 && self.resample_buf.len() >= WHISPER_MIN_DECODE_SAMPLES
             {
                 let tx = self.decode_job_tx.as_ref().expect("checked above");
+                let sent_len = self.resample_buf.len();
                 if tx.try_send(self.resample_buf.clone()).is_ok() {
                     self.last_decode = Instant::now();
+                    self.whisper_trim_next_prefix_16k =
+                        ((sent_len as f64) * WHISPER_NEXT_CHUNK_TRIM_FRAC) as usize;
                 }
             }
 
@@ -691,12 +731,15 @@ impl TranscriptionEngine {
                 for h in self.hypotheses.iter() {
                     fold_overlap_longer_into(&mut best, h);
                 }
-                self.try_push_stdout_commit(&best);
-                // Avoid printing the same finalized line both as commit and live line.
-                self.live_transcript.clear();
+                let pushed = self.try_push_stdout_commit(&best);
+                if !pushed {
+                    // Duplicate / rejected finalization: still drop window state so we do not loop.
+                    self.live_transcript.clear();
+                    self.stable_transcript.clear();
+                    self.hypotheses.clear();
+                    self.utterance_best.clear();
+                }
                 self.awaiting_final_commit = false;
-                self.stable_transcript.clear();
-                self.hypotheses.clear();
                 self.accept_results_until = Instant::now();
                 while self
                     .decode_result_rx

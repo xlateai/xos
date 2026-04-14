@@ -100,11 +100,15 @@ class _Transcriber:
             else:
                 xos.sleep(poll_interval)
 
-    def __del__(self):
+    def finish(self):
+        """Release transcriber state (same as cleanup); safe to call from ``finally``."""
         if self._ptr != 0:
             import xos
             xos.audio._transcriber_cleanup(self._ptr)
             self._ptr = 0
+
+    def __del__(self):
+        self.finish()
 
 _transcriber_instance = _Transcriber({})
 "#,
