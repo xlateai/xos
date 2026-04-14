@@ -71,6 +71,7 @@ ctrlc = "3.4"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
+mp3lame-encoder = "0.2.3"
 # CTranslate2 (vendored C++ via ct2rs; not Python). Requires CMake + C/C++ toolchain on PATH (e.g. `brew install cmake`, Xcode CLT). Long compile.
 ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy", "openblas"], optional = true }
 
