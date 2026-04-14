@@ -267,17 +267,17 @@ fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_INPUT_TAIL_SECS: u32 = 6;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(220);
+const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(150);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 5;
+const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 8;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_ON_RMS: f32 = 0.013;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_END_SILENCE: Duration = Duration::from_millis(320);
+const WHISPER_END_SILENCE: Duration = Duration::from_millis(700);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(900);
+const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(1400);
 
 pub struct TranscriptionEngine {
     caption: String,
@@ -311,6 +311,8 @@ pub struct TranscriptionEngine {
     last_snapshot: Instant,
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     accept_results_until: Instant,
+    #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+    awaiting_final_commit: bool,
 }
 
 impl TranscriptionEngine {
@@ -350,6 +352,7 @@ impl TranscriptionEngine {
                 quiet_for: Duration::ZERO,
                 last_snapshot: Instant::now(),
                 accept_results_until: Instant::now(),
+                awaiting_final_commit: false,
             };
         }
         #[cfg(not(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32"))))]
@@ -456,24 +459,22 @@ impl TranscriptionEngine {
                     self.last_decode = Instant::now() - WHISPER_DECODE_INTERVAL;
                 }
                 self.voice_active = true;
+                self.awaiting_final_commit = false;
                 self.quiet_for = Duration::ZERO;
                 self.accept_results_until = Instant::now() + WHISPER_RESULT_GRACE;
             } else if self.last_rms < WHISPER_VOICE_OFF_RMS && self.voice_active {
                 self.quiet_for = self.quiet_for.saturating_add(dt);
                 if self.quiet_for >= WHISPER_END_SILENCE {
-                    let best = if !self.stable_transcript.is_empty() {
-                        self.stable_transcript.clone()
-                    } else {
-                        self.live_transcript.clone()
-                    };
-                    self.try_push_stdout_commit(&best);
                     self.voice_active = false;
+                    self.awaiting_final_commit = true;
                     self.quiet_for = Duration::ZERO;
                     self.accept_results_until = Instant::now() + WHISPER_RESULT_GRACE;
-                    self.reset_phrase_state();
                 }
             }
             while let Ok(line) = self.decode_result_rx.as_ref().expect("paired decode channels").try_recv() {
+                if !self.voice_active && !self.awaiting_final_commit {
+                    continue;
+                }
                 if !self.voice_active && Instant::now() > self.accept_results_until {
                     continue;
                 }
@@ -482,7 +483,10 @@ impl TranscriptionEngine {
             let max_in = (sample_rate as usize).saturating_mul(WHISPER_INPUT_TAIL_SECS as usize).min(mono.len());
             let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
             resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
-            if self.voice_active
+            let allow_trailing_decode = !self.voice_active
+                && self.awaiting_final_commit
+                && Instant::now() <= self.accept_results_until;
+            if (self.voice_active || allow_trailing_decode)
                 && self.last_decode.elapsed() >= WHISPER_DECODE_INTERVAL
                 && self.resample_buf.len() >= WHISPER_MIN_DECODE_SAMPLES
             {
@@ -490,6 +494,32 @@ impl TranscriptionEngine {
                 if tx.try_send(self.resample_buf.clone()).is_ok() {
                     self.last_decode = Instant::now();
                 }
+            }
+
+            if self.awaiting_final_commit && Instant::now() > self.accept_results_until {
+                let best = if self.live_transcript.split_whitespace().count()
+                    >= self.stable_transcript.split_whitespace().count() + 2
+                {
+                    self.live_transcript.clone()
+                } else if !self.stable_transcript.is_empty() {
+                    self.stable_transcript.clone()
+                } else {
+                    self.live_transcript.clone()
+                };
+                self.try_push_stdout_commit(&best);
+                // Keep final line visible until next phrase starts.
+                self.live_transcript = best;
+                self.awaiting_final_commit = false;
+                self.stable_transcript.clear();
+                self.hypotheses.clear();
+                self.accept_results_until = Instant::now();
+                while self
+                    .decode_result_rx
+                    .as_ref()
+                    .expect("paired decode channels")
+                    .try_recv()
+                    .is_ok()
+                {}
             }
             return;
         }
