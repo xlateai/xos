@@ -1,0 +1,68 @@
+Prompt for redesigning XOS live transcription (start from scratch)
+===================================================================
+
+Goal: best possible accuracy + low latency + clear “commit” semantics, using ct2rs Whisper well,
+with readable, organized Rust. The old engine in `src/core/engine/audio/transcription/mod.rs` was
+wiped to a stub — rebuild deliberately.
+
+Key paths (where to plug in)
+----------------------------
+- Engine (decode, merge, commits): `src/core/engine/audio/transcription/mod.rs`
+- Python API + `_Transcriber` / `transcribe()` tuple: `src/py/audio/transcription.rs`
+- Audio module exports: `src/core/engine/audio/mod.rs` (`pub mod transcription`)
+- Native transcribe app (window + stdout): `src/core/apps/transcription/transcribe.rs`
+- Feature flag: `whisper_ct2` in `Cargo.toml` (optional ct2rs); iOS / wasm may exclude heavy paths
+
+Model sizes: `tiny` vs `small`
+------------------------------
+- Python: `xos.audio.transcription(audio, size="tiny"|"small")` — validated in `transcription_new`
+  (`src/py/audio/transcription.rs`).
+- Bundled dirs under repo: `src/core/engine/audio/transcription/models/` — names like
+  `whisper-tiny-ct2`, `whisper-small-ct2` (each needs `model.bin`, `config.json`, `vocabulary.json`,
+  `tokenizer.json`, `preprocessor_config.json`).
+- Pick one default; expose size to engine ctor so the right folder loads.
+
+Audio input and buffers (nuances)
+---------------------------------
+- Capture: `AudioListener` from `src/py/audio/microphone.rs` (Rust) / `xos.audio.system(...)` in Python.
+- Python passes `listener.get_samples_by_channel()` + `buffer().sample_rate()` each poll into
+  `TranscriptionEngine::process_snapshot(sample_rate, channels)`.
+- Channels are `Vec<Vec<f32>>` per channel, same length; engine typically downmixes to mono.
+- Ring buffer duration matters (e.g. 10s for Whisper in `transcribe` app) — longer = more context,
+  more RAM, older speech still in tail when you slice for decode.
+- RMS / voice activity if you gate: define whether you measure full buffer or tail only.
+
+ct2rs / Whisper usage (directional bullets)
+------------------------------------------
+- One `Whisper` instance, one decode thread, bounded channel (e.g. sync_channel(1)) is a simple shape.
+- `WhisperOptions` (beam_size, etc.) — tune vs CPU; document choices.
+- Input is f32 mono at 16 kHz for Whisper; resample from device rate if needed.
+- Sliding window overlap is a design choice (tail length, hop, whether to trim redundant prefix);
+  overlapping full-window decodes every ~90 ms burns CPU and confuses merge logic — avoid blind copy.
+
+Commits vs live captions (contract)
+-----------------------------------
+- Python `transcribe()` returns `(text, was_committed, is_new)` from `transcriber_transcribe_step`.
+- `is_new` is driven by `transcript_epoch` (not string compare); bump epoch only when you enqueue
+  new iterator / caption state so clients do not miss updates.
+
+Organization
+------------
+- Keep `mod.rs` as orchestration; split helpers (`merge`, `resample`, `voice_gate`) into submodules
+  if the file grows.
+- Keep cfg gates (`whisper_ct2`, ios, wasm) explicit so default builds stay light.
+
+Wish-I-knew / pitfalls (from prior iteration)
+---------------------------------------------
+- Do not let a “longer latest line” overwrite accumulated utterance text when the new line is a
+  disjoint tail-only decode — you lose the spoken prefix at final silence commit.
+- Duplicate commit suppression (`last_stdout_commit_key`) must not hide legitimate sequential commits.
+- Overlap-merge functions that return only `stable` when tail-head word overlap is zero drop the
+  `latest` clause entirely — dangerous for multi-sentence tails.
+- Python only prints when `is_new`; epoch must bump on commits and meaningful live changes.
+
+Next steps (minimal)
+--------------------
+1. Reintroduce resample + mono helpers (or depend on a small audio util module).
+2. Spawn decode thread + voice / silence policy + single place that pushes commits.
+3. Define one clear state machine (idle / live / trailing) and test with `transcribe.py`.

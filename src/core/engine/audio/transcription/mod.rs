@@ -14,6 +14,13 @@ mod whisper;
 ))]
 mod sample;
 
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod vad;
+
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,
@@ -57,6 +64,12 @@ pub struct TranscriptionEngine {
         not(target_os = "ios")
     ))]
     load_note: Option<String>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad: vad::EnergyVad,
 }
 
 impl TranscriptionEngine {
@@ -87,6 +100,7 @@ impl TranscriptionEngine {
                 utterance_buf: String::new(),
                 last_level_rms: 0.0,
                 load_note,
+                vad: vad::EnergyVad::new(),
             };
         }
         #[cfg(not(all(
@@ -257,14 +271,15 @@ impl TranscriptionEngine {
             self.stream_16k.clear();
             self.utterance_buf.clear();
             self.caption.clear();
+            self.vad.reset();
             self.last_ingested_frames = Some(ingested_frames);
             let mono = sample::downmix_mono(channels);
             if mono.is_empty() {
                 self.whisper = Some(model);
                 return;
             }
-            let m = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
-            self.stream_16k.extend_from_slice(&m);
+            let new_16k = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
+            Self::append_16k_and_vad(self, &new_16k);
             Self::process_filled_windows(self, &model);
             self.whisper = Some(model);
             return;
@@ -278,13 +293,15 @@ impl TranscriptionEngine {
         }
 
         let ch_len = channels[0].len();
-        if delta as usize > ch_len {
+        let new_16k = if delta as usize > ch_len {
             self.stream_16k.clear();
+            self.vad.reset();
             let mono = sample::downmix_mono(channels);
-            if !mono.is_empty() {
-                let m = sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ);
-                self.stream_16k.extend_from_slice(&m);
+            if mono.is_empty() {
+                self.whisper = Some(model);
+                return;
             }
+            sample::resample_linear(&mono, sample_rate, sample::WHISPER_HZ)
         } else {
             let take = (delta as usize).min(ch_len);
             let mono_new = sample::downmix_tail_frames(channels, take);
@@ -292,12 +309,22 @@ impl TranscriptionEngine {
                 self.whisper = Some(model);
                 return;
             }
-            let m = sample::resample_linear(&mono_new, sample_rate, sample::WHISPER_HZ);
-            self.stream_16k.extend_from_slice(&m);
-        }
+            sample::resample_linear(&mono_new, sample_rate, sample::WHISPER_HZ)
+        };
 
+        Self::append_16k_and_vad(self, &new_16k);
         Self::process_filled_windows(self, &model);
         self.whisper = Some(model);
+    }
+
+    fn append_16k_and_vad(engine: &mut TranscriptionEngine, new_16k: &[f32]) {
+        if new_16k.is_empty() {
+            return;
+        }
+        if engine.vad.push_mono_16k(new_16k) {
+            engine.finish_utterance_commit();
+        }
+        engine.stream_16k.extend_from_slice(new_16k);
     }
 
     fn process_filled_windows(engine: &mut TranscriptionEngine, w: &whisper::Whisper) {
