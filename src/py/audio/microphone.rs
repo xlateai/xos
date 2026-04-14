@@ -42,7 +42,11 @@ pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
     if args.args.len() > 1 {
         Ok(args.args[1].clone().try_into_value::<f64>(vm)? as f32)
-    } else if let Some(duration_arg) = args.kwargs.get("buffer_duration") {
+    } else if let Some(duration_arg) = args
+        .kwargs
+        .get("buffer_duration")
+        .or_else(|| args.kwargs.get("max_buffer_duration"))
+    {
         Ok(duration_arg.clone().try_into_value::<f64>(vm)? as f32)
     } else {
         Ok(1.0)
@@ -52,7 +56,11 @@ fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f
 fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
     if !args.args.is_empty() {
         Ok(args.args[0].clone().try_into_value::<f64>(vm)? as f32)
-    } else if let Some(d) = args.kwargs.get("buffer_duration") {
+    } else if let Some(d) = args
+        .kwargs
+        .get("buffer_duration")
+        .or_else(|| args.kwargs.get("max_buffer_duration"))
+    {
         Ok(d.clone().try_into_value::<f64>(vm)? as f32)
     } else {
         Ok(10.0)
@@ -146,6 +154,13 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn install_microphone_python_wrapper(listener_ptr: usize, vm: &VirtualMachine) -> PyResult {
     let code = format!(r#"
 class Microphone:
+    '''Shared rolling capture ring for this device.
+
+    ``buffer_duration`` (alias ``max_buffer_duration``) is the **maximum** seconds of audio
+    retained per channel; older samples drop when the ring is full. Waveforms and transcription
+    **peek**; ``read()`` **drains**. MP3 recording reads incrementally without draining the ring.
+    '''
+
     def __init__(self, listener_ptr):
         self._listener_ptr = listener_ptr
     

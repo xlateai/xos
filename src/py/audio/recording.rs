@@ -1,4 +1,9 @@
 //! MP3 capture from an existing `xos.audio.Microphone` / `AudioListener` (native desktop only).
+//!
+//! Each `Recording` keeps its own encoder and ingest cursor. Audio is taken **incrementally** from
+//! the shared device ring (peek-by-counter), so transcription / `get_batch` on the same mic keep
+//! working. Avoid `Microphone.read()` on that mic while recording unless you intend to drain the
+//! shared buffer.
 
 use crate::engine::audio::AudioListener;
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
@@ -13,6 +18,8 @@ struct PyRecorder {
     listener_ptr: usize,
     path: PathBuf,
     encoder: Mutex<Option<RecorderMp3>>,
+    /// After the first `_recording_step`, tracks `AudioBuffer::ingested_frame_count` between polls.
+    ingest_cursor: Mutex<Option<u64>>,
 }
 
 /// LAME expects PCM in multiples of 1152 samples per channel for each `encode` call.
@@ -193,6 +200,7 @@ pub fn recording_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         listener_ptr,
         path,
         encoder: Mutex::new(None),
+        ingest_cursor: Mutex::new(None),
     });
     let ptr = (&*boxed as *const PyRecorder) as usize;
     if let Ok(mut map) = recorders().lock() {
@@ -202,6 +210,8 @@ pub fn recording_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let code = format!(
         r#"
 class Recording:
+    '''MP3 writer with its own encoder; safe with other peek-based consumers on the same mic.'''
+
     def __init__(self, ptr):
         self._ptr = ptr
 
@@ -212,11 +222,21 @@ class Recording:
         self.finish()
         return False
 
-    def record(self, poll_interval=0.02):
+    def record(self, poll_interval=0.02, wait=True):
+        """
+        Capture audio into the file.
+
+        If ``wait`` is True (default), block forever, polling the mic each ``poll_interval``.
+        If ``wait`` is False, perform a single non-blocking poll (call from your own loop, e.g.
+        alongside transcription or animation).
+        """
         import xos
-        while True:
+        if wait:
+            while True:
+                xos.audio._recording_step(self._ptr)
+                xos.sleep(poll_interval)
+        else:
             xos.audio._recording_step(self._ptr)
-            xos.sleep(poll_interval)
 
     def finish(self):
         if self._ptr != 0:
@@ -247,15 +267,6 @@ pub fn recording_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let listener = unsafe { &*(rec.listener_ptr as *const AudioListener) };
     let buf = listener.buffer();
-    let n = buf.len();
-    if n == 0 {
-        return Ok(vm.ctx.none());
-    }
-
-    let drained = buf.drain_samples(n);
-    if drained.is_empty() || drained[0].is_empty() {
-        return Ok(vm.ctx.none());
-    }
 
     let sr = buf.sample_rate();
     let ch = buf.channels();
@@ -283,7 +294,40 @@ pub fn recording_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         });
     }
 
-    let inner = guard.as_mut().expect("just set");
+    let take: Option<usize> = {
+        let cur = buf.ingested_frame_count();
+        let mut ic = rec
+            .ingest_cursor
+            .lock()
+            .map_err(|_| vm.new_runtime_error("recording ingest cursor poisoned".to_string()))?;
+        match *ic {
+            None => {
+                *ic = Some(cur);
+                None
+            }
+            Some(prev) => {
+                let d = cur.saturating_sub(prev);
+                *ic = Some(cur);
+                if d == 0 {
+                    Some(0)
+                } else {
+                    Some((d as usize).min(buf.len()))
+                }
+            }
+        }
+    };
+    let take = match take {
+        None => return Ok(vm.ctx.none()),
+        Some(0) => return Ok(vm.ctx.none()),
+        Some(t) => t,
+    };
+
+    let drained = buf.copy_tail_frames(take);
+    if drained.is_empty() || drained[0].is_empty() {
+        return Ok(vm.ctx.none());
+    }
+
+    let inner = guard.as_mut().expect("encoder exists");
     let frames = drained[0].len();
     let left_i16: Vec<i16> = drained[0].iter().copied().map(f32_to_i16).collect();
     let right_i16: Option<Vec<i16>> = if ch == 2 {

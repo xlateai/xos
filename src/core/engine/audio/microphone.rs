@@ -8,16 +8,20 @@
 //! - iOS using AVAudioEngine via Swift FFI
 //! - WASM using Web Audio API
 //!
-//! ## Buffer Semantics
-//! 
-//! The AudioBuffer acts as a **rolling window accumulator**:
-//! - Samples continuously fill the buffer from the audio stream
-//! - When capacity is reached, oldest samples are dropped (FIFO)
-//! - `get_samples_by_channel()` returns current buffer contents WITHOUT clearing
-//! - This allows smooth, continuous data flow for visualizations
+//! ## Buffer semantics
 //!
-//! Capacity = `buffer_duration * sample_rate` samples per channel
+//! The `AudioBuffer` is a **single rolling ring per `Microphone` / `AudioListener`** (not one
+//! buffer per consumer). `buffer_duration_secs` (Python: `buffer_duration`, alias
+//! `max_buffer_duration`) is the **maximum** time depth retained per channel (~`duration *
+//! sample_rate` frames); when full, oldest samples drop (FIFO).
+//!
+//! - `get_samples_by_channel()` **peeks** at the ring (does not remove).
+//! - `Microphone.read()` / `drain_samples()` **removes** samples; avoid mixing drains with other
+//!   consumers unless you intend to steal audio from the shared ring.
+//! - MP3 `xos.audio.recording` reads **incrementally** via an internal frame counter so it does
+//!   not clear the ring; safe alongside transcription / waveforms that peek.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -49,6 +53,8 @@ pub struct AudioBuffer {
     channels: u16,
     /// Timestamp when the buffer was last accessed
     last_access: Arc<Mutex<Instant>>,
+    /// Monotonic count of multi-channel frames ingested (one interleaved frame = +1).
+    frames_ingested: Arc<AtomicU64>,
 }
 
 impl AudioBuffer {
@@ -65,6 +71,7 @@ impl AudioBuffer {
             sample_rate,
             channels,
             last_access: Arc::new(Mutex::new(Instant::now())),
+            frames_ingested: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -90,6 +97,8 @@ impl AudioBuffer {
             // Add new sample
             buffer.push_back(sample);
         }
+
+        self.frames_ingested.fetch_add(1, Ordering::Relaxed);
         
         // Update last access time
         *self.last_access.lock().unwrap() = Instant::now();
@@ -139,6 +148,7 @@ impl AudioBuffer {
                     // Add new sample
                     buffer.push_back(sample);
                 }
+                self.frames_ingested.fetch_add(1, Ordering::Relaxed);
             }
         }
         
@@ -157,6 +167,9 @@ impl AudioBuffer {
             }
             buffer.push_back(sample);
         }
+
+        self.frames_ingested
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
     }
     
     /// Get a copy of all samples for each channel
@@ -277,6 +290,29 @@ impl AudioBuffer {
     pub fn channels(&self) -> u16 {
         self.channels
     }
+
+    /// Monotonic count of multi-channel frames ingested into this ring (for incremental readers).
+    pub fn ingested_frame_count(&self) -> u64 {
+        self.frames_ingested.load(Ordering::Relaxed)
+    }
+
+    /// Peek at the last `frame_count` frames per channel (does not remove). `frame_count` is
+    /// clamped per channel to the current length. All channels return the same logical length
+    /// when the ring is driven symmetrically.
+    pub fn copy_tail_frames(&self, frame_count: usize) -> Vec<Vec<f32>> {
+        let channel_buffers = self.channel_samples.lock().unwrap();
+        channel_buffers
+            .iter()
+            .map(|buffer| {
+                if frame_count == 0 || buffer.is_empty() {
+                    return Vec::new();
+                }
+                let take = frame_count.min(buffer.len());
+                let start = buffer.len() - take;
+                buffer.range(start..).cloned().collect()
+            })
+            .collect()
+    }
 }
 
 // ================================================================================================
@@ -303,7 +339,9 @@ mod native {
     }
 
     impl AudioListener {
-        /// Create a new listener for the specified device
+        /// Create a new listener for the specified device.
+        ///
+        /// `buffer_duration_secs` is the **maximum** ring depth per channel (rolling window).
         pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
             #[cfg(target_os = "macos")]
             if audio_device.macos_sck_system_audio {
@@ -597,7 +635,9 @@ mod ios {
     }
 
     impl AudioListener {
-        /// Create a new listener for the specified device
+        /// Create a new listener for the specified device.
+        ///
+        /// `buffer_duration_secs` is the **maximum** ring depth per channel (rolling window).
         pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
             if !audio_device.is_input {
                 return Err("Device is not an input device".to_string());
