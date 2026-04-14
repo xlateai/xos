@@ -107,6 +107,13 @@ fn common_prefix_words(a: &str, b: &str) -> String {
     out.join(" ")
 }
 
+fn common_prefix_word_count(a: &str, b: &str) -> usize {
+    a.split_whitespace()
+        .zip(b.split_whitespace())
+        .take_while(|(wa, wb)| wa.eq_ignore_ascii_case(wb))
+        .count()
+}
+
 fn overlap_stable_into_latest(stable: &str, latest: &str) -> String {
     let stable = normalize_ws(stable);
     let latest = normalize_ws(latest);
@@ -278,6 +285,8 @@ const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 const WHISPER_END_SILENCE: Duration = Duration::from_millis(850);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2200);
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1800);
 
 pub struct TranscriptionEngine {
     caption: String,
@@ -314,6 +323,10 @@ pub struct TranscriptionEngine {
     accept_results_until: Instant,
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
     awaiting_final_commit: bool,
+    #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+    last_committed_text: String,
+    #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+    block_stale_until: Instant,
 }
 
 impl TranscriptionEngine {
@@ -355,6 +368,8 @@ impl TranscriptionEngine {
                 last_snapshot: Instant::now(),
                 accept_results_until: Instant::now(),
                 awaiting_final_commit: false,
+                last_committed_text: String::new(),
+                block_stale_until: Instant::now(),
             };
         }
         #[cfg(not(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32"))))]
@@ -412,8 +427,10 @@ impl TranscriptionEngine {
             return false;
         }
         self.last_stdout_commit_key = key;
-        self.pending_stdout.push(t);
+        self.pending_stdout.push(t.clone());
         self.pending_iter_events.push(None);
+        self.last_committed_text = t;
+        self.block_stale_until = Instant::now() + WHISPER_POST_COMMIT_STALE_BLOCK;
         true
     }
     #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
@@ -427,6 +444,15 @@ impl TranscriptionEngine {
         let clean = normalize_ws(&text);
         if clean.is_empty() || looks_degenerate(&clean) {
             return;
+        }
+        if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
+            let committed_words = self.last_committed_text.split_whitespace().count();
+            let clean_words = clean.split_whitespace().count();
+            let common = common_prefix_word_count(&self.last_committed_text, &clean);
+            let threshold = committed_words.min(clean_words).max(4);
+            if common >= threshold {
+                return;
+            }
         }
         self.hypotheses.push_back(clean.clone());
         while self.hypotheses.len() > 3 {
