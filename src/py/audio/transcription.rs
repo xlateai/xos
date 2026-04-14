@@ -20,7 +20,31 @@ fn transcribers() -> &'static Mutex<HashMap<usize, Box<PyTranscriber>>> {
 }
 
 pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let mic_obj: PyObjectRef = args.bind(vm)?;
+    let mic_obj: PyObjectRef = if !args.args.is_empty() {
+        args.args[0].clone()
+    } else if let Some(obj) = args.kwargs.get("audio") {
+        obj.clone()
+    } else {
+        return Err(vm.new_type_error(
+            "xos.audio.transcription(audio, size='small|tiny') expects a microphone object"
+                .to_string(),
+        ));
+    };
+    let size: Option<String> = if args.args.len() > 1 {
+        Some(args.args[1].clone().try_into_value::<String>(vm)?)
+    } else if let Some(s) = args.kwargs.get("size") {
+        Some(s.clone().try_into_value::<String>(vm)?)
+    } else {
+        None
+    };
+    if let Some(sz) = size.as_deref() {
+        let lower = sz.trim().to_ascii_lowercase();
+        if lower != "small" && lower != "tiny" {
+            return Err(vm.new_value_error(
+                "size must be 'small' or 'tiny'".to_string(),
+            ));
+        }
+    }
     let listener_ptr_obj = mic_obj
         .get_attr("_listener_ptr", vm)
         .map_err(|_| vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string()))?;
@@ -29,7 +53,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
 
-    let mut engine = TranscriptionEngine::new();
+    let mut engine = TranscriptionEngine::new_with_size(size.as_deref());
     let listener = unsafe { &*(listener_ptr as *const AudioListener) };
     engine.set_device_hint("python-mic", listener.buffer().sample_rate());
 

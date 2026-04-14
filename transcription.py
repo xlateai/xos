@@ -12,7 +12,7 @@ def pick_system_audio_input():
 
 
 audio = xos.audio.Microphone(device_id=pick_system_audio_input(), buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio)
+transcriber = xos.audio.transcription(audio, size="tiny")
 committed_statements = []
 last_statement = None
 printed_live = ""

@@ -32,6 +32,28 @@ pub fn default_bundled_ct2_model_dir() -> PathBuf {
     root.join(BUNDLED_WHISPER_CT2_DIR_NAMES[0])
 }
 
+fn preferred_model_dir_name(size: Option<&str>) -> Option<&'static str> {
+    match size.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(s) if s == "small" => Some("whisper-small-ct2"),
+        Some(s) if s == "tiny" => Some("whisper-tiny-ct2"),
+        _ => None,
+    }
+}
+
+fn default_bundled_ct2_model_dir_for_size(size: Option<&str>) -> PathBuf {
+    let root = bundled_models_root();
+    if let Some(name) = preferred_model_dir_name(size) {
+        let preferred = root.join(name);
+        if WHISPER_CT2_REQUIRED_FILES
+            .iter()
+            .all(|f| preferred.join(f).is_file())
+        {
+            return preferred;
+        }
+    }
+    default_bundled_ct2_model_dir()
+}
+
 pub fn resample_linear_mono(input_rate: u32, input: &[f32], output_rate: u32, out: &mut Vec<f32>) {
     out.clear();
     if input_rate == 0 || output_rate == 0 || input.is_empty() {
@@ -210,12 +232,12 @@ fn whisper_spurious_line(line: &str) -> bool {
 }
 
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
+fn try_load_whisper_ct2(preferred_size: Option<&str>) -> (Option<ct2rs::Whisper>, String) {
     use ct2rs::{Config, Whisper};
     const ENV: &str = "XOS_WHISPER_CT2_PATH";
     let path: PathBuf = match std::env::var(ENV) {
         Ok(raw) if !raw.trim().is_empty() => PathBuf::from(raw.trim()),
-        _ => default_bundled_ct2_model_dir(),
+        _ => default_bundled_ct2_model_dir_for_size(preferred_size),
     };
     let missing: Vec<&str> = WHISPER_CT2_REQUIRED_FILES
         .iter()
@@ -274,19 +296,25 @@ fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_INPUT_TAIL_SECS: u32 = 6;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(150);
+const WHISPER_DECODE_INTERVAL: Duration = Duration::from_millis(80);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 8;
+const WHISPER_MIN_DECODE_SAMPLES: usize = (WHISPER_SAMPLE_RATE as usize) / 12;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_ON_RMS: f32 = 0.013;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
 const WHISPER_VOICE_OFF_RMS: f32 = 0.010;
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_END_SILENCE: Duration = Duration::from_millis(850);
+const WHISPER_END_SILENCE: Duration = Duration::from_millis(620);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(2200);
+const WHISPER_RESULT_GRACE: Duration = Duration::from_millis(1600);
 #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
-const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1800);
+const WHISPER_POST_COMMIT_STALE_BLOCK: Duration = Duration::from_millis(1200);
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+const WHISPER_NEW_SENTENCE_MIN_PREV_WORDS: usize = 8;
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+const WHISPER_NEW_SENTENCE_MIN_NEW_WORDS: usize = 3;
+#[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
+const WHISPER_NEW_SENTENCE_MAX_SHARED_PREFIX: usize = 2;
 
 pub struct TranscriptionEngine {
     caption: String,
@@ -331,9 +359,13 @@ pub struct TranscriptionEngine {
 
 impl TranscriptionEngine {
     pub fn new() -> Self {
+        Self::new_with_size(None)
+    }
+
+    pub fn new_with_size(preferred_size: Option<&str>) -> Self {
         #[cfg(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32")))]
         {
-            let (whisper, hint) = try_load_whisper_ct2();
+            let (whisper, hint) = try_load_whisper_ct2(preferred_size);
             let (decode_job_tx, decode_result_rx) = match whisper {
                 Some(w) => {
                     let (tx, rx) = spawn_whisper_decode_thread(w);
@@ -374,6 +406,7 @@ impl TranscriptionEngine {
         }
         #[cfg(not(all(feature = "whisper_ct2", not(target_os = "ios"), not(target_arch = "wasm32"))))]
         {
+            let _ = preferred_size;
             Self {
                 caption: "Waiting for audio…".to_string(),
                 last_emit: Instant::now(),
@@ -428,6 +461,9 @@ impl TranscriptionEngine {
         }
         self.last_stdout_commit_key = key;
         self.pending_stdout.push(t.clone());
+        // Iterator contract: the final committed text should be the last
+        // non-None event immediately before the None commit marker.
+        self.pending_iter_events.push(Some(t.clone()));
         self.pending_iter_events.push(None);
         self.last_committed_text = t;
         self.block_stale_until = Instant::now() + WHISPER_POST_COMMIT_STALE_BLOCK;
@@ -445,6 +481,9 @@ impl TranscriptionEngine {
         if clean.is_empty() || looks_degenerate(&clean) {
             return;
         }
+        if whisper_spurious_line(&clean) {
+            return;
+        }
         if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
             let committed_words = self.last_committed_text.split_whitespace().count();
             let clean_words = clean.split_whitespace().count();
@@ -452,6 +491,27 @@ impl TranscriptionEngine {
             let threshold = committed_words.min(clean_words).max(4);
             if common >= threshold {
                 return;
+            }
+        }
+        // If the model abruptly diverges from a long in-progress sentence, treat this as
+        // a sentence rollover: commit previous best now and start a new draft stream.
+        let live_words = self.live_transcript.split_whitespace().count();
+        let clean_words = clean.split_whitespace().count();
+        let shared_prefix = common_prefix_word_count(&self.live_transcript, &clean);
+        if live_words >= WHISPER_NEW_SENTENCE_MIN_PREV_WORDS
+            && clean_words >= WHISPER_NEW_SENTENCE_MIN_NEW_WORDS
+            && shared_prefix <= WHISPER_NEW_SENTENCE_MAX_SHARED_PREFIX
+            && !self.live_transcript.is_empty()
+        {
+            let best = if !self.stable_transcript.is_empty() {
+                self.stable_transcript.clone()
+            } else {
+                self.live_transcript.clone()
+            };
+            let committed = self.try_push_stdout_commit(&best);
+            if committed {
+                self.reset_phrase_state();
+                self.block_stale_until = Instant::now() + Duration::from_millis(350);
             }
         }
         self.hypotheses.push_back(clean.clone());
