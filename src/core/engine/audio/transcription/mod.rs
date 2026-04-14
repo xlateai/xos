@@ -193,7 +193,10 @@ fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-const WHISPER_INPUT_TAIL_SECS: u32 = 4;
+const WHISPER_INPUT_TAIL_SECS: u32 = 8;
+
+/// RMS below this (on the level meter tail) counts as silence for committing a phrase to stdout.
+const WHISPER_SILENCE_COMMIT_RMS: f32 = 0.012;
 
 /// Transcription: RMS placeholder, or Whisper+CTranslate2 when `whisper_ct2` is enabled.
 pub struct TranscriptionEngine {
@@ -250,6 +253,11 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32")
     ))]
     whisper_meta_printed: bool,
+    /// Lines to print with `println!` (full scrollback); live rolling line uses [`Self::caption`].
+    pending_stdout: Vec<String>,
+    silence_accum: Duration,
+    last_snapshot: Instant,
+    live_unchanged_since: Instant,
 }
 
 impl TranscriptionEngine {
@@ -290,6 +298,10 @@ impl TranscriptionEngine {
                 transcript: String::new(),
                 ct2_hint,
                 whisper_meta_printed: false,
+                pending_stdout: Vec::new(),
+                silence_accum: Duration::ZERO,
+                last_snapshot: Instant::now(),
+                live_unchanged_since: Instant::now(),
             };
         }
         #[cfg(not(all(
@@ -332,6 +344,40 @@ impl TranscriptionEngine {
         self.last_rms
     }
 
+    /// Drains committed phrase lines (for terminal scrollback). No-op without Whisper.
+    pub fn drain_stdout_commits(&mut self) -> Vec<String> {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        {
+            return std::mem::take(&mut self.pending_stdout);
+        }
+        #[cfg(not(all(
+            feature = "whisper_ct2",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// Pushes any non-final live text to stdout commits (call on shutdown).
+    pub fn flush_live_to_stdout_commits(&mut self) {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        {
+            if !self.transcript.is_empty() {
+                self.pending_stdout.push(std::mem::take(&mut self.transcript));
+            }
+        }
+    }
+
     pub fn process_snapshot(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
         let mono = downmix_to_mono(channels);
         let tail = (sample_rate as usize).saturating_mul(80) / 1000;
@@ -345,6 +391,7 @@ impl TranscriptionEngine {
         ))]
         {
             if self.decode_job_tx.is_some() {
+                let mut decoded_new = false;
                 while let Ok(line) = self
                     .decode_result_rx
                     .as_ref()
@@ -352,6 +399,38 @@ impl TranscriptionEngine {
                     .try_recv()
                 {
                     self.transcript = line;
+                    decoded_new = true;
+                }
+                if decoded_new {
+                    self.live_unchanged_since = Instant::now();
+                }
+
+                let dt = self.last_snapshot.elapsed();
+                self.last_snapshot = Instant::now();
+                if self.last_rms < WHISPER_SILENCE_COMMIT_RMS {
+                    self.silence_accum = self.silence_accum.saturating_add(dt);
+                } else {
+                    self.silence_accum = Duration::ZERO;
+                }
+
+                let commit_live = |engine: &mut Self| {
+                    if !engine.transcript.is_empty() {
+                        engine
+                            .pending_stdout
+                            .push(std::mem::take(&mut engine.transcript));
+                        engine.live_unchanged_since = Instant::now();
+                        engine.silence_accum = Duration::ZERO;
+                    }
+                };
+
+                const SILENCE_COMMIT: Duration = Duration::from_millis(400);
+                const STABLE_COMMIT: Duration = Duration::from_millis(1200);
+                if !self.transcript.is_empty() {
+                    if self.silence_accum >= SILENCE_COMMIT {
+                        commit_live(self);
+                    } else if self.live_unchanged_since.elapsed() >= STABLE_COMMIT {
+                        commit_live(self);
+                    }
                 }
 
                 let max_in = (sample_rate as usize)
@@ -380,7 +459,7 @@ impl TranscriptionEngine {
                         .filter(|s| !s.trim().is_empty())
                         .unwrap_or_else(|| "en".into());
                     eprintln!(
-                        "transcribe: Whisper ~{:.2}s cadence · last {}s → 16 kHz · lang={} · greedy beam (stdout = live line)",
+                        "transcribe: Whisper ~{:.2}s cadence · last {}s → 16 kHz · lang={} · greedy beam · stdout: committed lines + rolling live",
                         self.decode_interval.as_secs_f32(),
                         WHISPER_INPUT_TAIL_SECS,
                         lg.trim()

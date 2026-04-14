@@ -5,7 +5,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
     keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
 };
@@ -14,8 +14,7 @@ use winit::platform::windows::WindowExtWindows;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
+use std::sync::{Arc, Mutex};
 use super::{
     apply_frame_view_zoom,
     f3_menu_boost_interaction_fade,
@@ -38,9 +37,18 @@ use crate::rasterizer::RasterCache;
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
+/// Wakes the winit loop so `SHOULD_EXIT` is observed promptly (Ctrl+C, Esc, programmatic exit).
+#[cfg(not(target_arch = "wasm32"))]
+static EXIT_EVENT_LOOP_PROXY: Mutex<Option<EventLoopProxy<()>>> = Mutex::new(None);
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn request_exit() {
     SHOULD_EXIT.store(true, Ordering::Relaxed);
+    if let Ok(lock) = EXIT_EVENT_LOOP_PROXY.lock() {
+        if let Some(proxy) = lock.as_ref() {
+            let _ = proxy.send_event(());
+        }
+    }
 }
 
 /// How the native host creates the winit window: a normal windowed app vs floating overlay.
@@ -677,6 +685,15 @@ impl ApplicationHandler for AppStateWrapper {
         }
     }
 
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
+        if SHOULD_EXIT.load(Ordering::Relaxed) {
+            if let Some(ref mut app_state) = self.app_state {
+                app_state.app.prepare_shutdown(&mut app_state.engine_state);
+            }
+            event_loop.exit();
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(ref mut app_state) = self.app_state {
             app_state.about_to_wait(event_loop);
@@ -690,14 +707,22 @@ fn run_native_event_loop(
     launch_mode: NativeLaunchMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     SHOULD_EXIT.store(false, Ordering::Relaxed);
-    // Install Ctrl+C handler for clean shutdown
+    let event_loop = EventLoop::new().map_err(|e| format!("EventLoop::new: {e}"))?;
+    let proxy = event_loop.create_proxy();
+    {
+        let mut lock = EXIT_EVENT_LOOP_PROXY
+            .lock()
+            .map_err(|e| format!("EXIT_EVENT_LOOP_PROXY: {e}"))?;
+        *lock = Some(proxy.clone());
+    }
+
     let should_exit = SHOULD_EXIT.clone();
+    let proxy_ctrlc = proxy;
     ctrlc::set_handler(move || {
         should_exit.store(true, Ordering::Relaxed);
+        let _ = proxy_ctrlc.send_event(());
     })
     .expect("Error setting Ctrl+C handler");
-
-    let event_loop = EventLoop::new().unwrap();
 
     let mut wrapper = AppStateWrapper {
         app_state: None,
@@ -707,7 +732,9 @@ fn run_native_event_loop(
 
     event_loop.run_app(&mut wrapper)?;
 
-    // println!("Event loop exited cleanly");
+    if let Ok(mut lock) = EXIT_EVENT_LOOP_PROXY.lock() {
+        lock.take();
+    }
     Ok(())
 }
 

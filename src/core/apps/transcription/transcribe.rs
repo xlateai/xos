@@ -56,6 +56,14 @@ impl TranscribeApp {
 
 impl Drop for TranscribeApp {
     fn drop(&mut self) {
+        self.engine.flush_live_to_stdout_commits();
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
         self.pause_input();
         if self.live_stdout_line {
             println!();
@@ -65,7 +73,7 @@ impl Drop for TranscribeApp {
 
 impl Application for TranscribeApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        println!("transcribe: waveform in window · transcript on stdout · Esc to quit");
+        println!("transcribe: waveform in window · transcript on stdout (scrollback + live line) · Esc to quit");
         let _ = io::stdout().flush();
 
         let all_devices = audio::devices();
@@ -83,7 +91,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 5.0_f32;
+            let buffer_duration = 10.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -126,7 +134,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 5.0_f32;
+            let buffer_duration = 10.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -164,6 +172,14 @@ impl Application for TranscribeApp {
 
         self.engine.process_snapshot(sr, &channels);
 
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
+
         let line = self.engine.caption().to_string();
         self.log_transcript_line_to_stdout(&line);
     }
@@ -176,7 +192,17 @@ impl Application for TranscribeApp {
     }
 
     fn prepare_shutdown(&mut self, _state: &mut EngineState) {
-        self.pause_input();
+        self.engine.flush_live_to_stdout_commits();
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.pause();
+        }
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
