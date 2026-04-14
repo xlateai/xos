@@ -18,16 +18,20 @@ last_statement = None
 printed_live = ""
 
 for statement in transcriber.iterate():
+    print(statement)
+
     if statement is None:
         if last_statement:
             committed_statements.append(last_statement)
-            xos.print(last_statement)
-            printed_live = ""
-        last_statement = None
-        continue
+            # xos.print(last_statement)
+            # printed_live = ""
+        # last_statement = None
+        # continue
 
     # Live draft update (same line, no commit yet)
-    if statement != printed_live:
-        xos.print("\r" + statement, end="")
-        printed_live = statement
+    # if statement != printed_live:
+        # xos.print("\r" + statement, end="")
+        # printed_live = statement
+
+
     last_statement = statement
