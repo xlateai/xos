@@ -5,6 +5,8 @@ audio = xos.audio.system(buffer_duration=10.0)
 transcriber = xos.audio.transcription(audio, size="tiny")
 recorder = xos.audio.recording(audio, "test.mp3")
 
+full_transcription = []
+
 try:
     while True:
         # let the buffer accrue a bit before processing
@@ -18,8 +20,13 @@ try:
         if is_new:
             color = "&a" if was_committed else "&8"
             xos.print_color(color + transcription)
+            if was_committed:
+                full_transcription.append(transcription)
 
 except KeyboardInterrupt:
     pass
 finally:
+    print("----------- FINAL TRANSCRIPTION -----------")
+    print("\n".join(full_transcription))
+    print("-------------------------------------------")
     recorder.finish()
