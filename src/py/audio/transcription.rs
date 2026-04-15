@@ -82,10 +82,11 @@ class _Transcriber:
         """
         One poll of the transcription engine. Returns ``(transcription, was_committed, is_new)``.
 
-        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step``. ``is_new``
-        is driven by the engine's ``transcript_epoch`` (no string equality): false when the
-        epoch is unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved;
-        callers can sleep between polls (see ``record.py``).
+        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step`` (silence-end
+        commits surface ``was_committed`` on the poll after the utterance closes). ``is_new`` is
+        driven by the engine's ``transcript_epoch`` (no string equality): false when the epoch is
+        unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved; callers can
+        sleep between polls (see ``record.py``).
         """
         import xos
         return xos.audio._transcriber_transcribe_step(self._ptr)
@@ -101,11 +102,13 @@ class _Transcriber:
                 xos.sleep(poll_interval)
 
     def finish(self):
-        """Release transcriber state (same as cleanup); safe to call from ``finally``."""
+        """Release transcriber state; returns any stdout commits flushed at shutdown (may be empty)."""
         if self._ptr != 0:
             import xos
-            xos.audio._transcriber_cleanup(self._ptr)
+            tail = xos.audio._transcriber_cleanup(self._ptr)
             self._ptr = 0
+            return tail
+        return []
 
     def __del__(self):
         self.finish()
@@ -148,8 +151,10 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
 ///
 /// `transcription` is the live caption while building an utterance; on ticks where a phrase
 /// commits it is that finalized phrase. `was_committed` is true iff at least one commit
-/// occurred this poll. `is_new` compares [`TranscriptionEngine::transcript_epoch`] to the last
-/// seen value (bumped when the engine queues live or commit iterator events).
+/// reached the iterator queue **this** poll. Silence-end commits are deferred one snapshot so
+/// this flag and the finalized string align with the tick **after** the utterance closes (not
+/// the same poll as the last live partial). `is_new` compares [`TranscriptionEngine::transcript_epoch`]
+/// to the last seen value (bumped when the engine queues live or commit iterator events).
 pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let ptr: usize = args.bind(vm)?;
     let mut map = transcribers()
@@ -208,9 +213,25 @@ pub fn transcriber_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Ok(mut set) = active_transcribers().lock() {
         set.remove(&ptr);
     }
+    let mut tail_commits: Vec<String> = Vec::new();
     if let Ok(mut map) = transcribers().lock() {
-        map.remove(&ptr);
+        if let Some(mut state) = map.remove(&ptr) {
+            let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
+            let channels = listener.get_samples_by_channel();
+            let buf = listener.buffer();
+            let sr = buf.sample_rate();
+            let ingested = buf.ingested_frame_count();
+            state.engine.process_snapshot(sr, &channels, ingested);
+            state.engine.flush_deferred_iter_delivery();
+            state.engine.flush_live_to_stdout_commits();
+            tail_commits = state.engine.drain_stdout_commits();
+            let _ = state.engine.drain_iter_events();
+        }
     }
-    Ok(vm.ctx.none())
+    let items: Vec<PyObjectRef> = tail_commits
+        .into_iter()
+        .map(|s| vm.ctx.new_str(s).into())
+        .collect();
+    Ok(vm.ctx.new_list(items).into())
 }
 

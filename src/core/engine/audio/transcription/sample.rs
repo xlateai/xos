@@ -13,8 +13,9 @@ pub const INPUT_TAIL_SECS: u32 = 12;
 pub const DECODE_INTERVAL_MS: u64 = 90;
 pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 12;
 
-pub const VOICE_ON_RMS: f32 = 0.013;
-pub const VOICE_OFF_RMS: f32 = 0.010;
+/// ~5% more sensitive than 0.013 / 0.010 (quieter input still counts as voice).
+pub const VOICE_ON_RMS: f32 = 0.01235;
+pub const VOICE_OFF_RMS: f32 = 0.0095;
 pub const END_SILENCE_MS: u64 = 900;
 pub const RESULT_GRACE_MS: u64 = 2000;
 pub const POST_COMMIT_STALE_MS: u64 = 1200;

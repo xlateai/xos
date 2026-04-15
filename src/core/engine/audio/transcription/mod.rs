@@ -176,6 +176,9 @@ pub struct TranscriptionEngine {
     ))]
     /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
     last_phrase_restart_commit: Option<Instant>,
+    /// Silence-end commits: iterator `Some`/`None` delivered on the **next** [`process_snapshot`]
+    /// so Python `was_committed` aligns one tick after the last live partial of the utterance.
+    deferred_silence_commit_iter: Vec<Option<String>>,
 }
 
 impl TranscriptionEngine {
@@ -227,6 +230,7 @@ impl TranscriptionEngine {
                 load_note,
                 last_ingested_frames: None,
                 last_phrase_restart_commit: None,
+                deferred_silence_commit_iter: Vec::new(),
             };
         }
         #[cfg(not(all(
@@ -310,6 +314,17 @@ impl TranscriptionEngine {
         std::mem::take(&mut self.pending_iter_events)
     }
 
+    /// Promotes any silence-deferred `Some`/`None` iterator pair into [`Self::pending_iter_events`].
+    /// Call before shutdown if you will not run another [`Self::process_snapshot`].
+    pub fn flush_deferred_iter_delivery(&mut self) {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        self.flush_deferred_silence_commit_iter();
+    }
+
     pub fn flush_live_to_stdout_commits(&mut self) {
         #[cfg(all(
             feature = "whisper_ct2",
@@ -329,7 +344,7 @@ impl TranscriptionEngine {
             for h in self.hypotheses.iter() {
                 merge::fold_overlap_longer_into(&mut candidate, h);
             }
-            self.try_push_stdout_commit(&candidate);
+            self.try_push_stdout_commit(&candidate, false);
         }
     }
 
@@ -385,9 +400,24 @@ impl TranscriptionEngine {
             while rx.try_recv().is_ok() {}
         }
         self.last_phrase_restart_commit = None;
+        self.deferred_silence_commit_iter.clear();
     }
 
-    fn try_push_stdout_commit(&mut self, line: &str) -> bool {
+    /// Move [`Self::deferred_silence_commit_iter`] into [`Self::pending_iter_events`] and bump
+    /// [`Self::transcript_epoch`] once per flush (paired with Python-visible commit delivery).
+    fn flush_deferred_silence_commit_iter(&mut self) {
+        if self.deferred_silence_commit_iter.is_empty() {
+            return;
+        }
+        self.pending_iter_events
+            .extend(self.deferred_silence_commit_iter.drain(..));
+        self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+    }
+
+    /// `defer_iter_delivery`: silence-end phrase commits only — queue `Some`/`None` for the next
+    /// [`process_snapshot_live`] so callers see `was_committed` on the tick **after** utterance
+    /// state is cleared (avoids pairing the flag with the previous live string).
+    fn try_push_stdout_commit(&mut self, line: &str, defer_iter_delivery: bool) -> bool {
         let t = merge::normalize_ws(line);
         if t.is_empty() || filter::is_spurious_line(&t) || filter::looks_degenerate(&t) {
             return false;
@@ -398,15 +428,20 @@ impl TranscriptionEngine {
         }
         self.last_stdout_commit_key = key;
         self.pending_stdout.push(t.clone());
-        self.pending_iter_events.push(Some(t.clone()));
-        self.pending_iter_events.push(None);
+        if defer_iter_delivery {
+            self.deferred_silence_commit_iter.push(Some(t.clone()));
+            self.deferred_silence_commit_iter.push(None);
+        } else {
+            self.pending_iter_events.push(Some(t.clone()));
+            self.pending_iter_events.push(None);
+            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        }
         self.last_committed_text = t;
         self.block_stale_until = Instant::now() + Duration::from_millis(sample::POST_COMMIT_STALE_MS);
         self.live_transcript.clear();
         self.stable_transcript.clear();
         self.hypotheses.clear();
         self.utterance_best.clear();
-        self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         true
     }
 
@@ -442,7 +477,7 @@ impl TranscriptionEngine {
         for h in self.hypotheses.iter() {
             merge::fold_overlap_longer_into(&mut to_commit, h);
         }
-        if !self.try_push_stdout_commit(&to_commit) {
+        if !self.try_push_stdout_commit(&to_commit, false) {
             return false;
         }
         self.last_phrase_restart_commit = Some(Instant::now());
@@ -517,6 +552,7 @@ impl TranscriptionEngine {
         if self.decode_job_tx.is_none() {
             return;
         }
+        self.flush_deferred_silence_commit_iter();
         if channels.is_empty() || channels[0].is_empty() || ingested_frames == 0 {
             return;
         }
@@ -610,7 +646,7 @@ impl TranscriptionEngine {
             for h in self.hypotheses.iter() {
                 merge::fold_overlap_longer_into(&mut best, h);
             }
-            self.try_push_stdout_commit(&best);
+            self.try_push_stdout_commit(&best, true);
             self.awaiting_final_commit = false;
             self.accept_results_until = Instant::now();
             while self
