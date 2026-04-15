@@ -28,6 +28,30 @@ pub fn common_prefix_word_count(a: &str, b: &str) -> usize {
         .count()
 }
 
+/// When `clean` begins with the full word sequence of `committed`, drop that prefix and return
+/// the remainder. Used after a stdout commit so the sliding window does not keep re-merging the
+/// entire previous sentence into the live line.
+pub fn strip_committed_word_prefix(committed: &str, clean: &str) -> String {
+    let committed = normalize_ws(committed);
+    let clean = normalize_ws(clean);
+    if committed.is_empty() {
+        return clean;
+    }
+    let cw: Vec<&str> = committed.split_whitespace().collect();
+    let lw: Vec<&str> = clean.split_whitespace().collect();
+    if lw.len() < cw.len() {
+        return clean;
+    }
+    if lw[..cw.len()]
+        .iter()
+        .zip(cw.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    {
+        return lw[cw.len()..].join(" ");
+    }
+    clean
+}
+
 /// Stitch `latest` onto `stable` using tail/head word overlap (ASCII case-insensitive).
 pub fn overlap_stable_into_latest(stable: &str, latest: &str) -> String {
     let stable = normalize_ws(stable);
@@ -152,5 +176,25 @@ mod tests {
         let anchor = "hey guys welcome to the demo of my library design";
         let clean = "demo of my library design";
         assert!(hypothesis_continues_anchor(anchor, clean));
+    }
+
+    #[test]
+    fn strip_drops_repeated_committed_prefix() {
+        let committed = "Hey guys! Welcome to the demo.";
+        let clean = "Hey guys! Welcome to the demo. And more here.";
+        assert_eq!(
+            strip_committed_word_prefix(committed, clean),
+            "And more here."
+        );
+    }
+
+    #[test]
+    fn strip_unchanged_when_no_full_prefix_match() {
+        let committed = "Hello world";
+        let clean = "Hello there friend";
+        assert_eq!(
+            strip_committed_word_prefix(committed, clean),
+            "Hello there friend"
+        );
     }
 }

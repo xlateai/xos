@@ -8,6 +8,50 @@ use std::path::PathBuf;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+/// `--long-name` → `long_name`; only ASCII letters, digits, underscore after mapping.
+pub(crate) fn cli_flag_to_snake_name(flag: &str) -> Option<String> {
+    let stripped = flag.strip_prefix("--")?;
+    if stripped.is_empty() || stripped.starts_with('-') {
+        return None;
+    }
+    let name = stripped.replace('-', "_");
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return None;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(name)
+}
+
+/// Build `xos.flags` setup: unknown attributes are `False`; listed names are `True`.
+fn xos_flags_setup_python(true_flag_names: &[String]) -> String {
+    let mut out = String::from(
+        r#"
+
+class _XosFlags:
+    def __getattr__(self, name):
+        return False
+
+_xos_flags = _XosFlags()
+"#,
+    );
+    for name in true_flag_names {
+        out.push_str(&format!("setattr(_xos_flags, '{name}', True)\n"));
+    }
+    out.push_str("xos.flags = _xos_flags\n");
+    out
+}
+
+/// Collect `--snake-style` args after the script path into flag names (`snake_style`).
+pub fn parse_script_cli_flags(rest: &[String]) -> Vec<String> {
+    rest.iter().filter_map(|a| cli_flag_to_snake_name(a)).collect()
+}
+
 /// Callback type for capturing print output
 pub type PrintCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -63,6 +107,7 @@ pub fn execute_python_code(
     filename: &str,
     persistent_scope: Option<rustpython_vm::scope::Scope>,
     print_callback: Option<PrintCallback>,
+    script_flags: &[String],
 ) -> (
     Result<(), String>,
     String,
@@ -126,14 +171,20 @@ pub fn execute_python_code(
         scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
         
         // Override print to capture output
-        let setup_code = r#"
+        let setup_code = format!(
+            r#"
 import builtins
 import sys
 import xos
 # Ensure `xos` is always present without an explicit user import
 # (for `xpy` and `xos py/python` execution paths).
 globals()["xos"] = xos
+{}
 __original_print__ = builtins.print
+"#,
+            xos_flags_setup_python(script_flags)
+        );
+        let setup_code = format!("{}{}", setup_code, r#"
 __original_import__ = builtins.__import__
 
 try:
@@ -181,9 +232,9 @@ def __custom_print__(*args, sep=' ', end='\n', **kwargs):
 builtins.print = __custom_print__
 xos.print = __custom_print__
 builtins.__import__ = __xos_import__
-"#;
+"#);
         
-        if let Err(e) = vm.run_code_string(scope.clone(), setup_code, "<setup>".to_string()) {
+        if let Err(e) = vm.run_code_string(scope.clone(), &setup_code, "<setup>".to_string()) {
             eprintln!("Failed to set up print capture: {:?}", e);
         }
         
@@ -219,7 +270,7 @@ builtins.__import__ = __original_import__
 }
 
 /// Run a Python file (CLI mode)
-pub fn run_python_file(file_path: &PathBuf) {
+pub fn run_python_file(file_path: &PathBuf, script_flags: &[String]) {
     let resolved_file_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.clone());
@@ -249,6 +300,7 @@ pub fn run_python_file(file_path: &PathBuf) {
         &resolved_file_path.to_string_lossy(),
         None,
         Some(print_cb),
+        script_flags,
     );
     
     // Handle errors
@@ -320,6 +372,7 @@ pub fn run_python_interactive() {
                     "<stdin>",
                     persistent_scope.clone(),
                     None,
+                    &[],
                 );
                 
                 persistent_scope = new_scope;
@@ -365,7 +418,7 @@ pub fn run_python_interactive() {
 }
 
 /// Run a Python application with the xos engine
-pub fn run_python_app(file_path: &PathBuf) {
+pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
     use crate::python_api::engine::pyapp::PyApp;
     let resolved_file_path = file_path
         .canonicalize()
@@ -397,6 +450,7 @@ pub fn run_python_app(file_path: &PathBuf) {
         &resolved_file_path.to_string_lossy(),
         None,
         Some(print_cb),
+        script_flags,
     );
     
     // Handle errors

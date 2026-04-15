@@ -72,6 +72,7 @@ fn run_mesh_script(resolved_file_path: &Path) {
         &resolved_file_path.to_string_lossy(),
         None,
         Some(print_cb),
+        &[],
     );
 
     *crate::mesh::state::LINE_EDITOR.lock().unwrap() = None;

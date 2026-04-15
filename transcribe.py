@@ -32,5 +32,6 @@ finally:
     print("----------- FINAL TRANSCRIPTION -----------")
     print("\n".join(full_transcription))
     print("-------------------------------------------")
-    recorder.finish()
+    if xos.flags.record:
+        recorder.finish()
     transcriber.finish()

@@ -402,6 +402,9 @@ impl TranscriptionEngine {
         self.pending_iter_events.push(None);
         self.last_committed_text = t;
         self.block_stale_until = Instant::now() + Duration::from_millis(sample::POST_COMMIT_STALE_MS);
+        self.live_transcript.clear();
+        self.stable_transcript.clear();
+        self.hypotheses.clear();
         self.utterance_best.clear();
         self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         true
@@ -443,25 +446,22 @@ impl TranscriptionEngine {
             return false;
         }
         self.last_phrase_restart_commit = Some(Instant::now());
-        self.live_transcript.clear();
-        self.stable_transcript.clear();
-        self.hypotheses.clear();
         self.ingest_hypothesis(clean.to_string());
         true
     }
 
     fn ingest_hypothesis(&mut self, text: String) {
-        let clean = merge::normalize_ws(&text);
-        if clean.is_empty() || filter::looks_degenerate(&clean) {
+        let raw = merge::normalize_ws(&text);
+        if raw.is_empty() || filter::looks_degenerate(&raw) {
             return;
         }
-        if filter::is_spurious_line(&clean) {
+        if filter::is_spurious_line(&raw) {
             return;
         }
         if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
             let cw = self.last_committed_text.split_whitespace().count();
-            let clean_words = clean.split_whitespace().count();
-            let common = merge::common_prefix_word_count(&self.last_committed_text, &clean);
+            let clean_words = raw.split_whitespace().count();
+            let common = merge::common_prefix_word_count(&self.last_committed_text, &raw);
             let extends_committed = clean_words > cw && common >= cw;
             if !extends_committed {
                 let threshold = cw.min(clean_words).max(4);
@@ -470,7 +470,12 @@ impl TranscriptionEngine {
                 }
             }
         }
-        if self.maybe_commit_phrase_restart(&clean) {
+        if self.maybe_commit_phrase_restart(&raw) {
+            return;
+        }
+        let clean = merge::strip_committed_word_prefix(&self.last_committed_text, &raw);
+        let clean = merge::normalize_ws(&clean);
+        if clean.is_empty() {
             return;
         }
         self.hypotheses.push_back(clean.clone());
@@ -606,10 +611,7 @@ impl TranscriptionEngine {
                 merge::fold_overlap_longer_into(&mut best, h);
             }
             self.try_push_stdout_commit(&best);
-            self.live_transcript.clear();
             self.awaiting_final_commit = false;
-            self.stable_transcript.clear();
-            self.hypotheses.clear();
             self.accept_results_until = Instant::now();
             while self
                 .decode_result_rx

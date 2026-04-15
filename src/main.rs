@@ -6,7 +6,7 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xos::apps::{AppCommands, run_app_command};
-use xos::python_api::{run_python_app, run_python_file, run_python_interactive};
+use xos::python_api::{parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_interactive() -> Result<(), String> {
@@ -138,6 +138,9 @@ enum Commands {
     Py {
         /// Python file to execute (if not provided, starts interactive console)
         file: Option<PathBuf>,
+        /// Script flags after the file (e.g. `--record` → `xos.flags.record`)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
     },
     /// Print the xos repo root (directory that contains `src/`, for `xos compile`), or `--exe` for this binary
     Path {
@@ -312,6 +315,14 @@ fn main() {
         }
     }
 
+    // `xos transcribe.py` → `xos py transcribe.py` (flags may follow the script path).
+    if original_args.len() >= 2 {
+        let first = original_args[1].as_str();
+        if first.ends_with(".py") && !first.starts_with('-') {
+            original_args.insert(1, "py".to_string());
+        }
+    }
+
     // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--web`, `--ios`).
     if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
         original_args[1] = "rs".to_string();
@@ -336,7 +347,10 @@ fn main() {
     }
 
     let resolved_python_file = match &cli.command {
-        Some(Commands::Py { file: Some(file) }) => {
+        Some(Commands::Py {
+            file: Some(file),
+            ..
+        }) => {
             match resolve_python_file_path(file.as_path()) {
                 Some(path) => Some(path),
                 None => {
@@ -402,10 +416,11 @@ fn main() {
         Some(Commands::Rs { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Py { file }) => {
+        Some(Commands::Py { file, rest }) => {
             if let Some(file_path) = file {
                 let path_to_run = resolved_python_file.unwrap_or(file_path);
-                run_python_app(&path_to_run);
+                let flags = parse_script_cli_flags(&rest);
+                run_python_app(&path_to_run, &flags);
             } else {
                 run_python_interactive();
             }
@@ -499,7 +514,7 @@ fn main() {
                 eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);
             }
-            run_python_file(&script);
+            run_python_file(&script, &[]);
         }
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {

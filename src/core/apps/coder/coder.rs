@@ -847,6 +847,7 @@ xos.print = __custom_print__
                 "<coder>",
                 None,
                 Some(print_callback),
+                &[],
             );
             
             // Handle errors (only if still current generation)
