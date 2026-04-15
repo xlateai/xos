@@ -6,12 +6,18 @@
 ))]
 
 pub const WHISPER_HZ: u32 = 16_000;
-/// Whisper input length per decode (2.5 s — more context than 1 s; overlaps with next hop).
-pub const ASR_WINDOW_SAMPLES: usize = (WHISPER_HZ as usize * 5) / 2;
-/// After each decode, advance the FIFO by this many samples (1 s). Overlap =
-/// `ASR_WINDOW_SAMPLES - ASR_HOP_SAMPLES` (1.5 s when window is 2.5 s).
-pub const ASR_HOP_SAMPLES: usize = WHISPER_HZ as usize;
-/// RMS over a full 1 s window below this ⇒ treat as silence (no ASR; flush utterance).
+
+/// How much audio at the **end** of one decode window is repeated at the **start** of the next
+/// (after sliding forward). Equivalently: `ASR_WINDOW_SAMPLES - ASR_HOP_SAMPLES`.
+pub const ASR_OVERLAP_SAMPLES: usize = WHISPER_HZ as usize / 2;
+
+/// Whisper input length per decode (3.0 s of 16 kHz mono per call).
+pub const ASR_WINDOW_SAMPLES: usize = WHISPER_HZ as usize * 3;
+
+/// Samples to drop from the front of the FIFO after each decode (**forward hop**). With a 3 s
+/// window and 0.5 s overlap, hop = 2.5 s — fewer decodes per second of speech than a 1 s hop.
+pub const ASR_HOP_SAMPLES: usize = ASR_WINDOW_SAMPLES - ASR_OVERLAP_SAMPLES;
+/// RMS over the full ASR window below this ⇒ treat as silence (no ASR; flush utterance).
 pub const CHUNK_SILENCE_RMS: f32 = 0.009;
 /// Trim oldest 16 kHz samples if the FIFO grows past this (slow polls / huge backlog).
 pub const MAX_STREAM_16K: usize = WHISPER_HZ as usize * 45;
