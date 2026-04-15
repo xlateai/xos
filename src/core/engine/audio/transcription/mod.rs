@@ -176,6 +176,11 @@ pub struct TranscriptionEngine {
     ))]
     /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
     last_phrase_restart_commit: Option<Instant>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
     /// Silence-end commits: iterator `Some`/`None` delivered on the **next** [`process_snapshot`]
     /// so Python `was_committed` aligns one tick after the last live partial of the utterance.
     deferred_silence_commit_iter: Vec<Option<String>>,
