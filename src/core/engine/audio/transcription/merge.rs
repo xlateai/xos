@@ -4,6 +4,28 @@
 //! often repeats a prefix of what we already merged; we find a **word-level** suffix/prefix match
 //! and append only the novel tail. If there is no match, we fall back to substring checks or
 //! concatenation.
+//!
+//! Words are compared after light **normalization** (case + strip punctuation) so `Hey guys!` and
+//! `Hey guys,` still overlap-match.
+
+fn norm_token(w: &str) -> String {
+    w.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '\'')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn suffix_prefix_word_match(pw: &[&str], iw: &[&str], k: usize) -> bool {
+    if k == 0 || pw.len() < k || iw.len() < k {
+        return false;
+    }
+    for i in 0..k {
+        if norm_token(pw[pw.len() - k + i]) != norm_token(iw[i]) {
+            return false;
+        }
+    }
+    true
+}
 
 /// Merge `incoming` (latest window transcript) into `prev` (running line for this VAD segment).
 pub fn merge_word_overlap(prev: &str, incoming: &str) -> String {
@@ -21,10 +43,7 @@ pub fn merge_word_overlap(prev: &str, incoming: &str) -> String {
     let max_k = pw.len().min(iw.len()).min(48);
 
     for k in (1..=max_k).rev() {
-        if pw.len() >= k
-            && iw.len() >= k
-            && pw[pw.len() - k..] == iw[0..k]
-        {
+        if suffix_prefix_word_match(&pw, &iw, k) {
             let mut out = pw.join(" ");
             if k < iw.len() {
                 if !out.is_empty() {
@@ -72,5 +91,12 @@ mod tests {
         let prev = "short";
         let inc = "short phrase here";
         assert_eq!(merge_word_overlap(prev, inc), "short phrase here");
+    }
+
+    #[test]
+    fn punctuation_mismatch_still_stitches() {
+        let prev = "Hey guys!";
+        let inc = "Hey guys, welcome to the";
+        assert_eq!(merge_word_overlap(prev, inc), "Hey guys! welcome to the");
     }
 }

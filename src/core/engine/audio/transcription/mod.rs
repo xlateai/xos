@@ -196,6 +196,8 @@ impl TranscriptionEngine {
             self.utterance_buf.clear();
             self.caption.clear();
             self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+            self.stream_16k.clear();
+            self.vad.reset();
         }
     }
 
@@ -251,6 +253,10 @@ impl TranscriptionEngine {
         self.utterance_buf.clear();
         self.caption.clear();
         self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        // Drop unprocessed 16 kHz carry-over so overlapping windows cannot re-transcribe audio
+        // from a phrase we already committed (VAD/silence boundaries are semantic cuts).
+        self.stream_16k.clear();
+        self.vad.reset();
     }
 
     fn process_snapshot_live(
