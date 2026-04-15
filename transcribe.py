@@ -3,7 +3,8 @@ import xos
 
 audio = xos.audio.system(buffer_duration=10.0)
 transcriber = xos.audio.transcription(audio, size="tiny")
-recorder = xos.audio.recording(audio, "test.mp3")
+if xos.flags.record:
+    recorder = xos.audio.recording(audio, "test.mp3")
 
 full_transcription = []
 
@@ -13,7 +14,8 @@ try:
         xos.sleep(0.02)
 
         # record the audio
-        recorder.record(wait=False)
+        if xos.flags.record:
+            recorder.record(wait=False)
         
         # transcribe the audio
         transcription, was_committed, is_new = transcriber.transcribe()

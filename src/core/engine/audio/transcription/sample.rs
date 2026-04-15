@@ -19,8 +19,11 @@ pub const END_SILENCE_MS: u64 = 900;
 pub const RESULT_GRACE_MS: u64 = 2000;
 pub const POST_COMMIT_STALE_MS: u64 = 1200;
 
-pub const RESTART_MIN_ANCHOR_WORDS: usize = 12;
-pub const RESTART_MIN_CLEAN_WORDS: usize = 8;
+pub const RESTART_MIN_ANCHOR_WORDS: usize = 18;
+pub const RESTART_MIN_CLEAN_WORDS: usize = 12;
+
+/// Minimum wall time between mid-utterance phrase-split stdout commits (sliding-window false positives).
+pub const PHRASE_RESTART_COMMIT_DEBOUNCE_MS: u64 = 10_000;
 
 pub fn downmix_mono(channels: &[Vec<f32>]) -> Vec<f32> {
     if channels.is_empty() {

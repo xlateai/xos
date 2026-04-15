@@ -79,11 +79,57 @@ pub fn clean_is_anchor_prefix_words(anchor: &str, clean: &str) -> bool {
     cw > 0 && common_prefix_word_count(anchor, clean) == cw
 }
 
+/// `clean` is exactly the last N words of `anchor` (Whisper re-emitted the same tail).
+pub fn clean_is_suffix_words_of_anchor(anchor: &str, clean: &str) -> bool {
+    let aw: Vec<&str> = anchor.split_whitespace().collect();
+    let cw: Vec<&str> = clean.split_whitespace().collect();
+    if cw.is_empty() || cw.len() > aw.len() {
+        return false;
+    }
+    let tail = &aw[aw.len() - cw.len()..];
+    tail.iter()
+        .zip(cw.iter())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+/// Last `k` words of `clean` occur as one consecutive run in the last `lookback` words of `anchor`.
+/// Catches sliding-window outputs that drop the opening clause but repeat the same ending.
+pub fn clean_suffix_appears_in_anchor_tail(anchor: &str, clean: &str, k: usize, lookback: usize) -> bool {
+    let aw: Vec<&str> = anchor.split_whitespace().collect();
+    let cw: Vec<&str> = clean.split_whitespace().collect();
+    if cw.len() < 4 || aw.len() < 4 {
+        return false;
+    }
+    let k = k.min(cw.len()).max(4);
+    let suffix = &cw[cw.len() - k..];
+    let lb = lookback.min(aw.len());
+    let start = aw.len() - lb;
+    for i in start..aw.len() {
+        if i + k > aw.len() {
+            continue;
+        }
+        if aw[i..i + k]
+            .iter()
+            .zip(suffix.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn hypothesis_continues_anchor(anchor: &str, clean: &str) -> bool {
     if anchor.is_empty() {
         return true;
     }
     if clean_is_anchor_prefix_words(anchor, clean) {
+        return true;
+    }
+    if clean_is_suffix_words_of_anchor(anchor, clean) {
+        return true;
+    }
+    if clean_suffix_appears_in_anchor_tail(anchor, clean, 8, 40) {
         return true;
     }
     let merged = overlap_stable_into_latest(anchor, clean);
@@ -99,5 +145,12 @@ mod tests {
         let s = "hello world how are";
         let l = "how are you today";
         assert_eq!(overlap_stable_into_latest(s, l), "hello world how are you today");
+    }
+
+    #[test]
+    fn suffix_repeat_is_continuation() {
+        let anchor = "hey guys welcome to the demo of my library design";
+        let clean = "demo of my library design";
+        assert!(hypothesis_continues_anchor(anchor, clean));
     }
 }

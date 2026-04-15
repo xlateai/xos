@@ -169,6 +169,13 @@ pub struct TranscriptionEngine {
         not(target_os = "ios")
     ))]
     last_ingested_frames: Option<u64>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
+    last_phrase_restart_commit: Option<Instant>,
 }
 
 impl TranscriptionEngine {
@@ -219,6 +226,7 @@ impl TranscriptionEngine {
                 last_level_rms: 0.0,
                 load_note,
                 last_ingested_frames: None,
+                last_phrase_restart_commit: None,
             };
         }
         #[cfg(not(all(
@@ -376,6 +384,7 @@ impl TranscriptionEngine {
         if let Some(rx) = &self.decode_result_rx {
             while rx.try_recv().is_ok() {}
         }
+        self.last_phrase_restart_commit = None;
     }
 
     fn try_push_stdout_commit(&mut self, line: &str) -> bool {
@@ -413,6 +422,14 @@ impl TranscriptionEngine {
         if merge::hypothesis_continues_anchor(anchor, clean) {
             return false;
         }
+        let now = Instant::now();
+        if let Some(t) = self.last_phrase_restart_commit {
+            if now.duration_since(t)
+                < Duration::from_millis(sample::PHRASE_RESTART_COMMIT_DEBOUNCE_MS)
+            {
+                return false;
+            }
+        }
         let mut to_commit = if !self.utterance_best.is_empty() {
             self.utterance_best.clone()
         } else {
@@ -425,6 +442,7 @@ impl TranscriptionEngine {
         if !self.try_push_stdout_commit(&to_commit) {
             return false;
         }
+        self.last_phrase_restart_commit = Some(Instant::now());
         self.live_transcript.clear();
         self.stable_transcript.clear();
         self.hypotheses.clear();
@@ -544,14 +562,14 @@ impl TranscriptionEngine {
                 decoded.push(line);
             }
         }
-        for line in decoded {
-            if !self.voice_active && !self.awaiting_final_commit {
-                continue;
+        // Unbounded result queue can deliver many stale lines in one poll; only the latest
+        // reflects the current sliding tail (older lines trigger bogus phrase restarts).
+        let allow_ingest = (self.voice_active || self.awaiting_final_commit)
+            && (self.voice_active || Instant::now() <= self.accept_results_until);
+        if allow_ingest {
+            if let Some(line) = decoded.into_iter().last() {
+                self.ingest_hypothesis(line);
             }
-            if !self.voice_active && Instant::now() > self.accept_results_until {
-                continue;
-            }
-            self.ingest_hypothesis(line);
         }
 
         let max_in = (sample_rate as usize)
