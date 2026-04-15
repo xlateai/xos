@@ -28,6 +28,7 @@ try:
 
 except KeyboardInterrupt:
     pass
+    
 finally:
     print("----------- FINAL TRANSCRIPTION -----------")
     print("\n".join(full_transcription))
