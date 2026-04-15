@@ -1,4 +1,4 @@
-//! CTranslate2 Whisper (ct2rs): load `whisper-tiny-ct2` / `whisper-small-ct2` and run decode.
+//! CTranslate2 Whisper (ct2rs): load bundled CT2 models and run decode on a background thread.
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
@@ -6,64 +6,47 @@
 ))]
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
 
 use ct2rs::sys::WhisperOptions;
 use ct2rs::{Config, Whisper as Ct2Whisper};
 
 const MODELS_SUBDIR: &str = "src/core/engine/audio/transcription/models";
 
-/// Owns the loaded CT2 Whisper model and decode options.
-pub struct Whisper {
-    inner: Ct2Whisper,
-    options: WhisperOptions,
-    /// Passed to `generate` as `Some(lang)` for faster path (default `en`).
-    language: Option<String>,
-}
+/// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
+pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
+    let dir = resolve_model_dir(size)?;
+    let lang = std::env::var("XOS_WHISPER_LANG")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "en".to_string());
 
-impl Whisper {
-    /// `size`: `Some("tiny")`, `Some("small")`, or `None` (defaults to **tiny**).
-    pub fn load(size: Option<&str>) -> Result<Self, String> {
-        let dir = resolve_model_dir(size)?;
-        let lang = std::env::var("XOS_WHISPER_LANG")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| s.trim().to_ascii_lowercase());
+    let whisper = Ct2Whisper::new(&dir, Config::default())
+        .map_err(|e| format!("Whisper load {}: {e}", dir.display()))?;
 
-        let inner = Ct2Whisper::new(&dir, Config::default())
-            .map_err(|e| format!("Whisper load {}: {e}", dir.display()))?;
+    let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
+    let (result_tx, result_rx) = mpsc::channel::<String>();
 
-        let mut options = WhisperOptions::default();
-        options.beam_size = 1;
-
-        Ok(Self {
-            inner,
-            options,
-            language: lang,
+    thread::Builder::new()
+        .name("xos-whisper-decode".into())
+        .spawn(move || {
+            let mut opts = WhisperOptions::default();
+            opts.beam_size = 2;
+            while let Ok(buf) = job_rx.recv() {
+                let line = match whisper.generate(&buf, Some(lang.as_str()), false, &opts) {
+                    Ok(parts) => cleanup_whisper_text(&parts.join(" ")),
+                    Err(e) => format!("(Whisper error: {e})"),
+                };
+                if result_tx.send(line).is_err() {
+                    break;
+                }
+            }
         })
-    }
+        .map_err(|e| format!("spawn whisper decode thread: {e}"))?;
 
-    /// Decode one contiguous chunk (e.g. exactly one 1 s window at 16 kHz).
-    #[inline]
-    pub fn transcribe_chunk(&self, mono_16k: &[f32]) -> Result<String, String> {
-        self.transcribe_tail(mono_16k, mono_16k.len().max(1))
-    }
-
-    /// Decode up to `max_take` **most recent** samples (16 kHz mono, [-1, 1]).
-    pub fn transcribe_tail(&self, mono_16k: &[f32], max_take: usize) -> Result<String, String> {
-        if mono_16k.is_empty() {
-            return Ok(String::new());
-        }
-        let n = mono_16k.len().min(max_take).max(1);
-        let start = mono_16k.len().saturating_sub(n);
-        let chunk = &mono_16k[start..];
-        let lang = self.language.as_deref();
-        let out = self
-            .inner
-            .generate(chunk, lang, false, &self.options)
-            .map_err(|e| e.to_string())?;
-        let text = out.into_iter().next().unwrap_or_default();
-        Ok(cleanup_whisper_text(&text))
-    }
+    Ok((job_tx, result_rx))
 }
 
 fn cleanup_whisper_text(s: &str) -> String {
@@ -71,7 +54,6 @@ fn cleanup_whisper_text(s: &str) -> String {
     if t.is_empty() {
         return String::new();
     }
-    // Rare: leaked special tokens
     let mut out = String::with_capacity(t.len());
     let mut skip = false;
     for ch in t.chars() {
