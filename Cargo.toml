@@ -71,8 +71,9 @@ ctrlc = "3.4"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
+mp3lame-encoder = "0.2.3"
 # CTranslate2 (vendored C++ via ct2rs; not Python). Requires CMake + C/C++ toolchain on PATH (e.g. `brew install cmake`, Xcode CLT). Long compile.
-ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy", "openblas"], optional = true }
+ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy"], optional = true }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -86,6 +87,8 @@ objc = "0.2"
 # CGWindowList-based capture (full desktop); grant Screen Recording for the xos binary.
 xcap = "0.9.4"
 enigo = "0.1"
+# System audio capture for input device list (ScreenCaptureKit; macOS 13+).
+screencapturekit = { version = "1.5.4", features = ["macos_13_0"] }
 
 # -------------------------------------------------------------------
 # WebAssembly target
@@ -122,8 +125,8 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = ["whisper_ct2"]
-## Whisper in CTranslate2 format. On by default for `cargo build` / `xos compile`. Bundled path prefers `transcription/models/whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete. Overrides: `XOS_WHISPER_CT2_PATH`, `XOS_WHISPER_LANG` (default `en`). Disable with `--no-default-features` if needed. Desktop only (not iOS / WASM).
+default = []
+## Whisper in CTranslate2 format. Opt-in with `--features whisper_ct2` when needed. Bundled path prefers `transcription/models/whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete. Overrides: `XOS_WHISPER_CT2_PATH`, `XOS_WHISPER_LANG` (default `en`). Desktop only (not iOS / WASM).
 whisper_ct2 = ["dep:ct2rs"]
 
 [lib]

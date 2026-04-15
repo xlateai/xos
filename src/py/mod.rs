@@ -24,7 +24,7 @@ pub mod auth;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 
-pub use runtime::{run_python_file, run_python_interactive, run_python_app};
+pub use runtime::{parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive};
 
 pub fn make_tensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.tensors", vm.ctx.new_dict(), None);

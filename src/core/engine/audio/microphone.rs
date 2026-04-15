@@ -1,20 +1,27 @@
-//! Microphone (audio input) module consolidating all platforms
+//! Audio **input** capture (module name: `microphone` for history).
+//!
+//! Handles all platform input endpoints: physical microphones, headsets, and virtual
+//! devices that present system/loopback audio as an input (driver-dependent).
 //! 
 //! This module provides audio input functionality across:
 //! - macOS/Linux (native) using CPAL
 //! - iOS using AVAudioEngine via Swift FFI
 //! - WASM using Web Audio API
 //!
-//! ## Buffer Semantics
-//! 
-//! The AudioBuffer acts as a **rolling window accumulator**:
-//! - Samples continuously fill the buffer from the audio stream
-//! - When capacity is reached, oldest samples are dropped (FIFO)
-//! - `get_samples_by_channel()` returns current buffer contents WITHOUT clearing
-//! - This allows smooth, continuous data flow for visualizations
+//! ## Buffer semantics
 //!
-//! Capacity = `buffer_duration * sample_rate` samples per channel
+//! The `AudioBuffer` is a **single rolling ring per `Microphone` / `AudioListener`** (not one
+//! buffer per consumer). `buffer_duration_secs` (Python: `buffer_duration`, alias
+//! `max_buffer_duration`) is the **maximum** time depth retained per channel (~`duration *
+//! sample_rate` frames); when full, oldest samples drop (FIFO).
+//!
+//! - `get_samples_by_channel()` **peeks** at the ring (does not remove).
+//! - `Microphone.read()` / `drain_samples()` **removes** samples; avoid mixing drains with other
+//!   consumers unless you intend to steal audio from the shared ring.
+//! - MP3 `xos.audio.recording` reads **incrementally** via an internal frame counter so it does
+//!   not clear the ring; safe alongside transcription / waveforms that peek.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -46,6 +53,8 @@ pub struct AudioBuffer {
     channels: u16,
     /// Timestamp when the buffer was last accessed
     last_access: Arc<Mutex<Instant>>,
+    /// Monotonic count of multi-channel frames ingested (one interleaved frame = +1).
+    frames_ingested: Arc<AtomicU64>,
 }
 
 impl AudioBuffer {
@@ -62,6 +71,7 @@ impl AudioBuffer {
             sample_rate,
             channels,
             last_access: Arc::new(Mutex::new(Instant::now())),
+            frames_ingested: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -87,9 +97,24 @@ impl AudioBuffer {
             // Add new sample
             buffer.push_back(sample);
         }
+
+        self.frames_ingested.fetch_add(1, Ordering::Relaxed);
         
         // Update last access time
         *self.last_access.lock().unwrap() = Instant::now();
+    }
+
+    /// Interleaved `channels`-wide PCM (e.g. ScreenCaptureKit).
+    pub(crate) fn push_interleaved_f32(&self, samples: &[f32], channels: u16) {
+        let c = channels as usize;
+        if c == 0 {
+            return;
+        }
+        for chunk in samples.chunks(c) {
+            if chunk.len() == c {
+                self.push_sample_batch(chunk);
+            }
+        }
     }
 
     /// Add samples to the buffer from FFI (iOS)
@@ -123,6 +148,7 @@ impl AudioBuffer {
                     // Add new sample
                     buffer.push_back(sample);
                 }
+                self.frames_ingested.fetch_add(1, Ordering::Relaxed);
             }
         }
         
@@ -141,6 +167,9 @@ impl AudioBuffer {
             }
             buffer.push_back(sample);
         }
+
+        self.frames_ingested
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
     }
     
     /// Get a copy of all samples for each channel
@@ -261,6 +290,29 @@ impl AudioBuffer {
     pub fn channels(&self) -> u16 {
         self.channels
     }
+
+    /// Monotonic count of multi-channel frames ingested into this ring (for incremental readers).
+    pub fn ingested_frame_count(&self) -> u64 {
+        self.frames_ingested.load(Ordering::Relaxed)
+    }
+
+    /// Peek at the last `frame_count` frames per channel (does not remove). `frame_count` is
+    /// clamped per channel to the current length. All channels return the same logical length
+    /// when the ring is driven symmetrically.
+    pub fn copy_tail_frames(&self, frame_count: usize) -> Vec<Vec<f32>> {
+        let channel_buffers = self.channel_samples.lock().unwrap();
+        channel_buffers
+            .iter()
+            .map(|buffer| {
+                if frame_count == 0 || buffer.is_empty() {
+                    return Vec::new();
+                }
+                let take = frame_count.min(buffer.len());
+                let start = buffer.len() - take;
+                buffer.range(start..).cloned().collect()
+            })
+            .collect()
+    }
 }
 
 // ================================================================================================
@@ -272,21 +324,45 @@ mod native {
     use super::*;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
+    use std::sync::Arc;
+    #[cfg(target_os = "macos")]
+    use screencapturekit::stream::sc_stream::SCStream;
 
     /// Audio listener to capture audio from a device
-    #[derive(Clone)]
     pub struct AudioListener {
-        /// The audio buffer
         buffer: AudioBuffer,
-        /// The audio stream
-        stream: Arc<Stream>,
-        /// The device being listened to
+        /// CPAL capture, or `None` when using macOS ScreenCaptureKit system audio.
+        cpal_stream: Option<Arc<Stream>>,
+        #[cfg(target_os = "macos")]
+        sck_stream: Option<Arc<SCStream>>,
         device_name: String,
     }
 
     impl AudioListener {
-        /// Create a new listener for the specified device
+        /// Create a new listener for the specified device.
+        ///
+        /// `buffer_duration_secs` is the **maximum** ring depth per channel (rolling window).
         pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
+            #[cfg(target_os = "macos")]
+            if audio_device.macos_sck_system_audio {
+                let sample_rate = 48_000u32;
+                let channels = 2u16;
+                let capacity = (buffer_duration_secs * sample_rate as f32) as usize;
+                let buffer = AudioBuffer::new(capacity, sample_rate, channels);
+                let sck = crate::engine::audio::macos_sck::build_system_audio_stream(buffer.clone())
+                    .map_err(|e| {
+                        format!(
+                            "{e} — enable Screen Recording for this app in System Settings → Privacy & Security."
+                        )
+                    })?;
+                return Ok(Self {
+                    buffer,
+                    cpal_stream: None,
+                    sck_stream: Some(Arc::new(sck)),
+                    device_name: audio_device.name.clone(),
+                });
+            }
+
             let device = &audio_device.device_cpal;
 
             // Get device name
@@ -295,8 +371,13 @@ mod native {
                 Err(_) => return Err("Could not get device name".to_string()),
             };
             
-            // Get default config for the device
-            let default_config = if audio_device.is_input {
+            // Get default config: normal inputs use capture defaults; Windows WASAPI loopback uses
+            // the **output** mix format on a render device (cpal sets AUDCLNT_STREAMFLAGS_LOOPBACK).
+            let default_config = if audio_device.wasapi_loopback {
+                device
+                    .default_output_config()
+                    .map_err(|e| format!("Failed to get output config for system audio capture: {e}"))?
+            } else if audio_device.is_input {
                 match device.default_input_config() {
                     Ok(config) => config,
                     Err(_) => {
@@ -407,7 +488,9 @@ mod native {
             
             Ok(Self {
                 buffer,
-                stream: Arc::new(stream),
+                cpal_stream: Some(Arc::new(stream)),
+                #[cfg(target_os = "macos")]
+                sck_stream: None,
                 device_name,
             })
         }
@@ -424,13 +507,30 @@ mod native {
         
         /// Pause the audio stream
         pub fn pause(&self) -> Result<(), String> {
-            self.stream.pause().map_err(|e| format!("Failed to pause stream: {}", e))
+            #[cfg(target_os = "macos")]
+            if let Some(s) = &self.sck_stream {
+                return s
+                    .stop_capture()
+                    .map_err(|e| format!("ScreenCaptureKit: {e:?}"));
+            }
+            if let Some(s) = &self.cpal_stream {
+                return s.pause().map_err(|e| format!("Failed to pause stream: {}", e));
+            }
+            Err("No audio capture stream".to_string())
         }
         
         /// Resume/start the audio stream
         pub fn record(&self) -> Result<(), String> {
-            // Play the stream (safe to call multiple times)
-            self.stream.play().map_err(|e| format!("Failed to resume stream: {}", e))
+            #[cfg(target_os = "macos")]
+            if let Some(s) = &self.sck_stream {
+                return s
+                    .start_capture()
+                    .map_err(|e| format!("ScreenCaptureKit: {e:?}"));
+            }
+            if let Some(s) = &self.cpal_stream {
+                return s.play().map_err(|e| format!("Failed to resume stream: {}", e));
+            }
+            Err("No audio capture stream".to_string())
         }
         
         /// Get samples separated by channel
@@ -448,6 +548,8 @@ mod native {
             name,
             is_input: true,
             is_output: false,
+            wasapi_loopback: false,
+            macos_sck_system_audio: false,
             device_cpal: device,
         })
     }
@@ -465,6 +567,38 @@ mod native {
                         name,
                         is_input: true,
                         is_output: false,
+                        wasapi_loopback: false,
+                        macos_sck_system_audio: false,
+                        device_cpal: device,
+                    });
+                }
+            }
+        }
+
+        // macOS 13+: system mix via ScreenCaptureKit (listed as "System audio").
+        #[cfg(target_os = "macos")]
+        if let Some(device) = host.default_input_device() {
+            audio_devices.push(AudioDevice {
+                name: "System audio".to_string(),
+                is_input: true,
+                is_output: false,
+                wasapi_loopback: false,
+                macos_sck_system_audio: true,
+                device_cpal: device,
+            });
+        }
+
+        // Windows: each output device can be opened as a loopback capture stream (system audio).
+        #[cfg(target_os = "windows")]
+        if let Ok(output_devices) = host.output_devices() {
+            for device in output_devices {
+                if let Ok(name) = device.name() {
+                    audio_devices.push(AudioDevice {
+                        name: format!("{name} (system audio)"),
+                        is_input: true,
+                        is_output: false,
+                        wasapi_loopback: true,
+                        macos_sck_system_audio: false,
                         device_cpal: device,
                     });
                 }
@@ -501,7 +635,9 @@ mod ios {
     }
 
     impl AudioListener {
-        /// Create a new listener for the specified device
+        /// Create a new listener for the specified device.
+        ///
+        /// `buffer_duration_secs` is the **maximum** ring depth per channel (rolling window).
         pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
             if !audio_device.is_input {
                 return Err("Device is not an input device".to_string());
@@ -796,7 +932,7 @@ mod wasm {
         }
 
         pub fn device_name(&self) -> &str {
-            "Web Microphone"
+            "Web audio input"
         }
 
         pub fn duration(&self) -> f32 {
@@ -895,7 +1031,7 @@ pub fn print_input_devices() {
     println!("XOS Audio: {} input device(s) detected", devices.len());
     
     for (i, device) in devices.iter().enumerate() {
-        println!("  {}: {}", i+1, device);
+        println!("  {}: {}", i+1, device.input_menu_label());
     }
 }
 

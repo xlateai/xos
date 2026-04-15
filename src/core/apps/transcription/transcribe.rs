@@ -28,7 +28,7 @@ impl TranscribeApp {
         }
     }
 
-    fn pause_mic(&self) {
+    fn pause_input(&self) {
         if let Some(l) = &self.listener {
             let _ = l.pause();
         }
@@ -56,7 +56,15 @@ impl TranscribeApp {
 
 impl Drop for TranscribeApp {
     fn drop(&mut self) {
-        self.pause_mic();
+        self.engine.flush_live_to_stdout_commits();
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
+        self.pause_input();
         if self.live_stdout_line {
             println!();
         }
@@ -65,14 +73,14 @@ impl Drop for TranscribeApp {
 
 impl Application for TranscribeApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        println!("transcribe: waveform in window · transcript on stdout · Esc to quit");
+        println!("transcribe: waveform in window · transcript on stdout (scrollback + live line) · Esc to quit");
         let _ = io::stdout().flush();
 
         let all_devices = audio::devices();
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
 
         if input_devices.is_empty() {
-            return Err("No audio input devices found. On macOS, pick a mic or a loopback driver (e.g. BlackHole) so system audio appears as an input.".to_string());
+            return Err("No audio input devices found. On Windows, choose “… (system audio)” for built-in capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS).".to_string());
         }
 
         #[cfg(target_os = "ios")]
@@ -83,7 +91,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 5.0_f32;
+            let buffer_duration = 10.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -106,7 +114,10 @@ impl Application for TranscribeApp {
 
         #[cfg(not(target_os = "ios"))]
         {
-            let names: Vec<String> = input_devices.iter().map(|d| d.name.clone()).collect();
+            let names: Vec<String> = input_devices
+                .iter()
+                .map(|d| d.input_menu_label())
+                .collect();
             let selection = Select::new()
                 .with_prompt("Select audio input (mic or loopback for system mix)")
                 .items(&names)
@@ -123,7 +134,7 @@ impl Application for TranscribeApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            let buffer_duration = 5.0_f32;
+            let buffer_duration = 10.0_f32;
             #[cfg(not(all(
                 feature = "whisper_ct2",
                 not(target_os = "ios"),
@@ -151,15 +162,28 @@ impl Application for TranscribeApp {
             return;
         }
 
-        let (channels, sr) = {
+        let (channels, sr, ingested) = {
             let l = self.listener.as_ref().expect("checked above");
-            (l.get_samples_by_channel(), l.buffer().sample_rate())
+            let buf = l.buffer();
+            (
+                l.get_samples_by_channel(),
+                buf.sample_rate(),
+                buf.ingested_frame_count(),
+            )
         };
 
         let l = self.listener.as_ref().expect("checked above");
         self.wave.tick_draw(state, l);
 
-        self.engine.process_snapshot(sr, &channels);
+        self.engine.process_snapshot(sr, &channels, ingested);
+
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
 
         let line = self.engine.caption().to_string();
         self.log_transcript_line_to_stdout(&line);
@@ -167,13 +191,23 @@ impl Application for TranscribeApp {
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         if ch == '\u{1b}' {
-            self.pause_mic();
+            self.pause_input();
             crate::engine::native_engine::request_exit();
         }
     }
 
     fn prepare_shutdown(&mut self, _state: &mut EngineState) {
-        self.pause_mic();
+        self.engine.flush_live_to_stdout_commits();
+        for line in self.engine.drain_stdout_commits() {
+            if self.live_stdout_line {
+                print!("\r\x1b[2K");
+                self.live_stdout_line = false;
+            }
+            println!("{}", line);
+        }
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.pause();
+        }
     }
 
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}

@@ -1,0 +1,216 @@
+use crate::engine::audio::{AudioListener, transcription::TranscriptionEngine};
+use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+struct PyTranscriber {
+    listener_ptr: usize,
+    engine: TranscriptionEngine,
+    /// Last [`TranscriptionEngine::transcript_epoch`] seen from [`transcriber_transcribe_step`].
+    last_yield_epoch: u64,
+}
+
+static ACTIVE_TRANSCRIBERS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+static TRANSCRIBERS: OnceLock<Mutex<HashMap<usize, Box<PyTranscriber>>>> = OnceLock::new();
+
+fn active_transcribers() -> &'static Mutex<HashSet<usize>> {
+    ACTIVE_TRANSCRIBERS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn transcribers() -> &'static Mutex<HashMap<usize, Box<PyTranscriber>>> {
+    TRANSCRIBERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let mic_obj: PyObjectRef = if !args.args.is_empty() {
+        args.args[0].clone()
+    } else if let Some(obj) = args.kwargs.get("audio") {
+        obj.clone()
+    } else {
+        return Err(vm.new_type_error(
+            "xos.audio.transcription(audio, size='small|tiny') expects a microphone object"
+                .to_string(),
+        ));
+    };
+    let size: Option<String> = if args.args.len() > 1 {
+        Some(args.args[1].clone().try_into_value::<String>(vm)?)
+    } else if let Some(s) = args.kwargs.get("size") {
+        Some(s.clone().try_into_value::<String>(vm)?)
+    } else {
+        None
+    };
+    if let Some(sz) = size.as_deref() {
+        let lower = sz.trim().to_ascii_lowercase();
+        if lower != "small" && lower != "tiny" {
+            return Err(vm.new_value_error(
+                "size must be 'small' or 'tiny'".to_string(),
+            ));
+        }
+    }
+    let listener_ptr_obj = mic_obj
+        .get_attr("_listener_ptr", vm)
+        .map_err(|_| vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string()))?;
+    let listener_ptr: usize = listener_ptr_obj.try_into_value(vm)?;
+    if listener_ptr == 0 {
+        return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
+    }
+
+    let mut engine = TranscriptionEngine::new_with_size(size.as_deref());
+    let listener = unsafe { &*(listener_ptr as *const AudioListener) };
+    engine.set_device_hint("python-mic", listener.buffer().sample_rate());
+
+    let boxed = Box::new(PyTranscriber {
+        listener_ptr,
+        engine,
+        last_yield_epoch: 0,
+    });
+    let ptr = (&*boxed as *const PyTranscriber) as usize;
+    if let Ok(mut map) = transcribers().lock() {
+        map.insert(ptr, boxed);
+    }
+    if let Ok(mut set) = active_transcribers().lock() {
+        set.insert(ptr);
+    }
+
+    let code = format!(
+        r#"
+class _Transcriber:
+    def __init__(self, ptr):
+        self._ptr = ptr
+
+    def transcribe(self, poll_interval=0.03):
+        """
+        One poll of the transcription engine. Returns ``(transcription, was_committed, is_new)``.
+
+        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step``. ``is_new``
+        is driven by the engine's ``transcript_epoch`` (no string equality): false when the
+        epoch is unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved;
+        callers can sleep between polls (see ``record.py``).
+        """
+        import xos
+        return xos.audio._transcriber_transcribe_step(self._ptr)
+
+    def iterate(self, poll_interval=0.03):
+        import xos
+        while True:
+            events = xos.audio._transcriber_next_events(self._ptr)
+            if events:
+                for ev in events:
+                    yield ev
+            else:
+                xos.sleep(poll_interval)
+
+    def finish(self):
+        """Release transcriber state (same as cleanup); safe to call from ``finally``."""
+        if self._ptr != 0:
+            import xos
+            xos.audio._transcriber_cleanup(self._ptr)
+            self._ptr = 0
+
+    def __del__(self):
+        self.finish()
+
+_transcriber_instance = _Transcriber({})
+"#,
+        ptr
+    );
+    let scope = vm.new_scope_with_builtins();
+    vm.run_code_string(scope.clone(), &code, "<transcriber>".to_string())?;
+    scope.globals.get_item("_transcriber_instance", vm)
+}
+
+pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let mut map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get_mut(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
+    let channels = listener.get_samples_by_channel();
+    let buf = listener.buffer();
+    let sr = buf.sample_rate();
+    let ingested = buf.ingested_frame_count();
+    state.engine.process_snapshot(sr, &channels, ingested);
+    let events = state.engine.drain_iter_events();
+    let py_list = events
+        .into_iter()
+        .map(|e| match e {
+            Some(line) => vm.ctx.new_str(line).into(),
+            None => vm.ctx.none(),
+        })
+        .collect::<Vec<_>>();
+    Ok(vm.ctx.new_list(py_list).into())
+}
+
+/// One transcription poll: returns `(transcription, was_committed, is_new)`.
+///
+/// `transcription` is the live caption while building an utterance; on ticks where a phrase
+/// commits it is that finalized phrase. `was_committed` is true iff at least one commit
+/// occurred this poll. `is_new` compares [`TranscriptionEngine::transcript_epoch`] to the last
+/// seen value (bumped when the engine queues live or commit iterator events).
+pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let mut map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get_mut(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    let listener = unsafe { &*(state.listener_ptr as *const AudioListener) };
+    let channels = listener.get_samples_by_channel();
+    let buf = listener.buffer();
+    let sr = buf.sample_rate();
+    let ingested = buf.ingested_frame_count();
+    state.engine.process_snapshot(sr, &channels, ingested);
+
+    let events = state.engine.drain_iter_events();
+    let mut new_commits: Vec<String> = Vec::new();
+    let mut prev: Option<String> = None;
+    for e in events {
+        match e {
+            None => {
+                if let Some(t) = prev.take() {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        new_commits.push(t);
+                    }
+                }
+            }
+            Some(s) => prev = Some(s),
+        }
+    }
+
+    let was_committed = !new_commits.is_empty();
+    let transcription = if was_committed {
+        new_commits.join("\n")
+    } else {
+        state.engine.caption().trim().to_string()
+    };
+
+    let epoch = state.engine.transcript_epoch();
+    let is_new = epoch != state.last_yield_epoch;
+    state.last_yield_epoch = epoch;
+
+    Ok(vm
+        .ctx
+        .new_tuple(vec![
+            vm.ctx.new_str(transcription).into(),
+            vm.ctx.new_bool(was_committed).into(),
+            vm.ctx.new_bool(is_new).into(),
+        ])
+        .into())
+}
+
+pub fn transcriber_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    if let Ok(mut set) = active_transcribers().lock() {
+        set.remove(&ptr);
+    }
+    if let Ok(mut map) = transcribers().lock() {
+        map.remove(&ptr);
+    }
+    Ok(vm.ctx.none())
+}
+

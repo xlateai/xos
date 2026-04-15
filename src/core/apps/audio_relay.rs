@@ -456,11 +456,17 @@ impl AudioRelay {
             
             self.draw_rect(buffer, width, height, x, item_y, column_width, item_height, item_color);
             
-            // Draw device name text (truncate if too long)
-            let device_name = if device.name.len() > 30 {
-                format!("{}...", &device.name[..27])
+            // Draw device label (input column includes mic vs loopback hint)
+            let full_label = if title == "Input" {
+                device.input_menu_label()
             } else {
                 device.name.clone()
+            };
+            let max_chars = if title == "Input" { 42 } else { 30 };
+            let device_name = if full_label.len() > max_chars {
+                format!("{}...", &full_label[..max_chars.saturating_sub(3)])
+            } else {
+                full_label
             };
             let text_color = if !use_default && i == selected_index { (0, 0, 0) } else { (255, 255, 255) };
             self.draw_text(buffer, width, height, &device_name, x + 10, item_y + 15, 14.0, text_color);

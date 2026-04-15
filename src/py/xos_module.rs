@@ -1,5 +1,6 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::{LazyLock, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use std::time::Duration;
@@ -630,14 +631,24 @@ fn xos_colorize(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(apply_minecraft_colors(&text)).into())
 }
 
-/// xos.color_print("&4Error: &fdetails")
+/// xos.print_color("&4Error: &fdetails", end="\\n")
 /// Supports Minecraft-style `&` codes and escapes (`\\&` or `&&`).
-fn xos_color_print(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let text: String = args.bind(vm)?;
+fn xos_print_color(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let text: String = if !args.args.is_empty() {
+        args.args[0].clone().try_into_value(vm)?
+    } else if let Some(t) = args.kwargs.get("text") {
+        t.clone().try_into_value(vm)?
+    } else {
+        return Err(vm.new_type_error("print_color(text, end='\\n')".to_string()));
+    };
+    let end: String = if let Some(e) = args.kwargs.get("end") {
+        e.clone().try_into_value(vm)?
+    } else {
+        "\n".to_string()
+    };
     let rendered = apply_minecraft_colors(&text);
-    if let Ok(builtin_print) = vm.builtins.get_attr("print", vm) {
-        let _ = builtin_print.call((vm.ctx.new_str(rendered),), vm);
-    }
+    print!("{rendered}{end}");
+    let _ = std::io::stdout().flush();
     Ok(vm.ctx.none())
 }
 
@@ -1012,7 +1023,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr("colorize", vm.new_function("colorize", xos_colorize), vm)
         .unwrap();
     module
-        .set_attr("color_print", vm.new_function("color_print", xos_color_print), vm)
+        .set_attr("print_color", vm.new_function("print_color", xos_print_color), vm)
         .unwrap();
     
     // Add the random submodule

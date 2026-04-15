@@ -8,6 +8,10 @@ use crate::apps::audiovis::media_control_bar::MediaControlBar;
 use rodio::{Decoder, OutputStream, Sink, Source};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use rodio::OutputStreamBuilder;
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use dialoguer::Select;
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use crate::engine::audio;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +47,8 @@ pub struct AudiovisApp {
     audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
     #[cfg(not(target_arch = "wasm32"))]
     last_seek_position: f32, // Last position we seeked to (to detect new seeks)
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    live_listener: Option<audio::AudioListener>,
 }
 
 impl AudiovisApp {
@@ -71,6 +77,8 @@ impl AudiovisApp {
             audio_file_path: None,
             #[cfg(not(target_arch = "wasm32"))]
             last_seek_position: -1.0,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            live_listener: None,
         }
     }
 
@@ -148,11 +156,21 @@ impl AudiovisApp {
 
 impl Application for AudiovisApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        // Open the selector on startup
-        self.visual_type_selector.open();
-
         #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
         {
+            let source_items = [
+                "Play audio file",
+                "Live input (microphone, loopback, or system mix)",
+            ];
+            let source_choice = Select::new()
+                .with_prompt("Audiovis audio source")
+                .items(&source_items[..])
+                .default(0)
+                .interact()
+                .map_err(|e| format!("Audio source selection failed: {e}"))?;
+
+            match source_choice {
+                0 => {
             // Open file picker for audio files
             let file = rfd::FileDialog::new()
                 .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg", "m4a", "aac"])
@@ -221,7 +239,42 @@ impl Application for AudiovisApp {
                 // No audio file selected - close the app
                 return Err("No audio file selected. Application will close.".to_string());
             }
+                }
+                1 => {
+                    let input_devices = audio::all_input_devices();
+                    if input_devices.is_empty() {
+                        return Err(
+                            "No audio input devices found. On Windows, “… (system audio)” entries \
+                             should list each output for capture; on macOS use BlackHole or similar."
+                                .to_string(),
+                        );
+                    }
+                    let names: Vec<String> = input_devices
+                        .iter()
+                        .map(|d| d.input_menu_label())
+                        .collect();
+                    let sel = Select::new()
+                        .with_prompt("Select input device")
+                        .items(&names)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| format!("Input device selection failed: {e}"))?;
+                    let device = input_devices
+                        .get(sel)
+                        .ok_or_else(|| "Invalid device selection".to_string())?;
+                    let buffer_duration = 1.0_f32;
+                    let listener = audio::AudioListener::new(device, buffer_duration)?;
+                    listener.record()?;
+                    self.live_listener = Some(listener);
+                    self.media_control_bar.set_live_mode(true);
+                    crate::print(&format!("Live input: {}", device.name));
+                }
+                _ => return Err("Invalid audio source selection.".to_string()),
+            }
         }
+
+        // Open the selector after the capture/playback source is ready
+        self.visual_type_selector.open();
 
         #[cfg(target_os = "ios")]
         {
@@ -281,14 +334,48 @@ impl Application for AudiovisApp {
         }
 
         // Get audio samples for visualization
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+        let audio_chunk = {
+            if let Some(listener) = &self.live_listener {
+                let channels = listener.get_samples_by_channel();
+                let ch0 = channels.get(0).map(|v| v.as_slice()).unwrap_or(&[]);
+                let buffer_len = ch0.len();
+                if buffer_len > 0 {
+                    let start = buffer_len.saturating_sub(BUFFER_SIZE);
+                    let samples: Vec<f32> = ch0.iter().skip(start).copied().collect();
+                    let mut chunk = vec![0.0; BUFFER_SIZE];
+                    let count = samples.len().min(BUFFER_SIZE);
+                    chunk[..count].copy_from_slice(&samples[..count]);
+                    Some(chunk)
+                } else {
+                    Some(vec![0.0; BUFFER_SIZE])
+                }
+            } else if let Some(sample_buffer) = &self.audio_samples {
+                let buffer = sample_buffer.lock().unwrap();
+                let buffer_len = buffer.len();
+
+                if buffer_len > 0 {
+                    let start = buffer_len.saturating_sub(BUFFER_SIZE);
+                    let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
+                    let mut chunk = vec![0.0; BUFFER_SIZE];
+                    let count = samples.len().min(BUFFER_SIZE);
+                    chunk[..count].copy_from_slice(&samples[..count]);
+                    Some(chunk)
+                } else {
+                    Some(vec![0.0; BUFFER_SIZE])
+                }
+            } else {
+                Some(vec![0.0; BUFFER_SIZE])
+            }
+        };
+
+        #[cfg(target_os = "ios")]
         let audio_chunk = {
             if let Some(sample_buffer) = &self.audio_samples {
                 let buffer = sample_buffer.lock().unwrap();
                 let buffer_len = buffer.len();
-                
+
                 if buffer_len > 0 {
-                    // Get the most recent BUFFER_SIZE samples
                     let start = buffer_len.saturating_sub(BUFFER_SIZE);
                     let samples: Vec<f32> = buffer.iter().skip(start).copied().collect();
                     let mut chunk = vec![0.0; BUFFER_SIZE];
@@ -311,7 +398,7 @@ impl Application for AudiovisApp {
 
         // Note: Seeking is handled in on_mouse_up to avoid blocking during drag
 
-        // Control audio playback based on pause state
+        // Control audio playback / capture based on pause state
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(sink) = &self.sink {
@@ -320,6 +407,14 @@ impl Application for AudiovisApp {
                     sink.pause();
                 } else {
                     sink.play();
+                }
+            }
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            if let Some(listener) = &self.live_listener {
+                if self.media_control_bar.is_paused() {
+                    let _ = listener.pause();
+                } else {
+                    let _ = listener.record();
                 }
             }
         }
@@ -359,7 +454,14 @@ impl Application for AudiovisApp {
             }
         }
 
-        // Get seek position for randomization
+        // Seek position seeds file-mode visualization; live input uses a fixed seed.
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+        let seek_position = if self.live_listener.is_some() {
+            0.0
+        } else {
+            self.media_control_bar.position()
+        };
+        #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
         let seek_position = self.media_control_bar.position();
 
         // If waveform is selected and initialized, render it
@@ -417,6 +519,14 @@ impl Application for AudiovisApp {
                                 sink.play();
                             }
                         }
+                        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+                        if let Some(listener) = &self.live_listener {
+                            if self.media_control_bar.is_paused() {
+                                let _ = listener.pause();
+                            } else {
+                                let _ = listener.record();
+                            }
+                        }
                     }
                     // If dragging, we'll seek on mouse up instead
                 }
@@ -431,6 +541,10 @@ impl Application for AudiovisApp {
         // When user releases mouse after dragging or clicking seek bar, seek to final position
         #[cfg(not(target_arch = "wasm32"))]
         {
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            if self.live_listener.is_some() {
+                return;
+            }
             let position = self.media_control_bar.position();
             let position_changed = (self.last_seek_position - position).abs() > 0.001;
             

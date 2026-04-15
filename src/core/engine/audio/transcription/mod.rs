@@ -1,315 +1,270 @@
-//! Live transcription: resampling helpers + optional Whisper via CTranslate2 (`ct2rs`).
-//!
-//! **Bundled model location** (no env var required): at compile time the repo root is fixed via
-//! `CARGO_MANIFEST_DIR`. We prefer `whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete.
-//! Optional override: `XOS_WHISPER_CT2_PATH` → any directory produced by `ct2-transformers-converter`.
-//! **`XOS_WHISPER_LANG`**: ISO code passed to Whisper (default `en`) to skip slow per-decode language detection.
-//!
-//! Build with **`--features whisper_ct2`** (desktop only; long compile). Without the feature,
-//! [`TranscriptionEngine`] stays on the RMS / placeholder path.
+//! Real-time transcription: Whisper (CT2) on desktop when `whisper_ct2` is enabled; stub elsewhere.
+//! Pipeline: voice gate (RMS) → frequent tail decodes → hypothesis stabilization → phrase commits.
 
-use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::thread;
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod filter;
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod merge;
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod sample;
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+mod whisper;
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+use std::collections::VecDeque;
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+use std::sync::mpsc::{Receiver, SyncSender};
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
 use std::time::{Duration, Instant};
 
-/// Sample rate expected by Whisper / CT2.
-pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
-
-/// Preferred bundled folders (first match with all required files wins).
-pub const BUNDLED_WHISPER_CT2_DIR_NAMES: &[&str] = &["whisper-tiny-ct2", "whisper-small-ct2"];
-
-/// `.../transcription/models` (contains per-model folders).
-pub fn bundled_models_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/engine/audio/transcription/models")
-}
-
-/// Files expected in a converted CT2 Whisper directory (`ct2rs` + HF tokenizer).
-pub const WHISPER_CT2_REQUIRED_FILES: &[&str] = &[
-    "model.bin",
-    "config.json",
-    "vocabulary.json",
-    "tokenizer.json",
-    "preprocessor_config.json",
-];
-
-/// First bundled directory under [`bundled_models_root`] that contains all [`WHISPER_CT2_REQUIRED_FILES`],
-/// else `whisper-tiny-ct2/` as the path to create or point `XOS_WHISPER_CT2_PATH` at.
-pub fn default_bundled_ct2_model_dir() -> PathBuf {
-    let root = bundled_models_root();
-    for name in BUNDLED_WHISPER_CT2_DIR_NAMES {
-        let p = root.join(name);
-        if WHISPER_CT2_REQUIRED_FILES
-            .iter()
-            .all(|f| p.join(f).is_file())
-        {
-            return p;
-        }
-    }
-    root.join(BUNDLED_WHISPER_CT2_DIR_NAMES[0])
-}
-
-/// Linear resample mono `input` (at `input_rate` Hz) to `output_rate` Hz into `out`.
-pub fn resample_linear_mono(input_rate: u32, input: &[f32], output_rate: u32, out: &mut Vec<f32>) {
-    out.clear();
-    if input_rate == 0 || output_rate == 0 || input.is_empty() {
-        return;
-    }
-    if input_rate == output_rate {
-        out.extend_from_slice(input);
-        return;
-    }
-    let ratio = input_rate as f64 / output_rate as f64;
-    let out_len = ((input.len() as f64) / ratio).floor().max(1.0) as usize;
-    out.reserve(out_len);
-    for i in 0..out_len {
-        let src_f = i as f64 * ratio;
-        let i0 = src_f.floor() as usize;
-        let i1 = (i0 + 1).min(input.len().saturating_sub(1));
-        let t = (src_f - i0 as f64) as f32;
-        let v = input[i0] * (1.0 - t) + input[i1] * t;
-        out.push(v);
-    }
-}
-
-/// Resample to [`WHISPER_SAMPLE_RATE`] (mono).
-pub fn resample_to_whisper_rate(input_rate: u32, mono: &[f32], out: &mut Vec<f32>) {
-    resample_linear_mono(input_rate, mono, WHISPER_SAMPLE_RATE, out);
-}
-
-fn downmix_to_mono(channels: &[Vec<f32>]) -> Vec<f32> {
-    if channels.is_empty() {
-        return Vec::new();
-    }
-    let n = channels.iter().map(|c| c.len()).min().unwrap_or(0);
-    if n == 0 {
-        return Vec::new();
-    }
-    let ch = channels.len() as f32;
-    let mut mono = vec![0.0f32; n];
-    for row in channels {
-        for (i, &s) in row.iter().take(n).enumerate() {
-            mono[i] += s;
-        }
-    }
-    for m in &mut mono {
-        *m /= ch;
-    }
-    mono
-}
-
-fn rms_tail(mono: &[f32], tail_max: usize) -> f32 {
-    if mono.is_empty() {
-        return 0.0;
-    }
-    let start = mono.len().saturating_sub(tail_max);
-    let slice = &mono[start..];
-    let mut acc = 0.0f32;
-    for &s in slice {
-        acc += s * s;
-    }
-    (acc / slice.len() as f32).sqrt()
-}
-
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-fn try_load_whisper_ct2() -> (Option<ct2rs::Whisper>, String) {
-    use ct2rs::{Config, Whisper};
-    const ENV: &str = "XOS_WHISPER_CT2_PATH";
-
-    let path: PathBuf = match std::env::var(ENV) {
-        Ok(raw) if !raw.trim().is_empty() => PathBuf::from(raw.trim()),
-        _ => default_bundled_ct2_model_dir(),
-    };
-
-    let mut missing = Vec::new();
-    for name in WHISPER_CT2_REQUIRED_FILES {
-        if !path.join(name).is_file() {
-            missing.push(*name);
-        }
-    }
-    if !missing.is_empty() {
-        let msg = format!(
-            "Whisper CT2 model directory is incomplete: {}\n\nMissing: {}\n\n`ct2rs` needs Hugging Face tokenizer + preprocessor files, not only `model.bin`. Re-run the converter with `--copy_files` (see models/README.md), or set {} to a complete directory.",
-            path.display(),
-            missing.join(", "),
-            ENV
-        );
-        return (None, msg);
-    }
-
-    match Whisper::new(&path, Config::default()) {
-        Ok(w) => (Some(w), String::new()),
-        Err(e) => (
-            None,
-            format!(
-                "Found model.bin at {} but failed to load: {e}",
-                path.display()
-            ),
-        ),
-    }
-}
-
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-fn spawn_whisper_decode_thread(whisper: ct2rs::Whisper) -> (SyncSender<Vec<f32>>, Receiver<String>) {
-    let lang = std::env::var("XOS_WHISPER_LANG")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "en".into());
-    let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
-    let (result_tx, result_rx) = mpsc::channel::<String>();
-    thread::Builder::new()
-        .name("xos-whisper-decode".into())
-        .spawn(move || {
-            use ct2rs::WhisperOptions;
-            let mut opts = WhisperOptions::default();
-            opts.beam_size = 1;
-            let lang_ref = lang.as_str();
-            while let Ok(buf) = job_rx.recv() {
-                let line = match whisper.generate(&buf, Some(lang_ref), false, &opts) {
-                    Ok(parts) => parts.join(" ").trim().to_string(),
-                    Err(e) => format!("(Whisper error: {e})"),
-                };
-                if result_tx.send(line).is_err() {
-                    break;
-                }
-            }
-        })
-        .expect("spawn whisper decode thread");
-    (job_tx, result_rx)
-}
-
-/// Max seconds of input audio passed to Whisper per decode (tail of the ring buffer).
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-const WHISPER_INPUT_TAIL_SECS: u32 = 4;
-
-/// Transcription: RMS placeholder, or Whisper+CTranslate2 when `whisper_ct2` is enabled.
+/// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
+    transcript_epoch: u64,
     caption: String,
-    last_emit: Instant,
-    emit_interval: Duration,
-    last_rms: f32,
     device_hint: String,
+    pending_stdout: Vec<String>,
+    pending_iter_events: Vec<Option<String>>,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
     decode_job_tx: Option<SyncSender<Vec<f32>>>,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
     decode_result_rx: Option<Receiver<String>>,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
     resample_buf: Vec<f32>,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
     last_decode: Instant,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
-    decode_interval: Duration,
+    live_transcript: String,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
-    transcript: String,
+    stable_transcript: String,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
-    ct2_hint: String,
+    hypotheses: VecDeque<String>,
     #[cfg(all(
         feature = "whisper_ct2",
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
     ))]
-    whisper_meta_printed: bool,
+    voice_active: bool,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    quiet_for: Duration,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_snapshot: Instant,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    accept_results_until: Instant,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    awaiting_final_commit: bool,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_committed_text: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    block_stale_until: Instant,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    utterance_best: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_stdout_commit_key: String,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_level_rms: f32,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    load_note: Option<String>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_ingested_frames: Option<u64>,
+    #[cfg(all(
+        feature = "whisper_ct2",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
+    last_phrase_restart_commit: Option<Instant>,
 }
 
 impl TranscriptionEngine {
     pub fn new() -> Self {
+        Self::new_with_size(None)
+    }
+
+    pub fn new_with_size(preferred_size: Option<&str>) -> Self {
         #[cfg(all(
             feature = "whisper_ct2",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
         ))]
         {
-            let (whisper, ct2_hint) = try_load_whisper_ct2();
-            let decode_interval = Duration::from_millis(240);
-            let (decode_job_tx, decode_result_rx) = match whisper {
-                Some(w) => {
-                    let (tx, rx) = spawn_whisper_decode_thread(w);
-                    (Some(tx), Some(rx))
-                }
-                None => (None, None),
-            };
+            let (decode_job_tx, decode_result_rx, load_note) =
+                match whisper::spawn_decode_thread(preferred_size) {
+                    Ok((tx, rx)) => (Some(tx), Some(rx), None),
+                    Err(e) => (None, None, Some(e)),
+                };
             let caption = if decode_job_tx.is_some() {
                 String::new()
-            } else if ct2_hint.is_empty() {
-                "Waiting for audio…".to_string()
             } else {
-                ct2_hint.clone()
+                load_note.clone().unwrap_or_else(|| "Waiting for audio…".to_string())
             };
             return Self {
+                transcript_epoch: 0,
                 caption,
-                last_emit: Instant::now(),
-                emit_interval: Duration::from_millis(400),
-                last_rms: 0.0,
                 device_hint: String::new(),
+                pending_stdout: Vec::new(),
+                pending_iter_events: Vec::new(),
                 decode_job_tx,
                 decode_result_rx,
                 resample_buf: Vec::new(),
-                last_decode: Instant::now() - decode_interval,
-                decode_interval,
-                transcript: String::new(),
-                ct2_hint,
-                whisper_meta_printed: false,
+                last_decode: Instant::now()
+                    - Duration::from_millis(sample::DECODE_INTERVAL_MS),
+                live_transcript: String::new(),
+                stable_transcript: String::new(),
+                hypotheses: VecDeque::new(),
+                voice_active: false,
+                quiet_for: Duration::ZERO,
+                last_snapshot: Instant::now(),
+                accept_results_until: Instant::now(),
+                awaiting_final_commit: false,
+                last_committed_text: String::new(),
+                block_stale_until: Instant::now(),
+                utterance_best: String::new(),
+                last_stdout_commit_key: String::new(),
+                last_level_rms: 0.0,
+                load_note,
+                last_ingested_frames: None,
+                last_phrase_restart_commit: None,
             };
         }
         #[cfg(not(all(
             feature = "whisper_ct2",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
         )))]
         {
+            let _ = preferred_size;
             Self {
-                caption: "Waiting for audio…".to_string(),
-                last_emit: Instant::now(),
-                emit_interval: Duration::from_millis(400),
-                last_rms: 0.0,
+                transcript_epoch: 0,
+                caption: String::new(),
                 device_hint: String::new(),
+                pending_stdout: Vec::new(),
+                pending_iter_events: Vec::new(),
             }
         }
     }
 
     pub fn set_device_hint(&mut self, name: &str, sample_rate: u32) {
         self.device_hint = format!("Input: {name} @ {sample_rate} Hz");
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        if self.decode_job_tx.is_none() {
+            if let Some(note) = &self.load_note {
+                self.caption = format!("{}\n\n{}", self.device_hint, note);
+            } else {
+                self.caption = format!("{}\n\nWaiting for audio…", self.device_hint);
+            }
+            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        }
+    }
+
+    pub fn transcript_epoch(&self) -> u64 {
+        self.transcript_epoch
     }
 
     pub fn device_hint(&self) -> &str {
@@ -319,120 +274,352 @@ impl TranscriptionEngine {
     pub fn caption(&self) -> &str {
         #[cfg(all(
             feature = "whisper_ct2",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
         ))]
         if self.decode_job_tx.is_some() {
-            return &self.transcript;
+            return &self.live_transcript;
         }
         &self.caption
     }
 
     pub fn last_level_rms(&self) -> f32 {
-        self.last_rms
-    }
-
-    pub fn process_snapshot(&mut self, sample_rate: u32, channels: &[Vec<f32>]) {
-        let mono = downmix_to_mono(channels);
-        let tail = (sample_rate as usize).saturating_mul(80) / 1000;
-        let tail = tail.max(256).min(mono.len().max(1));
-        self.last_rms = rms_tail(&mono, tail);
-
         #[cfg(all(
             feature = "whisper_ct2",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
         ))]
         {
-            if self.decode_job_tx.is_some() {
-                while let Ok(line) = self
-                    .decode_result_rx
-                    .as_ref()
-                    .expect("paired with decode_job_tx")
-                    .try_recv()
-                {
-                    self.transcript = line;
-                }
-
-                let max_in = (sample_rate as usize)
-                    .saturating_mul(WHISPER_INPUT_TAIL_SECS as usize)
-                    .min(mono.len());
-                let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
-                resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
-
-                let min_samples = WHISPER_SAMPLE_RATE as usize / 2;
-                if self.last_decode.elapsed() >= self.decode_interval
-                    && self.resample_buf.len() >= min_samples
-                {
-                    let job_tx = self
-                        .decode_job_tx
-                        .as_ref()
-                        .expect("checked decode_job_tx.is_some()");
-                    if job_tx.try_send(self.resample_buf.clone()).is_ok() {
-                        self.last_decode = Instant::now();
-                    }
-                }
-
-                if !self.whisper_meta_printed {
-                    self.whisper_meta_printed = true;
-                    let lg = std::env::var("XOS_WHISPER_LANG")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                        .unwrap_or_else(|| "en".into());
-                    eprintln!(
-                        "transcribe: Whisper ~{:.2}s cadence · last {}s → 16 kHz · lang={} · greedy beam (stdout = live line)",
-                        self.decode_interval.as_secs_f32(),
-                        WHISPER_INPUT_TAIL_SECS,
-                        lg.trim()
-                    );
-                }
-
-                return;
-            }
-            if !self.ct2_hint.is_empty() && self.last_emit.elapsed() >= self.emit_interval {
-                self.last_emit = Instant::now();
-                self.caption = self.ct2_hint.clone();
-            }
-            return;
+            return self.last_level_rms;
         }
-
         #[cfg(not(all(
             feature = "whisper_ct2",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
         )))]
         {
-            if self.last_emit.elapsed() < self.emit_interval {
+            0.0
+        }
+    }
+
+    pub fn drain_stdout_commits(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_stdout)
+    }
+
+    pub fn drain_iter_events(&mut self) -> Vec<Option<String>> {
+        std::mem::take(&mut self.pending_iter_events)
+    }
+
+    pub fn flush_live_to_stdout_commits(&mut self) {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            if self.decode_job_tx.is_none() {
                 return;
             }
-            self.last_emit = Instant::now();
-
-            let activity = if self.last_rms > 0.012 {
-                "voice / sound activity"
+            let mut candidate = if !self.stable_transcript.is_empty() {
+                self.stable_transcript.clone()
             } else {
-                "quiet (try speaking or use a loopback input for system audio)"
+                self.live_transcript.clone()
             };
+            merge::fold_overlap_longer_into(&mut candidate, &self.utterance_best);
+            for h in self.hypotheses.iter() {
+                merge::fold_overlap_longer_into(&mut candidate, h);
+            }
+            self.try_push_stdout_commit(&candidate);
+        }
+    }
 
-            let bundled = default_bundled_ct2_model_dir();
-            let whisper_note = format!(
-                "Enable Whisper+CT2: cargo build --features whisper_ct2, then place converted weights under:\n{}\n(see transcription/models/README.md). Optional override: XOS_WHISPER_CT2_PATH.",
-                bundled.display()
-            );
-
-            let rms_q = (self.last_rms * 100.0).round() / 100.0;
-            self.caption = format!(
-                "{activity}. Stream {sample_rate} Hz → {wh} Hz mono · RMS ≈ {rms_q:.2}\n{whisper_note}",
-                wh = WHISPER_SAMPLE_RATE,
-                whisper_note = whisper_note,
-            );
+    /// `ingested_frames`: monotonic frame counter from the same listener; used to detect new
+    /// audio vs idle polls and buffer resets. Pass `0` only if unavailable (engine may skip work).
+    pub fn process_snapshot(
+        &mut self,
+        sample_rate: u32,
+        channels: &[Vec<f32>],
+        ingested_frames: u64,
+    ) {
+        #[cfg(all(
+            feature = "whisper_ct2",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        self.process_snapshot_live(sample_rate, channels, ingested_frames);
+        #[cfg(not(all(
+            feature = "whisper_ct2",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        {
+            let _ = (sample_rate, channels, ingested_frames);
         }
     }
 
     pub fn full_display(&self) -> String {
         if self.device_hint.is_empty() {
-            self.caption.clone()
+            self.caption().to_string()
         } else {
-            format!("{}\n\n{}", self.device_hint, self.caption)
+            format!("{}\n\n{}", self.device_hint, self.caption())
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "whisper_ct2",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+impl TranscriptionEngine {
+    fn reset_utterance_state(&mut self) {
+        self.live_transcript.clear();
+        self.stable_transcript.clear();
+        self.hypotheses.clear();
+        self.utterance_best.clear();
+        self.voice_active = false;
+        self.quiet_for = Duration::ZERO;
+        self.awaiting_final_commit = false;
+        self.accept_results_until = Instant::now();
+        if let Some(rx) = &self.decode_result_rx {
+            while rx.try_recv().is_ok() {}
+        }
+        self.last_phrase_restart_commit = None;
+    }
+
+    fn try_push_stdout_commit(&mut self, line: &str) -> bool {
+        let t = merge::normalize_ws(line);
+        if t.is_empty() || filter::is_spurious_line(&t) || filter::looks_degenerate(&t) {
+            return false;
+        }
+        let key = t.to_ascii_lowercase();
+        if self.last_stdout_commit_key == key {
+            return false;
+        }
+        self.last_stdout_commit_key = key;
+        self.pending_stdout.push(t.clone());
+        self.pending_iter_events.push(Some(t.clone()));
+        self.pending_iter_events.push(None);
+        self.last_committed_text = t;
+        self.block_stale_until = Instant::now() + Duration::from_millis(sample::POST_COMMIT_STALE_MS);
+        self.live_transcript.clear();
+        self.stable_transcript.clear();
+        self.hypotheses.clear();
+        self.utterance_best.clear();
+        self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        true
+    }
+
+    /// Commit current phrase and start `clean` fresh when the model jumps to a new line.
+    fn maybe_commit_phrase_restart(&mut self, clean: &str) -> bool {
+        let anchor = if !self.utterance_best.is_empty() {
+            self.utterance_best.as_str()
+        } else {
+            self.live_transcript.as_str()
+        };
+        let aw = anchor.split_whitespace().count();
+        let cw = clean.split_whitespace().count();
+        if aw < sample::RESTART_MIN_ANCHOR_WORDS || cw < sample::RESTART_MIN_CLEAN_WORDS {
+            return false;
+        }
+        if merge::hypothesis_continues_anchor(anchor, clean) {
+            return false;
+        }
+        let now = Instant::now();
+        if let Some(t) = self.last_phrase_restart_commit {
+            if now.duration_since(t)
+                < Duration::from_millis(sample::PHRASE_RESTART_COMMIT_DEBOUNCE_MS)
+            {
+                return false;
+            }
+        }
+        let mut to_commit = if !self.utterance_best.is_empty() {
+            self.utterance_best.clone()
+        } else {
+            self.live_transcript.clone()
+        };
+        merge::fold_overlap_longer_into(&mut to_commit, &self.stable_transcript);
+        for h in self.hypotheses.iter() {
+            merge::fold_overlap_longer_into(&mut to_commit, h);
+        }
+        if !self.try_push_stdout_commit(&to_commit) {
+            return false;
+        }
+        self.last_phrase_restart_commit = Some(Instant::now());
+        self.ingest_hypothesis(clean.to_string());
+        true
+    }
+
+    fn ingest_hypothesis(&mut self, text: String) {
+        let raw = merge::normalize_ws(&text);
+        if raw.is_empty() || filter::looks_degenerate(&raw) {
+            return;
+        }
+        if filter::is_spurious_line(&raw) {
+            return;
+        }
+        if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
+            let cw = self.last_committed_text.split_whitespace().count();
+            let clean_words = raw.split_whitespace().count();
+            let common = merge::common_prefix_word_count(&self.last_committed_text, &raw);
+            let extends_committed = clean_words > cw && common >= cw;
+            if !extends_committed {
+                let threshold = cw.min(clean_words).max(4);
+                if common >= threshold {
+                    return;
+                }
+            }
+        }
+        if self.maybe_commit_phrase_restart(&raw) {
+            return;
+        }
+        let clean = merge::strip_committed_word_prefix(&self.last_committed_text, &raw);
+        let clean = merge::normalize_ws(&clean);
+        if clean.is_empty() {
+            return;
+        }
+        self.hypotheses.push_back(clean.clone());
+        while self.hypotheses.len() > 3 {
+            self.hypotheses.pop_front();
+        }
+        if self.hypotheses.len() >= 2 {
+            let mut prefix = self.hypotheses[0].clone();
+            for h in self.hypotheses.iter().skip(1) {
+                prefix = merge::common_prefix_words(&prefix, h);
+                if prefix.is_empty() {
+                    break;
+                }
+            }
+            if !prefix.is_empty()
+                && prefix.split_whitespace().count()
+                    >= self.stable_transcript.split_whitespace().count()
+            {
+                self.stable_transcript = prefix;
+            }
+        }
+        let next = merge::overlap_stable_into_latest(&self.stable_transcript, &clean);
+        if next.split_whitespace().count() > self.utterance_best.split_whitespace().count() {
+            self.utterance_best = next.clone();
+        }
+        if next != self.live_transcript {
+            self.live_transcript = next.clone();
+            self.pending_iter_events.push(Some(next));
+            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        }
+    }
+
+    fn process_snapshot_live(
+        &mut self,
+        sample_rate: u32,
+        channels: &[Vec<f32>],
+        ingested_frames: u64,
+    ) {
+        if self.decode_job_tx.is_none() {
+            return;
+        }
+        if channels.is_empty() || channels[0].is_empty() || ingested_frames == 0 {
+            return;
+        }
+
+        if self.last_ingested_frames.is_none() {
+            self.last_ingested_frames = Some(ingested_frames);
+            self.last_snapshot = Instant::now();
+            return;
+        }
+
+        let prev = self.last_ingested_frames.expect("checked");
+        if ingested_frames < prev {
+            self.reset_utterance_state();
+            self.last_ingested_frames = Some(ingested_frames);
+        } else {
+            self.last_ingested_frames = Some(ingested_frames);
+        }
+
+        let dt = self.last_snapshot.elapsed();
+        self.last_snapshot = Instant::now();
+
+        let mono = sample::downmix_mono(channels);
+        let tail = (sample_rate as usize).saturating_mul(80) / 1000;
+        let tail = tail.max(256).min(mono.len().max(1));
+        self.last_level_rms = sample::rms_tail(&mono, tail);
+
+        if self.last_level_rms >= sample::VOICE_ON_RMS {
+            if !self.voice_active {
+                self.last_decode = Instant::now() - Duration::from_millis(sample::DECODE_INTERVAL_MS);
+            }
+            self.voice_active = true;
+            self.awaiting_final_commit = false;
+            self.quiet_for = Duration::ZERO;
+            self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
+        } else if self.last_level_rms < sample::VOICE_OFF_RMS && self.voice_active {
+            self.quiet_for = self.quiet_for.saturating_add(dt);
+            if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
+                self.voice_active = false;
+                self.awaiting_final_commit = true;
+                self.quiet_for = Duration::ZERO;
+                self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
+            }
+        }
+
+        let mut decoded = Vec::<String>::new();
+        if let Some(rx) = &self.decode_result_rx {
+            while let Ok(line) = rx.try_recv() {
+                decoded.push(line);
+            }
+        }
+        // Unbounded result queue can deliver many stale lines in one poll; only the latest
+        // reflects the current sliding tail (older lines trigger bogus phrase restarts).
+        let allow_ingest = (self.voice_active || self.awaiting_final_commit)
+            && (self.voice_active || Instant::now() <= self.accept_results_until);
+        if allow_ingest {
+            if let Some(line) = decoded.into_iter().last() {
+                self.ingest_hypothesis(line);
+            }
+        }
+
+        let max_in = (sample_rate as usize)
+            .saturating_mul(sample::INPUT_TAIL_SECS as usize)
+            .min(mono.len());
+        let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
+        sample::resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
+
+        let allow_trailing_decode = !self.voice_active
+            && self.awaiting_final_commit
+            && Instant::now() <= self.accept_results_until;
+        if (self.voice_active || allow_trailing_decode)
+            && self.last_decode.elapsed() >= Duration::from_millis(sample::DECODE_INTERVAL_MS)
+            && self.resample_buf.len() >= sample::MIN_DECODE_SAMPLES
+        {
+            let tx = self.decode_job_tx.as_ref().expect("checked");
+            if tx.try_send(self.resample_buf.clone()).is_ok() {
+                self.last_decode = Instant::now();
+            }
+        }
+
+        if self.awaiting_final_commit && Instant::now() > self.accept_results_until {
+            let mut best = if self.live_transcript.split_whitespace().count()
+                >= self.stable_transcript.split_whitespace().count() + 2
+            {
+                self.live_transcript.clone()
+            } else if !self.stable_transcript.is_empty() {
+                self.stable_transcript.clone()
+            } else {
+                self.live_transcript.clone()
+            };
+            merge::fold_overlap_longer_into(&mut best, &self.utterance_best);
+            for h in self.hypotheses.iter() {
+                merge::fold_overlap_longer_into(&mut best, h);
+            }
+            self.try_push_stdout_commit(&best);
+            self.awaiting_final_commit = false;
+            self.accept_results_until = Instant::now();
+            while self
+                .decode_result_rx
+                .as_ref()
+                .expect("paired decode channels")
+                .try_recv()
+                .is_ok()
+            {}
         }
     }
 }

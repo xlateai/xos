@@ -2,6 +2,8 @@ use crate::engine::EngineState;
 
 /// Media control bar with play/pause button and seek bar
 pub struct MediaControlBar {
+    /// Live capture mode: hide seek UI; pause still toggles the input stream.
+    live_mode: bool,
     /// Whether playback is currently paused
     is_paused: bool,
     /// Current playback position (0.0 to 1.0)
@@ -23,6 +25,7 @@ pub struct MediaControlBar {
 impl MediaControlBar {
     pub fn new() -> Self {
         Self {
+            live_mode: false,
             is_paused: false,
             position: 0.0,
             is_dragging: false,
@@ -32,6 +35,10 @@ impl MediaControlBar {
             just_seeked: false,
             frames_since_seek: 0,
         }
+    }
+
+    pub fn set_live_mode(&mut self, live: bool) {
+        self.live_mode = live;
     }
 
     /// Get the current playback position (0.0 to 1.0)
@@ -164,6 +171,10 @@ impl MediaControlBar {
             return true;
         }
 
+        if self.live_mode {
+            return false;
+        }
+
         // Check seek bar area (with tolerance)
         let seek_tolerance = 30.0; // Click tolerance around the line and handle
         if (mouse_y - seek_y as f32).abs() < seek_tolerance && 
@@ -285,39 +296,41 @@ impl MediaControlBar {
             }
         }
 
-        // Draw seek bar (crystal style - smooth white line with subtle glow)
-        let seek_width = seek_x_end - seek_x_start;
-        let line_height = 6;
+        if !self.live_mode {
+            // Draw seek bar (crystal style - smooth white line with subtle glow)
+            let seek_width = seek_x_end - seek_x_start;
+            let line_height = 6;
 
-        // Draw white line with subtle glow effect
-        let line_color = (255, 255, 255);
-        for py in (seek_y - line_height / 2)..(seek_y + line_height / 2 + 1) {
-            for px in seek_x_start..seek_x_end {
-                if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
-                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                    if idx + 3 < buffer.len() {
-                        buffer[idx + 0] = line_color.0;
-                        buffer[idx + 1] = line_color.1;
-                        buffer[idx + 2] = line_color.2;
-                        buffer[idx + 3] = 0xff;
+            // Draw white line with subtle glow effect
+            let line_color = (255, 255, 255);
+            for py in (seek_y - line_height / 2)..(seek_y + line_height / 2 + 1) {
+                for px in seek_x_start..seek_x_end {
+                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx + 0] = line_color.0;
+                            buffer[idx + 1] = line_color.1;
+                            buffer[idx + 2] = line_color.2;
+                            buffer[idx + 3] = 0xff;
+                        }
                     }
                 }
             }
-        }
 
-        // Draw seek handle (crystal style - smooth silver circle with gradient)
-        let handle_x = seek_x_start + (seek_width as f32 * self.position) as i32;
-        let handle_y = seek_y;
-        let handle_radius_i = self.handle_radius as i32;
-        
-        // Draw crystal-style handle with smooth anti-aliased circle
-        self.draw_crystal_circle(
-            buffer, width, height,
-            handle_x, handle_y,
-            handle_radius_i,
-            (220, 220, 230), // Light silver
-            (180, 180, 190), // Darker silver for shadow
-        );
+            // Draw seek handle (crystal style - smooth silver circle with gradient)
+            let handle_x = seek_x_start + (seek_width as f32 * self.position) as i32;
+            let handle_y = seek_y;
+            let handle_radius_i = self.handle_radius as i32;
+
+            // Draw crystal-style handle with smooth anti-aliased circle
+            self.draw_crystal_circle(
+                buffer, width, height,
+                handle_x, handle_y,
+                handle_radius_i,
+                (220, 220, 230), // Light silver
+                (180, 180, 190), // Darker silver for shadow
+            );
+        }
     }
 
     /// Draw a smooth anti-aliased circle with crystal UI style (gradient and shadow)
