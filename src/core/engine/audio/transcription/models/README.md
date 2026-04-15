@@ -69,3 +69,29 @@ ct2-transformers-converter --model openai/whisper-small --output_dir "$out" \
 ```
 
 After weights are in place: `cargo build --release` then `cargo run -- app transcribe` — opens a **small window** with a **live waveform** strip; **transcript text** is printed to **stdout** as it changes (Ctrl+C or close window to quit; **Esc** also requests exit). Install **CMake** first; see “Rust build” above.
+
+---
+
+## Whisper-Burn (Burn + wgpu / LibTorch) — planned second stack
+
+The **[Gadersd/whisper-burn](https://github.com/Gadersd/whisper-burn)** tree (vendored next to this repo as `whisper-burn/`) is a **Rust Whisper** implementation. It does **not** use CTranslate2; weights are **Burn records** (`.mpk` / `.mpk.gz`) plus a **`*.cfg`** and **`tokenizer.json`** next to the process cwd (upstream loads `tokenizer.json` by relative path).
+
+**Download tiny files** (from repo root):
+
+```bash
+bash scripts/download_whisper_burn_tiny.sh
+```
+
+That places artifacts under `whisper-burn/tiny/` inside this `models/` directory (already covered by `whisper-*` in `.gitignore`).
+
+**Why this is not a one-line `Cargo.toml` dependency yet**
+
+1. **Burn version skew**: `whisper-burn` pins `burn` from **git** (`github.com/burn-rs/burn.git`); `xos` pins **Burn 0.20** from crates.io for the rest of the engine. Cargo must resolve **one** `burn` graph; you need either to **port whisper-burn to Burn 0.20** or **move xos’s Burn pin** to match the fork (large ripple).
+2. **Crate name**: the library is named **`whisper`**, which is easy to confuse with OpenAI’s ecosystem; prefer a **path dependency with `package = "whisper"` renamed** via a thin `xos-whisper-burn` wrapper crate, or **vendor** the sources under `src/core/...` and rename the crate.
+3. **Backends**: upstream defaults to **`burn-tch`** (LibTorch). For **iOS** and “no LibTorch” desktops, you want **`burn-wgpu`** (see their `wgpu-backend` feature). That is plausible on **macOS/iOS Metal**, but **must be validated** on device (App Store binary size, `wgpu` + CubeCL on iOS, tokenizer `onig` / `tokenizers` for mobile).
+4. **API**: integrate at **`whisper::transcribe::waveform_to_text`** — **16 kHz mono** `Vec<f32>` in, `String` out; your existing realtime pipeline already resamples to 16 kHz for CT2; the same buffer can feed a **Burn decode job** on a background thread mirroring `whisper.rs`.
+
+**Suggested layout after port**
+
+- Keep CT2 as optional feature `whisper_ct2`; add e.g. **`whisper_burn`** feature that enables a new `spawn_decode_thread_burn` wired from `TranscriptionEngine`.
+- Resolve weights with **`find_xos_project_root()`** + `…/models/whisper-burn/tiny/tiny` (record basename) and pass an **absolute path** to `Gpt2Tokenizer::from_file` once you fork tokenizer loading (upstream uses cwd-relative `tokenizer.json` only).

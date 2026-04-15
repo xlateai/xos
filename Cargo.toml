@@ -146,7 +146,7 @@ name = "xrs"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "src/core/crates/xos-java"]
+members = [".", "src/core/crates/xos-java", "crates/xos-whisper-burn"]
 resolver = "2"
 
 # gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types

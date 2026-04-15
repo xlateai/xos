@@ -1,0 +1,17 @@
+[package]
+name = "xos-whisper-burn"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Whisper inference for xos (vendored from whisper-burn, Burn 0.20 + wgpu/ndarray only)."
+
+[dependencies]
+burn = { version = "0.20", default-features = false, features = ["std"] }
+burn-wgpu = { version = "0.20", default-features = false }
+burn-ndarray = { version = "0.20", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+num-traits = "0.2"
+tokenizers = { version = "0.15", default-features = false, features = ["onig"] }
+cfg-if = "1"
+strum = "0.25"
+strum_macros = "0.25"
