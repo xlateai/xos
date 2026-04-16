@@ -11,11 +11,12 @@ for i, (name, param) in enumerate(whisper.named_parameters()):
 
 
 # inference on random value waveform
-print("SDFKJLSDLFJDSLFSDJFLSDJFJSDFJLSDFJ")
+print("-----------------------------------------------")
 x = xos.random.uniform(1, 1000, shape=(1, 1000))
 print(x)
 y = whisper.forward(x)
 print(y)
+print("-----------------------------------------------")
 
 
 # inference on a real audio waveform
@@ -30,7 +31,9 @@ for (param_name, output) in whisper.forward_layer_by_layer(x):
     # print the param name and shape of the activation as well as the shape of the parameters
     if param_name is not None:
         param = whisper.get_parameter(param_name)
-        print(f"{param_name}: {output.shape} -> {param.shape}")
+        print(f"{param_name}: {param.shape} --param produces--> {output.shape}")
     else:
         print("output:")
         print(output)
+
+print("-----------------------------------------------")
