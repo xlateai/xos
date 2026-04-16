@@ -48,6 +48,20 @@ use std::sync::mpsc::{Receiver, SyncSender};
 ))]
 use std::time::{Duration, Instant};
 
+#[cfg(all(
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+fn transcribe_debug_enabled() -> bool {
+    std::env::var("XOS_TRANSCRIBE_DEBUG")
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        })
+        .unwrap_or(false)
+}
+
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,
@@ -619,6 +633,14 @@ impl TranscriptionEngine {
             && (self.voice_active || Instant::now() <= self.accept_results_until);
         if allow_ingest {
             if let Some(line) = decoded.into_iter().last() {
+                if transcribe_debug_enabled() {
+                    eprintln!(
+                        "[xos-transcribe] ingest: len={} voice_active={} awaiting_final_commit={}",
+                        line.len(),
+                        self.voice_active,
+                        self.awaiting_final_commit
+                    );
+                }
                 self.ingest_hypothesis(line);
             }
         }
@@ -632,12 +654,28 @@ impl TranscriptionEngine {
         let allow_trailing_decode = !self.voice_active
             && self.awaiting_final_commit
             && Instant::now() <= self.accept_results_until;
-        if (self.voice_active || allow_trailing_decode)
-            && self.last_decode.elapsed() >= Duration::from_millis(sample::DECODE_INTERVAL_MS)
+        let allow_idle_probe_decode = !self.voice_active && !self.awaiting_final_commit;
+        let decode_interval_ms = if self.voice_active || allow_trailing_decode {
+            sample::DECODE_INTERVAL_MS
+        } else {
+            sample::IDLE_PROBE_DECODE_INTERVAL_MS
+        };
+        if (self.voice_active || allow_trailing_decode || allow_idle_probe_decode)
+            && self.last_decode.elapsed() >= Duration::from_millis(decode_interval_ms)
             && self.resample_buf.len() >= sample::MIN_DECODE_SAMPLES
         {
             let tx = self.decode_job_tx.as_ref().expect("checked");
             if tx.try_send(self.resample_buf.clone()).is_ok() {
+                if transcribe_debug_enabled() {
+                    eprintln!(
+                        "[xos-transcribe] queued decode: samples={} rms={:.6} voice_active={} trailing={} probe={}",
+                        self.resample_buf.len(),
+                        self.last_level_rms,
+                        self.voice_active,
+                        allow_trailing_decode,
+                        allow_idle_probe_decode
+                    );
+                }
                 self.last_decode = Instant::now();
             }
         }

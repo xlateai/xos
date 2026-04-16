@@ -11,6 +11,9 @@ pub const WHISPER_HZ: u32 = 16_000;
 pub const INPUT_TAIL_SECS: u32 = 12;
 
 pub const DECODE_INTERVAL_MS: u64 = 90;
+/// While idle (voice gate closed), run occasional probe decodes so low-level system audio can
+/// bootstrap the gate instead of staying permanently silent.
+pub const IDLE_PROBE_DECODE_INTERVAL_MS: u64 = 350;
 pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 12;
 
 /// RMS gate (last ~80 ms). System/loopback mixes are often much quieter than close-mic speech;

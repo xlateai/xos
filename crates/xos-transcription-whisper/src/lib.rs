@@ -24,6 +24,15 @@ use fast_whisper_burn::transcribe::{transcribe as fw_transcribe, WhisperParams};
 
 type WgpuF32 = Wgpu<f32>;
 
+fn transcribe_debug_enabled() -> bool {
+    std::env::var("XOS_TRANSCRIBE_DEBUG")
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        })
+        .unwrap_or(false)
+}
+
 /// `sync_channel(1)` drops backlog; decoded lines arrive on `result_rx`.
 pub fn spawn_decode_thread(
     models_root: PathBuf,
@@ -65,8 +74,19 @@ pub fn spawn_decode_thread(
             params.no_timestamps = true;
             params.detect_language = false;
             params.print_special = false;
+            // Live desktop/system-audio chunks often look lower-confidence than clean mic speech.
+            // Keep segments instead of classifying them as "no speech" and dropping text.
+            params.no_speech_thold = 1.0;
+            params.logprob_thold = -5.0;
+            params.suppress_blank = false;
 
             while let Ok(buf) = job_rx.recv() {
+                if transcribe_debug_enabled() {
+                    eprintln!(
+                        "[xos-whisper] decode start: samples={} sr=16000",
+                        buf.len()
+                    );
+                }
                 let line = match fw_transcribe(
                     &whisper,
                     &bpe,
@@ -78,6 +98,13 @@ pub fn spawn_decode_thread(
                     Ok(r) => cleanup_whisper_text(&r.text),
                     Err(e) => format!("(Whisper error: {e})"),
                 };
+                if transcribe_debug_enabled() {
+                    eprintln!(
+                        "[xos-whisper] decode done: text_len={} text_preview={:?}",
+                        line.len(),
+                        line.chars().take(80).collect::<String>()
+                    );
+                }
                 if result_tx.send(line).is_err() {
                     break;
                 }
