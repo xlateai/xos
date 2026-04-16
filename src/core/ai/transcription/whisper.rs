@@ -28,6 +28,26 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
     xos_transcription_whisper::spawn_decode_thread(models_root, size)
 }
 
+pub fn transcribe_waveform_once(
+    size: Option<&str>,
+    waveform: &[f32],
+    sample_rate: u32,
+) -> Result<String, String> {
+    let model_key = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("small") => "small",
+        Some("tiny") | None => "tiny",
+        Some(other) => {
+            return Err(format!(
+                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
+            ));
+        }
+    };
+
+    let models_root = resolve_models_root(model_key)?;
+    xos_transcription_whisper::ensure_whisper_artifacts(model_key, &models_root, DOWNLOAD_MANIFEST)?;
+    xos_transcription_whisper::transcribe_waveform(models_root, size, waveform, sample_rate)
+}
+
 /// Prefer `~/.xos/models/whisper/{model}/`, else the repo’s bundled `fast-whisper-burn/` tree when developing from source.
 fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
     let cache = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;

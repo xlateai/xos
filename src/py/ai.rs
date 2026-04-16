@@ -214,11 +214,58 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(payload.into())
 }
 
+fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args;
+    let model = parse_string_arg(av.first(), "tiny", vm)?;
+    let waveform: Vec<f32> = match av.get(1) {
+        Some(v) => v.clone().try_into_value(vm)?,
+        None => {
+            return Err(vm.new_type_error(
+                "_forward_native(model, waveform, sample_rate=16000) requires waveform".to_string(),
+            ));
+        }
+    };
+    let sample_rate: i64 = if let Some(v) = av.get(2) {
+        v.clone().try_into_value(vm)?
+    } else {
+        16_000
+    };
+    if sample_rate <= 0 {
+        return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
+    }
+
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let text = crate::ai::transcription::whisper::transcribe_waveform_once(
+            Some(&model),
+            &waveform,
+            sample_rate as u32,
+        )
+        .map_err(|e| to_py_err(vm, e))?;
+        Ok(vm.ctx.new_str(text).into())
+    }
+    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
+    {
+        let _ = (model, waveform, sample_rate);
+        Err(to_py_err(
+            vm,
+            "whisper forward is unavailable on this build/target",
+        ))
+    }
+}
+
 pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let ai = vm.new_module("xos.ai", vm.ctx.new_dict(), None);
     let whisper = vm.new_module("xos.ai.whisper", vm.ctx.new_dict(), None);
     whisper
         .set_attr("_load_payload", vm.new_function("_load_payload", whisper_load_payload), vm)
+        .ok();
+    whisper
+        .set_attr(
+            "_forward_native",
+            vm.new_function("_forward_native", whisper_forward_native),
+            vm,
+        )
         .ok();
 
     let scope = vm.new_scope_with_builtins();
@@ -237,9 +284,39 @@ def _mk_parameter(payload):
         payload.get("stats", {}),
     )
 
+def _waveform_to_list(x):
+    if isinstance(x, (list, tuple)):
+        out = []
+        for v in x:
+            out.append(float(v))
+        return out
+    if hasattr(x, "list"):
+        try:
+            vals = x.list()
+            if isinstance(vals, (list, tuple)):
+                return [float(v) for v in vals]
+        except Exception:
+            pass
+    if hasattr(x, "_data"):
+        d = x._data
+        if isinstance(d, dict):
+            raw = d.get("_data", None)
+            if raw is None:
+                raw = d.get("data", None)
+            if isinstance(raw, (list, tuple)):
+                if raw and isinstance(raw[0], (list, tuple)):
+                    return [[float(v) for v in row] for row in raw]
+                return [float(v) for v in raw]
+        elif isinstance(d, (list, tuple)):
+            if d and isinstance(d[0], (list, tuple)):
+                return [[float(v) for v in row] for row in d]
+            return [float(v) for v in d]
+    return [float(x)]
+
 class _WhisperModel:
     def __init__(self, payload):
         self._payload = payload
+        self._model = payload.get("model", "tiny")
     def named_parameters(self):
         for p in self._payload["parameters"]:
             param = _mk_parameter(p)
@@ -253,11 +330,15 @@ class _WhisperModel:
     @property
     def weights_file(self):
         return self._payload["weights_file"]
-    def forward(self, _x):
-        raise NotImplementedError("WhisperModel.forward is not exposed in Python inspector mode yet.")
+    def forward(self, x, sample_rate=16000):
+        wave = _waveform_to_list(x)
+        if wave and isinstance(wave[0], (list, tuple)):
+            return [_forward_native(self._model, [float(v) for v in row], int(sample_rate)) for row in wave]
+        return _forward_native(self._model, [float(v) for v in wave], int(sample_rate))
 
 def load(model="tiny", full_values=False, max_values=128, weights_path=None):
     payload = _load_payload(model, full_values, max_values, weights_path)
+    payload["model"] = model
     return _WhisperModel(payload)
 "#;
     if vm

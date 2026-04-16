@@ -218,6 +218,58 @@ pub fn spawn_decode_thread(
     Ok((job_tx, result_rx))
 }
 
+/// One-shot transcription for already-collected waveform samples.
+pub fn transcribe_waveform(
+    models_root: PathBuf,
+    size: Option<&str>,
+    waveform: &[f32],
+    sample_rate: u32,
+) -> Result<String, String> {
+    use fast_whisper_burn::transcribe::SamplingStrategy;
+
+    if waveform.is_empty() {
+        return Ok(String::new());
+    }
+
+    let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("small") => "small",
+        Some("tiny") | None => "tiny",
+        Some(other) => {
+            return Err(format!(
+                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
+            ));
+        }
+    };
+
+    validate_artifacts(&models_root, model_name)?;
+    let device = <WgpuF32 as Backend>::Device::default();
+    let (bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
+
+    let mut params = WhisperParams::default();
+    params.language = "en".to_string();
+    params.strategy = SamplingStrategy::Greedy { best_of: 1 };
+    params.use_f16_compute = false;
+    params.debug_mode = false;
+    params.no_timestamps = true;
+    params.single_segment = true;
+    params.detect_language = false;
+    params.print_special = false;
+    params.no_speech_thold = 1.0;
+    params.logprob_thold = -5.0;
+    params.suppress_blank = false;
+
+    let result = fw_transcribe(
+        &whisper,
+        &bpe,
+        waveform,
+        sample_rate as usize,
+        &params,
+        None::<fn(usize, usize) -> bool>,
+    )
+    .map_err(|e| format!("whisper forward: {e}"))?;
+    Ok(cleanup_whisper_text(&result.text))
+}
+
 fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {
     let req = [
         dir.join(format!("{name}.cfg")),
