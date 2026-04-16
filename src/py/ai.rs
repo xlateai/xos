@@ -93,12 +93,18 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let model = parse_string_arg(av.first(), "tiny", vm)?;
     let full_values = parse_bool_flag(av.get(1), vm)?;
     let max_values = parse_usize_flag(av.get(2), 128, vm)?;
-    let override_path = if let Some(v) = av.get(3) {
-        let s: String = v.clone().try_into_value(vm)?;
-        if s.trim().is_empty() { None } else { Some(s) }
+    let override_path: Option<String> = if let Some(v) = av.get(3) {
+        v.clone().try_into_value(vm)?
     } else {
         None
     };
+    let override_path = override_path.and_then(|s| {
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    });
 
     let weights_path = resolve_weights_path(&model, override_path).map_err(|e| to_py_err(vm, e))?;
     let weights_s = weights_path

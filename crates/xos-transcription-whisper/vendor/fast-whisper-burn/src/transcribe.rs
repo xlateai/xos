@@ -2780,11 +2780,13 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
 
         // tid: argmax over timestamp range on CPU
         let tid = if token_beg < vocab_size {
-            let (offset, _) = lp[token_beg..vocab_size]
+            let ts_slice = &lp[token_beg..vocab_size];
+            let offset = ts_slice
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap();
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             token_beg + offset
         } else {
             token_beg
@@ -2797,9 +2799,9 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             lp.iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap()
-                .0
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(token_eot)
         };
 
         let final_tid = if sampled_id >= token_beg {
