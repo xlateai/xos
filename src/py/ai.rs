@@ -236,7 +236,7 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
-        let text = crate::ai::transcription::whisper::transcribe_waveform_once(
+        let text = crate::ai::transcription::transcribe_waveform_once(
             Some(&model),
             &waveform,
             sample_rate as u32,
