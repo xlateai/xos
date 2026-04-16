@@ -14,21 +14,21 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 
 ## 🧠 Available AI Models
 
-Xos makes it easy to use popular model types with standalone easy-to-use native desktop applications. Are you a researcher developing these kinds of models? Feel free to import your own in here and make use of the already robust application code! Application developer/user? Simply launch the applications from our `xos` commandl ine interface OR use `xpy` and call the relevant modules directly. Alternatively, if you're a dev building in rust you can include xos as a dependency in your `Cargo.toml` and reference the relevant rust functions directly! While you're at it, feel free to use our other very useful framework inclusions.
+The current AI integration is focused on local inference with a simple runtime surface across CLI, Python, and Rust. The goal is practical access to models in native apps with zero setup.
 
-1. Real-time Whisper models is available in 3 major ways:
+1. Real-time Whisper transcription is available in 3 ways:
   1. Usage from the CLI after installation: `xos app transcribe`
-  2. Available in the python module `xos.audio.transcribe`.
-  3. Available in Rust `transcribe.rs`.
+  2. Python module entrypoint: `xos.audio.transcription(...)`
+  3. Rust integration through the transcription engine (`src/core/ai/transcription/` and `crates/xos-transcription-whisper/`)
 2. TODO: Llama2
 3. TODO: OCR
 
-A more helpful documentation on how to use these models is underway, but rest assured that all models will be:
+Model docs are still in progress. Current behavior for supported models:
 
-1. Automatically downloaded, converted, and stored so you don't need to find any model weight downloads.
-2. Integrated as a standalone CLI-launched desktop application.
-3. Integrated as a pythonic module to be used in your own `xpy` scripts.
-4. Available in rust so you can build into your own rust projects.
+1. Weights are downloaded, converted, and cached automatically on first use.
+2. The model path is exposed through a standalone CLI app flow.
+3. The same functionality is callable from `xpy` scripts.
+4. Rust APIs are available for embedding in native apps.
 
 ## 🤝 Help Wanted!
 

@@ -10,7 +10,7 @@ use burn::{
     backend::ndarray::NdArray,
     module::Module,
     tensor::{
-        ElementConversion, Int, Tensor,
+        DType, ElementConversion, FloatDType, Int, Tensor,
         activation::{log_softmax, softmax},
         backend::Backend,
     },
@@ -2662,13 +2662,25 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             logits
         };
 
+        // Apply pre-built static suppression mask on GPU.
+        // Burn fusion requires both operands of add to share dtype.
+        let logits_dtype = logits.clone().into_data().dtype;
+        let static_mask = match logits_dtype {
+            DType::F16 => gpu_static_suppress.clone().cast(FloatDType::F16),
+            _ => gpu_static_suppress.clone().cast(FloatDType::F32),
+        };
+
         // Apply pre-built static suppression mask on GPU
         // (covers suppress_mask, nst_suppress_ids, token_not)
-        let logits = logits + gpu_static_suppress.clone();
+        let logits = logits + static_mask;
 
         // suppress_blank on initial step
         let logits = if params.suppress_blank && is_initial {
-            logits + gpu_blank_suppress.clone()
+            let blank_mask = match logits_dtype {
+                DType::F16 => gpu_blank_suppress.clone().cast(FloatDType::F16),
+                _ => gpu_blank_suppress.clone().cast(FloatDType::F32),
+            };
+            logits + blank_mask
         } else {
             logits
         };
@@ -2768,11 +2780,13 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
 
         // tid: argmax over timestamp range on CPU
         let tid = if token_beg < vocab_size {
-            let (offset, _) = lp[token_beg..vocab_size]
+            let ts_slice = &lp[token_beg..vocab_size];
+            let offset = ts_slice
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap();
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             token_beg + offset
         } else {
             token_beg
@@ -2785,9 +2799,9 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             lp.iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .unwrap()
-                .0
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(token_eot)
         };
 
         let final_tid = if sampled_id >= token_beg {
