@@ -16,7 +16,7 @@ use std::thread;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn_store::BurnpackStore;
+use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
 use fast_whisper_burn::token::Gpt2Tokenizer;
@@ -126,6 +126,7 @@ fn load_whisper(
     let cfg_path = models_root.join(format!("{model_name}.cfg"));
     let f32_bpk = models_root.join(format!("{model_name}.bpk"));
     let f16_bpk = models_root.join(format!("{model_name}-f16.bpk"));
+    let use_f16_adapter = !f32_bpk.is_file() && f16_bpk.is_file();
 
     let bpk_path = if f32_bpk.is_file() {
         f32_bpk
@@ -152,7 +153,7 @@ fn load_whisper(
             .to_str()
             .ok_or_else(|| format!("invalid utf-8 in path {}", bpk_path.display()))?,
     );
-    if bpk_path == f16_bpk {
+    if use_f16_adapter {
         store = store.with_from_adapter(MixedPrecisionAdapter(burn::tensor::DType::F16));
     }
     let mut whisper_model = whisper_config.init(device);

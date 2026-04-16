@@ -6,7 +6,7 @@ use std::path::Path;
 use burn::backend::wgpu::Wgpu;
 use burn::config::Config;
 use burn_store::pytorch::PytorchReader;
-use burn_store::{BurnpackStore, PytorchStore};
+use burn_store::{BurnpackStore, ModuleSnapshot, PytorchStore};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::custom_kernels::CustomKernelsBackend;
 use fast_whisper_burn::model::*;
