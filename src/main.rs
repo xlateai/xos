@@ -142,12 +142,8 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
-    /// Print the xos repo root (directory that contains `src/`, for `xos compile`), or `--exe` for this binary
-    Path {
-        /// Print the path of this running `xos` / `xpy` / `xrs` executable instead of the repo root
-        #[arg(long)]
-        exe: bool,
-    },
+    /// Print git repo root, app data dir (credentials, etc.), and this CLI binary path
+    Path,
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
         /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
@@ -173,6 +169,49 @@ enum Commands {
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
 const ORANGE_UNCOMMITTED: &str = "\x1b[38;5;208m";
 const ANSI_RESET: &str = "\x1b[0m";
+
+/// `xos path`: gray → yellow-green → green (256-color) when stdout is a TTY.
+const PATH_LINE_GRAY: &str = "\x1b[38;5;240m";
+const PATH_LINE_MID: &str = "\x1b[38;5;107m";
+const PATH_LINE_GREEN: &str = "\x1b[38;5;40m";
+
+fn print_xos_paths() {
+    use xos::auth::auth_data_dir;
+
+    let color = io::stdout().is_terminal();
+    let (c1, c2, c3) = if color {
+        (PATH_LINE_GRAY, PATH_LINE_MID, PATH_LINE_GREEN)
+    } else {
+        ("", "", "")
+    };
+    let reset = if color { ANSI_RESET } else { "" };
+
+    let code = match xos::find_xos_project_root() {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let data = match auth_data_dir() {
+        Ok(p) => p.display().to_string(),
+        Err(e) => format!("({e})"),
+    };
+
+    let exe = match std::env::current_exe() {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            eprintln!("❌ Could not resolve path of running executable: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Fixed label width so paths align after a tab.
+    println!("{}{:<9}\t{}{}", c1, "code:", code, reset);
+    println!("{}{:<9}\t{}{}", c2, "data:", data, reset);
+    println!("{}{:<9}\t{}{}", c3, "cli-exe:", exe, reset);
+}
 
 /// Second line for `xos -v` / `xpy -v`: full commit hash, optional colored dirty suffix, or a fixed message if no git tree.
 fn version_git_second_line(color_uncommitted: bool) -> String {
@@ -394,24 +433,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Path { exe }) => {
-            if exe {
-                match std::env::current_exe() {
-                    Ok(path) => println!("{}", path.display()),
-                    Err(e) => {
-                        eprintln!("❌ Could not resolve path of running executable: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                match xos::find_xos_project_root() {
-                    Ok(root) => println!("{}", root.display()),
-                    Err(e) => {
-                        eprintln!("❌ {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
+        Some(Commands::Path) => {
+            print_xos_paths();
         }
         Some(Commands::Rs { app }) => {
             run_app_command(app);
