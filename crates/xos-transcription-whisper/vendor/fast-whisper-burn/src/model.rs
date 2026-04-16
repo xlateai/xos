@@ -6,7 +6,10 @@ use burn::{
         attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
         conv::{Conv1d, Conv1dConfig},
     },
-    tensor::{Bool, DType, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
+    tensor::{
+        Bool, DType, Distribution, FloatDType, Int, Tensor, backend::Backend,
+        module::{embedding, linear as tensor_linear},
+    },
 };
 
 use crate::custom_kernels::{
@@ -1075,22 +1078,31 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
 
     /// Build pre-projected cross-attention KV cache in 4D head-split format.
     fn build_cross_cache(&self, xa: Tensor<B, 3>, use_f16: bool) -> DecoderCrossAttentionCache<B> {
+        fn linear_forward_aligned<Bk: Backend>(linear: &nn::Linear<Bk>, x: Tensor<Bk, 3>) -> Tensor<Bk, 3> {
+            let weight = linear.weight.val();
+            let w_dtype = weight.clone().into_data().dtype;
+            let x = match w_dtype {
+                DType::F16 => x.cast(FloatDType::F16),
+                _ => x.cast(FloatDType::F32),
+            };
+            let bias = linear.bias.as_ref().map(|b| {
+                let b = b.val();
+                match w_dtype {
+                    DType::F16 => b.cast(FloatDType::F16),
+                    _ => b.cast(FloatDType::F32),
+                }
+            });
+            tensor_linear(x, weight, bias)
+        }
+
         // Cross-attn weights are f32 for accuracy; project in f32, then cast cache to f16
         let [batch, seq, _] = xa.dims();
         let n_heads = self.cross_attn.n_heads;
         let d_k = self.cross_attn.d_k;
-        let xa_key = Self::cast_for_linear(xa.clone(), &self.cross_attn.key);
-        let xa_value = Self::cast_for_linear(xa, &self.cross_attn.value);
-        let key = self
-            .cross_attn
-            .key
-            .forward(xa_key)
+        let key = linear_forward_aligned(&self.cross_attn.key, xa.clone())
             .reshape([batch, seq, n_heads, d_k])
             .swap_dims(1, 2);
-        let value = self
-            .cross_attn
-            .value
-            .forward(xa_value)
+        let value = linear_forward_aligned(&self.cross_attn.value, xa)
             .reshape([batch, seq, n_heads, d_k])
             .swap_dims(1, 2);
         DecoderCrossAttentionCache {
