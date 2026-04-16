@@ -13,10 +13,12 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
+use burn::backend::ndarray::NdArray;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn::tensor::{Int, Tensor, TensorData};
+use burn::tensor::{Distribution, Int, Tensor, TensorData};
+use fast_whisper_burn::audio::{max_waveform_samples, prep_audio};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
@@ -64,7 +66,27 @@ fn probe_loaded_model(
     device: &<WgpuF32 as Backend>::Device,
 ) -> Result<(), String> {
     let n_mels = whisper.encoder_mel_size();
-    let mel = Tensor::<WgpuF32, 3>::zeros([1, n_mels, 3000], device);
+    // Real inference feeds **log-mel** from `prep_audio`, not raw zeros. All-zero “mel” is
+    // out-of-distribution and can blow up activations; it is not a reliable dtype/weights check.
+    eprintln!(
+        "[xos-whisper] probe: building log-mel via prep_audio (same path as transcribe), not zeros"
+    );
+    let cpu = <NdArray as Backend>::Device::default();
+    let n_samples = max_waveform_samples(3000).saturating_sub(256).max(8000);
+    let wave = Tensor::<NdArray, 2>::random(
+        [1, n_samples],
+        Distribution::Normal(0.0, 0.02f64),
+        &cpu,
+    );
+    let mel_na = prep_audio(wave, 16000.0, n_mels);
+    let t = mel_na.dims()[2];
+    let mel_na = if t >= 3000 {
+        mel_na.slice([0..1, 0..n_mels, 0..3000])
+    } else {
+        let pad = Tensor::<NdArray, 3>::zeros([1, n_mels, 3000 - t], &cpu);
+        Tensor::cat(vec![mel_na, pad], 2)
+    };
+    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.into_data(), device);
     let enc = whisper.forward_encoder(mel);
     let enc_data = enc
         .clone()
@@ -85,8 +107,13 @@ fn probe_loaded_model(
 
     let sot = bpe.special_token(SpecialToken::StartofTranscript).unwrap_or(50258);
     let tok = Tensor::<WgpuF32, 2, Int>::from_data(TensorData::new(vec![sot as i64], [1, 1]), device);
-    let out = whisper.forward_decoder(tok, enc);
+    // Match `transcribe`: decoder runs the **cached** path (`layer_norm_mixed` / `softmax_mixed`),
+    // not `TextDecoder::forward` (stock Burn MHA). The uncached path can NaN on WGPU while live
+    // decode uses the cached API — so probe it the same way we ship.
+    let cache = whisper.create_decoder_cache(enc.clone());
+    let out = whisper.forward_decoder_cached_with_cross_attention(tok, cache);
     let out_data = out
+        .logits
         .clone()
         .into_data()
         .convert::<f32>()
@@ -95,7 +122,7 @@ fn probe_loaded_model(
     let (dec_finite, dec_nan, dec_min, dec_mean, dec_max) = summarize_f32(&out_data);
     eprintln!(
         "[xos-whisper] probe decoder logits: dims={:?} finite={} nan={} min={:.6} mean={:.6} max={:.6}",
-        out.dims(),
+        out.logits.dims(),
         dec_finite,
         dec_nan,
         dec_min,
