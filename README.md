@@ -35,19 +35,18 @@ A more helpful documentation on how to use these models is underway, but rest as
 Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
 
 ## Progress
-
-- Headless mode for applications without viewports.
-- iOS audio drivers.
-- iOS haptics drivers.
-- Python runtime and scripting.
-- Multi-file python.
-- Networking.
-- Optimized metal and other operations capable high resolution and performance iOS video rendering.
-- Locally inferenced chat models.
-- Locally inferenced audio transcription models.
-- Re-enable WASM/Web support.
-- Build for iOS without xcode on the developer's machine.
-- Tests + performance checks
+- [x] Headless mode for applications without viewports.
+- [x] iOS audio drivers.
+- [ ] iOS haptics drivers.
+- [x] Python runtime and scripting.
+- [x] Multi-file python.
+- [ ] Networking.
+- [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
+- [ ] Locally inferenced chat models.
+- [ ] Locally inferenced audio transcription models.
+- [ ] Re-enable WASM/Web support.
+- [ ] Build for iOS without xcode on the developer's machine.
+- [ ] Tests + performance checks
 
 ## 📁 Code Examples
 
