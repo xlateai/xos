@@ -1,5 +1,7 @@
 //! First-run download (OpenAI `.pt` + Hugging Face `tokenizer.json`) and conversion to Burnpack.
 
+use std::io::{self, IsTerminal};
+
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -68,6 +70,17 @@ pub fn ensure_whisper_artifacts(model_key: &str, dest_dir: &Path, manifest_json:
     if pt_path.is_file() {
         let _ = fs::remove_file(&pt_path);
     }
+
+    // Bold bright green on stderr TTY so first-run completion is obvious.
+    let (green, reset) = if io::stderr().is_terminal() {
+        ("\x1b[1;92m", "\x1b[0m")
+    } else {
+        ("", "")
+    };
+    eprintln!(
+        "{green}xos: finished — Whisper '{model_key}' is ready (cached at {}).{reset}",
+        dest_dir.display(),
+    );
 
     Ok(())
 }

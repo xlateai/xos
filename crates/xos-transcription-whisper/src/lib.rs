@@ -57,10 +57,9 @@ pub fn spawn_decode_thread(
 
             let mut params = WhisperParams::default();
             params.language = lang;
-            params.strategy = SamplingStrategy::BeamSearch {
-                beam_size: 3,
-                patience: -1.0,
-            };
+            // Greedy avoids `decode_segment_beam`; beam search on WGPU+fusion can hit Burn IR
+            // `DTypeMismatch` (builder.rs) on some drivers — greedy matches the stable `transcribe` CLI path.
+            params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             // Always false: fused f16 graph + mixed checkpoints triggers Burn IR `DTypeMismatch` on some GPUs.
             params.use_f16_compute = false;
             params.no_timestamps = true;
