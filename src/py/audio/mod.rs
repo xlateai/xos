@@ -14,6 +14,15 @@ mod recording;
 pub use microphone::cleanup_all_microphones_rust;
 pub use speakers::cleanup_all_speakers_rust;
 
+fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    Ok(dict)
+}
+
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     if input.is_empty() || src_rate == 0 || dst_rate == 0 || src_rate == dst_rate {
@@ -34,8 +43,10 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-fn audio_load_raw(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     use rodio::{Decoder, Source};
+    use crate::python_api::dtypes::DType;
+    use crate::python_api::tensors::{Tensor, create_tensor_from_data};
 
     let path: String = if let Some(v) = args.args.first() {
         v.clone().try_into_value(vm)?
@@ -71,15 +82,13 @@ fn audio_load_raw(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     let mono = resample_linear(&mono, src_rate, target_sample_rate as u32);
-    let py = mono
-        .into_iter()
-        .map(|v| vm.ctx.new_float(v as f64).into())
-        .collect();
-    Ok(vm.ctx.new_list(py).into())
+    let shape = vec![mono.len()];
+    let py_tensor: Tensor = create_tensor_from_data(mono, shape, DType::Float32);
+    wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?, vm)
 }
 
 #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
-fn audio_load_raw(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+fn audio_load(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error(
         "xos.audio.load is only available on desktop (macOS/Linux/Windows), not iOS/WASM"
             .to_string(),
@@ -105,7 +114,7 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("Microphone", vm.new_function("Microphone", microphone::microphone_new), vm).unwrap();
     module.set_attr("system", vm.new_function("system", microphone::microphone_system), vm).unwrap();
     module
-        .set_attr("_load_raw", vm.new_function("_load_raw", audio_load_raw), vm)
+        .set_attr("load", vm.new_function("load", audio_load), vm)
         .unwrap();
     module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", microphone::cleanup_all_microphones), vm).unwrap();
     module.set_attr("transcription", vm.new_function("transcription", transcription::transcription_new), vm).unwrap();
@@ -165,19 +174,6 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("_speaker_get_buffer_size", vm.new_function("_speaker_get_buffer_size", speakers::speaker_get_buffer_size), vm).unwrap();
     module.set_attr("_speaker_get_buffer", vm.new_function("_speaker_get_buffer", speakers::speaker_get_buffer), vm).unwrap();
     module.set_attr("_speaker_cleanup", vm.new_function("_speaker_cleanup", speakers::speaker_cleanup), vm).unwrap();
-
-    let scope = vm.new_scope_with_builtins();
-    let glue = r#"
-import xos
-
-def load(path, sample_rate=16000):
-    vals = xos.audio._load_raw(path, int(sample_rate))
-    return xos.tensor(vals, dtype=xos.float32)
-"#;
-    let _ = vm.run_code_string(scope.clone(), glue, "<xos.audio>".to_string());
-    if let Ok(load_fn) = scope.globals.get_item("load", vm) {
-        module.set_attr("load", load_fn, vm).ok();
-    }
 
     module
 }
