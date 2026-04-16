@@ -5,9 +5,9 @@ edition = "2021"
 description = "Whisper decode thread for xos using fast-whisper-burn (Burn + WGPU)."
 
 [dependencies]
-# Must match `fast-whisper-burn` / rev so Cargo unifies one Burn graph.
-burn = { git = "https://github.com/tracel-ai/burn.git", rev = "9deccba", default-features = false, features = ["std", "wgpu", "autotune", "ndarray"] }
-burn-store = { git = "https://github.com/tracel-ai/burn.git", rev = "9deccba", features = ["burnpack", "pytorch"] }
+# Must match `fast-whisper-burn` / root so Cargo unifies one Burn graph.
+burn = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "fusion"] }
+burn-store = { version = "=0.21.0-pre.3", features = ["burnpack", "pytorch"] }
 fast-whisper-burn = { path = "vendor/fast-whisper-burn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
