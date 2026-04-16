@@ -227,21 +227,34 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     }
 
     let glue = r#"
+def _mk_parameter(payload):
+    xos = __import__("xos")
+    return xos.nn.Parameter(
+        payload["name"],
+        payload["shape"],
+        payload["dtype"],
+        payload.get("values", []),
+        payload.get("stats", {}),
+    )
+
 class _WhisperModel:
     def __init__(self, payload):
         self._payload = payload
     def named_parameters(self):
         for p in self._payload["parameters"]:
-            yield p["name"], p
+            param = _mk_parameter(p)
+            yield p["name"], param
     @property
     def parameters(self):
-        return self._payload["parameters"]
+        return [_mk_parameter(p) for p in self._payload["parameters"]]
     @property
     def parameter_count(self):
         return self._payload["parameter_count"]
     @property
     def weights_file(self):
         return self._payload["weights_file"]
+    def forward(self, _x):
+        raise NotImplementedError("WhisperModel.forward is not exposed in Python inspector mode yet.")
 
 def load(model="tiny", full_values=False, max_values=128, weights_path=None):
     payload = _load_payload(model, full_values, max_values, weights_path)

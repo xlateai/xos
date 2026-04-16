@@ -10,6 +10,6 @@ for i, (name, param) in enumerate(whisper.named_parameters()):
     print(f"Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
 
 # random values to test inference
-x = xos.randn(1, 1000)
+x = xos.random.randint(1, 1000)
 y = whisper.forward(x)
 print(y)
