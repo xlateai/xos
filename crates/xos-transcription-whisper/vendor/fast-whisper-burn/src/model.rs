@@ -466,6 +466,13 @@ pub struct TextDecoder<B: Backend> {
 }
 
 impl<B: CustomKernelsBackend> TextDecoder<B> {
+    fn cast_to_dtype<const D: usize>(t: Tensor<B, D>, dtype: DType) -> Tensor<B, D> {
+        match dtype {
+            DType::F16 => t.cast(FloatDType::F16),
+            _ => t.cast(FloatDType::F32),
+        }
+    }
+
     fn forward(&self, x: Tensor<B, 2, Int>, xa: Tensor<B, 3>) -> Tensor<B, 3> {
         let [_n_batch, seq_len] = x.dims();
 
@@ -477,12 +484,15 @@ impl<B: CustomKernelsBackend> TextDecoder<B> {
         );
 
         let device = x.device();
-        let x = embedding(self.token_embedding.val(), x)
-            + self
-                .positional_embedding
+        let x_tok = embedding(self.token_embedding.val(), x);
+        let pos = Self::cast_to_dtype(
+            self.positional_embedding
                 .val()
                 .slice([0..seq_len])
-                .unsqueeze::<3>();
+                .unsqueeze::<3>(),
+            x_tok.clone().into_data().dtype,
+        );
+        let x = x_tok + pos;
 
         let mask = causal_mask::<B>(seq_len, 0, &device);
 
@@ -510,12 +520,15 @@ impl<B: CustomKernelsBackend> TextDecoder<B> {
         );
 
         let device = x.device();
-        let x = embedding(self.token_embedding.val(), x)
-            + self
-                .positional_embedding
+        let x_tok = embedding(self.token_embedding.val(), x);
+        let pos = Self::cast_to_dtype(
+            self.positional_embedding
                 .val()
                 .slice([0..seq_len])
-                .unsqueeze::<3>();
+                .unsqueeze::<3>(),
+            x_tok.clone().into_data().dtype,
+        );
+        let x = x_tok + pos;
 
         let mask = causal_mask::<B>(seq_len, 0, &device);
 
@@ -578,12 +591,15 @@ impl<B: CustomKernelsBackend> TextDecoder<B> {
 
         let device = x.device();
         let position_start = cache.n_past;
-        let x = embedding(self.token_embedding.val(), x)
-            + self
-                .positional_embedding
+        let x_tok = embedding(self.token_embedding.val(), x);
+        let pos = Self::cast_to_dtype(
+            self.positional_embedding
                 .val()
                 .slice([position_start..position_start + seq_len])
-                .unsqueeze::<3>();
+                .unsqueeze::<3>(),
+            x_tok.clone().into_data().dtype,
+        );
+        let x = x_tok + pos;
 
         // For seq_len=1 (autoregressive step), the causal mask is trivially all-false
         // (the single query can attend to all past tokens), so skip mask generation entirely.
@@ -838,15 +854,27 @@ pub struct ResidualEncoderAttentionBlock<B: Backend> {
 const ENCODER_ATTN_CHUNK: usize = 256;
 
 impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
+    fn cast_to_dtype<const D: usize>(t: Tensor<B, D>, dtype: DType) -> Tensor<B, D> {
+        match dtype {
+            DType::F16 => t.cast(FloatDType::F16),
+            _ => t.cast(FloatDType::F32),
+        }
+    }
+
+    fn add_aligned(lhs: Tensor<B, 3>, rhs: Tensor<B, 3>) -> Tensor<B, 3> {
+        let dtype = lhs.clone().into_data().dtype;
+        lhs + Self::cast_to_dtype(rhs, dtype)
+    }
+
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
         let _ = use_f16;
         let ln_out = layer_norm_mixed(&self.attn_ln, x.clone(), false);
         let attn_out = self.chunked_self_attention(ln_out, false);
 
-        let x = x + attn_out;
+        let x = Self::add_aligned(x, attn_out);
 
         let mlp_input = layer_norm_mixed(&self.mlp_ln, x.clone(), false);
-        x + self.mlp.forward(mlp_input)
+        Self::add_aligned(x, self.mlp.forward(mlp_input))
     }
 
     /// Chunked self-attention: processes queries in blocks of ENCODER_ATTN_CHUNK
@@ -974,21 +1002,45 @@ pub struct ResidualDecoderAttentionBlock<B: Backend> {
 }
 
 impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
+    fn cast_to_dtype<const D: usize>(t: Tensor<B, D>, dtype: DType) -> Tensor<B, D> {
+        match dtype {
+            DType::F16 => t.cast(FloatDType::F16),
+            _ => t.cast(FloatDType::F32),
+        }
+    }
+
+    fn add_aligned(lhs: Tensor<B, 3>, rhs: Tensor<B, 3>) -> Tensor<B, 3> {
+        let dtype = lhs.clone().into_data().dtype;
+        lhs + Self::cast_to_dtype(rhs, dtype)
+    }
+
+    fn cast_for_linear(x: Tensor<B, 3>, linear: &nn::Linear<B>) -> Tensor<B, 3> {
+        let target_dtype = if let Some(bias) = &linear.bias {
+            bias.val().into_data().dtype
+        } else {
+            linear.weight.val().into_data().dtype
+        };
+        Self::cast_to_dtype(x, target_dtype)
+    }
+
     fn forward(&self, x: Tensor<B, 3>, xa: Tensor<B, 3>, mask: Tensor<B, 3, Bool>) -> Tensor<B, 3> {
+        let x_norm = layer_norm_mixed(&self.attn_ln, x.clone(), false);
         let self_attn_out = self
             .attn
-            .forward(MhaInput::self_attn(self.attn_ln.forward(x.clone())).mask_attn(mask))
+            .forward(MhaInput::self_attn(x_norm).mask_attn(mask))
             .context;
-        let x = x + self_attn_out;
+        let x = Self::add_aligned(x, self_attn_out);
 
+        let xa_k = Self::cast_for_linear(xa.clone(), &self.cross_attn.key);
+        let xa_v = Self::cast_for_linear(xa, &self.cross_attn.value);
         let cross_attn_out = self.cross_attn.forward(MhaInput::new(
-            self.cross_attn_ln.forward(x.clone()),
-            xa.clone(),
-            xa,
+            layer_norm_mixed(&self.cross_attn_ln, x.clone(), false),
+            xa_k,
+            xa_v,
         ));
-        let x = x + cross_attn_out.context;
+        let x = Self::add_aligned(x, cross_attn_out.context);
 
-        x.clone() + self.mlp.forward(self.mlp_ln.forward(x))
+        Self::add_aligned(x.clone(), self.mlp.forward(layer_norm_mixed(&self.mlp_ln, x, false)))
     }
 
     fn forward_with_cross_attention(
@@ -997,21 +1049,27 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
         xa: Tensor<B, 3>,
         mask: Tensor<B, 3, Bool>,
     ) -> (Tensor<B, 3>, Tensor<B, 4>) {
+        let x_norm = layer_norm_mixed(&self.attn_ln, x.clone(), false);
         let self_attn_out = self
             .attn
-            .forward(MhaInput::self_attn(self.attn_ln.forward(x.clone())).mask_attn(mask))
+            .forward(MhaInput::self_attn(x_norm).mask_attn(mask))
             .context;
-        let x = x + self_attn_out;
+        let x = Self::add_aligned(x, self_attn_out);
 
+        let xa_k = Self::cast_for_linear(xa.clone(), &self.cross_attn.key);
+        let xa_v = Self::cast_for_linear(xa, &self.cross_attn.value);
         let cross_attn_out = self.cross_attn.forward(MhaInput::new(
-            self.cross_attn_ln.forward(x.clone()),
-            xa.clone(),
-            xa,
+            layer_norm_mixed(&self.cross_attn_ln, x.clone(), false),
+            xa_k,
+            xa_v,
         ));
         let weights = cross_attn_out.weights.clone();
-        let x = x + cross_attn_out.context;
+        let x = Self::add_aligned(x, cross_attn_out.context);
 
-        let output = x.clone() + self.mlp.forward(self.mlp_ln.forward(x));
+        let output = Self::add_aligned(
+            x.clone(),
+            self.mlp.forward(layer_norm_mixed(&self.mlp_ln, x, false)),
+        );
         (output, weights)
     }
 
@@ -1021,16 +1079,18 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
         let [batch, seq, _] = xa.dims();
         let n_heads = self.cross_attn.n_heads;
         let d_k = self.cross_attn.d_k;
+        let xa_key = Self::cast_for_linear(xa.clone(), &self.cross_attn.key);
+        let xa_value = Self::cast_for_linear(xa, &self.cross_attn.value);
         let key = self
             .cross_attn
             .key
-            .forward(xa.clone())
+            .forward(xa_key)
             .reshape([batch, seq, n_heads, d_k])
             .swap_dims(1, 2);
         let value = self
             .cross_attn
             .value
-            .forward(xa)
+            .forward(xa_value)
             .reshape([batch, seq, n_heads, d_k])
             .swap_dims(1, 2);
         DecoderCrossAttentionCache {
@@ -1058,15 +1118,15 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
         let ln_out = layer_norm_mixed(&self.attn_ln, x.clone(), use_f16);
         let (self_attn_output, self_attention) =
             self.cached_self_attention(ln_out, mask, cache.self_attention, use_f16, fused_qkv);
-        let x = x + self_attn_output;
+        let x = Self::add_aligned(x, self_attn_output);
 
         let ln_out = layer_norm_mixed(&self.cross_attn_ln, x.clone(), use_f16);
         let (cross_attn_output, cross_weights, cross_attention) =
             self.cached_cross_attention(ln_out, cache.cross_attention, use_f16);
-        let x = x + cross_attn_output;
+        let x = Self::add_aligned(x, cross_attn_output);
 
         let ln_out = layer_norm_mixed(&self.mlp_ln, x.clone(), use_f16);
-        let output = x + self.mlp.forward(ln_out);
+        let output = Self::add_aligned(x, self.mlp.forward(ln_out));
 
         DecoderBlockCachedOutput {
             output,
@@ -1094,7 +1154,8 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
 
         let (q, k_new, v_new) = if let Some((qkv_w, qkv_b)) = fused_qkv {
             // Fused QKV: one matmul with pre-computed [d_model, 3*d_model] weight
-            let x_flat = x.reshape([batch_size * seq_len, d_model]);
+            let x_dtype = qkv_w.clone().into_data().dtype;
+            let x_flat = Self::cast_to_dtype(x, x_dtype).reshape([batch_size * seq_len, d_model]);
             let qkv = (x_flat.matmul(qkv_w.clone()) + qkv_b.clone().unsqueeze()).reshape([
                 batch_size,
                 seq_len,
@@ -1121,19 +1182,19 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
             let q = self
                 .attn
                 .query
-                .forward(x.clone())
+                .forward(Self::cast_for_linear(x.clone(), &self.attn.query))
                 .reshape([batch_size, seq_len, n_heads, d_k])
                 .swap_dims(1, 2);
             let k_new = self
                 .attn
                 .key
-                .forward(x.clone())
+                .forward(Self::cast_for_linear(x.clone(), &self.attn.key))
                 .reshape([batch_size, seq_len, n_heads, d_k])
                 .swap_dims(1, 2);
             let v_new = self
                 .attn
                 .value
-                .forward(x)
+                .forward(Self::cast_for_linear(x, &self.attn.value))
                 .reshape([batch_size, seq_len, n_heads, d_k])
                 .swap_dims(1, 2);
             (q, k_new, v_new)
@@ -1176,7 +1237,10 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
                 .swap_dims(1, 2)
                 .reshape([batch_size, seq_len, n_heads * d_k])
         };
-        let output = self.attn.output.forward(context);
+        let output = self
+            .attn
+            .output
+            .forward(Self::cast_for_linear(context, &self.attn.output));
 
         (
             output,
@@ -1204,7 +1268,7 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
         let q = self
             .cross_attn
             .query
-            .forward(q_input)
+            .forward(Self::cast_for_linear(q_input, &self.cross_attn.query))
             .reshape([batch_size, seq_len, n_heads, d_k])
             .swap_dims(1, 2);
         let q = if use_f16 { q.cast(FloatDType::F16) } else { q };
@@ -1224,7 +1288,10 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
         } else {
             context
         };
-        let output = self.cross_attn.output.forward(context_proj);
+        let output = self
+            .cross_attn
+            .output
+            .forward(Self::cast_for_linear(context_proj, &self.cross_attn.output));
         let output = if use_f16 {
             output.cast(FloatDType::F16)
         } else {
