@@ -10,9 +10,8 @@ use std::thread;
 
 use burn::backend::Wgpu;
 use burn::config::Config;
-use burn::module::Module;
 use burn::tensor::backend::Backend;
-use burn_store::BurnpackStore;
+use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
 use fast_whisper_burn::token::Gpt2Tokenizer;
