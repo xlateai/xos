@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
 
-use burn_store_fw::{BurnpackStore, ModuleSnapshot};
+use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::audio::prep_audio;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
@@ -18,11 +18,11 @@ use fast_whisper_burn::token::Gpt2Tokenizer;
 use fast_whisper_burn::transcribe::{WhisperParams, transcribe as fw_transcribe};
 use fast_whisper_burn::{self};
 
-use burn_fw::backend::Wgpu;
-use burn_fw::backend::ndarray::NdArray;
-use burn_fw::config::Config;
-use burn_fw::tensor::backend::Backend;
-use burn_fw::tensor::{Tensor, TensorData};
+use burn::backend::Wgpu;
+use burn::backend::ndarray::NdArray;
+use burn::config::Config;
+use burn::tensor::backend::Backend;
+use burn::tensor::{Tensor, TensorData};
 
 use super::ActivationStep;
 
@@ -359,7 +359,7 @@ fn load_whisper(
             .ok_or_else(|| format!("invalid utf-8 in path {}", bpk_path.display()))?,
     );
     if use_f16_adapter {
-        store = store.with_from_adapter(MixedPrecisionAdapter(burn_fw::tensor::DType::F32));
+        store = store.with_from_adapter(MixedPrecisionAdapter(burn::tensor::DType::F32));
     }
 
     let mut whisper_model = whisper_config.init(device);
