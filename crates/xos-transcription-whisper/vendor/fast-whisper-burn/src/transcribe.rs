@@ -713,27 +713,6 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             .to_vec();
         let mut seek_delta = result.seek_delta;
         let no_speech_prob = result.no_speech_prob;
-        if params.debug_mode {
-            eprintln!(
-                "[fwb-transcribe] chunk seek={} tokens={} result_len={} avg_logprobs={:.4} entropy={:.4} no_speech_prob={:.4} is_no_speech={}",
-                seek,
-                tokens_cur.len(),
-                result.result_len,
-                result.avg_logprobs,
-                result.entropy,
-                no_speech_prob,
-                is_no_speech
-            );
-            if !tokens_cur.is_empty() {
-                let preview_ids = tokens_cur
-                    .iter()
-                    .take(12)
-                    .map(|(id, _, _)| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                eprintln!("[fwb-transcribe] token_ids_preview=[{preview_ids}]");
-            }
-        }
 
         // Build segments from decoded tokens (skip if no-speech detected)
         if !tokens_cur.is_empty() && !is_no_speech {
@@ -906,15 +885,6 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
     }
 
     let full_text = segments.iter().map(|s| s.text.as_str()).collect::<String>();
-    if params.debug_mode {
-        let preview = full_text.chars().take(120).collect::<String>();
-        eprintln!(
-            "[fwb-transcribe] completed: segments={} text_len={} text_preview={:?}",
-            segments.len(),
-            full_text.len(),
-            preview
-        );
-    }
 
     Ok(TranscriptionResult {
         segments,
@@ -1653,7 +1623,7 @@ fn greedy_decode_step(
         let (offset, _) = lp[token_beg..vocab_size]
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .unwrap();
         token_beg + offset
     } else {
@@ -1664,7 +1634,7 @@ fn greedy_decode_step(
     let sampled_id = lp
         .iter()
         .enumerate()
-        .max_by(|a, b| a.1.total_cmp(b.1))
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
         .unwrap()
         .0;
 
@@ -2188,7 +2158,7 @@ fn decode_regions_beam_batched<B: CustomKernelsBackend>(
                     let (offset, _) = lp[token_beg..vocab_size]
                         .iter()
                         .enumerate()
-                        .max_by(|a, b| a.1.total_cmp(b.1))
+                        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
                         .unwrap();
                     token_beg + offset
                 } else {
@@ -2777,21 +2747,16 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         // Timestamp vs text logprob comparison on CPU
         if !params.no_timestamps {
             let ts_slice = &lp[token_beg..vocab_size];
-            let ts_finite: Vec<f32> = ts_slice.iter().copied().filter(|x| x.is_finite()).collect();
-            let txt_finite: Vec<f32> = lp[..token_beg]
+            let ts_max = ts_slice.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let ts_logprob = ts_max
+                + ts_slice
+                    .iter()
+                    .map(|&x| (x - ts_max).exp())
+                    .sum::<f32>()
+                    .ln();
+            let max_text_logprob = lp[..token_beg]
                 .iter()
-                .copied()
-                .filter(|x| x.is_finite())
-                .collect();
-            let ts_logprob = if ts_finite.is_empty() {
-                f32::NEG_INFINITY
-            } else {
-                let ts_max = ts_finite.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                ts_max + ts_finite.iter().map(|&x| (x - ts_max).exp()).sum::<f32>().ln()
-            };
-            let max_text_logprob = txt_finite
-                .iter()
-                .copied()
+                .cloned()
                 .fold(f32::NEG_INFINITY, f32::max);
 
             if ts_logprob > max_text_logprob {
@@ -2803,13 +2768,12 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
 
         // tid: argmax over timestamp range on CPU
         let tid = if token_beg < vocab_size {
-            lp[token_beg..vocab_size]
+            let (offset, _) = lp[token_beg..vocab_size]
                 .iter()
                 .enumerate()
-                .filter(|(_, v)| v.is_finite())
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .map(|(offset, _)| token_beg + offset)
-                .unwrap_or(token_beg)
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap();
+            token_beg + offset
         } else {
             token_beg
         };
@@ -2821,10 +2785,9 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             lp.iter()
                 .enumerate()
-                .filter(|(_, v)| v.is_finite())
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .map(|(idx, _)| idx)
-                .unwrap_or(token_eot)
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .unwrap()
+                .0
         };
 
         let final_tid = if sampled_id >= token_beg {
@@ -2940,7 +2903,7 @@ fn sample_from_probs(probs: &[f32], rng: &mut MT19937) -> usize {
         return probs
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(index, _)| index)
             .unwrap_or(0);
     }
@@ -3027,7 +2990,7 @@ fn compute_token_timestamps_for_segment(
         let (peak_pos, peak) = alignment
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_cmp(b.1))
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
             .map(|(i, &v)| (i, v))
             .unwrap();
 

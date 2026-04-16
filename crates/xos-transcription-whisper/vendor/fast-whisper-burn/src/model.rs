@@ -9,7 +9,9 @@ use burn::{
     tensor::{Bool, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
 };
 
-use crate::custom_kernels::{CustomKernelsBackend, layer_norm_mixed, softmax_mixed};
+use crate::custom_kernels::{
+    CustomKernelsBackend, fused_single_query_attn, layer_norm_mixed, softmax_mixed,
+};
 
 #[derive(Config, Debug)]
 pub struct WhisperConfig {
@@ -1033,26 +1035,32 @@ impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
             v_new
         };
 
-        // Use the standard attention path for stability.
-        // Some GPU/driver combos show NaNs in fused single-query attention.
-        let scale = (d_k as f32).sqrt().recip();
-        let scores = q.matmul(k.clone().transpose()) * scale;
-
-        let scores = if let Some(mask) = mask {
-            let [mask_batch, mask_seq_q, mask_seq_k] = mask.dims();
-            scores.mask_fill(
-                mask.reshape([mask_batch, 1, mask_seq_q, mask_seq_k]),
-                self.attn.min_float,
-            )
+        // For single-query decoding, use fused attention kernel
+        // (Q@K^T·scale → softmax → @V in one pass, no intermediate tensors)
+        let context = if seq_len == 1 && mask.is_none() {
+            fused_single_query_attn::<B>(q, k.clone(), v.clone())
+                .swap_dims(1, 2)
+                .reshape([batch_size, 1, n_heads * d_k])
         } else {
-            scores
-        };
+            let scale = (d_k as f32).sqrt().recip();
+            let scores = q.matmul(k.clone().transpose()) * scale;
 
-        let weights = softmax_mixed(scores, 3, use_f16);
-        let context = weights
-            .matmul(v.clone())
-            .swap_dims(1, 2)
-            .reshape([batch_size, seq_len, n_heads * d_k]);
+            let scores = if let Some(mask) = mask {
+                let [mask_batch, mask_seq_q, mask_seq_k] = mask.dims();
+                scores.mask_fill(
+                    mask.reshape([mask_batch, 1, mask_seq_q, mask_seq_k]),
+                    self.attn.min_float,
+                )
+            } else {
+                scores
+            };
+
+            let weights = softmax_mixed(scores, 3, use_f16);
+            weights
+                .matmul(v.clone())
+                .swap_dims(1, 2)
+                .reshape([batch_size, seq_len, n_heads * d_k])
+        };
         let output = self.attn.output.forward(context);
 
         (
