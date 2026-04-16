@@ -42,7 +42,14 @@ pub fn ensure_whisper_artifacts(model_key: &str, dest_dir: &Path, manifest_json:
     let f32 = dest_dir.join(format!("{stem}.bpk"));
     let f16 = dest_dir.join(format!("{stem}-f16.bpk"));
     if cfg.is_file() && tok.is_file() && (f32.is_file() || f16.is_file()) {
-        return Ok(());
+        if tokenizer_json_looks_valid(&tok) {
+            return Ok(());
+        }
+        eprintln!(
+            "xos: tokenizer cache looks invalid ({}), re-downloading...",
+            tok.display()
+        );
+        let _ = fs::remove_file(&tok);
     }
 
     let pt_name = pt_entry
@@ -62,6 +69,13 @@ pub fn ensure_whisper_artifacts(model_key: &str, dest_dir: &Path, manifest_json:
     if !tok.is_file() {
         eprintln!("xos: downloading Whisper tokenizer ({model_key})...");
         download_file(tok_url, &tok)?;
+        if !tokenizer_json_looks_valid(&tok) {
+            let _ = fs::remove_file(&tok);
+            return Err(format!(
+                "downloaded tokenizer is not valid JSON: {} (source: {tok_url})",
+                tok.display()
+            ));
+        }
     }
 
     eprintln!("xos: converting Whisper checkpoint to Burnpack ({model_key})...");
@@ -115,4 +129,14 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     }
     fs::write(dest, buf).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn tokenizer_json_looks_valid(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if bytes.is_empty() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&bytes).is_ok()
 }
