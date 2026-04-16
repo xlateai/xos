@@ -853,7 +853,12 @@ impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
     /// to avoid allocating the full [batch, heads, seq, seq] score matrix.
     fn chunked_self_attention(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
         fn cast_for_linear<Bk: Backend>(x: Tensor<Bk, 3>, linear: &nn::Linear<Bk>) -> Tensor<Bk, 3> {
-            match linear.weight.val().into_data().dtype {
+            let target_dtype = if let Some(bias) = &linear.bias {
+                bias.val().into_data().dtype
+            } else {
+                linear.weight.val().into_data().dtype
+            };
+            match target_dtype {
                 DType::F16 => x.cast(FloatDType::F16),
                 _ => x.cast(FloatDType::F32),
             }
@@ -1254,13 +1259,23 @@ pub struct MLP<B: Backend> {
 
 impl<B: Backend> MLP<B> {
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
-        let x = match self.lin1.weight.val().into_data().dtype {
+        let lin1_dtype = if let Some(bias) = &self.lin1.bias {
+            bias.val().into_data().dtype
+        } else {
+            self.lin1.weight.val().into_data().dtype
+        };
+        let x = match lin1_dtype {
             DType::F16 => x.cast(FloatDType::F16),
             _ => x.cast(FloatDType::F32),
         };
         let x = self.lin1.forward(x);
         let x = self.gelu.forward(x);
-        let x = match self.lin2.weight.val().into_data().dtype {
+        let lin2_dtype = if let Some(bias) = &self.lin2.bias {
+            bias.val().into_data().dtype
+        } else {
+            self.lin2.weight.val().into_data().dtype
+        };
+        let x = match lin2_dtype {
             DType::F16 => x.cast(FloatDType::F16),
             _ => x.cast(FloatDType::F32),
         };
