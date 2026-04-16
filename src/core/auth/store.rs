@@ -1,10 +1,12 @@
-//! Persisted identity (two files under the xos data dir):
+//! Persisted identity (two files under **`{data_dir}/auth/`**):
 //! - **`authentication.json`** — account auth: RSA-2048 derived from username + password (**v4**).
 //! - **`node_identity.json`** — per-machine RSA keypair + **`node_name`**; LAN mesh uses this.
 //!   **`node_id`** is **SHA256(SPKI DER of the public key)** as hex — **not** stored (derive anytime).
 //!
 //! Legacy **`identity.json`** is migrated to `authentication.json` + a generated `node_identity.json`
 //! on first load. **`v3`/`v2`/`v1`** still work via **`unlock_identity(password)`** when reading old layouts.
+//!
+//! Files that previously lived next to **`identity.json`** at the data root are moved into **`auth/`** on first access.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng as AesOsRng};
 use aes_gcm::{Aes256Gcm, Key};
@@ -76,14 +78,54 @@ pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
     }
 }
 
+/// Subdirectory for offline identity files (`authentication.json`, `node_identity.json`).
+pub fn auth_identity_dir() -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?.join("auth"))
+}
+
+/// Cached Whisper Burn artifacts: `{data_dir}/models/whisper/{model_key}/` (e.g. `tiny`, `small`).
+pub fn whisper_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?.join("models").join("whisper").join(model_key))
+}
+
+/// Move legacy `authentication.json` / `node_identity.json` from the data root into `auth/`.
+fn ensure_auth_subdir_migrated() -> Result<(), AuthError> {
+    let base = auth_data_dir()?;
+    let auth_sub = base.join("auth");
+    let old_a = base.join("authentication.json");
+    let old_n = base.join("node_identity.json");
+    let new_a = auth_sub.join("authentication.json");
+    let new_n = auth_sub.join("node_identity.json");
+
+    if new_a.exists() || new_n.exists() {
+        fs::create_dir_all(&auth_sub).map_err(|e| AuthError::Io(e.to_string()))?;
+        return Ok(());
+    }
+
+    if old_a.exists() || old_n.exists() {
+        fs::create_dir_all(&auth_sub).map_err(|e| AuthError::Io(e.to_string()))?;
+        if old_a.exists() {
+            fs::rename(&old_a, &new_a).map_err(|e| AuthError::Io(e.to_string()))?;
+        }
+        if old_n.exists() {
+            fs::rename(&old_n, &new_n).map_err(|e| AuthError::Io(e.to_string()))?;
+        }
+    } else {
+        fs::create_dir_all(&auth_sub).map_err(|e| AuthError::Io(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Account / authentication file (username + password-derived RSA, v4+).
 pub fn authentication_json_path() -> Result<PathBuf, AuthError> {
-    Ok(auth_data_dir()?.join("authentication.json"))
+    ensure_auth_subdir_migrated()?;
+    Ok(auth_identity_dir()?.join("authentication.json"))
 }
 
 /// Per-machine node keys + friendly name (LAN mesh identity).
 pub fn node_identity_json_path() -> Result<PathBuf, AuthError> {
-    Ok(auth_data_dir()?.join("node_identity.json"))
+    ensure_auth_subdir_migrated()?;
+    Ok(auth_identity_dir()?.join("node_identity.json"))
 }
 
 /// Legacy path (pre-split). Prefer [`authentication_json_path`].
@@ -118,10 +160,13 @@ pub fn has_identity() -> bool {
 /// Remove `authentication.json`, `node_identity.json`, and legacy `identity.json` if present.
 pub fn delete_identity() -> Result<(), AuthError> {
     let mut removed = false;
+    let base = auth_data_dir()?;
     for p in [
         authentication_json_path()?,
         node_identity_json_path()?,
         legacy_identity_json_path()?,
+        base.join("authentication.json"),
+        base.join("node_identity.json"),
     ] {
         if p.exists() {
             fs::remove_file(&p).map_err(|e| AuthError::Io(e.to_string()))?;

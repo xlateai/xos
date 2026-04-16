@@ -16,13 +16,11 @@ fn login_offline_interactive() -> Result<(), String> {
     if has_identity() {
         let p = auth_data_dir()
             .map(|d| {
-                format!(
-                    "{} + {}",
-                    d.join("authentication.json").display(),
-                    d.join("node_identity.json").display()
-                )
+                let a = d.join("auth").join("authentication.json");
+                let n = d.join("auth").join("node_identity.json");
+                format!("{} + {}", a.display(), n.display())
             })
-            .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
+            .unwrap_or_else(|_| "auth/authentication.json + auth/node_identity.json".to_string());
         return Err(format!(
             "identity already exists ({p}). Use xos login --reset to replace credentials, or xos login --delete to remove identity."
         ));
@@ -146,7 +144,7 @@ enum Commands {
     Path,
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
-        /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
+        /// Remove local `auth/authentication.json` and `auth/node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
         /// Replace existing credentials safely (requires an existing identity).
@@ -458,7 +456,7 @@ fn main() {
                 use xos::auth::delete_identity;
                 match delete_identity() {
                     Ok(()) => println!(
-                        "Removed local identity (authentication.json, node_identity.json, legacy identity.json)."
+                        "Removed local identity (auth/authentication.json, auth/node_identity.json, legacy identity.json)."
                     ),
                     Err(e) => {
                         eprintln!("❌ {e}");
@@ -470,7 +468,7 @@ fn main() {
                 match login_offline_reset_interactive() {
                     Ok(()) => {
                         println!(
-                            "Reset identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA)."
+                            "Reset identity: auth/authentication.json (username + account RSA) and auth/node_identity.json (machine name + node RSA)."
                         );
                     }
                     Err(e) => {
@@ -482,7 +480,7 @@ fn main() {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
-                            "Saved identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
+                            "Saved identity: auth/authentication.json (username + account RSA) and auth/node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
                         );
                     }
                     Err(e) => {

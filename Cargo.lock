@@ -13743,6 +13743,10 @@ dependencies = [
  "burn 0.21.0-pre.2",
  "burn-store 0.21.0-pre.2",
  "fast-whisper-burn",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]

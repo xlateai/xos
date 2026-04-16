@@ -1,7 +1,12 @@
 //! Background Whisper decode using fast-whisper-burn (WGPU + Burnpack `.bpk`).
 //!
-//! Expected layout under `models_root` (e.g. `.../transcription/models/fast-whisper-burn/`):
+//! Expected layout under `models_root` (e.g. `~/.xos/models/whisper/tiny/`):
 //! `{name}.cfg`, `{name}.bpk`, `{name}-f16.bpk`, `{name}-tokenizer.json`.
+
+mod convert;
+mod ensure;
+
+pub use ensure::ensure_whisper_artifacts;
 
 use std::path::Path;
 use std::path::PathBuf;

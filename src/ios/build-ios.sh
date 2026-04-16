@@ -32,7 +32,8 @@ export IPHONEOS_DEPLOYMENT_TARGET=15.1
 # - --crate-type staticlib: Produce a static library (.a file) that can be linked into Swift code
 # - link-arg: Sets minimum iOS version for the linker
 echo "🔨 Building for iOS device (aarch64-apple-ios)..."
-cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib -- -C link-arg=-miphoneos-version-min=15.1
+# Whisper pulls a desktop-only optional crate; iOS lib build uses default features off.
+cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features -- -C link-arg=-miphoneos-version-min=15.1
 
 # Verify the build succeeded by checking for the output file
 # The static library will be named libxos.a (following Rust's naming convention)
