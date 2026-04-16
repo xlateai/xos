@@ -38,10 +38,9 @@ pub fn spawn_decode_thread(
 
     // English decoding; extend call chain with a language parameter when the API needs it.
     let lang = "en".to_string();
-    let use_f16_weights = true;
 
     let device = <WgpuF32 as Backend>::Device::default();
-    let (bpe, whisper) = load_whisper(&models_root, model_name, &device, use_f16_weights)?;
+    let (bpe, whisper, use_f16_compute) = load_whisper(&models_root, model_name, &device)?;
 
     let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = mpsc::channel::<String>();
@@ -57,7 +56,7 @@ pub fn spawn_decode_thread(
                 beam_size: 3,
                 patience: -1.0,
             };
-            params.use_f16_compute = use_f16_weights;
+            params.use_f16_compute = use_f16_compute;
             params.no_timestamps = true;
             params.detect_language = false;
             params.print_special = false;
@@ -109,37 +108,29 @@ fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Load Whisper weights. Prefer **`{name}.bpk`** (full precision) + **`use_f16_compute = false`** so the
+/// fused f16 inference path in fast-whisper-burn does not hit `DTypeMismatch` against mixed checkpoints.
+/// If only **`{name}-f16.bpk`** exists, load that and enable f16 compute (matches upstream `transcribe --f16`).
 fn load_whisper(
     models_root: &Path,
     model_name: &str,
     device: &<WgpuF32 as Backend>::Device,
-    use_f16: bool,
-) -> Result<(Gpt2Tokenizer, Whisper<WgpuF32>), String> {
+) -> Result<(Gpt2Tokenizer, Whisper<WgpuF32>, bool), String> {
     let tok_path = models_root.join(format!("{model_name}-tokenizer.json"));
     let cfg_path = models_root.join(format!("{model_name}.cfg"));
-    let (bpk_path, adapter_dtype) = if use_f16 {
-        let f16p = models_root.join(format!("{model_name}-f16.bpk"));
-        if f16p.is_file() {
-            (f16p, burn::tensor::DType::F16)
-        } else {
-            let f32p = models_root.join(format!("{model_name}.bpk"));
-            if !f32p.is_file() {
-                return Err(format!(
-                    "weights file not found: expected {} or {}",
-                    models_root
-                        .join(format!("{model_name}-f16.bpk"))
-                        .display(),
-                    f32p.display()
-                ));
-            }
-            (f32p, burn::tensor::DType::F32)
-        }
+    let f32_bpk = models_root.join(format!("{model_name}.bpk"));
+    let f16_bpk = models_root.join(format!("{model_name}-f16.bpk"));
+
+    let (bpk_path, adapter_dtype, use_f16_compute) = if f32_bpk.is_file() {
+        (f32_bpk, burn::tensor::DType::F32, false)
+    } else if f16_bpk.is_file() {
+        (f16_bpk, burn::tensor::DType::F16, true)
     } else {
-        let p = models_root.join(format!("{model_name}.bpk"));
-        if !p.is_file() {
-            return Err(format!("weights file not found: {}", p.display()));
-        }
-        (p, burn::tensor::DType::F32)
+        return Err(format!(
+            "weights file not found: expected {} or {}",
+            f32_bpk.display(),
+            f16_bpk.display()
+        ));
     };
 
     let tok_s = tok_path
@@ -158,7 +149,7 @@ fn load_whisper(
         .load_from(&mut store)
         .map_err(|e| format!("weights load {}: {e}", bpk_path.display()))?;
 
-    Ok((bpe, whisper_model))
+    Ok((bpe, whisper_model, use_f16_compute))
 }
 
 fn cleanup_whisper_text(s: &str) -> String {
