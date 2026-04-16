@@ -788,7 +788,7 @@ impl<B: CustomKernelsBackend> AudioEncoder<B> {
             x = block.forward(x, use_f16);
         }
 
-        self.ln_post.forward(x)
+        layer_norm_mixed(&self.ln_post, x, use_f16)
     }
 
     fn ctx_size(&self) -> usize {
@@ -852,6 +852,13 @@ impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
     /// Chunked self-attention: processes queries in blocks of ENCODER_ATTN_CHUNK
     /// to avoid allocating the full [batch, heads, seq, seq] score matrix.
     fn chunked_self_attention(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
+        fn cast_for_linear<Bk: Backend>(x: Tensor<Bk, 3>, linear: &nn::Linear<Bk>) -> Tensor<Bk, 3> {
+            match linear.weight.val().into_data().dtype {
+                DType::F16 => x.cast(FloatDType::F16),
+                _ => x.cast(FloatDType::F32),
+            }
+        }
+
         let mha = &self.attn;
         let [batch, seq_len, d_model] = x.dims();
         let n_heads = mha.n_heads;
@@ -860,17 +867,17 @@ impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
         // Project Q, K, V: [batch, seq, d_model] -> [batch, heads, seq, d_k]
         let q = mha
             .query
-            .forward(x.clone())
+            .forward(cast_for_linear(x.clone(), &mha.query))
             .reshape([batch, seq_len, n_heads, d_k])
             .swap_dims(1, 2);
         let k = mha
             .key
-            .forward(x.clone())
+            .forward(cast_for_linear(x.clone(), &mha.key))
             .reshape([batch, seq_len, n_heads, d_k])
             .swap_dims(1, 2);
         let v = mha
             .value
-            .forward(x)
+            .forward(cast_for_linear(x, &mha.value))
             .reshape([batch, seq_len, n_heads, d_k])
             .swap_dims(1, 2);
 
@@ -884,7 +891,7 @@ impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
                 .matmul(v)
                 .swap_dims(1, 2)
                 .reshape([batch, seq_len, d_model]);
-            return mha.output.forward(context);
+            return mha.output.forward(cast_for_linear(context, &mha.output));
         }
 
         // Chunked: process query blocks against full K, V
@@ -912,7 +919,7 @@ impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
         let context = Tensor::cat(chunk_outputs, 2)
             .swap_dims(1, 2)
             .reshape([batch, seq_len, d_model]);
-        mha.output.forward(context)
+        mha.output.forward(cast_for_linear(context, &mha.output))
     }
 }
 
@@ -1247,9 +1254,16 @@ pub struct MLP<B: Backend> {
 
 impl<B: Backend> MLP<B> {
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+        let x = match self.lin1.weight.val().into_data().dtype {
+            DType::F16 => x.cast(FloatDType::F16),
+            _ => x.cast(FloatDType::F32),
+        };
         let x = self.lin1.forward(x);
         let x = self.gelu.forward(x);
-
+        let x = match self.lin2.weight.val().into_data().dtype {
+            DType::F16 => x.cast(FloatDType::F16),
+            _ => x.cast(FloatDType::F32),
+        };
         self.lin2.forward(x)
     }
 }
