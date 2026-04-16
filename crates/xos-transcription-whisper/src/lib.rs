@@ -61,7 +61,6 @@ fn with_cached_model<T>(
         let needs_load = slot.as_ref().map(|m| m.key != key).unwrap_or(true);
         if needs_load {
             let (bpe, whisper) = load_whisper(models_root, model_name, &device)?;
-            println!("\x1b[92m[xos-whisper] loaded model: {model_name}\x1b[0m");
             *slot = Some(CachedWhisperModel { key, bpe, whisper });
         }
         let entry = slot.as_ref().expect("cache populated");
