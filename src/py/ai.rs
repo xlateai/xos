@@ -272,6 +272,12 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     if let Ok(loader) = whisper.get_attr("_load_payload", vm) {
         scope.globals.set_item("_load_payload", loader, vm).ok();
     }
+    if let Ok(forward_native) = whisper.get_attr("_forward_native", vm) {
+        scope
+            .globals
+            .set_item("_forward_native", forward_native, vm)
+            .ok();
+    }
 
     let glue = r#"
 def _mk_parameter(payload):
