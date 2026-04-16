@@ -71,8 +71,12 @@ pub fn spawn_decode_thread(
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             // Always false: fused f16 graph + mixed checkpoints triggers Burn IR `DTypeMismatch` on some GPUs.
             params.use_f16_compute = false;
+            params.debug_mode = true;
+            // Live caption mode: force text-token decode (no timestamp-token short-circuit).
             params.no_timestamps = true;
+            params.single_segment = true;
             params.detect_language = false;
+            params.language = "en".to_string();
             params.print_special = false;
             // Live desktop/system-audio chunks often look lower-confidence than clean mic speech.
             // Keep segments instead of classifying them as "no speech" and dropping text.

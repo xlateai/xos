@@ -713,6 +713,27 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             .to_vec();
         let mut seek_delta = result.seek_delta;
         let no_speech_prob = result.no_speech_prob;
+        if params.debug_mode {
+            eprintln!(
+                "[fwb-transcribe] chunk seek={} tokens={} result_len={} avg_logprobs={:.4} entropy={:.4} no_speech_prob={:.4} is_no_speech={}",
+                seek,
+                tokens_cur.len(),
+                result.result_len,
+                result.avg_logprobs,
+                result.entropy,
+                no_speech_prob,
+                is_no_speech
+            );
+            if !tokens_cur.is_empty() {
+                let preview_ids = tokens_cur
+                    .iter()
+                    .take(12)
+                    .map(|(id, _, _)| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                eprintln!("[fwb-transcribe] token_ids_preview=[{preview_ids}]");
+            }
+        }
 
         // Build segments from decoded tokens (skip if no-speech detected)
         if !tokens_cur.is_empty() && !is_no_speech {
@@ -885,6 +906,15 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
     }
 
     let full_text = segments.iter().map(|s| s.text.as_str()).collect::<String>();
+    if params.debug_mode {
+        let preview = full_text.chars().take(120).collect::<String>();
+        eprintln!(
+            "[fwb-transcribe] completed: segments={} text_len={} text_preview={:?}",
+            segments.len(),
+            full_text.len(),
+            preview
+        );
+    }
 
     Ok(TranscriptionResult {
         segments,
