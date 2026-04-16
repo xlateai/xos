@@ -16,10 +16,11 @@ use std::thread;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
+use burn::tensor::{Int, Tensor, TensorData};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
-use fast_whisper_burn::token::Gpt2Tokenizer;
+use fast_whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
 use fast_whisper_burn::transcribe::{transcribe as fw_transcribe, WhisperParams};
 
 type WgpuF32 = Wgpu<f32>;
@@ -31,6 +32,77 @@ fn transcribe_debug_enabled() -> bool {
             v == "1" || v == "true" || v == "yes" || v == "on"
         })
         .unwrap_or(false)
+}
+
+fn summarize_f32(values: &[f32]) -> (usize, usize, f32, f32, f32) {
+    let mut finite_count = 0usize;
+    let mut nan_count = 0usize;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+    let mut sum = 0.0f64;
+    for &v in values {
+        if v.is_finite() {
+            finite_count += 1;
+            min_v = min_v.min(v);
+            max_v = max_v.max(v);
+            sum += v as f64;
+        } else if v.is_nan() {
+            nan_count += 1;
+        }
+    }
+    let mean = if finite_count > 0 {
+        (sum / finite_count as f64) as f32
+    } else {
+        f32::NAN
+    };
+    (finite_count, nan_count, min_v, mean, max_v)
+}
+
+fn probe_loaded_model(
+    whisper: &Whisper<WgpuF32>,
+    bpe: &Gpt2Tokenizer,
+    device: &<WgpuF32 as Backend>::Device,
+) -> Result<(), String> {
+    let n_mels = whisper.encoder_mel_size();
+    let mel = Tensor::<WgpuF32, 3>::zeros([1, n_mels, 3000], device);
+    let enc = whisper.forward_encoder(mel);
+    let enc_data = enc
+        .clone()
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .map_err(|e| format!("encoder probe to_vec: {e}"))?;
+    let (enc_finite, enc_nan, enc_min, enc_mean, enc_max) = summarize_f32(&enc_data);
+    eprintln!(
+        "[xos-whisper] probe encoder: dims={:?} finite={} nan={} min={:.6} mean={:.6} max={:.6}",
+        enc.dims(),
+        enc_finite,
+        enc_nan,
+        enc_min,
+        enc_mean,
+        enc_max
+    );
+
+    let sot = bpe.special_token(SpecialToken::StartofTranscript).unwrap_or(50258);
+    let tok = Tensor::<WgpuF32, 2, Int>::from_data(TensorData::new(vec![sot as i64], [1, 1]), device);
+    let out = whisper.forward_decoder(tok, enc);
+    let out_data = out
+        .clone()
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .map_err(|e| format!("decoder probe to_vec: {e}"))?;
+    let (dec_finite, dec_nan, dec_min, dec_mean, dec_max) = summarize_f32(&out_data);
+    eprintln!(
+        "[xos-whisper] probe decoder logits: dims={:?} finite={} nan={} min={:.6} mean={:.6} max={:.6}",
+        out.dims(),
+        dec_finite,
+        dec_nan,
+        dec_min,
+        dec_mean,
+        dec_max
+    );
+    Ok(())
 }
 
 /// `sync_channel(1)` drops backlog; decoded lines arrive on `result_rx`.
@@ -190,6 +262,24 @@ fn load_whisper(
     whisper_model
         .load_from(&mut store)
         .map_err(|e| format!("weights load {}: {e}", bpk_path.display()))?;
+    if transcribe_debug_enabled() {
+        eprintln!(
+            "[xos-whisper] model loaded: cfg={} weights={} f16_adapter={}",
+            cfg_path.display(),
+            bpk_path.display(),
+            use_f16_adapter
+        );
+        eprintln!(
+            "[xos-whisper] model dims: n_mels={} enc_ctx={} dec_ctx={} decoder_layers={}",
+            whisper_model.encoder_mel_size(),
+            whisper_model.encoder_ctx_size(),
+            whisper_model.decoder_ctx_size(),
+            whisper_model.decoder_layer_count()
+        );
+        if let Err(e) = probe_loaded_model(&whisper_model, &bpe, device) {
+            eprintln!("[xos-whisper] probe failed: {e}");
+        }
+    }
 
     Ok((bpe, whisper_model))
 }

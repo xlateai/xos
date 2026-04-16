@@ -2777,16 +2777,21 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         // Timestamp vs text logprob comparison on CPU
         if !params.no_timestamps {
             let ts_slice = &lp[token_beg..vocab_size];
-            let ts_max = ts_slice.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-            let ts_logprob = ts_max
-                + ts_slice
-                    .iter()
-                    .map(|&x| (x - ts_max).exp())
-                    .sum::<f32>()
-                    .ln();
-            let max_text_logprob = lp[..token_beg]
+            let ts_finite: Vec<f32> = ts_slice.iter().copied().filter(|x| x.is_finite()).collect();
+            let txt_finite: Vec<f32> = lp[..token_beg]
                 .iter()
-                .cloned()
+                .copied()
+                .filter(|x| x.is_finite())
+                .collect();
+            let ts_logprob = if ts_finite.is_empty() {
+                f32::NEG_INFINITY
+            } else {
+                let ts_max = ts_finite.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                ts_max + ts_finite.iter().map(|&x| (x - ts_max).exp()).sum::<f32>().ln()
+            };
+            let max_text_logprob = txt_finite
+                .iter()
+                .copied()
                 .fold(f32::NEG_INFINITY, f32::max);
 
             if ts_logprob > max_text_logprob {
@@ -2798,12 +2803,13 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
 
         // tid: argmax over timestamp range on CPU
         let tid = if token_beg < vocab_size {
-            let (offset, _) = lp[token_beg..vocab_size]
+            lp[token_beg..vocab_size]
                 .iter()
                 .enumerate()
+                .filter(|(_, v)| v.is_finite())
                 .max_by(|a, b| a.1.total_cmp(b.1))
-                .unwrap();
-            token_beg + offset
+                .map(|(offset, _)| token_beg + offset)
+                .unwrap_or(token_beg)
         } else {
             token_beg
         };
@@ -2815,9 +2821,10 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             lp.iter()
                 .enumerate()
+                .filter(|(_, v)| v.is_finite())
                 .max_by(|a, b| a.1.total_cmp(b.1))
-                .unwrap()
-                .0
+                .map(|(idx, _)| idx)
+                .unwrap_or(token_eot)
         };
 
         let final_tid = if sampled_id >= token_beg {
