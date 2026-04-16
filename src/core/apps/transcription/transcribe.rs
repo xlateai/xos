@@ -87,13 +87,13 @@ impl Application for TranscribeApp {
         {
             let device = input_devices.first().ok_or("No input devices available")?;
             #[cfg(all(
-                feature = "whisper_ct2",
+                feature = "whisper",
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
             let buffer_duration = 10.0_f32;
             #[cfg(not(all(
-                feature = "whisper_ct2",
+                feature = "whisper",
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             )))]
@@ -130,13 +130,13 @@ impl Application for TranscribeApp {
                 .ok_or_else(|| "Selected device not found".to_string())?;
 
             #[cfg(all(
-                feature = "whisper_ct2",
+                feature = "whisper",
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
             let buffer_duration = 10.0_f32;
             #[cfg(not(all(
-                feature = "whisper_ct2",
+                feature = "whisper",
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             )))]

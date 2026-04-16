@@ -36,21 +36,12 @@ pub fn spawn_decode_thread(
 
     validate_artifacts(&models_root, model_name)?;
 
-    let lang = std::env::var("XOS_WHISPER_LANG")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "en".to_string());
-
-    let use_f16 = std::env::var("XOS_WHISPER_BURN_F32")
-        .map(|v| {
-            let v = v.trim();
-            v != "1" && !v.eq_ignore_ascii_case("true")
-        })
-        .unwrap_or(true);
+    // English decoding; extend call chain with a language parameter when the API needs it.
+    let lang = "en".to_string();
+    let use_f16_weights = true;
 
     let device = <WgpuF32 as Backend>::Device::default();
-    let (bpe, whisper) = load_whisper(&models_root, model_name, &device, use_f16)?;
+    let (bpe, whisper) = load_whisper(&models_root, model_name, &device, use_f16_weights)?;
 
     let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = mpsc::channel::<String>();
@@ -66,7 +57,7 @@ pub fn spawn_decode_thread(
                 beam_size: 3,
                 patience: -1.0,
             };
-            params.use_f16_compute = use_f16;
+            params.use_f16_compute = use_f16_weights;
             params.no_timestamps = true;
             params.detect_language = false;
             params.print_special = false;

@@ -125,9 +125,9 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = []
-## Whisper transcription (fast-whisper-burn: Burnpack + WGPU). Enable with `--features whisper_ct2`. Artifacts: `transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`). Overrides: `XOS_WHISPER_BURN_DIR`, `XOS_WHISPER_LANG`, `XOS_WHISPER_BURN_F32=1` to force full-precision weights. Desktop only (not iOS / WASM).
-whisper_ct2 = ["dep:xos-transcription-whisper"]
+default = ["whisper"]
+## Desktop Whisper (fast-whisper-burn: Burnpack + WGPU). On by default for macOS/Linux/Windows; use `--no-default-features` for iOS/WASM static lib builds. Artifacts: `transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`).
+whisper = ["dep:xos-transcription-whisper"]
 
 [lib]
 path = "src/core/lib.rs"

@@ -1,48 +1,48 @@
-//! Real-time transcription: Whisper (fast-whisper-burn) on desktop when `whisper_ct2` is enabled; stub elsewhere.
+//! Real-time transcription: Whisper (fast-whisper-burn) on desktop when the `whisper` feature is enabled; stub elsewhere.
 //! Pipeline: voice gate (RMS) → frequent tail decodes → hypothesis stabilization → phrase commits.
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod filter;
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod merge;
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod sample;
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod whisper;
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 use std::collections::VecDeque;
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 use std::sync::mpsc::{Receiver, SyncSender};
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
@@ -56,128 +56,128 @@ pub struct TranscriptionEngine {
     pending_stdout: Vec<String>,
     pending_iter_events: Vec<Option<String>>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     decode_job_tx: Option<SyncSender<Vec<f32>>>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     decode_result_rx: Option<Receiver<String>>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     resample_buf: Vec<f32>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_decode: Instant,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     live_transcript: String,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     stable_transcript: String,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     hypotheses: VecDeque<String>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     voice_active: bool,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     quiet_for: Duration,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_snapshot: Instant,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     accept_results_until: Instant,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     awaiting_final_commit: bool,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_committed_text: String,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     block_stale_until: Instant,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     utterance_best: String,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_stdout_commit_key: String,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_level_rms: f32,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     load_note: Option<String>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     last_ingested_frames: Option<u64>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
     last_phrase_restart_commit: Option<Instant>,
     #[cfg(all(
-        feature = "whisper_ct2",
+        feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
@@ -193,7 +193,7 @@ impl TranscriptionEngine {
 
     pub fn new_with_size(preferred_size: Option<&str>) -> Self {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -239,7 +239,7 @@ impl TranscriptionEngine {
             };
         }
         #[cfg(not(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         )))]
@@ -258,7 +258,7 @@ impl TranscriptionEngine {
     pub fn set_device_hint(&mut self, name: &str, sample_rate: u32) {
         self.device_hint = format!("Input: {name} @ {sample_rate} Hz");
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -282,7 +282,7 @@ impl TranscriptionEngine {
 
     pub fn caption(&self) -> &str {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -294,7 +294,7 @@ impl TranscriptionEngine {
 
     pub fn last_level_rms(&self) -> f32 {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -302,7 +302,7 @@ impl TranscriptionEngine {
             return self.last_level_rms;
         }
         #[cfg(not(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         )))]
@@ -323,7 +323,7 @@ impl TranscriptionEngine {
     /// Call before shutdown if you will not run another [`Self::process_snapshot`].
     pub fn flush_deferred_iter_delivery(&mut self) {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -332,7 +332,7 @@ impl TranscriptionEngine {
 
     pub fn flush_live_to_stdout_commits(&mut self) {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
@@ -362,13 +362,13 @@ impl TranscriptionEngine {
         ingested_frames: u64,
     ) {
         #[cfg(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         ))]
         self.process_snapshot_live(sample_rate, channels, ingested_frames);
         #[cfg(not(all(
-            feature = "whisper_ct2",
+            feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
         )))]
@@ -387,7 +387,7 @@ impl TranscriptionEngine {
 }
 
 #[cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]

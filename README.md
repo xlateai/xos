@@ -1,6 +1,6 @@
 # 🐍 xos
 
-Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
+Python, cross-platform (+ios📱) with built-in ai models, viewports, audio drivers, ml/sci/compute operations/kernels, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
 
 YouTube [@xlateai](https://youtube.com/@xlateai) • X/Twitter [@xlateai](https://x.com/xlateai) • Discord [xlateai](https://discord.gg/WvPaPG7DYh)
 
@@ -188,7 +188,7 @@ Coming soon: RN/Expo-style builds.
 
 - After you change **Rust**, run `**xos compile`** (or `**xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
 - If CLI behavior looks stale, run `cargo install --path .`.
-- Use `**xos path**` for the repo root (folder with `src/`, where you run `xos compile`), and `**xos path --exe**` for the running executable path.
+- Use `**xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and `**xos path --exe**` for the running executable path.
 - `**xos -v**` (or `**xpy -v**`, `**xrs -v**`) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with `**(uncommitted changes)**` in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
 
 ## 🚧 Package Limitations

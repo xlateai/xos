@@ -1,6 +1,6 @@
 //! Mono downmix, linear resample, RMS, and RealtimeSTT-style timing constants (16 kHz).
 #![cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]

@@ -1,6 +1,6 @@
 //! Stable / latest overlap merge (RealtimeSTT-style) for sliding-window hypotheses.
 #![cfg(all(
-    feature = "whisper_ct2",
+    feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
