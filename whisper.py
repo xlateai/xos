@@ -3,11 +3,20 @@ import xos
 # load the whisper model
 whisper = xos.ai.whisper.load("tiny")
 
+
+def get_color(param_name):
+    if "encoder" in param_name:
+        return "&3"
+    elif "decoder" in param_name:
+        return "&4"
+    return ""
+
 # let's us look directly into all of the parameters like you can with pytorch
 for i, (name, param) in enumerate(whisper.named_parameters()):
+    color = get_color(name)
     # print stats of the layer
-    print(f"{i}: {name}: {param.shape}")
-    print(f"Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
+    xos.print_color(f"{color}{i}: {name}: {param.shape}")
+    xos.print_color(f"{color}Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
 
 
 # inference on random value waveform
