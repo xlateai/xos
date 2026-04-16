@@ -981,6 +981,17 @@ impl MeshSession {
         self.connected.load(Ordering::SeqCst) != 0
     }
 
+    /// True when this session uses encrypted LAN transport (vs plaintext loopback-only local mesh).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_lan_transport(&self) -> bool {
+        self.lan_host.is_some() || self.lan_client.is_some()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn is_lan_transport(&self) -> bool {
+        false
+    }
+
     pub fn join(mesh_id: &str, mode: MeshMode) -> Result<Self, String> {
         #[cfg(target_arch = "wasm32")]
         {

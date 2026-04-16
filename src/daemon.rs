@@ -193,16 +193,36 @@ pub fn run_daemon_forever() -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     let (_global_mesh, global_mode) = {
         use xos::mesh::{MeshMode, MeshSession};
+        const GLOBAL_LAN_ATTEMPTS: u32 = 16;
+        const GLOBAL_LAN_GAP_MS: u64 = 120;
         match xos::auth::load_node_identity() {
-            Ok(identity) => match MeshSession::join_with_identity(
-                GLOBAL_MESH_ID,
-                MeshMode::Lan,
-                Arc::new(identity),
-                None,
-            ) {
-                Ok(s) => (s, "lan"),
-                Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
-            },
+            Ok(identity) => {
+                let id = Arc::new(identity);
+                let mut lan_session: Option<MeshSession> = None;
+                for attempt in 0..GLOBAL_LAN_ATTEMPTS {
+                    match MeshSession::join_with_identity(
+                        GLOBAL_MESH_ID,
+                        MeshMode::Lan,
+                        Arc::clone(&id),
+                        None,
+                    ) {
+                        Ok(s) => {
+                            lan_session = Some(s);
+                            break;
+                        }
+                        Err(_) => {
+                            if attempt + 1 < GLOBAL_LAN_ATTEMPTS {
+                                thread::sleep(Duration::from_millis(GLOBAL_LAN_GAP_MS));
+                            }
+                        }
+                    }
+                }
+                if let Some(s) = lan_session {
+                    (s, "lan")
+                } else {
+                    (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local")
+                }
+            }
             Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
         }
     };
