@@ -287,6 +287,12 @@ pub fn transcribe_waveform_with_intermediates(
     if waveform.is_empty() {
         return Ok((String::new(), vec![]));
     }
+    if waveform.len() < 400 {
+        return Err(format!(
+            "waveform too short for Whisper STFT: got {} samples, need at least 400 (try xos.audio.load(...) or provide longer audio)",
+            waveform.len()
+        ));
+    }
     let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         Some("small") => "small",
         Some("tiny") | None => "tiny",

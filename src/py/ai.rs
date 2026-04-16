@@ -450,6 +450,9 @@ class _WhisperModel:
         )
         for step in payload["steps"]:
             name = step.get("name", None)
+            if name is None:
+                yield None, payload.get("text", "")
+                continue
             act = _mk_parameter({
                 "name": name if name is not None else "output",
                 "shape": step.get("shape", []),

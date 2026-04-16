@@ -10,9 +10,15 @@ for i, (name, param) in enumerate(whisper.named_parameters()):
     print(f"Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
 
 
-# standard forward function call
-# random values to test inference
-# x = xos.random.randint(1, 1000)
+# inference on random value waveform
+print("SDFKJLSDLFJDSLFSDJFLSDJFJSDFJLSDFJ")
+x = xos.random.uniform(1, 1000, shape=(1, 1000))
+print(x)
+y = whisper.forward(x)
+print(y)
+
+
+# inference on a real audio waveform
 x = xos.audio.load("intro.mp3")
 y = whisper.forward(x)
 print(y)
