@@ -25,15 +25,16 @@ y = whisper.forward(x)
 print("intro.mp3 output transcripts:", y)
 
 
-# forward function call with intermediates
-for (param_name, output) in whisper.forward_layer_by_layer(x):
-    # if param_name is None then it is the output (instead of activation)
-    # print the param name and shape of the activation as well as the shape of the parameters
-    if param_name is not None:
-        param = whisper.get_parameter(param_name)
-        # print(f"{param_name}: {param.shape} --param produces--> {output.shape}")
+print("-----------------------------------------------")
+print("forward function with layer-wise statistics:")
+for (layer_name, output) in whisper.forward_layer_by_layer(x):
+    # if layer_name is None then it is the output (instead of activation)
+    # print the layer name and shape of the activation as well as the shape of the parameters
+    if layer_name is not None:
+        param = whisper.get_parameter(layer_name)
+        # print(f"{layer_name}: {param.shape} --param produces--> {output.shape}")
         # print param name and stats
-        print(f"--------{param_name}--------")
+        print(f"--------{layer_name}--------")
         print(f"Param Stats: shape={param.shape}, mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
         print(f"Output Stats: shape={output.shape}, mean={output.mean():.4f}, std={output.std():.4f}, min={output.min():.4f}, max={output.max():.4f}")
     else:
