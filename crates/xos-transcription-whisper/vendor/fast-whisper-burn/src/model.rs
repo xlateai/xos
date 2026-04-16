@@ -43,6 +43,77 @@ pub struct Whisper<B: Backend> {
 }
 
 impl<B: CustomKernelsBackend> Whisper<B> {
+    fn assert_tensor_finite<const D: usize>(
+        &self,
+        name: &str,
+        tensor: Tensor<B, D>,
+    ) -> Result<(), String> {
+        let dims = tensor.dims();
+        let values = tensor
+            .into_data()
+            .convert::<f32>()
+            .to_vec::<f32>()
+            .map_err(|e| format!("{name}: to_vec failed: {e}"))?;
+        let mut nan_count = 0usize;
+        let mut inf_count = 0usize;
+        for &v in &values {
+            if v.is_nan() {
+                nan_count += 1;
+            } else if !v.is_finite() {
+                inf_count += 1;
+            }
+        }
+        if nan_count > 0 || inf_count > 0 {
+            return Err(format!(
+                "{name}: non-finite weights detected (dims={dims:?}, nan={nan_count}, inf={inf_count})"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Checks representative loaded weights and fails fast on NaN/Inf.
+    pub fn debug_assert_no_suspicious_weights(&self) -> Result<(), String> {
+        self.assert_tensor_finite("encoder.conv1.weight", self.encoder.conv1.weight.val())?;
+        self.assert_tensor_finite("encoder.conv2.weight", self.encoder.conv2.weight.val())?;
+        self.assert_tensor_finite(
+            "encoder.positional_embedding",
+            self.encoder.positional_embedding.val(),
+        )?;
+        self.assert_tensor_finite(
+            "decoder.token_embedding",
+            self.decoder.token_embedding.val().slice([0..128, 0..64]),
+        )?;
+        self.assert_tensor_finite(
+            "decoder.positional_embedding",
+            self.decoder.positional_embedding.val(),
+        )?;
+        if let Some(first_block) = self.encoder.blocks.first() {
+            self.assert_tensor_finite(
+                "encoder.blocks[0].attn.query.weight",
+                first_block.attn.query.weight.val(),
+            )?;
+            self.assert_tensor_finite(
+                "encoder.blocks[0].attn.key.weight",
+                first_block.attn.key.weight.val(),
+            )?;
+            self.assert_tensor_finite(
+                "encoder.blocks[0].attn.value.weight",
+                first_block.attn.value.weight.val(),
+            )?;
+        }
+        if let Some(first_block) = self.decoder.blocks.first() {
+            self.assert_tensor_finite(
+                "decoder.blocks[0].attn.query.weight",
+                first_block.attn.query.weight.val(),
+            )?;
+            self.assert_tensor_finite(
+                "decoder.blocks[0].cross_attn.query.weight",
+                first_block.cross_attn.query.weight.val(),
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn forward(&self, mel: Tensor<B, 3>, tokens: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         let encoder_output = self.encoder.forward(mel, false);
         self.decoder.forward(tokens, encoder_output)
@@ -639,6 +710,9 @@ pub struct AudioEncoder<B: Backend> {
 
 impl<B: CustomKernelsBackend> AudioEncoder<B> {
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
+        // Burn 0.21 + fusion can panic with Conv1d DTypeMismatch if the input arrives in a
+        // different float dtype than conv params. Force f32 for both conv kernels.
+        let x = x.cast(FloatDType::F32);
         let [_, n_mels, _n_ctx] = x.dims();
 
         assert!(
