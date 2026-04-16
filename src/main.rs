@@ -143,8 +143,19 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
-    /// Print git repo root, app data dir (credentials, etc.), and this CLI binary path
-    Path,
+    /// Print git repo root, app data dir (credentials, etc.), and this CLI binary path.
+    /// With `--code`, `--data`, or `--cli-exe`, print only that path (plain, no colors) for shell use, e.g. `cd "$(xos path --data)"`.
+    Path {
+        /// Print only the xos project / repository root
+        #[arg(long)]
+        code: bool,
+        /// Print only the app data directory (`~/.xos` on Unix, `%LocalAppData%\\xos` on Windows)
+        #[arg(long)]
+        data: bool,
+        /// Print only the path of this `xos` / `xpy` executable
+        #[arg(long = "cli-exe")]
+        cli_exe: bool,
+    },
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
         /// Remove local `auth/authentication.json` and `auth/node_identity.json` (and legacy `identity.json`).
@@ -176,9 +187,20 @@ const PATH_LINE_GRAY: &str = "\x1b[38;5;240m";
 const PATH_LINE_MID: &str = "\x1b[38;5;107m";
 const PATH_LINE_GREEN: &str = "\x1b[38;5;40m";
 
-fn print_xos_paths() {
+fn resolve_xos_paths() -> (
+    Result<PathBuf, String>,
+    Result<PathBuf, String>,
+    Result<PathBuf, String>,
+) {
     use xos::auth::auth_data_dir;
+    (
+        xos::find_xos_project_root().map_err(|e| e.to_string()),
+        auth_data_dir().map_err(|e| e.to_string()),
+        std::env::current_exe().map_err(|e| e.to_string()),
+    )
+}
 
+fn print_xos_paths() {
     let color = io::stdout().is_terminal();
     let (c1, c2, c3) = if color {
         (PATH_LINE_GRAY, PATH_LINE_MID, PATH_LINE_GREEN)
@@ -187,7 +209,9 @@ fn print_xos_paths() {
     };
     let reset = if color { ANSI_RESET } else { "" };
 
-    let code = match xos::find_xos_project_root() {
+    let (code_r, data_r, exe_r) = resolve_xos_paths();
+
+    let code = match code_r {
         Ok(p) => p.display().to_string(),
         Err(e) => {
             eprintln!("❌ {e}");
@@ -195,12 +219,12 @@ fn print_xos_paths() {
         }
     };
 
-    let data = match auth_data_dir() {
+    let data = match data_r {
         Ok(p) => p.display().to_string(),
         Err(e) => format!("({e})"),
     };
 
-    let exe = match std::env::current_exe() {
+    let exe = match exe_r {
         Ok(p) => p.display().to_string(),
         Err(e) => {
             eprintln!("❌ Could not resolve path of running executable: {e}");
@@ -212,6 +236,42 @@ fn print_xos_paths() {
     println!("{}{:<9}\t{}{}", c1, "code:", code, reset);
     println!("{}{:<9}\t{}{}", c2, "data:", data, reset);
     println!("{}{:<9}\t{}{}", c3, "cli-exe:", exe, reset);
+}
+
+fn run_path_command(code: bool, data: bool, cli_exe: bool) {
+    if !code && !data && !cli_exe {
+        print_xos_paths();
+        return;
+    }
+
+    let (code_r, data_r, exe_r) = resolve_xos_paths();
+    if code {
+        match code_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if data {
+        match data_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if cli_exe {
+        match exe_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ Could not resolve path of running executable: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 /// Second line for `xos -v` / `xpy -v`: full commit hash, optional colored dirty suffix, or a fixed message if no git tree.
@@ -434,8 +494,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Path) => {
-            print_xos_paths();
+        Some(Commands::Path {
+            code,
+            data,
+            cli_exe,
+        }) => {
+            run_path_command(code, data, cli_exe);
         }
         Some(Commands::Rs { app }) => {
             run_app_command(app);

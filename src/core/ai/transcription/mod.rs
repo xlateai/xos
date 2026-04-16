@@ -1,5 +1,5 @@
 //! Real-time transcription: Whisper (fast-whisper-burn) on desktop when the `whisper` feature is enabled; stub elsewhere.
-//! Pipeline: voice gate (RMS) → frequent tail decodes → hypothesis stabilization → phrase commits.
+//! Pipeline: voice gate (RMS + peak) → frequent tail decodes → hypothesis stabilization → phrase commits.
 
 #[cfg(all(
     feature = "whisper",
@@ -583,8 +583,13 @@ impl TranscriptionEngine {
         let tail = (sample_rate as usize).saturating_mul(80) / 1000;
         let tail = tail.max(256).min(mono.len().max(1));
         self.last_level_rms = sample::rms_tail(&mono, tail);
+        let last_peak = sample::peak_tail(&mono, tail);
+        let voice_on = self.last_level_rms >= sample::VOICE_ON_RMS
+            || last_peak >= sample::VOICE_ON_PEAK;
+        let voice_off = self.last_level_rms < sample::VOICE_OFF_RMS
+            && last_peak < sample::VOICE_OFF_PEAK;
 
-        if self.last_level_rms >= sample::VOICE_ON_RMS {
+        if voice_on {
             if !self.voice_active {
                 self.last_decode = Instant::now() - Duration::from_millis(sample::DECODE_INTERVAL_MS);
             }
@@ -592,7 +597,7 @@ impl TranscriptionEngine {
             self.awaiting_final_commit = false;
             self.quiet_for = Duration::ZERO;
             self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
-        } else if self.last_level_rms < sample::VOICE_OFF_RMS && self.voice_active {
+        } else if voice_off && self.voice_active {
             self.quiet_for = self.quiet_for.saturating_add(dt);
             if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
                 self.voice_active = false;

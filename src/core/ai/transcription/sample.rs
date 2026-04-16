@@ -13,9 +13,14 @@ pub const INPUT_TAIL_SECS: u32 = 12;
 pub const DECODE_INTERVAL_MS: u64 = 90;
 pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 12;
 
-/// ~5% more sensitive than 0.013 / 0.010 (quieter input still counts as voice).
-pub const VOICE_ON_RMS: f32 = 0.01235;
-pub const VOICE_OFF_RMS: f32 = 0.0095;
+/// RMS gate (last ~80 ms). System/loopback mixes are often much quieter than close-mic speech;
+/// keep thresholds low so transcription still runs on typical macOS/Windows capture levels.
+pub const VOICE_ON_RMS: f32 = 0.0038;
+pub const VOICE_OFF_RMS: f32 = 0.0028;
+
+/// Peak gate on the same tail as RMS — catches percussive / sparse content when RMS stays low.
+pub const VOICE_ON_PEAK: f32 = 0.012;
+pub const VOICE_OFF_PEAK: f32 = 0.009;
 pub const END_SILENCE_MS: u64 = 900;
 pub const RESULT_GRACE_MS: u64 = 2000;
 pub const POST_COMMIT_STALE_MS: u64 = 1200;
@@ -87,4 +92,16 @@ pub fn rms_tail(mono: &[f32], tail_max: usize) -> f32 {
     let slice = &mono[start..];
     let acc: f32 = slice.iter().map(|s| s * s).sum();
     (acc / slice.len() as f32).sqrt()
+}
+
+/// Max absolute sample in the last `tail_max` samples (same window as [`rms_tail`]).
+pub fn peak_tail(mono: &[f32], tail_max: usize) -> f32 {
+    if mono.is_empty() {
+        return 0.0;
+    }
+    let start = mono.len().saturating_sub(tail_max);
+    mono[start..]
+        .iter()
+        .map(|s| s.abs())
+        .fold(0.0f32, f32::max)
 }
