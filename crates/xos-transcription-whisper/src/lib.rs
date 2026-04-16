@@ -17,7 +17,7 @@ use burn::backend::ndarray::NdArray;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn::tensor::{Distribution, FloatDType, Int, Tensor, TensorData};
+use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use fast_whisper_burn::audio::{max_waveform_samples, prep_audio};
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
@@ -78,7 +78,7 @@ fn probe_loaded_model(
         Distribution::Normal(0.0, 0.02f64),
         &cpu,
     );
-    let mel_na = prep_audio(wave, 16000.0, n_mels).cast(FloatDType::F32);
+    let mel_na = prep_audio(wave, 16000.0, n_mels);
     let t = mel_na.dims()[2];
     let mel_na = if t >= 3000 {
         mel_na.slice([0..1, 0..n_mels, 0..3000])
@@ -86,8 +86,7 @@ fn probe_loaded_model(
         let pad = Tensor::<NdArray, 3>::zeros([1, n_mels, 3000 - t], &cpu);
         Tensor::cat(vec![mel_na, pad], 2)
     };
-    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.into_data(), device)
-        .cast(burn::tensor::FloatDType::F32);
+    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.into_data(), device);
     let enc = whisper.forward_encoder(mel);
     let enc_data = enc
         .clone()

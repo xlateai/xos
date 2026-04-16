@@ -6,7 +6,7 @@ use burn::{
         attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
         conv::{Conv1d, Conv1dConfig},
     },
-    tensor::{Bool, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
+    tensor::{Bool, DType, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
 };
 
 use crate::custom_kernels::{
@@ -710,9 +710,20 @@ pub struct AudioEncoder<B: Backend> {
 
 impl<B: CustomKernelsBackend> AudioEncoder<B> {
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
-        // Burn 0.21 + fusion can panic with Conv1d DTypeMismatch if the input arrives in a
-        // different float dtype than conv params. Force f32 for both conv kernels.
-        let x = x.cast(FloatDType::F32);
+        fn dtype_3<Bk: Backend>(t: &Tensor<Bk, 3>) -> String {
+            format!("{:?}", t.clone().into_data().dtype)
+        }
+        fn dtype_1<Bk: Backend>(t: &Tensor<Bk, 1>) -> String {
+            format!("{:?}", t.clone().into_data().dtype)
+        }
+
+        // Burn fusion requires input/weight dtype agreement for conv.
+        let conv1_w = self.conv1.weight.val();
+        let conv1_dtype = conv1_w.clone().into_data().dtype;
+        let x = match conv1_dtype {
+            DType::F16 => x.cast(FloatDType::F16),
+            _ => x.cast(FloatDType::F32),
+        };
         let [_, n_mels, _n_ctx] = x.dims();
 
         assert!(
@@ -721,12 +732,26 @@ impl<B: CustomKernelsBackend> AudioEncoder<B> {
             self.n_mels
         );
 
-        // Conv weights are kept in f32 for accuracy; run convs in f32
+        // Run conv in the same dtype as its parameters.
+        let conv1_b = self.conv1.bias.as_ref().map(|b| b.val());
+        eprintln!(
+            "[fwb][dtype] conv1 input={} weight={} bias={}",
+            dtype_3(&x),
+            dtype_3(&conv1_w),
+            conv1_b
+                .as_ref()
+                .map(dtype_1)
+                .unwrap_or_else(|| "None".to_string())
+        );
         let x = self.gelu1.forward(self.conv1.forward(x));
         let x = self.gelu2.forward(self.conv2.forward(x));
 
-        // Cast to f16 after convs for the attention blocks
-        let x = if use_f16 { x.cast(FloatDType::F16) } else { x };
+        // Keep conv dtype aligned with weights, then respect runtime compute mode for encoder blocks.
+        let x = if use_f16 {
+            x.cast(FloatDType::F16)
+        } else {
+            x.cast(FloatDType::F32)
+        };
 
         let x = x.swap_dims(1, 2);
         let k = x.dims()[1];
@@ -745,21 +770,24 @@ impl<B: CustomKernelsBackend> AudioEncoder<B> {
             .val()
             .slice([0..k])
             .unsqueeze::<3>();
-        // positional_embedding is kept in f32 for stability, cast to match x
-        let pos_emb = if use_f16 {
-            pos_emb.cast(FloatDType::F16)
-        } else {
-            pos_emb
+        let x_dtype = x.clone().into_data().dtype;
+        let pos_emb = match x_dtype {
+            DType::F16 => pos_emb.cast(FloatDType::F16),
+            _ => pos_emb.cast(FloatDType::F32),
         };
+        eprintln!(
+            "[fwb][dtype] pre-pos-add x={} pos_emb={}",
+            dtype_3(&x),
+            dtype_3(&pos_emb)
+        );
         let x = x + pos_emb;
 
         let mut x = x;
+        eprintln!("[fwb][dtype] pre-enc-block x={}", dtype_3(&x));
         for block in self.blocks.iter() {
             x = block.forward(x, use_f16);
         }
 
-        // Cast back to f32 for final LayerNorm
-        let x = if use_f16 { x.cast(FloatDType::F32) } else { x };
         self.ln_post.forward(x)
     }
 
@@ -811,12 +839,13 @@ const ENCODER_ATTN_CHUNK: usize = 256;
 
 impl<B: CustomKernelsBackend> ResidualEncoderAttentionBlock<B> {
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
-        let ln_out = layer_norm_mixed(&self.attn_ln, x.clone(), use_f16);
-        let attn_out = self.chunked_self_attention(ln_out, use_f16);
+        let _ = use_f16;
+        let ln_out = layer_norm_mixed(&self.attn_ln, x.clone(), false);
+        let attn_out = self.chunked_self_attention(ln_out, false);
 
         let x = x + attn_out;
 
-        let mlp_input = layer_norm_mixed(&self.mlp_ln, x.clone(), use_f16);
+        let mlp_input = layer_norm_mixed(&self.mlp_ln, x.clone(), false);
         x + self.mlp.forward(mlp_input)
     }
 

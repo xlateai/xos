@@ -1096,6 +1096,12 @@ pub fn layer_norm_mixed<B: CustomKernelsBackend, const D: usize>(
     x: BurnTensor<B, D>,
     use_f16: bool,
 ) -> BurnTensor<B, D> {
+    let ln_dtype = ln.gamma.val().into_data().dtype;
+    let x = match ln_dtype {
+        DType::F16 => x.cast(burn::tensor::FloatDType::F16),
+        _ => x.cast(burn::tensor::FloatDType::F32),
+    };
+
     if use_f16 {
         layer_norm_f16::<B, D>(
             x,
