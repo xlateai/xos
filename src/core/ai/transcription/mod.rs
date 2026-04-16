@@ -79,12 +79,20 @@ pub fn transcribe_waveform_once(
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ActivationStep {
+    pub name: Option<String>,
+    pub shape: Vec<usize>,
+    pub dtype: String,
+    pub values: Vec<f32>,
+}
+
 pub fn transcribe_waveform_with_intermediates(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
     max_values: usize,
-) -> Result<(String, Vec<xos_transcription_whisper::ActivationStep>), String> {
+) -> Result<(String, Vec<ActivationStep>), String> {
     #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
         return whisper::transcribe_waveform_with_intermediates(

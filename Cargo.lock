@@ -898,7 +898,6 @@ source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c
 dependencies = [
  "burn-autodiff 0.21.0-pre.2",
  "burn-candle 0.21.0-pre.2",
- "burn-collective",
  "burn-core 0.21.0-pre.2",
  "burn-cpu 0.21.0-pre.2",
  "burn-cuda 0.21.0-pre.2",
@@ -907,12 +906,10 @@ dependencies = [
  "burn-ndarray 0.21.0-pre.2",
  "burn-nn 0.21.0-pre.2",
  "burn-optim 0.21.0-pre.2",
- "burn-remote",
  "burn-rocm 0.21.0-pre.2",
  "burn-router 0.21.0-pre.2",
  "burn-store 0.21.0-pre.2",
  "burn-tch 0.21.0-pre.2",
- "burn-train",
  "burn-wgpu 0.21.0-pre.2",
 ]
 
@@ -924,6 +921,7 @@ checksum = "194141a65d74cf81579d13a2c956447509ceb20e4032af7d34f9d7ecc68ef2d3"
 dependencies = [
  "burn-autodiff 0.21.0-pre.3",
  "burn-candle 0.21.0-pre.3",
+ "burn-collective",
  "burn-core 0.21.0-pre.3",
  "burn-cpu 0.21.0-pre.3",
  "burn-cuda 0.21.0-pre.3",
@@ -932,10 +930,12 @@ dependencies = [
  "burn-ndarray 0.21.0-pre.3",
  "burn-nn 0.21.0-pre.3",
  "burn-optim 0.21.0-pre.3",
+ "burn-remote",
  "burn-rocm 0.21.0-pre.3",
  "burn-router 0.21.0-pre.3",
  "burn-store 0.21.0-pre.3",
  "burn-tch 0.21.0-pre.3",
+ "burn-train",
  "burn-wgpu 0.21.0-pre.3",
 ]
 
@@ -953,7 +953,6 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "spin 0.10.0",
- "tracing",
 ]
 
 [[package]]
@@ -971,6 +970,7 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "spin 0.10.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1039,12 +1039,13 @@ dependencies = [
 
 [[package]]
 name = "burn-collective"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0b9c5490c71045fa65e3682ab861e8e87025ec64f636004c710e846e5da2bfd"
 dependencies = [
+ "burn-backend 0.21.0-pre.3",
  "burn-communication",
- "burn-std 0.21.0-pre.2",
- "burn-tensor 0.21.0-pre.2",
+ "burn-std 0.21.0-pre.3",
  "bytes",
  "futures",
  "log",
@@ -1056,12 +1057,13 @@ dependencies = [
 
 [[package]]
 name = "burn-communication"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7fce1d8c8e2b5eab5a682b1b5d9d124c68a80b15c1de2bbf4dc64b5668246e9"
 dependencies = [
  "axum",
- "burn-std 0.21.0-pre.2",
- "burn-tensor 0.21.0-pre.2",
+ "burn-std 0.21.0-pre.3",
+ "burn-tensor 0.21.0-pre.3",
  "bytes",
  "derive-new",
  "futures",
@@ -1085,7 +1087,6 @@ source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c
 dependencies = [
  "ahash",
  "bincode",
- "burn-dataset",
  "burn-derive 0.21.0-pre.2",
  "burn-std 0.21.0-pre.2",
  "burn-tensor 0.21.0-pre.2",
@@ -1116,6 +1117,7 @@ checksum = "1c1625261e56af29b79ec0ff20f8861f1f63737ffe96f3a3d585c1404f52da06"
 dependencies = [
  "ahash",
  "bincode",
+ "burn-dataset",
  "burn-derive 0.21.0-pre.3",
  "burn-std 0.21.0-pre.3",
  "burn-tensor 0.21.0-pre.3",
@@ -1256,8 +1258,9 @@ dependencies = [
 
 [[package]]
 name = "burn-dataset"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a47eb336f52cb750e1054f143ddb308586b5cbffa6b4414fd53ad664cdd8a10c"
 dependencies = [
  "csv",
  "derive-new",
@@ -1398,6 +1401,29 @@ dependencies = [
  "burn-backend 0.21.0-pre.2",
  "burn-ir 0.21.0-pre.2",
  "burn-std 0.21.0-pre.2",
+ "const-random",
+ "libm",
+ "macerator",
+ "matrixmultiply",
+ "ndarray 0.17.2",
+ "num-traits",
+ "paste",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rand 0.10.1",
+]
+
+[[package]]
+name = "burn-ndarray"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e21ae84db1162cb52f871bd740de6427a0cb27e105bf256417fcb3e132dfbd67"
+dependencies = [
+ "atomic_float",
+ "burn-autodiff 0.21.0-pre.3",
+ "burn-backend 0.21.0-pre.3",
+ "burn-ir 0.21.0-pre.3",
+ "burn-std 0.21.0-pre.3",
  "bytemuck",
  "const-random",
  "itertools 0.14.0",
@@ -1412,29 +1438,6 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "seq-macro",
-]
-
-[[package]]
-name = "burn-ndarray"
-version = "0.21.0-pre.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e21ae84db1162cb52f871bd740de6427a0cb27e105bf256417fcb3e132dfbd67"
-dependencies = [
- "atomic_float",
- "burn-autodiff 0.21.0-pre.3",
- "burn-backend 0.21.0-pre.3",
- "burn-ir 0.21.0-pre.3",
- "burn-std 0.21.0-pre.3",
- "const-random",
- "libm",
- "macerator",
- "matrixmultiply",
- "ndarray 0.17.2",
- "num-traits",
- "paste",
- "portable-atomic",
- "portable-atomic-util",
- "rand 0.10.1",
 ]
 
 [[package]]
@@ -1487,16 +1490,17 @@ dependencies = [
 
 [[package]]
 name = "burn-remote"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3aba62e3e012fdb36411e72af601c9f00e4f0648ecd0e808026aa5dd4d46dd3c"
 dependencies = [
  "async-channel",
  "axum",
- "burn-backend 0.21.0-pre.2",
+ "burn-backend 0.21.0-pre.3",
  "burn-communication",
- "burn-ir 0.21.0-pre.2",
- "burn-router 0.21.0-pre.2",
- "burn-std 0.21.0-pre.2",
+ "burn-ir 0.21.0-pre.3",
+ "burn-router 0.21.0-pre.3",
+ "burn-std 0.21.0-pre.3",
  "bytes",
  "derive-new",
  "futures-util",
@@ -1513,11 +1517,12 @@ dependencies = [
 
 [[package]]
 name = "burn-rl"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b987f2677090b3a7a7e76549dc7cbc22b1bcb0ce7e7fe251013b508d33491852"
 dependencies = [
- "burn-core 0.21.0-pre.2",
- "burn-optim 0.21.0-pre.2",
+ "burn-core 0.21.0-pre.3",
+ "burn-optim 0.21.0-pre.3",
  "derive-new",
  "log",
  "rand 0.10.1",
@@ -1705,13 +1710,14 @@ dependencies = [
 
 [[package]]
 name = "burn-train"
-version = "0.21.0-pre.2"
-source = "git+https://github.com/tracel-ai/burn.git?rev=9deccba#9deccbadc999c74c363db5cef9ee604fb30d81cf"
+version = "0.21.0-pre.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d405c29fc8261ff58439e5dac5bfb0da51d1b94baa26de7c35d5a9c45e6907f"
 dependencies = [
  "async-channel",
- "burn-core 0.21.0-pre.2",
- "burn-ndarray 0.21.0-pre.2",
- "burn-optim 0.21.0-pre.2",
+ "burn-core 0.21.0-pre.3",
+ "burn-ndarray 0.21.0-pre.3",
+ "burn-optim 0.21.0-pre.3",
  "burn-rl",
  "derive-new",
  "log",
@@ -4338,13 +4344,13 @@ dependencies = [
 name = "fast-whisper-burn"
 version = "0.1.0"
 dependencies = [
- "burn 0.21.0-pre.2",
- "burn-backend 0.21.0-pre.2",
- "burn-cubecl 0.21.0-pre.2",
- "burn-fusion 0.21.0-pre.2",
- "burn-ir 0.21.0-pre.2",
- "burn-store 0.21.0-pre.2",
- "cubecl 0.10.0-pre.2",
+ "burn 0.21.0-pre.3",
+ "burn-backend 0.21.0-pre.3",
+ "burn-cubecl 0.21.0-pre.3",
+ "burn-fusion 0.21.0-pre.3",
+ "burn-ir 0.21.0-pre.3",
+ "burn-store 0.21.0-pre.3",
+ "cubecl 0.10.0-pre.3",
  "half 2.7.1",
  "hound",
  "log",
@@ -12945,6 +12951,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "base64 0.22.1",
+ "burn 0.21.0-pre.2",
  "burn 0.21.0-pre.3",
  "burn-autodiff 0.21.0-pre.3",
  "burn-backend 0.21.0-pre.3",
@@ -12952,6 +12959,7 @@ dependencies = [
  "burn-fusion 0.21.0-pre.3",
  "burn-ir 0.21.0-pre.3",
  "burn-ndarray 0.21.0-pre.3",
+ "burn-store 0.21.0-pre.2",
  "burn-store 0.21.0-pre.3",
  "burn-wgpu 0.21.0-pre.3",
  "clap",
@@ -12964,6 +12972,7 @@ dependencies = [
  "dialoguer",
  "dirs 5.0.1",
  "enigo",
+ "fast-whisper-burn",
  "fontdue",
  "getrandom 0.3.4",
  "hkdf",
@@ -13002,7 +13011,6 @@ dependencies = [
  "winit",
  "x25519-dalek",
  "xcap",
- "xos-transcription-whisper",
 ]
 
 [[package]]
@@ -13011,19 +13019,6 @@ version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
  "xos",
-]
-
-[[package]]
-name = "xos-transcription-whisper"
-version = "0.1.0"
-dependencies = [
- "burn 0.21.0-pre.3",
- "burn-store 0.21.0-pre.3",
- "fast-whisper-burn",
- "serde",
- "serde_json",
- "sha2",
- "ureq",
 ]
 
 [[package]]

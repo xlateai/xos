@@ -77,8 +77,9 @@ ctrlc = "3.4"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
 mp3lame-encoder = "0.2.3"
-# Whisper crate shares the same Burn git rev / graph as below.
-xos-transcription-whisper = { path = "crates/xos-transcription-whisper", optional = true }
+fast-whisper-burn = { path = "crates/fast-whisper-burn", optional = true }
+burn_fw = { package = "burn", git = "https://github.com/tracel-ai/burn.git", rev = "9deccba", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "fusion"] }
+burn_store_fw = { package = "burn-store", git = "https://github.com/tracel-ai/burn.git", rev = "9deccba", features = ["burnpack", "pytorch"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -132,7 +133,7 @@ console_error_panic_hook = "0.1"
 [features]
 default = ["whisper"]
 ## Desktop Whisper (fast-whisper-burn: Burnpack + WGPU). On by default for macOS/Linux/Windows; use `--no-default-features` for iOS/WASM static lib builds. Bundled artifacts: `src/core/ai/transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`); runtime cache `~/.xos/models/whisper/{tiny,small}/`.
-whisper = ["dep:xos-transcription-whisper"]
+whisper = ["dep:fast-whisper-burn"]
 
 [lib]
 path = "src/core/lib.rs"
@@ -151,8 +152,7 @@ name = "xrs"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "src/core/crates/xos-java", "crates/xos-transcription-whisper"]
-exclude = ["fast-whisper-burn"]
+members = [".", "src/core/crates/xos-java", "crates/fast-whisper-burn"]
 resolver = "2"
 
 # gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types
