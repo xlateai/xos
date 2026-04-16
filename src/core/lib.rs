@@ -26,6 +26,8 @@ pub mod rasterizer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime_config;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).
 pub fn is_xos_project_root(path: &Path) -> bool {

@@ -157,6 +157,11 @@ pub fn has_identity() -> bool {
             .unwrap_or(false)
 }
 
+/// True when a local login identity exists on this machine.
+pub fn is_logged_in() -> bool {
+    has_identity()
+}
+
 /// Remove `authentication.json`, `node_identity.json`, and legacy `identity.json` if present.
 pub fn delete_identity() -> Result<(), AuthError> {
     let mut removed = false;

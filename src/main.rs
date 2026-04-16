@@ -174,6 +174,12 @@ enum Commands {
     /// Print daemon status without auto-starting.
     #[command(name = "status")]
     Status,
+    /// Enable daemon usage globally (`daemon_enabled: true`) and start it.
+    #[command(name = "on")]
+    On,
+    /// Disable daemon usage globally (`daemon_enabled: false`) and stop it.
+    #[command(name = "off")]
+    Off,
     #[command(name = "daemon-internal", hide = true)]
     DaemonInternal,
 }
@@ -371,6 +377,8 @@ fn main() {
                     | "terminal"
                     | "kill"
                     | "status"
+                    | "on"
+                    | "off"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -403,6 +411,8 @@ fn main() {
                     | "terminal"
                     | "kill"
                     | "status"
+                    | "on"
+                    | "off"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -470,7 +480,7 @@ fn main() {
             | Some(Commands::Terminal)
     );
     if should_ensure_daemon {
-        if let Err(e) = daemon::ensure_daemon_running() {
+        if let Err(e) = daemon::maybe_ensure_daemon_running() {
             eprintln!("❌ failed to start xos daemon: {e}");
             std::process::exit(1);
         }
@@ -486,8 +496,8 @@ fn main() {
             } else {
                 compile::xos_compile_command(true, clean)
             };
-            if let Err(e) = daemon::ensure_daemon_running() {
-                eprintln!("❌ compile finished, but failed to restart daemon: {e}");
+            if let Err(e) = daemon::maybe_ensure_daemon_running() {
+                eprintln!("❌ compile finished, but failed to enforce daemon state: {e}");
                 std::process::exit(1);
             }
             if !compile_ok {
@@ -576,6 +586,14 @@ fn main() {
             println!("xos daemon offline");
         }
         Some(Commands::Status) => {
+            let daemon_enabled = match xos::runtime_config::daemon_enabled() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("❌ failed to read daemon config: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let logged_in = xos::auth::is_logged_in();
             match daemon::daemon_status() {
                 Ok(s) if s.online => {
                     println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
@@ -588,6 +606,8 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            println!("daemon_enabled: {}", daemon_enabled);
+            println!("logged_in: {}", logged_in);
 
             xos::manager::bootstrap("xos-status");
             let root = match xos::find_xos_project_root() {
@@ -604,6 +624,30 @@ fn main() {
             }
             run_python_file(&script, &[]);
         }
+        Some(Commands::On) => match daemon::enable_daemon_usage() {
+            Ok(pid) => {
+                println!("daemon enabled");
+                println!("daemon: online (pid: {pid})");
+            }
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        },
+        Some(Commands::Off) => match daemon::disable_daemon_usage() {
+            Ok(was_running) => {
+                println!("daemon disabled");
+                if was_running {
+                    println!("daemon: stopped");
+                } else {
+                    println!("daemon: already offline");
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        },
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {
                 eprintln!("❌ daemon error: {e}");
