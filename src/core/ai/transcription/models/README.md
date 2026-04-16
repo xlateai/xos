@@ -39,7 +39,7 @@ pip install "ctranslate2>=4.3" "transformers[torch]" accelerate sentencepiece sa
 Convert `openai/whisper-small` into this repo path (adjust drive/path if your clone lives elsewhere). **`--copy_files` is required** so `tokenizer.json` and `preprocessor_config.json` are present for Rust:
 
 ```powershell
-$out = Join-Path $PWD "src\core\engine\audio\transcription\models\whisper-small-ct2"
+$out = Join-Path $PWD "src\core\ai\transcription\models\whisper-small-ct2"
 ct2-transformers-converter --model openai/whisper-small --output_dir $out `
   --copy_files tokenizer.json preprocessor_config.json special_tokens_map.json
 ```
@@ -63,7 +63,7 @@ cargo run -- app transcribe   # window + waveform; transcript on stdout
 Same `pip` install, then (from repo root):
 
 ```bash
-out="$PWD/src/core/engine/audio/transcription/models/whisper-small-ct2"
+out="$PWD/src/core/ai/transcription/models/whisper-small-ct2"
 ct2-transformers-converter --model openai/whisper-small --output_dir "$out" \
   --copy_files tokenizer.json preprocessor_config.json special_tokens_map.json
 ```

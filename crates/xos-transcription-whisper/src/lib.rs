@@ -16,7 +16,7 @@ use std::thread;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn_store::{BurnpackStore, ModuleSnapshot};
+use burn_store::BurnpackStore;
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
 use fast_whisper_burn::token::Gpt2Tokenizer;
@@ -45,7 +45,7 @@ pub fn spawn_decode_thread(
     let lang = "en".to_string();
 
     let device = <WgpuF32 as Backend>::Device::default();
-    let (bpe, whisper, use_f16_compute) = load_whisper(&models_root, model_name, &device)?;
+    let (bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
 
     let (job_tx, job_rx) = mpsc::sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = mpsc::channel::<String>();
@@ -61,7 +61,8 @@ pub fn spawn_decode_thread(
                 beam_size: 3,
                 patience: -1.0,
             };
-            params.use_f16_compute = use_f16_compute;
+            // Always false: fused f16 graph + mixed checkpoints triggers Burn IR `DTypeMismatch` on some GPUs.
+            params.use_f16_compute = false;
             params.no_timestamps = true;
             params.detect_language = false;
             params.print_special = false;
@@ -113,23 +114,23 @@ fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Load Whisper weights. Prefer **`{name}.bpk`** (full precision) + **`use_f16_compute = false`** so the
-/// fused f16 inference path in fast-whisper-burn does not hit `DTypeMismatch` against mixed checkpoints.
-/// If only **`{name}-f16.bpk`** exists, load that and enable f16 compute (matches upstream `transcribe --f16`).
+/// Load Whisper weights. Prefer **`{name}.bpk`** (full f32 checkpoint) loaded **without** an adapter.
+/// **`{name}-f16.bpk`** is only used when f32 is missing; we still run inference with **`use_f16_compute = false`**
+/// to avoid Burn fusion dtype mismatches.
 fn load_whisper(
     models_root: &Path,
     model_name: &str,
     device: &<WgpuF32 as Backend>::Device,
-) -> Result<(Gpt2Tokenizer, Whisper<WgpuF32>, bool), String> {
+) -> Result<(Gpt2Tokenizer, Whisper<WgpuF32>), String> {
     let tok_path = models_root.join(format!("{model_name}-tokenizer.json"));
     let cfg_path = models_root.join(format!("{model_name}.cfg"));
     let f32_bpk = models_root.join(format!("{model_name}.bpk"));
     let f16_bpk = models_root.join(format!("{model_name}-f16.bpk"));
 
-    let (bpk_path, adapter_dtype, use_f16_compute) = if f32_bpk.is_file() {
-        (f32_bpk, burn::tensor::DType::F32, false)
+    let bpk_path = if f32_bpk.is_file() {
+        f32_bpk
     } else if f16_bpk.is_file() {
-        (f16_bpk, burn::tensor::DType::F16, true)
+        f16_bpk
     } else {
         return Err(format!(
             "weights file not found: expected {} or {}",
@@ -146,15 +147,20 @@ fn load_whisper(
     let whisper_config =
         WhisperConfig::load(&cfg_path).map_err(|e| format!("config load: {e}"))?;
 
-    let mut store = BurnpackStore::from_file(&bpk_path);
-    let target_dtype = adapter_dtype;
-    store = store.with_from_adapter(MixedPrecisionAdapter(target_dtype));
+    let mut store = BurnpackStore::from_file(
+        bpk_path
+            .to_str()
+            .ok_or_else(|| format!("invalid utf-8 in path {}", bpk_path.display()))?,
+    );
+    if bpk_path == f16_bpk {
+        store = store.with_from_adapter(MixedPrecisionAdapter(burn::tensor::DType::F16));
+    }
     let mut whisper_model = whisper_config.init(device);
     whisper_model
         .load_from(&mut store)
         .map_err(|e| format!("weights load {}: {e}", bpk_path.display()))?;
 
-    Ok((bpe, whisper_model, use_f16_compute))
+    Ok((bpe, whisper_model))
 }
 
 fn cleanup_whisper_text(s: &str) -> String {

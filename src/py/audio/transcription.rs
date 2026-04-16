@@ -1,4 +1,5 @@
-use crate::engine::audio::{AudioListener, transcription::TranscriptionEngine};
+use crate::ai::transcription::TranscriptionEngine;
+use crate::engine::audio::AudioListener;
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};

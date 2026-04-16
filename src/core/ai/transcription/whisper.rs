@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender};
 
-const MODELS_SUBDIR: &str = "src/core/engine/audio/transcription/models/fast-whisper-burn";
+const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
 const DOWNLOAD_MANIFEST: &str = include_str!("models/whisper_download_links.json");
 
 /// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.

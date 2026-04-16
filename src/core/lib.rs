@@ -9,6 +9,7 @@ use webbrowser;
 
 pub mod random;
 pub mod tuneable;
+pub mod ai;
 pub mod engine;
 pub mod video;
 pub mod apps;

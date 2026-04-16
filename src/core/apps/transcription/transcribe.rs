@@ -1,5 +1,6 @@
 use crate::apps::waveform::WaveformCanvas;
-use crate::engine::audio::{self, transcription::TranscriptionEngine};
+use crate::ai::transcription::TranscriptionEngine;
+use crate::engine::audio;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 #[cfg(not(target_os = "ios"))]
