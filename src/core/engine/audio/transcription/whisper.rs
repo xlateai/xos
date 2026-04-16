@@ -5,7 +5,7 @@
     not(target_os = "ios")
 ))]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender};
 
 const MODELS_SUBDIR: &str = "src/core/engine/audio/transcription/models/fast-whisper-burn";
