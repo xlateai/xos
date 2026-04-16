@@ -2,7 +2,6 @@
 
 Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
 
-
 YouTube [@xlateai](https://youtube.com/@xlateai) • X/Twitter [@xlateai](https://x.com/xlateai) • Discord [xlateai](https://discord.gg/WvPaPG7DYh)
 
 ## ℹ️ Details
@@ -13,27 +12,46 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 - Designed to be an alternative to React-Native
 - ❌ no JavaScript, no HTML, no CSS ❌
 
+## 🧠 Available AI Models
+
+Xos makes it easy to use popular model types with standalone easy-to-use native desktop applications. Are you a researcher developing these kinds of models? Feel free to import your own in here and make use of the already robust application code! Application developer/user? Simply launch the applications from our `xos` commandl ine interface OR use `xpy` and call the relevant modules directly. Alternatively, if you're a dev building in rust you can include xos as a dependency in your `Cargo.toml` and reference the relevant rust functions directly! While you're at it, feel free to use our other very useful framework inclusions.
+
+1. Real-time Whisper models is available in 3 major ways:
+  1. Usage from the CLI after installation: `xos app transcribe`
+  2. Available in the python module `xos.audio.transcribe`.
+  3. Available in Rust `transcribe.rs`.
+2. TODO: Llama2
+3. TODO: OCR
+
+A more helpful documentation on how to use these models is underway, but rest assured that all models will be:
+
+1. Automatically downloaded, converted, and stored so you don't need to find any model weight downloads.
+2. Integrated as a standalone CLI-launched desktop application.
+3. Integrated as a pythonic module to be used in your own `xpy` scripts.
+4. Available in rust so you can build into your own rust projects.
+
 ## 🤝 Help Wanted!
 
 Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
 
 ## Progress
-- [x] Headless mode for applications without viewports.
-- [x] iOS audio drivers.
-- [ ] iOS haptics drivers.
-- [x] Python runtime and scripting.
-- [x] Multi-file python.
-- [ ] Networking.
-- [ ] Optimized metal and other operations capable high resolution and performance iOS video rendering.
-- [ ] Locally inferenced chat models.
-- [ ] Locally inferenced audio transcription models.
-- [ ] Re-enable WASM/Web support.
-- [ ] Build for iOS without xcode on the developer's machine.
-- [ ] Tests + performance checks
+
+- Headless mode for applications without viewports.
+- iOS audio drivers.
+- iOS haptics drivers.
+- Python runtime and scripting.
+- Multi-file python.
+- Networking.
+- Optimized metal and other operations capable high resolution and performance iOS video rendering.
+- Locally inferenced chat models.
+- Locally inferenced audio transcription models.
+- Re-enable WASM/Web support.
+- Build for iOS without xcode on the developer's machine.
+- Tests + performance checks
 
 ## 📁 Code Examples
 
-As of `v0.3.x`, apps are single-file Python scripts run with **`xpy`** (same as **`xos py`** — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
+As of `v0.3.x`, apps are single-file Python scripts run with `**xpy**` (same as `**xos py**` — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
 
 - 🚀 `xpy ./example-scripts/ball_lines.py`
 
@@ -132,7 +150,7 @@ cargo build --release
 cargo install --path .
 ```
 
-That installs **`xos`**, **`xpy`**, and **`xrs`** on your `PATH`. Then run Python scripts with `xpy path/to/code.py` (same as `xos py path/to/code.py`), and Rust apps with `xrs whiteboard` (same as `xos rs whiteboard`).
+That installs `**xos**`, `**xpy**`, and `**xrs**` on your `PATH`. Then run Python scripts with `xpy path/to/code.py` (same as `xos py path/to/code.py`), and Rust apps with `xrs whiteboard` (same as `xos rs whiteboard`).
 
 ### 🧰 Common Commands
 
@@ -152,9 +170,9 @@ xos path
 xos path --exe
 ```
 
-- **`xpy`** / **`xpy <file>`** is the same as **`xos py`** / **`xos py <file>`** (shorter binary; same CLI).
-- **`xrs`** / **`xrs <app-name>`** is the same as **`xos rs`** / **`xos rs <app-name>`** (shorter binary for Rust apps).
-- Subcommand aliases: **`xos rust`** / **`xos app`** → **`xos rs`**; **`xos python`** → **`xos py`**.
+- `**xpy**` / `**xpy <file>**` is the same as `**xos py**` / `**xos py <file>**` (shorter binary; same CLI).
+- `**xrs**` / `**xrs <app-name>**` is the same as `**xos rs**` / `**xos rs <app-name>**` (shorter binary for Rust apps).
+- Subcommand aliases: `**xos rust**` / `**xos app**` → `**xos rs**`; `**xos python**` → `**xos py**`.
 
 ### 📱 Using `--ios`
 
@@ -168,10 +186,10 @@ Coming soon: RN/Expo-style builds.
 
 ### 🔁 Recompile + CLI Fixes
 
-- After you change **Rust**, run **`xos compile`** (or **`xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
+- After you change **Rust**, run `**xos compile`** (or `**xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
 - If CLI behavior looks stale, run `cargo install --path .`.
-- Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
-- **`xos -v`** (or **`xpy -v`**, **`xrs -v`**) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with **`(uncommitted changes)`** in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
+- Use `**xos path**` for the repo root (folder with `src/`, where you run `xos compile`), and `**xos path --exe**` for the running executable path.
+- `**xos -v**` (or `**xpy -v**`, `**xrs -v**`) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with `**(uncommitted changes)**` in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
 
 ## 🚧 Package Limitations
 

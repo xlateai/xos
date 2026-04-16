@@ -72,8 +72,8 @@ ctrlc = "3.4"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
 mp3lame-encoder = "0.2.3"
-# CTranslate2 (vendored C++ via ct2rs; not Python). Requires CMake + C/C++ toolchain on PATH (e.g. `brew install cmake`, Xcode CLT). Long compile.
-ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy"], optional = true }
+# fast-whisper-burn (Burn git + WGPU); separate crate to avoid mixing with xos's Burn 0.20 crates.io graph.
+xos-transcription-whisper = { path = "crates/xos-transcription-whisper", optional = true }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -126,8 +126,8 @@ console_error_panic_hook = "0.1"
 
 [features]
 default = []
-## Whisper in CTranslate2 format. Opt-in with `--features whisper_ct2` when needed. Bundled path prefers `transcription/models/whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete. Overrides: `XOS_WHISPER_CT2_PATH`, `XOS_WHISPER_LANG` (default `en`). Desktop only (not iOS / WASM).
-whisper_ct2 = ["dep:ct2rs"]
+## Whisper transcription (fast-whisper-burn: Burnpack + WGPU). Enable with `--features whisper_ct2`. Artifacts: `transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`). Overrides: `XOS_WHISPER_BURN_DIR`, `XOS_WHISPER_LANG`, `XOS_WHISPER_BURN_F32=1` to force full-precision weights. Desktop only (not iOS / WASM).
+whisper_ct2 = ["dep:xos-transcription-whisper"]
 
 [lib]
 path = "src/core/lib.rs"
@@ -146,7 +146,8 @@ name = "xrs"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "src/core/crates/xos-java"]
+members = [".", "src/core/crates/xos-java", "crates/xos-transcription-whisper"]
+exclude = ["fast-whisper-burn"]
 resolver = "2"
 
 # gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types

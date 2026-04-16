@@ -1,4 +1,4 @@
-//! Real-time transcription: Whisper (CT2) on desktop when `whisper_ct2` is enabled; stub elsewhere.
+//! Real-time transcription: Whisper (fast-whisper-burn) on desktop when `whisper_ct2` is enabled; stub elsewhere.
 //! Pipeline: voice gate (RMS) → frequent tail decodes → hypothesis stabilization → phrase commits.
 
 #[cfg(all(
