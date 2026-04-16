@@ -10,6 +10,7 @@ pub use ensure::ensure_whisper_artifacts;
 
 use std::path::Path;
 use std::path::PathBuf;
+use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
@@ -17,12 +18,12 @@ use burn::backend::ndarray::NdArray;
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn::tensor::{Distribution, Int, Tensor, TensorData};
-use fast_whisper_burn::audio::{max_waveform_samples, prep_audio};
+use burn::tensor::{Tensor, TensorData};
+use fast_whisper_burn::audio::prep_audio;
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
-use fast_whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
+use fast_whisper_burn::token::Gpt2Tokenizer;
 use fast_whisper_burn::transcribe::{transcribe as fw_transcribe, WhisperParams};
 
 type WgpuF32 = Wgpu<f32>;
@@ -34,109 +35,38 @@ pub struct ActivationStep {
     pub values: Vec<f32>,
 }
 
-fn transcribe_debug_enabled() -> bool {
-    std::env::var("XOS_TRANSCRIBE_DEBUG")
-        .map(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes" || v == "on"
-        })
-        .unwrap_or(false)
+struct CachedWhisperModel {
+    key: String,
+    bpe: Gpt2Tokenizer,
+    whisper: Whisper<WgpuF32>,
 }
 
-fn summarize_f32(values: &[f32]) -> (usize, usize, f32, f32, f32) {
-    let mut finite_count = 0usize;
-    let mut nan_count = 0usize;
-    let mut min_v = f32::INFINITY;
-    let mut max_v = f32::NEG_INFINITY;
-    let mut sum = 0.0f64;
-    for &v in values {
-        if v.is_finite() {
-            finite_count += 1;
-            min_v = min_v.min(v);
-            max_v = max_v.max(v);
-            sum += v as f64;
-        } else if v.is_nan() {
-            nan_count += 1;
+thread_local! {
+    static WHISPER_MODEL_CACHE: RefCell<Option<CachedWhisperModel>> = const { RefCell::new(None) };
+}
+
+fn model_cache_key(models_root: &Path, model_name: &str) -> String {
+    format!("{}::{}", models_root.display(), model_name)
+}
+
+fn with_cached_model<T>(
+    models_root: &Path,
+    model_name: &str,
+    f: impl FnOnce(&Gpt2Tokenizer, &Whisper<WgpuF32>) -> Result<T, String>,
+) -> Result<T, String> {
+    let key = model_cache_key(models_root, model_name);
+    let device = <WgpuF32 as Backend>::Device::default();
+    WHISPER_MODEL_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let needs_load = slot.as_ref().map(|m| m.key != key).unwrap_or(true);
+        if needs_load {
+            let (bpe, whisper) = load_whisper(models_root, model_name, &device)?;
+            println!("\x1b[92m[xos-whisper] loaded model: {model_name}\x1b[0m");
+            *slot = Some(CachedWhisperModel { key, bpe, whisper });
         }
-    }
-    let mean = if finite_count > 0 {
-        (sum / finite_count as f64) as f32
-    } else {
-        f32::NAN
-    };
-    (finite_count, nan_count, min_v, mean, max_v)
-}
-
-fn probe_loaded_model(
-    whisper: &Whisper<WgpuF32>,
-    bpe: &Gpt2Tokenizer,
-    device: &<WgpuF32 as Backend>::Device,
-) -> Result<(), String> {
-    let n_mels = whisper.encoder_mel_size();
-    // Real inference feeds **log-mel** from `prep_audio`, not raw zeros. All-zero “mel” is
-    // out-of-distribution and can blow up activations; it is not a reliable dtype/weights check.
-    eprintln!(
-        "[xos-whisper] probe: building log-mel via prep_audio (same path as transcribe), not zeros"
-    );
-    let cpu = <NdArray as Backend>::Device::default();
-    let n_samples = max_waveform_samples(3000).saturating_sub(256).max(8000);
-    let wave = Tensor::<NdArray, 2>::random(
-        [1, n_samples],
-        Distribution::Normal(0.0, 0.02f64),
-        &cpu,
-    );
-    let mel_na = prep_audio(wave, 16000.0, n_mels);
-    let t = mel_na.dims()[2];
-    let mel_na = if t >= 3000 {
-        mel_na.slice([0..1, 0..n_mels, 0..3000])
-    } else {
-        let pad = Tensor::<NdArray, 3>::zeros([1, n_mels, 3000 - t], &cpu);
-        Tensor::cat(vec![mel_na, pad], 2)
-    };
-    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.into_data(), device);
-    let enc = whisper.forward_encoder(mel);
-    let enc_data = enc
-        .clone()
-        .into_data()
-        .convert::<f32>()
-        .to_vec::<f32>()
-        .map_err(|e| format!("encoder probe to_vec: {e}"))?;
-    let (enc_finite, enc_nan, enc_min, enc_mean, enc_max) = summarize_f32(&enc_data);
-    eprintln!(
-        "[xos-whisper] probe encoder: dims={:?} finite={} nan={} min={:.6} mean={:.6} max={:.6}",
-        enc.dims(),
-        enc_finite,
-        enc_nan,
-        enc_min,
-        enc_mean,
-        enc_max
-    );
-
-    let sot = bpe.special_token(SpecialToken::StartofTranscript).unwrap_or(50258);
-    let tok = Tensor::<WgpuF32, 2, Int>::from_data(TensorData::new(vec![sot as i64], [1, 1]), device);
-    // Match `transcribe`: decoder runs the **cached** path (`layer_norm_mixed` / `softmax_mixed`),
-    // not `TextDecoder::forward` (stock Burn MHA). The uncached path can NaN on WGPU while live
-    // decode uses the cached API — so probe it the same way we ship.
-    let cache = whisper.create_decoder_cache(enc.clone());
-    let out = whisper.forward_decoder_cached_with_cross_attention(tok, cache);
-    let out_data = out
-        .logits
-        .clone()
-        .into_data()
-        .convert::<f32>()
-        .to_vec::<f32>()
-        .map_err(|e| format!("decoder probe to_vec: {e}"))?;
-    let (dec_finite, dec_nan, dec_min, dec_mean, dec_max) = summarize_f32(&out_data);
-    eprintln!(
-        "[xos-whisper] probe decoder logits: dims={:?} finite={} nan={} min={:.6} mean={:.6} max={:.6}",
-        out.logits.dims(),
-        dec_finite,
-        dec_nan,
-        dec_min,
-        dec_mean,
-        dec_max
-    );
-    Ok(())
+        let entry = slot.as_ref().expect("cache populated");
+        f(&entry.bpe, &entry.whisper)
+    })
 }
 
 /// `sync_channel(1)` drops backlog; decoded lines arrive on `result_rx`.
@@ -177,7 +107,7 @@ pub fn spawn_decode_thread(
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             // Always false: fused f16 graph + mixed checkpoints triggers Burn IR `DTypeMismatch` on some GPUs.
             params.use_f16_compute = false;
-            params.debug_mode = true;
+            params.debug_mode = false;
             // Live caption mode: force text-token decode (no timestamp-token short-circuit).
             params.no_timestamps = true;
             params.single_segment = true;
@@ -191,12 +121,6 @@ pub fn spawn_decode_thread(
             params.suppress_blank = false;
 
             while let Ok(buf) = job_rx.recv() {
-                if transcribe_debug_enabled() {
-                    eprintln!(
-                        "[xos-whisper] decode start: samples={} sr=16000",
-                        buf.len()
-                    );
-                }
                 let line = match fw_transcribe(
                     &whisper,
                     &bpe,
@@ -208,13 +132,6 @@ pub fn spawn_decode_thread(
                     Ok(r) => cleanup_whisper_text(&r.text),
                     Err(e) => format!("(Whisper error: {e})"),
                 };
-                if transcribe_debug_enabled() {
-                    eprintln!(
-                        "[xos-whisper] decode done: text_len={} text_preview={:?}",
-                        line.len(),
-                        line.chars().take(80).collect::<String>()
-                    );
-                }
                 if result_tx.send(line).is_err() {
                     break;
                 }
@@ -249,32 +166,31 @@ pub fn transcribe_waveform(
     };
 
     validate_artifacts(&models_root, model_name)?;
-    let device = <WgpuF32 as Backend>::Device::default();
-    let (bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
+    with_cached_model(&models_root, model_name, |bpe, whisper| {
+        let mut params = WhisperParams::default();
+        params.language = "en".to_string();
+        params.strategy = SamplingStrategy::Greedy { best_of: 1 };
+        params.use_f16_compute = false;
+        params.debug_mode = false;
+        params.no_timestamps = true;
+        params.single_segment = true;
+        params.detect_language = false;
+        params.print_special = false;
+        params.no_speech_thold = 1.0;
+        params.logprob_thold = -5.0;
+        params.suppress_blank = false;
 
-    let mut params = WhisperParams::default();
-    params.language = "en".to_string();
-    params.strategy = SamplingStrategy::Greedy { best_of: 1 };
-    params.use_f16_compute = false;
-    params.debug_mode = false;
-    params.no_timestamps = true;
-    params.single_segment = true;
-    params.detect_language = false;
-    params.print_special = false;
-    params.no_speech_thold = 1.0;
-    params.logprob_thold = -5.0;
-    params.suppress_blank = false;
-
-    let result = fw_transcribe(
-        &whisper,
-        &bpe,
-        waveform,
-        sample_rate as usize,
-        &params,
-        None::<fn(usize, usize) -> bool>,
-    )
-    .map_err(|e| format!("whisper forward: {e}"))?;
-    Ok(cleanup_whisper_text(&result.text))
+        let result = fw_transcribe(
+            whisper,
+            bpe,
+            waveform,
+            sample_rate as usize,
+            &params,
+            None::<fn(usize, usize) -> bool>,
+        )
+        .map_err(|e| format!("whisper forward: {e}"))?;
+        Ok(cleanup_whisper_text(&result.text))
+    })
 }
 
 pub fn transcribe_waveform_with_intermediates(
@@ -284,6 +200,8 @@ pub fn transcribe_waveform_with_intermediates(
     sample_rate: u32,
     max_values: usize,
 ) -> Result<(String, Vec<ActivationStep>), String> {
+    use fast_whisper_burn::transcribe::SamplingStrategy;
+
     if waveform.is_empty() {
         return Ok((String::new(), vec![]));
     }
@@ -303,50 +221,71 @@ pub fn transcribe_waveform_with_intermediates(
         }
     };
     validate_artifacts(&models_root, model_name)?;
-    let device = <WgpuF32 as Backend>::Device::default();
-    let (_bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
+    with_cached_model(&models_root, model_name, |bpe, whisper| {
+        let device = <WgpuF32 as Backend>::Device::default();
+        let cpu = <NdArray as Backend>::Device::default();
+        let wave_na = Tensor::<NdArray, 2>::from_data(
+            TensorData::new(waveform.to_vec(), [1, waveform.len()]),
+            &cpu,
+        );
+        let mel_na = prep_audio(wave_na, sample_rate as f64, whisper.encoder_mel_size());
+        let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.clone().into_data(), &device);
+        let enc = whisper.forward_encoder(mel);
 
-    let cpu = <NdArray as Backend>::Device::default();
-    let wave_na = Tensor::<NdArray, 2>::from_data(
-        TensorData::new(waveform.to_vec(), [1, waveform.len()]),
-        &cpu,
-    );
-    let mel_na = prep_audio(wave_na, sample_rate as f64, whisper.encoder_mel_size());
-    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.clone().into_data(), &device);
-    let enc = whisper.forward_encoder(mel);
-
-    let text = transcribe_waveform(models_root, size, waveform, sample_rate)?;
-    let take = |v: Vec<f32>| -> Vec<f32> { v.into_iter().take(max_values.max(1)).collect() };
-    let mel_shape = mel_na.dims().to_vec();
-    let mel_vals = mel_na
-        .into_data()
-        .convert::<f32>()
-        .to_vec::<f32>()
-        .map_err(|e| format!("mel to_vec: {e}"))?;
-    let enc_vals = enc
-        .clone()
-        .into_data()
-        .convert::<f32>()
-        .to_vec::<f32>()
-        .map_err(|e| format!("encoder to_vec: {e}"))?;
-    let steps = vec![
-        ActivationStep {
-            name: Some("encoder.conv1.weight".to_string()),
-            shape: mel_shape,
-            values: take(mel_vals),
-        },
-        ActivationStep {
-            name: Some("decoder.ln.gamma".to_string()),
-            shape: enc.dims().to_vec(),
-            values: take(enc_vals),
-        },
-        ActivationStep {
-            name: None,
-            shape: vec![text.len()],
-            values: vec![],
-        },
-    ];
-    Ok((text, steps))
+        let mut params = WhisperParams::default();
+        params.language = "en".to_string();
+        params.strategy = SamplingStrategy::Greedy { best_of: 1 };
+        params.use_f16_compute = false;
+        params.debug_mode = false;
+        params.no_timestamps = true;
+        params.single_segment = true;
+        params.detect_language = false;
+        params.print_special = false;
+        params.no_speech_thold = 1.0;
+        params.logprob_thold = -5.0;
+        params.suppress_blank = false;
+        let text = fw_transcribe(
+            whisper,
+            bpe,
+            waveform,
+            sample_rate as usize,
+            &params,
+            None::<fn(usize, usize) -> bool>,
+        )
+        .map_err(|e| format!("whisper forward: {e}"))
+        .map(|r| cleanup_whisper_text(&r.text))?;
+        let take = |v: Vec<f32>| -> Vec<f32> { v.into_iter().take(max_values.max(1)).collect() };
+        let mel_shape = mel_na.dims().to_vec();
+        let mel_vals = mel_na
+            .into_data()
+            .convert::<f32>()
+            .to_vec::<f32>()
+            .map_err(|e| format!("mel to_vec: {e}"))?;
+        let enc_vals = enc
+            .clone()
+            .into_data()
+            .convert::<f32>()
+            .to_vec::<f32>()
+            .map_err(|e| format!("encoder to_vec: {e}"))?;
+        let steps = vec![
+            ActivationStep {
+                name: Some("encoder.conv1.weight".to_string()),
+                shape: mel_shape,
+                values: take(mel_vals),
+            },
+            ActivationStep {
+                name: Some("decoder.ln.gamma".to_string()),
+                shape: enc.dims().to_vec(),
+                values: take(enc_vals),
+            },
+            ActivationStep {
+                name: None,
+                shape: vec![text.len()],
+                values: vec![],
+            },
+        ];
+        Ok((text, steps))
+    })
 }
 
 fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {
@@ -423,25 +362,6 @@ fn load_whisper(
     whisper_model
         .debug_assert_no_suspicious_weights()
         .map_err(|e| format!("weights validation {}: {e}", bpk_path.display()))?;
-    if transcribe_debug_enabled() {
-        eprintln!(
-            "[xos-whisper] model loaded: cfg={} weights={} f16_adapter={}",
-            cfg_path.display(),
-            bpk_path.display(),
-            use_f16_adapter
-        );
-        eprintln!(
-            "[xos-whisper] model dims: n_mels={} enc_ctx={} dec_ctx={} decoder_layers={}",
-            whisper_model.encoder_mel_size(),
-            whisper_model.encoder_ctx_size(),
-            whisper_model.decoder_ctx_size(),
-            whisper_model.decoder_layer_count()
-        );
-        if let Err(e) = probe_loaded_model(&whisper_model, &bpe, device) {
-            eprintln!("[xos-whisper] probe failed: {e}");
-        }
-    }
-
     Ok((bpe, whisper_model))
 }
 

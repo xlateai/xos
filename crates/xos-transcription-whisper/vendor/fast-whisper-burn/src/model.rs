@@ -752,13 +752,6 @@ impl<B: Backend> XosModule for AudioEncoder<B> {
 
 impl<B: CustomKernelsBackend> AudioEncoder<B> {
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
-        fn dtype_3<Bk: Backend>(t: &Tensor<Bk, 3>) -> String {
-            format!("{:?}", t.clone().into_data().dtype)
-        }
-        fn dtype_1<Bk: Backend>(t: &Tensor<Bk, 1>) -> String {
-            format!("{:?}", t.clone().into_data().dtype)
-        }
-
         // Burn fusion requires input/weight dtype agreement for conv.
         let conv1_w = self.conv1.weight.val();
         let conv1_dtype = conv1_w.clone().into_data().dtype;
@@ -775,16 +768,6 @@ impl<B: CustomKernelsBackend> AudioEncoder<B> {
         );
 
         // Run conv in the same dtype as its parameters.
-        let conv1_b = self.conv1.bias.as_ref().map(|b| b.val());
-        eprintln!(
-            "[fwb][dtype] conv1 input={} weight={} bias={}",
-            dtype_3(&x),
-            dtype_3(&conv1_w),
-            conv1_b
-                .as_ref()
-                .map(dtype_1)
-                .unwrap_or_else(|| "None".to_string())
-        );
         let x = self.gelu1.forward(self.conv1.forward(x));
         let x = self.gelu2.forward(self.conv2.forward(x));
 
@@ -817,15 +800,9 @@ impl<B: CustomKernelsBackend> AudioEncoder<B> {
             DType::F16 => pos_emb.cast(FloatDType::F16),
             _ => pos_emb.cast(FloatDType::F32),
         };
-        eprintln!(
-            "[fwb][dtype] pre-pos-add x={} pos_emb={}",
-            dtype_3(&x),
-            dtype_3(&pos_emb)
-        );
         let x = x + pos_emb;
 
         let mut x = x;
-        eprintln!("[fwb][dtype] pre-enc-block x={}", dtype_3(&x));
         for block in self.blocks.iter() {
             x = block.forward(x, use_f16);
         }
