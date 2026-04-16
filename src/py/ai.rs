@@ -254,6 +254,82 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args;
+    let model = parse_string_arg(av.first(), "tiny", vm)?;
+    let waveform: Vec<f32> = match av.get(1) {
+        Some(v) => v.clone().try_into_value(vm)?,
+        None => {
+            return Err(vm.new_type_error(
+                "_forward_layer_by_layer_native(model, waveform, sample_rate=16000, max_values=256) requires waveform"
+                    .to_string(),
+            ));
+        }
+    };
+    let sample_rate: i64 = if let Some(v) = av.get(2) {
+        v.clone().try_into_value(vm)?
+    } else {
+        16_000
+    };
+    let max_values: i64 = if let Some(v) = av.get(3) {
+        v.clone().try_into_value(vm)?
+    } else {
+        256
+    };
+    if sample_rate <= 0 || max_values <= 0 {
+        return Err(vm.new_value_error("sample_rate and max_values must be > 0".to_string()));
+    }
+
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        let (text, steps) = crate::ai::transcription::transcribe_waveform_with_intermediates(
+            Some(&model),
+            &waveform,
+            sample_rate as u32,
+            max_values as usize,
+        )
+        .map_err(|e| to_py_err(vm, e))?;
+
+        let out_steps: Vec<PyObjectRef> = steps
+            .into_iter()
+            .map(|s| {
+                let d = vm.ctx.new_dict();
+                match s.name {
+                    Some(name) => d.set_item("name", vm.ctx.new_str(name).into(), vm).ok(),
+                    None => d.set_item("name", vm.ctx.none(), vm).ok(),
+                };
+                let shape: Vec<PyObjectRef> = s
+                    .shape
+                    .into_iter()
+                    .map(|v| vm.ctx.new_int(v as i64).into())
+                    .collect();
+                let values: Vec<PyObjectRef> = s
+                    .values
+                    .into_iter()
+                    .map(|v| vm.ctx.new_float(v as f64).into())
+                    .collect();
+                d.set_item("shape", vm.ctx.new_list(shape).into(), vm).ok();
+                d.set_item("values", vm.ctx.new_list(values).into(), vm).ok();
+                d.into()
+            })
+            .collect();
+        let payload = vm.ctx.new_dict();
+        payload.set_item("text", vm.ctx.new_str(text).into(), vm).ok();
+        payload
+            .set_item("steps", vm.ctx.new_list(out_steps).into(), vm)
+            .ok();
+        Ok(payload.into())
+    }
+    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
+    {
+        let _ = (model, waveform, sample_rate, max_values);
+        Err(to_py_err(
+            vm,
+            "whisper forward_layer_by_layer is unavailable on this build/target",
+        ))
+    }
+}
+
 pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let ai = vm.new_module("xos.ai", vm.ctx.new_dict(), None);
     let whisper = vm.new_module("xos.ai.whisper", vm.ctx.new_dict(), None);
@@ -267,6 +343,16 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
             vm,
         )
         .ok();
+    whisper
+        .set_attr(
+            "_forward_layer_by_layer_native",
+            vm.new_function(
+                "_forward_layer_by_layer_native",
+                whisper_forward_layer_by_layer_native,
+            ),
+            vm,
+        )
+        .ok();
 
     let scope = vm.new_scope_with_builtins();
     if let Ok(loader) = whisper.get_attr("_load_payload", vm) {
@@ -276,6 +362,12 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         scope
             .globals
             .set_item("_forward_native", forward_native, vm)
+            .ok();
+    }
+    if let Ok(fwd_lbl) = whisper.get_attr("_forward_layer_by_layer_native", vm) {
+        scope
+            .globals
+            .set_item("_forward_layer_by_layer_native", fwd_lbl, vm)
             .ok();
     }
 
@@ -330,6 +422,11 @@ class _WhisperModel:
     @property
     def parameters(self):
         return [_mk_parameter(p) for p in self._payload["parameters"]]
+    def get_parameter(self, name):
+        for p in self.parameters:
+            if p.name == name:
+                return p
+        return None
     @property
     def parameter_count(self):
         return self._payload["parameter_count"]
@@ -341,6 +438,26 @@ class _WhisperModel:
         if wave and isinstance(wave[0], (list, tuple)):
             return [_forward_native(self._model, [float(v) for v in row], int(sample_rate)) for row in wave]
         return _forward_native(self._model, [float(v) for v in wave], int(sample_rate))
+    def forward_layer_by_layer(self, x, sample_rate=16000, max_values=256):
+        wave = _waveform_to_list(x)
+        if wave and isinstance(wave[0], (list, tuple)):
+            raise ValueError("forward_layer_by_layer currently supports only a single waveform")
+        payload = _forward_layer_by_layer_native(
+            self._model,
+            [float(v) for v in wave],
+            int(sample_rate),
+            int(max_values),
+        )
+        for step in payload["steps"]:
+            name = step.get("name", None)
+            act = _mk_parameter({
+                "name": name if name is not None else "output",
+                "shape": step.get("shape", []),
+                "dtype": "float32",
+                "values": step.get("values", []),
+                "stats": {},
+            })
+            yield name, act
 
 def load(model="tiny", full_values=False, max_values=128, weights_path=None):
     payload = _load_payload(model, full_values, max_values, weights_path)

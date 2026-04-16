@@ -16,6 +16,11 @@ use crate::custom_kernels::{
     CustomKernelsBackend, fused_single_query_attn, layer_norm_mixed, softmax_mixed,
 };
 
+/// xOS-level module identity trait for forward-trace traversal.
+pub trait XosModule {
+    fn xos_module_name(&self) -> &'static str;
+}
+
 #[derive(Config, Debug)]
 pub struct WhisperConfig {
     audio_encoder_config: AudioEncoderConfig,
@@ -43,6 +48,12 @@ impl WhisperConfig {
 pub struct Whisper<B: Backend> {
     encoder: AudioEncoder<B>,
     decoder: TextDecoder<B>,
+}
+
+impl<B: Backend> XosModule for Whisper<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "Whisper"
+    }
 }
 
 impl<B: CustomKernelsBackend> Whisper<B> {
@@ -468,6 +479,12 @@ pub struct TextDecoder<B: Backend> {
     n_text_ctx: usize,
 }
 
+impl<B: Backend> XosModule for TextDecoder<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "TextDecoder"
+    }
+}
+
 impl<B: CustomKernelsBackend> TextDecoder<B> {
     fn cast_to_dtype<const D: usize>(t: Tensor<B, D>, dtype: DType) -> Tensor<B, D> {
         match dtype {
@@ -727,6 +744,12 @@ pub struct AudioEncoder<B: Backend> {
     n_audio_ctx: usize,
 }
 
+impl<B: Backend> XosModule for AudioEncoder<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "AudioEncoder"
+    }
+}
+
 impl<B: CustomKernelsBackend> AudioEncoder<B> {
     fn forward(&self, x: Tensor<B, 3>, use_f16: bool) -> Tensor<B, 3> {
         fn dtype_3<Bk: Backend>(t: &Tensor<Bk, 3>) -> String {
@@ -848,6 +871,12 @@ pub struct ResidualEncoderAttentionBlock<B: Backend> {
     attn_ln: nn::LayerNorm<B>,
     mlp: MLP<B>,
     mlp_ln: nn::LayerNorm<B>,
+}
+
+impl<B: Backend> XosModule for ResidualEncoderAttentionBlock<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "ResidualEncoderAttentionBlock"
+    }
 }
 
 /// Number of query positions to process at once in chunked encoder attention.
@@ -1002,6 +1031,12 @@ pub struct ResidualDecoderAttentionBlock<B: Backend> {
     cross_attn_ln: nn::LayerNorm<B>,
     mlp: MLP<B>,
     mlp_ln: nn::LayerNorm<B>,
+}
+
+impl<B: Backend> XosModule for ResidualDecoderAttentionBlock<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "ResidualDecoderAttentionBlock"
+    }
 }
 
 impl<B: CustomKernelsBackend> ResidualDecoderAttentionBlock<B> {
@@ -1334,6 +1369,12 @@ pub struct MLP<B: Backend> {
     lin1: nn::Linear<B>,
     gelu: nn::Gelu,
     lin2: nn::Linear<B>,
+}
+
+impl<B: Backend> XosModule for MLP<B> {
+    fn xos_module_name(&self) -> &'static str {
+        "MLP"
+    }
 }
 
 impl<B: Backend> MLP<B> {

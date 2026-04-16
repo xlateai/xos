@@ -27,6 +27,13 @@ use fast_whisper_burn::transcribe::{transcribe as fw_transcribe, WhisperParams};
 
 type WgpuF32 = Wgpu<f32>;
 
+#[derive(Debug, Clone)]
+pub struct ActivationStep {
+    pub name: Option<String>,
+    pub shape: Vec<usize>,
+    pub values: Vec<f32>,
+}
+
 fn transcribe_debug_enabled() -> bool {
     std::env::var("XOS_TRANSCRIBE_DEBUG")
         .map(|v| {
@@ -268,6 +275,72 @@ pub fn transcribe_waveform(
     )
     .map_err(|e| format!("whisper forward: {e}"))?;
     Ok(cleanup_whisper_text(&result.text))
+}
+
+pub fn transcribe_waveform_with_intermediates(
+    models_root: PathBuf,
+    size: Option<&str>,
+    waveform: &[f32],
+    sample_rate: u32,
+    max_values: usize,
+) -> Result<(String, Vec<ActivationStep>), String> {
+    if waveform.is_empty() {
+        return Ok((String::new(), vec![]));
+    }
+    let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("small") => "small",
+        Some("tiny") | None => "tiny",
+        Some(other) => {
+            return Err(format!(
+                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
+            ));
+        }
+    };
+    validate_artifacts(&models_root, model_name)?;
+    let device = <WgpuF32 as Backend>::Device::default();
+    let (_bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
+
+    let cpu = <NdArray as Backend>::Device::default();
+    let wave_na = Tensor::<NdArray, 2>::from_data(
+        TensorData::new(waveform.to_vec(), [1, waveform.len()]),
+        &cpu,
+    );
+    let mel_na = prep_audio(wave_na, sample_rate as f64, whisper.encoder_mel_size());
+    let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.clone().into_data(), &device);
+    let enc = whisper.forward_encoder(mel);
+
+    let text = transcribe_waveform(models_root, size, waveform, sample_rate)?;
+    let take = |v: Vec<f32>| -> Vec<f32> { v.into_iter().take(max_values.max(1)).collect() };
+    let mel_shape = mel_na.dims().to_vec();
+    let mel_vals = mel_na
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .map_err(|e| format!("mel to_vec: {e}"))?;
+    let enc_vals = enc
+        .clone()
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .map_err(|e| format!("encoder to_vec: {e}"))?;
+    let steps = vec![
+        ActivationStep {
+            name: Some("encoder.conv1.weight".to_string()),
+            shape: mel_shape,
+            values: take(mel_vals),
+        },
+        ActivationStep {
+            name: Some("decoder.ln.gamma".to_string()),
+            shape: enc.dims().to_vec(),
+            values: take(enc_vals),
+        },
+        ActivationStep {
+            name: None,
+            shape: vec![text.len()],
+            values: vec![],
+        },
+    ];
+    Ok((text, steps))
 }
 
 fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {

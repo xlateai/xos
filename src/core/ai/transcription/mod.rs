@@ -79,6 +79,28 @@ pub fn transcribe_waveform_once(
     }
 }
 
+pub fn transcribe_waveform_with_intermediates(
+    size: Option<&str>,
+    waveform: &[f32],
+    sample_rate: u32,
+    max_values: usize,
+) -> Result<(String, Vec<xos_transcription_whisper::ActivationStep>), String> {
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        return whisper::transcribe_waveform_with_intermediates(
+            size,
+            waveform,
+            sample_rate,
+            max_values,
+        );
+    }
+    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
+    {
+        let _ = (size, waveform, sample_rate, max_values);
+        Err("whisper feature unavailable on this target".to_string())
+    }
+}
+
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,
