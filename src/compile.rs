@@ -1,4 +1,4 @@
-//! CLI compile helpers: `xos compile`, copying release binaries into Cargo `bin`, and iOS scripts.
+//! CLI compile helpers: `xos compile`, `xos compile --clean`, copying release binaries into Cargo `bin`, and iOS scripts.
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -265,9 +265,36 @@ pub fn find_project_root() -> PathBuf {
     }
 }
 
+/// Run `cargo clean` in the xos project root (full target wipe for a fresh rebuild).
+pub fn run_cargo_clean(project_root: &Path) -> bool {
+    println!("🧹 cargo clean in {}...", project_root.display());
+    match Command::new("cargo")
+        .args(["clean"])
+        .current_dir(project_root)
+        .status()
+    {
+        Ok(s) if s.success() => {
+            println!("✅ cargo clean finished.");
+            true
+        }
+        Ok(s) => {
+            eprintln!("❌ cargo clean failed ({s}).");
+            false
+        }
+        Err(e) => {
+            eprintln!("❌ failed to run cargo clean: {e}");
+            false
+        }
+    }
+}
+
 /// Release compile then copy into Cargo `bin`. `verbose`: full `cargo` output; `!verbose`: spinner only.
-pub fn xos_compile_command(verbose: bool) -> bool {
+/// With `clean`, runs [`run_cargo_clean`] first.
+pub fn xos_compile_command(verbose: bool, clean: bool) -> bool {
     let project_root = find_project_root();
+    if clean && !run_cargo_clean(&project_root) {
+        return false;
+    }
     if verbose {
         // println!("🔨 Compiling xos CLI (release) and updating Cargo bin...");
     }
@@ -297,10 +324,15 @@ pub fn xos_compile_command(verbose: bool) -> bool {
     }
 }
 
-pub fn compile_ios_rust() -> bool {
+/// `clean`: run `cargo clean` in the repo root before the iOS build script.
+pub fn compile_ios_rust(clean: bool) -> bool {
     println!("🦀 Compiling Rust library for iOS...");
 
     let project_root = find_project_root();
+    if clean && !run_cargo_clean(&project_root) {
+        return false;
+    }
+
     let script_path = project_root.join("src").join("ios").join("build-ios.sh");
 
     if !script_path.exists() {
@@ -372,7 +404,7 @@ pub fn compile_ios_swift() {
 /// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`compile_ios_rust`].
 #[allow(dead_code)]
 pub fn compile_ios() {
-    if !compile_ios_rust() {
+    if !compile_ios_rust(false) {
         std::process::exit(1);
     }
     compile_ios_swift();

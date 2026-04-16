@@ -130,6 +130,9 @@ enum Commands {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
+        /// Run `cargo clean` in the project root before building (full rebuild).
+        #[arg(long)]
+        clean: bool,
     },
     /// Execute Python scripts (`xpy` is a shortcut for this command).
     #[command(name = "py", visible_alias = "python")]
@@ -414,14 +417,14 @@ fn main() {
     }
 
     match cli.command {
-        Some(Commands::Compile { ios }) => {
+        Some(Commands::Compile { ios, clean }) => {
             if let Err(e) = daemon::stop_daemon() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
             let compile_ok = if ios {
-                compile::compile_ios_rust()
+                compile::compile_ios_rust(clean)
             } else {
-                compile::xos_compile_command(true)
+                compile::xos_compile_command(true, clean)
             };
             if let Err(e) = daemon::ensure_daemon_running() {
                 eprintln!("❌ compile finished, but failed to restart daemon: {e}");
