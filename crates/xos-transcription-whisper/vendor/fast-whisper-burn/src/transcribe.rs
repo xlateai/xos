@@ -10,7 +10,7 @@ use burn::{
     backend::ndarray::NdArray,
     module::Module,
     tensor::{
-        ElementConversion, Int, Tensor,
+        DType, ElementConversion, FloatDType, Int, Tensor,
         activation::{log_softmax, softmax},
         backend::Backend,
     },
@@ -2662,13 +2662,25 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             logits
         };
 
+        // Apply pre-built static suppression mask on GPU.
+        // Burn fusion requires both operands of add to share dtype.
+        let logits_dtype = logits.clone().into_data().dtype;
+        let static_mask = match logits_dtype {
+            DType::F16 => gpu_static_suppress.clone().cast(FloatDType::F16),
+            _ => gpu_static_suppress.clone().cast(FloatDType::F32),
+        };
+
         // Apply pre-built static suppression mask on GPU
         // (covers suppress_mask, nst_suppress_ids, token_not)
-        let logits = logits + gpu_static_suppress.clone();
+        let logits = logits + static_mask;
 
         // suppress_blank on initial step
         let logits = if params.suppress_blank && is_initial {
-            logits + gpu_blank_suppress.clone()
+            let blank_mask = match logits_dtype {
+                DType::F16 => gpu_blank_suppress.clone().cast(FloatDType::F16),
+                _ => gpu_blank_suppress.clone().cast(FloatDType::F32),
+            };
+            logits + blank_mask
         } else {
             logits
         };

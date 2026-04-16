@@ -110,19 +110,19 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .get_all_snapshots()
         .map_err(|e| to_py_err(vm, format!("failed to read snapshots: {e}")))?;
 
-    let params = vm.ctx.new_list(vec![]);
+    let mut params_vec: Vec<PyObjectRef> = Vec::with_capacity(snapshots.len());
     for (name, snapshot) in snapshots {
         let entry = vm.ctx.new_dict();
         entry
             .set_item("name", vm.ctx.new_str(name.clone()).into(), vm)
-            .map_err(|e| to_py_err(vm, format!("dict set name: {e}")))?;
+            .map_err(|e| to_py_err(vm, format!("dict set name: {e:?}")))?;
         entry
             .set_item(
                 "dtype",
                 vm.ctx.new_str(format!("{:?}", snapshot.dtype)).into(),
                 vm,
             )
-            .map_err(|e| to_py_err(vm, format!("dict set dtype: {e}")))?;
+            .map_err(|e| to_py_err(vm, format!("dict set dtype: {e:?}")))?;
         let shape_items: Vec<PyObjectRef> = snapshot
             .shape
             .iter()
@@ -130,14 +130,14 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             .collect();
         entry
             .set_item("shape", vm.ctx.new_list(shape_items).into(), vm)
-            .map_err(|e| to_py_err(vm, format!("dict set shape: {e}")))?;
+            .map_err(|e| to_py_err(vm, format!("dict set shape: {e:?}")))?;
         entry
             .set_item(
                 "numel",
                 vm.ctx.new_int(snapshot.shape.num_elements() as i64).into(),
                 vm,
             )
-            .map_err(|e| to_py_err(vm, format!("dict set numel: {e}")))?;
+            .map_err(|e| to_py_err(vm, format!("dict set numel: {e:?}")))?;
 
         if matches!(snapshot.dtype, DType::F16 | DType::F32 | DType::BF16) {
             let data = snapshot
@@ -187,16 +187,20 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .ok();
         }
 
-        params.append(entry.into(), vm)
-            .map_err(|e| to_py_err(vm, format!("append param: {e}")))?;
+        params_vec.push(entry.into());
     }
 
+    let params = vm.ctx.new_list(params_vec);
     let payload = vm.ctx.new_dict();
     payload
         .set_item("weights_file", vm.ctx.new_str(weights_s).into(), vm)
         .ok();
     payload
-        .set_item("parameter_count", vm.ctx.new_int(params.len() as i64).into(), vm)
+        .set_item(
+            "parameter_count",
+            vm.ctx.new_int(snapshots.len() as i64).into(),
+            vm,
+        )
         .ok();
     payload
         .set_item("parameters", params.as_object().to_owned(), vm)
@@ -238,7 +242,7 @@ def load(model="tiny", full_values=False, max_values=128, weights_path=None):
     return _WhisperModel(payload)
 "#;
     if vm
-        .run_code_string(scope.clone(), glue.to_string(), "<xos.ai.whisper>".to_string())
+        .run_code_string(scope.clone(), glue, "<xos.ai.whisper>".to_string())
         .is_ok()
     {
         if let Ok(load_fn) = scope.globals.get_item("load", vm) {
