@@ -54,7 +54,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
         }
     };
 
-    let models_root = resolve_models_root(model_name)?;
+    let models_root = prepare_whisper_models_root(model_name)?;
     validate_artifacts(&models_root, model_name)?;
     let device = <WgpuF32 as Backend>::Device::default();
     let (bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
@@ -115,7 +115,7 @@ pub fn transcribe_waveform_once(
         }
     };
 
-    let models_root = resolve_models_root(model_name)?;
+    let models_root = prepare_whisper_models_root(model_name)?;
     validate_artifacts(&models_root, model_name)?;
     with_cached_model(&models_root, model_name, |bpe, whisper| {
         let mut params = WhisperParams::default();
@@ -160,7 +160,7 @@ pub fn transcribe_waveform_with_intermediates(
             ));
         }
     };
-    let models_root = resolve_models_root(model_name)?;
+    let models_root = prepare_whisper_models_root(model_name)?;
     validate_artifacts(&models_root, model_name)?;
     with_cached_model(&models_root, model_name, |bpe, whisper| {
         let device = <WgpuF32 as Backend>::Device::default();
@@ -232,6 +232,26 @@ pub fn transcribe_waveform_with_intermediates(
         ];
         Ok((text, steps))
     })
+}
+
+/// Download / convert into `xos path --data`/models/whisper/{model}/ if needed, then resolve load path.
+/// Skips fetching when the repo-bundled tree already has a complete model pack.
+fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
+    let cache = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    let cache_ok = super::whisper_ensure::artifacts_ready(&cache, model_key);
+    if !cache_ok {
+        let bundled_ok = crate::find_xos_project_root()
+            .ok()
+            .map(|root| {
+                let bundled = root.join(MODELS_SUBDIR);
+                super::whisper_ensure::artifacts_ready(&bundled, model_key)
+            })
+            .unwrap_or(false);
+        if !bundled_ok {
+            super::whisper_ensure::ensure_whisper_artifacts(model_key)?;
+        }
+    }
+    resolve_models_root(model_key)
 }
 
 /// Prefer `~/.xos/models/whisper/{model}/`, else the repo’s bundled `fast-whisper-burn/` tree when developing from source.

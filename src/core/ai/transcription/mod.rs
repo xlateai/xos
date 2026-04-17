@@ -34,6 +34,13 @@ mod whisper;
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
+mod whisper_ensure;
+
+#[cfg(all(
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
 use std::collections::VecDeque;
 #[cfg(all(
     feature = "whisper",

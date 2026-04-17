@@ -1623,7 +1623,7 @@ fn greedy_decode_step(
         let (offset, _) = lp[token_beg..vocab_size]
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .unwrap();
         token_beg + offset
     } else {
@@ -1634,7 +1634,7 @@ fn greedy_decode_step(
     let sampled_id = lp
         .iter()
         .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .unwrap()
         .0;
 
@@ -2158,7 +2158,7 @@ fn decode_regions_beam_batched<B: CustomKernelsBackend>(
                     let (offset, _) = lp[token_beg..vocab_size]
                         .iter()
                         .enumerate()
-                        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                        .max_by(|a, b| a.1.total_cmp(b.1))
                         .unwrap();
                     token_beg + offset
                 } else {
@@ -2168,7 +2168,7 @@ fn decode_regions_beam_batched<B: CustomKernelsBackend>(
                 // Top-k candidates
                 let top_k = beam_size.min(vocab_size).max(1);
                 let mut indexed: Vec<(usize, f32)> = lp.iter().cloned().enumerate().collect();
-                indexed.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                indexed.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
                 indexed.truncate(top_k);
 
                 for (sampled_id, log_prob_f32) in indexed {
@@ -2208,7 +2208,7 @@ fn decode_regions_beam_batched<B: CustomKernelsBackend>(
             }
 
             // Sort by total logprob
-            candidates.sort_by(|a, b| b.sum_logprobs_all.partial_cmp(&a.sum_logprobs_all).unwrap());
+            candidates.sort_by(|a, b| b.sum_logprobs_all.total_cmp(&a.sum_logprobs_all));
 
             // Assign best candidates to beams
             let mut used = 0usize;
@@ -2360,7 +2360,7 @@ fn decode_regions_beam_batched<B: CustomKernelsBackend>(
                         b.result_len,
                         params.length_penalty,
                     );
-                    score_a.partial_cmp(&score_b).unwrap()
+                    score_a.total_cmp(&score_b)
                 });
 
             if let Some(best) = best {
@@ -2771,7 +2771,7 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             let (offset, _) = lp[token_beg..vocab_size]
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.total_cmp(b.1))
                 .unwrap();
             token_beg + offset
         } else {
@@ -2785,7 +2785,7 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             lp.iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.total_cmp(b.1))
                 .unwrap()
                 .0
         };
@@ -2903,7 +2903,7 @@ fn sample_from_probs(probs: &[f32], rng: &mut MT19937) -> usize {
         return probs
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .map(|(index, _)| index)
             .unwrap_or(0);
     }
@@ -2990,7 +2990,7 @@ fn compute_token_timestamps_for_segment(
         let (peak_pos, peak) = alignment
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .max_by(|a, b| a.1.total_cmp(b.1))
             .map(|(i, &v)| (i, v))
             .unwrap();
 

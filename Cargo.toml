@@ -9,7 +9,7 @@ license = "MIT"
 default-run = "xos"
 
 [dependencies]
-burn         = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "fusion", "autodiff"] }
+burn         = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "autodiff"] }
 burn-store   = { version = "=0.21.0-pre.3", features = ["burnpack", "pytorch"] }
 burn-cubecl  = { version = "=0.21.0-pre.3" }
 burn-fusion  = { version = "=0.21.0-pre.3" }
@@ -17,7 +17,7 @@ burn-ir      = { version = "=0.21.0-pre.3" }
 burn-backend = { version = "=0.21.0-pre.3" }
 burn-autodiff = { version = "=0.21.0-pre.3", default-features = false }
 burn-ndarray = { version = "=0.21.0-pre.3", default-features = false }
-burn-wgpu    = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune", "fusion"] }
+burn-wgpu    = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
 cubecl       = { version = "=0.10.0-pre.3", features = ["stdlib"] }
 pixels = "0.15.0"
 winit = "0.30.12"
@@ -78,6 +78,7 @@ nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
 mp3lame-encoder = "0.2.3"
 fast-whisper-burn = { path = "crates/fast-whisper-burn", optional = true }
+ureq = { version = "2.12", optional = true }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -131,7 +132,7 @@ console_error_panic_hook = "0.1"
 [features]
 default = ["whisper"]
 ## Desktop Whisper (fast-whisper-burn: Burnpack + WGPU). On by default for macOS/Linux/Windows; use `--no-default-features` for iOS/WASM static lib builds. Bundled artifacts: `src/core/ai/transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`); runtime cache `~/.xos/models/whisper/{tiny,small}/`.
-whisper = ["dep:fast-whisper-burn"]
+whisper = ["dep:fast-whisper-burn", "dep:ureq"]
 
 [lib]
 path = "src/core/lib.rs"
