@@ -14,7 +14,7 @@ use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
 use fast_whisper_burn::audio::prep_audio;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
-use fast_whisper_burn::token::Gpt2Tokenizer;
+use fast_whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
 use fast_whisper_burn::transcribe::{WhisperParams, transcribe as fw_transcribe};
 use fast_whisper_burn::{self};
 
@@ -22,7 +22,7 @@ use burn::backend::Wgpu;
 use burn::backend::ndarray::NdArray;
 use burn::config::Config;
 use burn::tensor::backend::Backend;
-use burn::tensor::{Tensor, TensorData};
+use burn::tensor::{Int, Tensor, TensorData};
 
 use super::ActivationStep;
 
@@ -197,6 +197,7 @@ pub fn transcribe_waveform_with_intermediates(
         .map(|r| cleanup_whisper_text(&r.text))?;
 
         let take = |v: Vec<f32>| -> Vec<f32> { v.into_iter().take(max_values.max(1)).collect() };
+        let waveform_vals = waveform.to_vec();
         let mel_shape = mel_na.dims().to_vec();
         let mel_data = mel_na.into_data();
         let mel_dtype = format!("{:?}", mel_data.dtype);
@@ -210,18 +211,56 @@ pub fn transcribe_waveform_with_intermediates(
             .convert::<f32>()
             .to_vec::<f32>()
             .map_err(|e| format!("encoder to_vec: {e}"))?;
+        let dec_step0 = if let Some(sot) = bpe.special_token(SpecialToken::StartofTranscript) {
+            let token_tensor = Tensor::<WgpuF32, 2, Int>::from_ints(
+                TensorData::new(vec![sot as u32], [1, 1]),
+                &device,
+            );
+            let logits = whisper
+                .forward_decoder_cached_with_cross_attention(
+                    token_tensor,
+                    whisper.create_decoder_cache(enc.clone()),
+                )
+                .logits;
+            let logits_shape = logits.dims().to_vec();
+            let logits_data = logits.into_data();
+            let logits_dtype = format!("{:?}", logits_data.dtype);
+            let logits_vals = logits_data
+                .convert::<f32>()
+                .to_vec::<f32>()
+                .map_err(|e| format!("decoder logits to_vec: {e}"))?;
+            Some((logits_shape, logits_dtype, logits_vals))
+        } else {
+            None
+        };
+        let (dec_shape, dec_dtype, dec_vals) = match dec_step0 {
+            Some((shape, dtype, vals)) => (shape, dtype, vals),
+            None => (vec![], "F32".to_string(), vec![]),
+        };
         let steps = vec![
             ActivationStep {
-                name: Some("encoder.conv1.weight".to_string()),
+                name: Some("input.waveform".to_string()),
+                shape: vec![1, waveform_vals.len()],
+                dtype: "F32".to_string(),
+                values: take(sanitize_non_finite(waveform_vals)),
+            },
+            ActivationStep {
+                name: Some("input.mel".to_string()),
                 shape: mel_shape,
                 dtype: mel_dtype,
                 values: take(sanitize_non_finite(mel_vals)),
             },
             ActivationStep {
-                name: Some("decoder.ln.gamma".to_string()),
+                name: Some("encoder.output".to_string()),
                 shape: enc.dims().to_vec(),
                 dtype: enc_dtype,
                 values: take(sanitize_non_finite(enc_vals)),
+            },
+            ActivationStep {
+                name: Some("decoder.step0.logits".to_string()),
+                shape: dec_shape,
+                dtype: dec_dtype,
+                values: take(sanitize_non_finite(dec_vals)),
             },
             ActivationStep {
                 name: None,

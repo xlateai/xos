@@ -32,6 +32,7 @@ print("-----------------------------------------------")
 x = xos.audio.load("intro.mp3")
 y = whisper.forward(x)
 print("intro.mp3 output transcripts:", y)
+print(x)
 
 
 print("-----------------------------------------------")
@@ -41,11 +42,15 @@ for (layer_name, output) in whisper.forward_layer_by_layer(x):
     # print the layer name and shape of the activation as well as the shape of the parameters
     if layer_name is not None:
         param = whisper.get_parameter(layer_name)
-        # print(f"{layer_name}: {param.shape} --param produces--> {output.shape}")
-        # print param name and stats
         print(f"--------{layer_name}--------")
-        print(f"Param Stats: shape={param.shape}, mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
+        if param is not None:
+            print(f"Param Stats: shape={param.shape}, mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
+        values = output.values if hasattr(output, "values") else []
+        finite = sum(1 for v in values if isinstance(v, float) and v == v and abs(v) != float("inf"))
+        zero = sum(1 for v in values if v == 0.0)
+        zero_ratio = (zero / len(values)) if values else 0.0
         print(f"Output Stats: shape={output.shape}, mean={output.mean():.4f}, std={output.std():.4f}, min={output.min():.4f}, max={output.max():.4f}")
+        print(f"Sample Stats: sampled={len(values)}, finite={finite}, zero={zero}, zero_ratio={zero_ratio:.4f}")
     else:
         print("output transcripts:", output)
 
