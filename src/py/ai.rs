@@ -261,7 +261,7 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
         Some(v) => v.clone().try_into_value(vm)?,
         None => {
             return Err(vm.new_type_error(
-                "_forward_layer_by_layer_native(model, waveform, sample_rate=16000, max_values=256) requires waveform"
+                "_forward_layer_by_layer_native(model, waveform, sample_rate=16000) requires waveform"
                     .to_string(),
             ));
         }
@@ -271,13 +271,8 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
     } else {
         16_000
     };
-    let max_values: i64 = if let Some(v) = av.get(3) {
-        v.clone().try_into_value(vm)?
-    } else {
-        256
-    };
-    if sample_rate <= 0 || max_values <= 0 {
-        return Err(vm.new_value_error("sample_rate and max_values must be > 0".to_string()));
+    if sample_rate <= 0 {
+        return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
     }
 
     #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -286,7 +281,6 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
             Some(&model),
             &waveform,
             sample_rate as u32,
-            max_values as usize,
         )
         .map_err(|e| to_py_err(vm, e))?;
 
@@ -303,6 +297,7 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
                     .into_iter()
                     .map(|v| vm.ctx.new_int(v as i64).into())
                     .collect();
+                let prefix_len = s.values.len();
                 let values: Vec<PyObjectRef> = s
                     .values
                     .into_iter()
@@ -310,6 +305,25 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
                     .collect();
                 d.set_item("shape", vm.ctx.new_list(shape).into(), vm).ok();
                 d.set_item("values", vm.ctx.new_list(values).into(), vm).ok();
+                let stats = vm.ctx.new_dict();
+                stats
+                    .set_item("num_values", vm.ctx.new_int(prefix_len as i64).into(), vm)
+                    .ok();
+                if let Some(fs) = s.full_stats {
+                    stats
+                        .set_item("full_mean", vm.ctx.new_float(f64::from(fs.mean)).into(), vm)
+                        .ok();
+                    stats
+                        .set_item("full_std", vm.ctx.new_float(f64::from(fs.std)).into(), vm)
+                        .ok();
+                    stats
+                        .set_item("full_min", vm.ctx.new_float(f64::from(fs.min)).into(), vm)
+                        .ok();
+                    stats
+                        .set_item("full_max", vm.ctx.new_float(f64::from(fs.max)).into(), vm)
+                        .ok();
+                }
+                d.set_item("stats", stats.into(), vm).ok();
                 d.into()
             })
             .collect();
@@ -322,7 +336,7 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
     }
     #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
     {
-        let _ = (model, waveform, sample_rate, max_values);
+        let _ = (model, waveform, sample_rate);
         Err(to_py_err(
             vm,
             "whisper forward_layer_by_layer is unavailable on this build/target",
@@ -438,7 +452,7 @@ class _WhisperModel:
         if wave and isinstance(wave[0], (list, tuple)):
             return [_forward_native(self._model, [float(v) for v in row], int(sample_rate)) for row in wave]
         return _forward_native(self._model, [float(v) for v in wave], int(sample_rate))
-    def forward_layer_by_layer(self, x, sample_rate=16000, max_values=256):
+    def forward_layer_by_layer(self, x, sample_rate=16000):
         wave = _waveform_to_list(x)
         if wave and isinstance(wave[0], (list, tuple)):
             raise ValueError("forward_layer_by_layer currently supports only a single waveform")
@@ -446,7 +460,6 @@ class _WhisperModel:
             self._model,
             [float(v) for v in wave],
             int(sample_rate),
-            int(max_values),
         )
         for step in payload["steps"]:
             name = step.get("name", None)
@@ -458,7 +471,7 @@ class _WhisperModel:
                 "shape": step.get("shape", []),
                 "dtype": "float32",
                 "values": step.get("values", []),
-                "stats": {},
+                "stats": step.get("stats") or {},
             })
             yield name, act
 

@@ -86,32 +86,37 @@ pub fn transcribe_waveform_once(
     }
 }
 
+/// Min/mean/max/std over **all** elements (used for debug; `ActivationStep.values` is only a prefix).
+#[derive(Debug, Clone)]
+pub struct TensorDebugStats {
+    pub mean: f32,
+    pub std: f32,
+    pub min: f32,
+    pub max: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ActivationStep {
     pub name: Option<String>,
     pub shape: Vec<usize>,
     pub dtype: String,
     pub values: Vec<f32>,
+    /// Summary stats over all elements in `values` (same span as `values`; no silent truncation).
+    pub full_stats: Option<TensorDebugStats>,
 }
 
 pub fn transcribe_waveform_with_intermediates(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
-    max_values: usize,
 ) -> Result<(String, Vec<ActivationStep>), String> {
     #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
-        return whisper::transcribe_waveform_with_intermediates(
-            size,
-            waveform,
-            sample_rate,
-            max_values,
-        );
+        return whisper::transcribe_waveform_with_intermediates(size, waveform, sample_rate);
     }
     #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
     {
-        let _ = (size, waveform, sample_rate, max_values);
+        let _ = (size, waveform, sample_rate);
         Err("whisper feature unavailable on this target".to_string())
     }
 }

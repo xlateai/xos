@@ -24,7 +24,7 @@ use burn::config::Config;
 use burn::tensor::backend::Backend;
 use burn::tensor::{Int, Tensor, TensorData};
 
-use super::ActivationStep;
+use super::{ActivationStep, TensorDebugStats};
 
 type WgpuF32 = Wgpu<f32>;
 
@@ -39,6 +39,42 @@ thread_local! {
 }
 
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
+
+fn tensor_debug_stats(vals: &[f32]) -> Option<TensorDebugStats> {
+    if vals.is_empty() {
+        return None;
+    }
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+    let mut sum = 0.0f64;
+    let mut n = 0usize;
+    for &v in vals {
+        if v.is_finite() {
+            min_v = min_v.min(v);
+            max_v = max_v.max(v);
+            sum += f64::from(v);
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    let mean = (sum / n as f64) as f32;
+    let mut acc = 0.0f64;
+    for &v in vals {
+        if v.is_finite() {
+            let d = f64::from(v) - f64::from(mean);
+            acc += d * d;
+        }
+    }
+    let std = (acc / n as f64).sqrt() as f32;
+    Some(TensorDebugStats {
+        mean,
+        std,
+        min: min_v,
+        max: max_v,
+    })
+}
 
 /// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
 pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
@@ -147,7 +183,6 @@ pub fn transcribe_waveform_with_intermediates(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
-    max_values: usize,
 ) -> Result<(String, Vec<ActivationStep>), String> {
     use fast_whisper_burn::transcribe::SamplingStrategy;
 
@@ -196,21 +231,28 @@ pub fn transcribe_waveform_with_intermediates(
         .map_err(|e| format!("whisper forward: {e}"))
         .map(|r| cleanup_whisper_text(&r.text))?;
 
-        let take = |v: Vec<f32>| -> Vec<f32> { v.into_iter().take(max_values.max(1)).collect() };
-        let waveform_vals = waveform.to_vec();
+        let waveform_vals = sanitize_non_finite(waveform.to_vec());
+        let wf_len = waveform_vals.len();
+        let wf_stats = tensor_debug_stats(&waveform_vals);
         let mel_shape = mel_na.dims().to_vec();
         let mel_data = mel_na.into_data();
         let mel_dtype = format!("{:?}", mel_data.dtype);
-        let mel_vals = mel_data
-            .convert::<f32>()
-            .to_vec::<f32>()
-            .map_err(|e| format!("mel to_vec: {e}"))?;
+        let mel_vals = sanitize_non_finite(
+            mel_data
+                .convert::<f32>()
+                .to_vec::<f32>()
+                .map_err(|e| format!("mel to_vec: {e}"))?,
+        );
+        let mel_stats = tensor_debug_stats(&mel_vals);
         let enc_data = enc.clone().into_data();
         let enc_dtype = format!("{:?}", enc_data.dtype);
-        let enc_vals = enc_data
-            .convert::<f32>()
-            .to_vec::<f32>()
-            .map_err(|e| format!("encoder to_vec: {e}"))?;
+        let enc_vals = sanitize_non_finite(
+            enc_data
+                .convert::<f32>()
+                .to_vec::<f32>()
+                .map_err(|e| format!("encoder to_vec: {e}"))?,
+        );
+        let enc_stats = tensor_debug_stats(&enc_vals);
         let dec_step0 = if let Some(sot) = bpe.special_token(SpecialToken::StartofTranscript) {
             let token_tensor = Tensor::<WgpuF32, 2, Int>::from_ints(
                 TensorData::new(vec![sot as u32], [1, 1]),
@@ -225,48 +267,58 @@ pub fn transcribe_waveform_with_intermediates(
             let logits_shape = logits.dims().to_vec();
             let logits_data = logits.into_data();
             let logits_dtype = format!("{:?}", logits_data.dtype);
-            let logits_vals = logits_data
-                .convert::<f32>()
-                .to_vec::<f32>()
-                .map_err(|e| format!("decoder logits to_vec: {e}"))?;
+            let logits_vals = sanitize_non_finite(
+                logits_data
+                    .convert::<f32>()
+                    .to_vec::<f32>()
+                    .map_err(|e| format!("decoder logits to_vec: {e}"))?,
+            );
             Some((logits_shape, logits_dtype, logits_vals))
         } else {
             None
         };
-        let (dec_shape, dec_dtype, dec_vals) = match dec_step0 {
-            Some((shape, dtype, vals)) => (shape, dtype, vals),
-            None => (vec![], "F32".to_string(), vec![]),
+        let (dec_shape, dec_dtype, dec_vals, dec_stats) = match dec_step0 {
+            Some((shape, dtype, vals)) => {
+                let st = tensor_debug_stats(&vals);
+                (shape, dtype, vals, st)
+            }
+            None => (vec![], "F32".to_string(), vec![], None),
         };
         let steps = vec![
             ActivationStep {
                 name: Some("input.waveform".to_string()),
-                shape: vec![1, waveform_vals.len()],
+                shape: vec![1, wf_len],
                 dtype: "F32".to_string(),
-                values: take(sanitize_non_finite(waveform_vals)),
+                values: waveform_vals,
+                full_stats: wf_stats,
             },
             ActivationStep {
                 name: Some("input.mel".to_string()),
                 shape: mel_shape,
                 dtype: mel_dtype,
-                values: take(sanitize_non_finite(mel_vals)),
+                values: mel_vals,
+                full_stats: mel_stats,
             },
             ActivationStep {
                 name: Some("encoder.output".to_string()),
                 shape: enc.dims().to_vec(),
                 dtype: enc_dtype,
-                values: take(sanitize_non_finite(enc_vals)),
+                values: enc_vals,
+                full_stats: enc_stats,
             },
             ActivationStep {
                 name: Some("decoder.step0.logits".to_string()),
                 shape: dec_shape,
                 dtype: dec_dtype,
-                values: take(sanitize_non_finite(dec_vals)),
+                values: dec_vals,
+                full_stats: dec_stats,
             },
             ActivationStep {
                 name: None,
                 shape: vec![text.len()],
                 dtype: "string".to_string(),
                 values: vec![],
+                full_stats: None,
             },
         ];
         Ok((text, steps))

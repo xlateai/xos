@@ -46,11 +46,21 @@ for (layer_name, output) in whisper.forward_layer_by_layer(x):
         if param is not None:
             print(f"Param Stats: shape={param.shape}, mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
         values = output.values if hasattr(output, "values") else []
+        st = getattr(output, "stats", {}) or {}
+        n = st.get("num_values", len(values))
         finite = sum(1 for v in values if isinstance(v, float) and v == v and abs(v) != float("inf"))
         zero = sum(1 for v in values if v == 0.0)
         zero_ratio = (zero / len(values)) if values else 0.0
-        print(f"Output Stats: shape={output.shape}, mean={output.mean():.4f}, std={output.std():.4f}, min={output.min():.4f}, max={output.max():.4f}")
-        print(f"Sample Stats: sampled={len(values)}, finite={finite}, zero={zero}, zero_ratio={zero_ratio:.4f}")
+        print(
+            f"Values stats (num_values={n}): shape={output.shape}, "
+            f"mean={output.mean():.4f}, std={output.std():.4f}, min={output.min():.4f}, max={output.max():.4f}"
+        )
+        print(f"Values: len={len(values)}, finite={finite}, zero={zero}, zero_ratio={zero_ratio:.4f}")
+        if "full_mean" in st:
+            print(
+                f"Summary (Rust): mean={float(st['full_mean']):.4f}, std={float(st['full_std']):.4f}, "
+                f"min={float(st['full_min']):.4f}, max={float(st['full_max']):.4f}"
+            )
     else:
         print("output transcripts:", output)
 
