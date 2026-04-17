@@ -39,13 +39,21 @@ thread_local! {
 
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
 
-/// Set `XOS_WHISPER_DECODE_DEBUG=1` (or `true`) to print decode tracing on stderr: per-seek mel
-/// and encoder stats, cross-attn K/V (layer 0 and last), post-prompt logits, per-step
-/// `logits_pre_suppress`, masked latent summary, `logits_post_forward` for the next token, then
-/// token picks and segment summary (`[whisper decode] ...`).
+/// `XOS_WHISPER_DECODE_DEBUG=1` — decoder tracing on stderr: cross-attn K/V caches, post-prompt
+/// logits, per-step `logits_pre_suppress`, masked latent line, `logits_post_forward`, token picks
+/// (`[whisper decode] ...`). Per-seek mel/encoder lines use `XOS_WHISPER_ENCODER_DEBUG` (see
+/// `whisper_encoder_trace_from_env`).
 fn whisper_decode_trace_from_env() -> bool {
     matches!(
         std::env::var("XOS_WHISPER_DECODE_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+/// `XOS_WHISPER_ENCODER_DEBUG=1` — per-seek mel + full encoder output stats (`[whisper encode] ...`).
+fn whisper_encoder_trace_from_env() -> bool {
+    matches!(
+        std::env::var("XOS_WHISPER_ENCODER_DEBUG").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
 }
@@ -131,6 +139,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             params.use_f16_compute = false;
             params.debug_mode = whisper_decode_trace_from_env();
+            params.encoder_trace = whisper_encoder_trace_from_env();
             params.no_timestamps = true;
             params.single_segment = true;
             params.detect_language = false;
@@ -185,6 +194,7 @@ pub fn transcribe_waveform_once(
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
         params.use_f16_compute = false;
         params.debug_mode = whisper_decode_trace_from_env();
+        params.encoder_trace = whisper_encoder_trace_from_env();
         params.no_timestamps = true;
         params.single_segment = true;
         params.detect_language = false;
@@ -285,6 +295,7 @@ pub fn transcribe_waveform_with_intermediates(
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
         params.use_f16_compute = false;
         params.debug_mode = whisper_decode_trace_from_env();
+        params.encoder_trace = whisper_encoder_trace_from_env();
         params.no_timestamps = true;
         params.single_segment = true;
         params.detect_language = false;

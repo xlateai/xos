@@ -75,8 +75,8 @@ fn debug_pull_tensor_flat_f32<B: Backend, const D: usize>(t: Tensor<B, D>) -> Ve
         .unwrap_or_default()
 }
 
-/// Count NaN/±∞ and summarize **finite** values (two-pass std for debug only).
-fn debug_report_f32_buffer(label: &str, data: &[f32]) -> String {
+/// One buffer: `nonfinite` counts every element; `finite_stats` uses **only** finite values (same tensor, not “half weights”).
+fn debug_tensor_value_stats(what: &str, data: &[f32]) -> String {
     let mut nan_c = 0usize;
     let mut p_inf = 0usize;
     let mut n_inf = 0usize;
@@ -98,8 +98,8 @@ fn debug_report_f32_buffer(label: &str, data: &[f32]) -> String {
             max_v = max_v.max(x);
         }
     }
-    let finite_summary = if count_fin == 0 {
-        "finite:none".to_string()
+    let finite_stats = if count_fin == 0 {
+        "none (no finite values)".to_string()
     } else {
         let mean = (sum / count_fin as f64) as f32;
         let mean64 = sum / count_fin as f64;
@@ -112,28 +112,17 @@ fn debug_report_f32_buffer(label: &str, data: &[f32]) -> String {
         }
         let std = (acc / count_fin as f64).sqrt() as f32;
         format!(
-            "finite:n={count_fin} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
+            "n={count_fin} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
         )
     };
-    if label.is_empty() {
-        format!(
-            "len={} nan={} +inf={} -inf={} | {}",
-            data.len(),
-            nan_c,
-            p_inf,
-            n_inf,
-            finite_summary
-        )
-    } else {
-        format!(
-            "{label} len={} nan={} +inf={} -inf={} | {}",
-            data.len(),
-            nan_c,
-            p_inf,
-            n_inf,
-            finite_summary
-        )
-    }
+    format!(
+        "{what} | elem_count={} || nonfinite: nan={} +inf={} -inf={} || finite_stats: {}",
+        data.len(),
+        nan_c,
+        p_inf,
+        n_inf,
+        finite_stats
+    )
 }
 
 // Non-speech tokens to suppress when suppress_nst is enabled
@@ -223,7 +212,10 @@ pub struct WhisperParams {
     pub max_len: usize,
     pub split_on_word: bool,
     pub max_tokens: usize,
+    /// Verbose greedy / mask / logits tracing (`XOS_WHISPER_DECODE_DEBUG` in xos).
     pub debug_mode: bool,
+    /// Per-seek mel + encoder output stats (`XOS_WHISPER_ENCODER_DEBUG` in xos).
+    pub encoder_trace: bool,
     pub audio_ctx: usize,
     pub tdrz_enable: bool,
     pub initial_prompt: Option<String>,
@@ -262,6 +254,7 @@ impl Default for WhisperParams {
             split_on_word: false,
             max_tokens: 0,
             debug_mode: false,
+            encoder_trace: false,
             audio_ctx: 0,
             tdrz_enable: false,
             initial_prompt: None,
@@ -705,13 +698,16 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             }
         };
 
-        if params.debug_mode {
+        if params.encoder_trace {
             let mel_dims = mel_chunk.dims();
             let mel_v = debug_pull_tensor_flat_f32(mel_chunk.clone());
             eprintln!(
-                "[whisper decode] trace seek={} mel_dim={mel_dims:?} {}",
+                "[whisper encode] seek={} mel spectrogram (encoder input activations, not weights) dim={mel_dims:?}\n             {}",
                 seek,
-                debug_report_f32_buffer("", &mel_v)
+                debug_tensor_value_stats(
+                    "one flattened buffer: nonfinite counts + stats over finite values only",
+                    &mel_v
+                )
             );
         }
 
@@ -731,13 +727,16 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             whisper.forward_encoder(mel_chunk)
         };
 
-        if params.debug_mode {
+        if params.encoder_trace {
             let enc_dims = encoder_output.dims();
             let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
             eprintln!(
-                "[whisper decode] trace seek={} encoder_out_dim={enc_dims:?} {}",
+                "[whisper encode] seek={} encoder_output (forward activations after AudioEncoder; not checkpoint tensors) dim={enc_dims:?}\n             {}",
                 seek,
-                debug_report_f32_buffer("", &enc_v)
+                debug_tensor_value_stats(
+                    "one flattened buffer: nonfinite counts + stats over finite values only",
+                    &enc_v
+                )
             );
         }
 
@@ -2724,31 +2723,34 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
     if params.debug_mode {
         let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
         eprintln!(
-            "[whisper decode] trace decode_entry encoder_out_dim={:?} {}",
+            "[whisper decode] decode_entry same encoder_output tensor as encode pass dim={:?}\n             {}",
             encoder_output.dims(),
-            debug_report_f32_buffer("", &enc_v)
+            debug_tensor_value_stats(
+                "activations from forward_encoder (not weight tensors); one buffer — see legend",
+                &enc_v
+            )
         );
         if let Some(layer0) = prompt_output.cache.layers.first() {
             let k0 = debug_pull_tensor_flat_f32(layer0.cross_attention.key.clone());
             eprintln!(
-                "[whisper decode] trace cross_attn_L0_key_dim={:?} {}",
+                "[whisper decode] cross_attn layer0 K cache (projected keys for this forward; not embedding weights) dim={:?}\n             {}",
                 layer0.cross_attention.key.dims(),
-                debug_report_f32_buffer("", &k0)
+                debug_tensor_value_stats("same buffer layout as above", &k0)
             );
             let v0 = debug_pull_tensor_flat_f32(layer0.cross_attention.value.clone());
             eprintln!(
-                "[whisper decode] trace cross_attn_L0_val_dim={:?} {}",
+                "[whisper decode] cross_attn layer0 V cache dim={:?}\n             {}",
                 layer0.cross_attention.value.dims(),
-                debug_report_f32_buffer("", &v0)
+                debug_tensor_value_stats("same buffer layout as above", &v0)
             );
         }
         if let Some(layer_last) = prompt_output.cache.layers.last() {
             let li = prompt_output.cache.layers.len().saturating_sub(1);
             let kl = debug_pull_tensor_flat_f32(layer_last.cross_attention.key.clone());
             eprintln!(
-                "[whisper decode] trace cross_attn_L{li}_key_dim={:?} {}",
+                "[whisper decode] cross_attn layer{li} K cache dim={:?}\n             {}",
                 layer_last.cross_attention.key.dims(),
-                debug_report_f32_buffer("", &kl)
+                debug_tensor_value_stats("same buffer layout as above", &kl)
             );
         }
         let pl_last = prompt_output
@@ -2758,8 +2760,8 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             .flatten::<1>(0, 2);
         let plv = debug_pull_tensor_flat_f32(pl_last);
         eprintln!(
-            "[whisper decode] trace post_prompt_last_logits {}",
-            debug_report_f32_buffer("", &plv)
+            "[whisper decode] post_prompt last-position logits (decoder head output before masks)\n             {}",
+            debug_tensor_value_stats("vocab vector = one row of activations", &plv)
         );
     }
 
@@ -2833,9 +2835,9 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         if params.debug_mode {
             let pre = debug_pull_tensor_flat_f32(logits.clone());
             eprintln!(
-                "[whisper decode] step {:4} logits_pre_suppress {}",
+                "[whisper decode] step {:4} logits_pre_suppress (after temp scale, before +static_mask)\n             {}",
                 i,
-                debug_report_f32_buffer("", &pre)
+                debug_tensor_value_stats("vocab logits activations", &pre)
             );
         }
 
@@ -3111,9 +3113,9 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
                     .flatten::<1>(0, 2),
             );
             eprintln!(
-                "[whisper decode] step {:4} logits_post_forward(next_token) {}",
+                "[whisper decode] step {:4} logits_post_forward (next autoregressive step, raw head)\n             {}",
                 i,
-                debug_report_f32_buffer("", &nxt)
+                debug_tensor_value_stats("vocab logits activations", &nxt)
             );
         }
         cache = step_output.cache;
