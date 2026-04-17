@@ -193,20 +193,20 @@ pub struct DecoderSelfAttentionCache<B: Backend> {
 /// Cross-attention KV cache stored in head-split 4D format [batch, heads, seq, d_k].
 #[derive(Clone, Debug)]
 pub struct DecoderCrossAttentionCache<B: Backend> {
-    key: Tensor<B, 4>,
-    value: Tensor<B, 4>,
+    pub(crate) key: Tensor<B, 4>,
+    pub(crate) value: Tensor<B, 4>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DecoderLayerCache<B: Backend> {
-    self_attention: DecoderSelfAttentionCache<B>,
-    cross_attention: DecoderCrossAttentionCache<B>,
+    pub(crate) self_attention: DecoderSelfAttentionCache<B>,
+    pub(crate) cross_attention: DecoderCrossAttentionCache<B>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DecoderCache<B: Backend> {
-    layers: Vec<DecoderLayerCache<B>>,
-    n_past: usize,
+    pub(crate) layers: Vec<DecoderLayerCache<B>>,
+    pub(crate) n_past: usize,
 }
 
 impl<B: Backend> DecoderCache<B> {

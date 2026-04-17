@@ -37,6 +37,105 @@ pub fn compute_mel_cpu<B: CustomKernelsBackend>(
     Tensor::<B, 3>::from_data(mel.into_data(), device)
 }
 
+/// Summary of **finite** values only (masked `-inf` entries are skipped) for decode tracing.
+fn debug_f32_latent_summary(label: &str, xs: &[f32]) -> String {
+    let fs: Vec<f32> = xs.iter().copied().filter(|z| z.is_finite()).collect();
+    if fs.is_empty() {
+        return format!("{label}:no_finite");
+    }
+    let n = fs.len();
+    let min_v = fs.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_v = fs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let sum: f64 = fs.iter().map(|&x| f64::from(x)).sum();
+    let mean = (sum / n as f64) as f32;
+    let var: f64 = fs
+        .iter()
+        .map(|&x| {
+            let d = f64::from(x) - sum / n as f64;
+            d * d
+        })
+        .sum::<f64>()
+        / n as f64;
+    let std = var.sqrt() as f32;
+    format!(
+        "{label}:n={n} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
+    )
+}
+
+/// Flatten any-rank float tensor to `Vec<f32>` for host-side debug (syncs GPU).
+fn debug_pull_tensor_flat_f32<B: Backend, const D: usize>(t: Tensor<B, D>) -> Vec<f32> {
+    let n: usize = t.dims().iter().product();
+    if n == 0 {
+        return Vec::new();
+    }
+    t.reshape([n])
+        .into_data()
+        .convert::<f32>()
+        .to_vec::<f32>()
+        .unwrap_or_default()
+}
+
+/// Count NaN/±∞ and summarize **finite** values (two-pass std for debug only).
+fn debug_report_f32_buffer(label: &str, data: &[f32]) -> String {
+    let mut nan_c = 0usize;
+    let mut p_inf = 0usize;
+    let mut n_inf = 0usize;
+    let mut count_fin = 0usize;
+    let mut min_v = f32::INFINITY;
+    let mut max_v = f32::NEG_INFINITY;
+    let mut sum = 0.0f64;
+    for &x in data {
+        if x.is_nan() {
+            nan_c += 1;
+        } else if x == f32::INFINITY {
+            p_inf += 1;
+        } else if x == f32::NEG_INFINITY {
+            n_inf += 1;
+        } else {
+            count_fin += 1;
+            sum += f64::from(x);
+            min_v = min_v.min(x);
+            max_v = max_v.max(x);
+        }
+    }
+    let finite_summary = if count_fin == 0 {
+        "finite:none".to_string()
+    } else {
+        let mean = (sum / count_fin as f64) as f32;
+        let mean64 = sum / count_fin as f64;
+        let mut acc = 0.0f64;
+        for &x in data {
+            if x.is_finite() {
+                let d = f64::from(x) - mean64;
+                acc += d * d;
+            }
+        }
+        let std = (acc / count_fin as f64).sqrt() as f32;
+        format!(
+            "finite:n={count_fin} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
+        )
+    };
+    if label.is_empty() {
+        format!(
+            "len={} nan={} +inf={} -inf={} | {}",
+            data.len(),
+            nan_c,
+            p_inf,
+            n_inf,
+            finite_summary
+        )
+    } else {
+        format!(
+            "{label} len={} nan={} +inf={} -inf={} | {}",
+            data.len(),
+            nan_c,
+            p_inf,
+            n_inf,
+            finite_summary
+        )
+    }
+}
+
 // Non-speech tokens to suppress when suppress_nst is enabled
 // ref: https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
 const NON_SPEECH_TOKENS: &[&str] = &[
@@ -606,6 +705,16 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             }
         };
 
+        if params.debug_mode {
+            let mel_dims = mel_chunk.dims();
+            let mel_v = debug_pull_tensor_flat_f32(mel_chunk.clone());
+            eprintln!(
+                "[whisper decode] trace seek={} mel_dim={mel_dims:?} {}",
+                seek,
+                debug_report_f32_buffer("", &mel_v)
+            );
+        }
+
         // Use pre-computed encoder output if available (first seek iteration only),
         // otherwise encode the mel chunk.
         let encoder_output = if let Some(ref enc) = pre_encoded {
@@ -621,6 +730,16 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
         } else {
             whisper.forward_encoder(mel_chunk)
         };
+
+        if params.debug_mode {
+            let enc_dims = encoder_output.dims();
+            let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
+            eprintln!(
+                "[whisper decode] trace seek={} encoder_out_dim={enc_dims:?} {}",
+                seek,
+                debug_report_f32_buffer("", &enc_v)
+            );
+        }
 
         // Temperature fallback loop
         let mut best_result: Option<SegmentDecodeResult> = None;
@@ -2601,6 +2720,49 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         )
     };
     let prompt_last_pos = full_tokens.len() - 1;
+
+    if params.debug_mode {
+        let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
+        eprintln!(
+            "[whisper decode] trace decode_entry encoder_out_dim={:?} {}",
+            encoder_output.dims(),
+            debug_report_f32_buffer("", &enc_v)
+        );
+        if let Some(layer0) = prompt_output.cache.layers.first() {
+            let k0 = debug_pull_tensor_flat_f32(layer0.cross_attention.key.clone());
+            eprintln!(
+                "[whisper decode] trace cross_attn_L0_key_dim={:?} {}",
+                layer0.cross_attention.key.dims(),
+                debug_report_f32_buffer("", &k0)
+            );
+            let v0 = debug_pull_tensor_flat_f32(layer0.cross_attention.value.clone());
+            eprintln!(
+                "[whisper decode] trace cross_attn_L0_val_dim={:?} {}",
+                layer0.cross_attention.value.dims(),
+                debug_report_f32_buffer("", &v0)
+            );
+        }
+        if let Some(layer_last) = prompt_output.cache.layers.last() {
+            let li = prompt_output.cache.layers.len().saturating_sub(1);
+            let kl = debug_pull_tensor_flat_f32(layer_last.cross_attention.key.clone());
+            eprintln!(
+                "[whisper decode] trace cross_attn_L{li}_key_dim={:?} {}",
+                layer_last.cross_attention.key.dims(),
+                debug_report_f32_buffer("", &kl)
+            );
+        }
+        let pl_last = prompt_output
+            .logits
+            .clone()
+            .slice([0..1, prompt_last_pos..prompt_last_pos + 1])
+            .flatten::<1>(0, 2);
+        let plv = debug_pull_tensor_flat_f32(pl_last);
+        eprintln!(
+            "[whisper decode] trace post_prompt_last_logits {}",
+            debug_report_f32_buffer("", &plv)
+        );
+    }
+
     let mut cache = prompt_output.cache;
     let mut pending_logits: Tensor<B, 1> = prompt_output
         .logits
@@ -2667,6 +2829,15 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             logits
         };
+
+        if params.debug_mode {
+            let pre = debug_pull_tensor_flat_f32(logits.clone());
+            eprintln!(
+                "[whisper decode] step {:4} logits_pre_suppress {}",
+                i,
+                debug_report_f32_buffer("", &pre)
+            );
+        }
 
         // Apply pre-built static suppression mask on GPU
         // (covers suppress_mask, nst_suppress_ids, token_not)
@@ -2742,6 +2913,19 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             logits
         };
 
+        let dbg_masked_logits: Option<Vec<f32>> = if params.debug_mode {
+            Some(
+                logits
+                    .clone()
+                    .into_data()
+                    .convert::<f32>()
+                    .to_vec::<f32>()
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
+
         // Log softmax on GPU, then pull to CPU once (single GPU sync instead of ~5 per step)
         let logprobs_gpu = log_softmax(logits, 0);
         let mut lp: Vec<f32> = logprobs_gpu
@@ -2756,6 +2940,13 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             if !x.is_finite() {
                 *x = f32::NEG_INFINITY;
             }
+        }
+
+        // <|notimestamps|> is inserted in the *prompt* when no_timestamps=true; its id is **below**
+        // token_beg (first <|0.00|>) so it sits inside `lp[..token_beg]`. The decoder must never emit
+        // it again — GPU mask+add can still leave it as the argmax (NaN / ordering). Pin it on CPU.
+        if params.no_timestamps && token_not < lp.len() {
+            lp[token_not] = f32::NEG_INFINITY;
         }
 
         if i == 0 && token_nosp < lp.len() {
@@ -2800,10 +2991,13 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         // Token selection on CPU
         let sampled_id = if use_sampling {
             let mut probs: Vec<f32> = lp.iter().map(|&x| x.exp()).collect();
-            if params.no_timestamps && token_beg > 0 {
+            if params.no_timestamps && token_beg > 0 && token_beg <= probs.len() {
                 for p in probs[token_beg..].iter_mut() {
                     *p = 0.0;
                 }
+            }
+            if params.no_timestamps && token_not < probs.len() {
+                probs[token_not] = 0.0;
             }
             sample_from_probs(&probs, rng.as_deref_mut().expect("sampling requires RNG"))
         } else if params.no_timestamps && token_beg > 0 {
@@ -2836,9 +3030,23 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             let piece = bpe
                 .decode(&[sampled_id], false)
                 .unwrap_or_else(|e| format!("<decode_err {sampled_id}: {e:?}>"));
+            let ml = dbg_masked_logits
+                .as_ref()
+                .map(|v| debug_f32_latent_summary("masked_logits", v))
+                .unwrap_or_else(|| "masked_logits:n/a".to_string());
+            let lp_all = debug_f32_latent_summary("log_probs", &lp);
+            let lp_text = if token_beg <= lp.len() {
+                debug_f32_latent_summary("text_log_probs", &lp[..token_beg])
+            } else {
+                "text_log_probs:n/a".to_string()
+            };
             eprintln!(
                 "[whisper decode] step {:4}  id {:6}  logp {:9.4}  {}",
                 i, sampled_id, log_prob, piece
+            );
+            eprintln!(
+                "[whisper decode]          latent  {} | {} | {}",
+                ml, lp_all, lp_text
             );
         }
 
@@ -2894,6 +3102,20 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             whisper.forward_decoder_cached_with_cross_attention(next_token_tensor, cache)
         };
+        if params.debug_mode {
+            let nxt = debug_pull_tensor_flat_f32(
+                step_output
+                    .logits
+                    .clone()
+                    .slice([0..1, 0..1])
+                    .flatten::<1>(0, 2),
+            );
+            eprintln!(
+                "[whisper decode] step {:4} logits_post_forward(next_token) {}",
+                i,
+                debug_report_f32_buffer("", &nxt)
+            );
+        }
         cache = step_output.cache;
         pending_logits = step_output.logits.slice([0..1, 0..1]).flatten::<1>(0, 2);
         pending_attention = if params.token_timestamps {

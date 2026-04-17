@@ -19,18 +19,21 @@ for i, (name, param) in enumerate(whisper.named_parameters()):
     xos.print_color(f"{color}Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
 
 
-# inference on random value waveform
-print("-----------------------------------------------")
-x = xos.random.uniform(1, 1000, shape=(1, 1000))
-print(x)
-y = whisper.forward(x)
-print("random value waveform output transcripts:", y)
-print("-----------------------------------------------")
+# inference on synthetic audio: must be ~[-1, 1] float PCM at sample_rate (default 16 kHz).
+# uniform(1, 1000) is *not* a waveform — it looks like a bug and drives mel/encoder garbage.
+# print("-----------------------------------------------")
+# sr = 16000
+# n = sr * 2  # ~2 s at 16 kHz
+# x = xos.random.uniform(-1.0, 1.0, shape=(1, n))
+# print(x)
+# y = whisper.forward(x, sr)
+# print("random value waveform output transcripts:", y)
+# print("-----------------------------------------------")
 
 
-# inference on a real audio waveform
-x = xos.audio.load("intro.mp3")
-y = whisper.forward(x)
+# inference on a real audio waveform (load resamples to `sample_rate`, mono f32)
+x = xos.audio.load("intro.mp3", 16000)
+y = whisper.forward(x, 16000)
 print("intro.mp3 output transcripts:", y)
 print(x)
 

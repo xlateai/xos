@@ -102,8 +102,18 @@ pub fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult
     let mut cur = obj.clone();
     for _ in 0..8 {
         if let Some(list) = cur.downcast_ref::<PyList>() {
-            return list
-                .borrow_vec()
+            let vec = list.borrow_vec();
+            // Nested `[[f32, ...]]` (shape (1, N)): flatten to match Whisper / burn `&[f32]`.
+            if vec.len() == 1 {
+                if let Some(inner) = vec[0].downcast_ref::<PyList>() {
+                    return inner
+                        .borrow_vec()
+                        .iter()
+                        .map(|x| py_number_to_f64(x, vm).map(|v| v as f32))
+                        .collect::<Result<Vec<f32>, _>>();
+                }
+            }
+            return vec
                 .iter()
                 .map(|x| py_number_to_f64(x, vm).map(|v| v as f32))
                 .collect::<Result<Vec<f32>, _>>();

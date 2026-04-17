@@ -4,6 +4,21 @@ use burn::tensor::DType;
 use burn_store::{BurnpackStore, ModuleStore};
 use rustpython_vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
 
+use crate::tensor::tensor::tensor_flat_data_list;
+
+/// Mono `f32` samples — same contract as [`fast_whisper_burn::transcribe`]: one contiguous buffer,
+/// values typically in ~`[-1, 1]`, `sample_rate` Hz (Whisper expects 16 kHz).
+fn waveform_vec_from_py(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
+    match tensor_flat_data_list(obj, vm) {
+        Ok(v) if !v.is_empty() => Ok(v),
+        Ok(_) => Err(vm.new_value_error(
+            "waveform is empty: need non-empty float32 mono PCM (e.g. xos.audio.load(path, 16000))"
+                .to_string(),
+        )),
+        Err(_) => obj.clone().try_into_value::<Vec<f32>>(vm),
+    }
+}
+
 fn to_py_err(vm: &VirtualMachine, msg: impl Into<String>) -> rustpython_vm::builtins::PyBaseExceptionRef {
     vm.new_runtime_error(msg.into())
 }
@@ -218,7 +233,7 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args;
     let model = parse_string_arg(av.first(), "tiny", vm)?;
     let waveform: Vec<f32> = match av.get(1) {
-        Some(v) => v.clone().try_into_value(vm)?,
+        Some(v) => waveform_vec_from_py(v, vm)?,
         None => {
             return Err(vm.new_type_error(
                 "_forward_native(model, waveform, sample_rate=16000) requires waveform".to_string(),
@@ -258,7 +273,7 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
     let av = args.args;
     let model = parse_string_arg(av.first(), "tiny", vm)?;
     let waveform: Vec<f32> = match av.get(1) {
-        Some(v) => v.clone().try_into_value(vm)?,
+        Some(v) => waveform_vec_from_py(v, vm)?,
         None => {
             return Err(vm.new_type_error(
                 "_forward_layer_by_layer_native(model, waveform, sample_rate=16000) requires waveform"
@@ -433,6 +448,17 @@ def _waveform_to_list(x):
             return [float(v) for v in d]
     return [float(x)]
 
+def _flatten_batch_dim1(wave):
+    # Shape (1, N) from xos often appears as one row: match fast-whisper-burn's flat &[f32].
+    if (
+        len(wave) == 1
+        and isinstance(wave[0], (list, tuple))
+        and wave[0]
+        and not isinstance(wave[0][0], (list, tuple))
+    ):
+        return [float(v) for v in wave[0]]
+    return wave
+
 class _WhisperModel:
     def __init__(self, payload):
         self._payload = payload
@@ -456,12 +482,12 @@ class _WhisperModel:
     def weights_file(self):
         return self._payload["weights_file"]
     def forward(self, x, sample_rate=16000):
-        wave = _waveform_to_list(x)
+        wave = _flatten_batch_dim1(_waveform_to_list(x))
         if wave and isinstance(wave[0], (list, tuple)):
             return [_forward_native(self._model, [float(v) for v in row], int(sample_rate)) for row in wave]
         return _forward_native(self._model, [float(v) for v in wave], int(sample_rate))
     def forward_layer_by_layer(self, x, sample_rate=16000):
-        wave = _waveform_to_list(x)
+        wave = _flatten_batch_dim1(_waveform_to_list(x))
         if wave and isinstance(wave[0], (list, tuple)):
             raise ValueError("forward_layer_by_layer currently supports only a single waveform")
         payload = _forward_layer_by_layer_native(

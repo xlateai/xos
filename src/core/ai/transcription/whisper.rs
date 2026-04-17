@@ -39,8 +39,10 @@ thread_local! {
 
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
 
-/// Set `XOS_WHISPER_DECODE_DEBUG=1` (or `true`) to print greedy autoregressive steps from
-/// `fast_whisper-burn` (`[whisper decode] ...` on stderr).
+/// Set `XOS_WHISPER_DECODE_DEBUG=1` (or `true`) to print decode tracing on stderr: per-seek mel
+/// and encoder stats, cross-attn K/V (layer 0 and last), post-prompt logits, per-step
+/// `logits_pre_suppress`, masked latent summary, `logits_post_forward` for the next token, then
+/// token picks and segment summary (`[whisper decode] ...`).
 fn whisper_decode_trace_from_env() -> bool {
     matches!(
         std::env::var("XOS_WHISPER_DECODE_DEBUG").as_deref(),
