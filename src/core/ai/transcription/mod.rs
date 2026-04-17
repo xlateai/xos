@@ -86,7 +86,7 @@ pub fn transcribe_waveform_once(
     }
 }
 
-/// Min/mean/max/std over **all** elements (used for debug; `ActivationStep.values` is only a prefix).
+/// Min/mean/max/std over **all** elements in `ActivationStep.values` (full tensor; no truncation).
 #[derive(Debug, Clone)]
 pub struct TensorDebugStats {
     pub mean: f32,
@@ -103,6 +103,9 @@ pub struct ActivationStep {
     pub values: Vec<f32>,
     /// Summary stats over all elements in `values` (same span as `values`; no silent truncation).
     pub full_stats: Option<TensorDebugStats>,
+    /// On-device reduction before host readback (sum, max abs). If non-zero here but `values` are all
+    /// zero, suspect dtype/readback rather than the kernel.
+    pub device_preflight: Option<(f32, f32)>,
 }
 
 pub fn transcribe_waveform_with_intermediates(

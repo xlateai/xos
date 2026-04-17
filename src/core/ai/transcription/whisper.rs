@@ -12,17 +12,16 @@ use std::thread;
 
 use burn_store::{BurnpackStore, ModuleSnapshot};
 use fast_whisper_burn::MixedPrecisionAdapter;
-use fast_whisper_burn::audio::prep_audio;
 use fast_whisper_burn::model::{Whisper, WhisperConfig};
 use fast_whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
-use fast_whisper_burn::transcribe::{WhisperParams, transcribe as fw_transcribe};
+use fast_whisper_burn::transcribe::{WhisperParams, compute_mel_cpu, transcribe as fw_transcribe};
 use fast_whisper_burn::{self};
 
 use burn::backend::Wgpu;
-use burn::backend::ndarray::NdArray;
 use burn::config::Config;
+use burn::module::Module;
 use burn::tensor::backend::Backend;
-use burn::tensor::{Int, Tensor, TensorData};
+use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
 
 use super::{ActivationStep, TensorDebugStats};
 
@@ -39,6 +38,31 @@ thread_local! {
 }
 
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
+
+/// Set `XOS_WHISPER_DECODE_DEBUG=1` (or `true`) to print greedy autoregressive steps from
+/// `fast_whisper-burn` (`[whisper decode] ...` on stderr).
+fn whisper_decode_trace_from_env() -> bool {
+    matches!(
+        std::env::var("XOS_WHISPER_DECODE_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+/// Host values for debugging: uses [`TensorData::iter`] so Flex32 and F32 both round-trip like
+/// `transcribe` / the Burn CLI (avoids relying on `convert` + `to_vec` alone).
+fn tensor_data_to_f32_vec(data: TensorData) -> Vec<f32> {
+    data.iter::<f32>().map(|x| x.elem()).collect()
+}
+
+/// Some WGPU/CubeCL read paths mis-read large multi-dim tensors; flattening to 1D before
+/// `into_data()` matches what works reliably for uploads and avoids stale/zero host buffers.
+fn flatten_tensor_for_host_read<B: Backend, const D: usize>(
+    t: Tensor<B, D>,
+    shape: &[usize],
+) -> Tensor<B, 1> {
+    let n: usize = shape.iter().product();
+    t.reshape([n])
+}
 
 fn tensor_debug_stats(vals: &[f32]) -> Option<TensorDebugStats> {
     if vals.is_empty() {
@@ -104,7 +128,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
             params.language = "en".to_string();
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             params.use_f16_compute = false;
-            params.debug_mode = false;
+            params.debug_mode = whisper_decode_trace_from_env();
             params.no_timestamps = true;
             params.single_segment = true;
             params.detect_language = false;
@@ -158,7 +182,7 @@ pub fn transcribe_waveform_once(
         params.language = "en".to_string();
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
         params.use_f16_compute = false;
-        params.debug_mode = false;
+        params.debug_mode = whisper_decode_trace_from_env();
         params.no_timestamps = true;
         params.single_segment = true;
         params.detect_language = false;
@@ -198,21 +222,67 @@ pub fn transcribe_waveform_with_intermediates(
     let models_root = prepare_whisper_models_root(model_name)?;
     validate_artifacts(&models_root, model_name)?;
     with_cached_model(&models_root, model_name, |bpe, whisper| {
-        let device = <WgpuF32 as Backend>::Device::default();
-        let cpu = <NdArray as Backend>::Device::default();
-        let wave_na = Tensor::<NdArray, 2>::from_data(
-            TensorData::new(waveform.to_vec(), [1, waveform.len()]),
-            &cpu,
+        let device = whisper.devices()[0].clone();
+        // Same mel + device path as `fast_whisper_burn::transcribe::transcribe_inner`.
+        let full_mel = compute_mel_cpu::<WgpuF32>(
+            waveform,
+            sample_rate as usize,
+            whisper.encoder_mel_size(),
+            &device,
         );
-        let mel_na = prep_audio(wave_na, sample_rate as f64, whisper.encoder_mel_size());
-        let mel = Tensor::<WgpuF32, 3>::from_data(mel_na.clone().into_data(), &device);
-        let enc = whisper.forward_encoder(mel);
+        let enc = whisper.forward_encoder(full_mel.clone());
+
+        // Read GPU tensors to host **before** `fw_transcribe` — full decode can sync/reuse WGPU
+        // state such that tensors captured earlier read back as zeros if materialized too late.
+        let enc_preflight = (
+            enc.clone().sum().into_scalar().elem::<f32>(),
+            enc.clone().abs().max().into_scalar().elem::<f32>(),
+        );
+        let enc_shape = enc.dims().to_vec();
+        let enc_data = flatten_tensor_for_host_read(enc.clone(), &enc_shape).into_data();
+        let enc_dtype = format!("{:?}", enc_data.dtype);
+        let enc_vals = sanitize_non_finite(tensor_data_to_f32_vec(enc_data));
+        let enc_stats = tensor_debug_stats(&enc_vals);
+
+        let mel_preflight = (
+            full_mel.clone().sum().into_scalar().elem::<f32>(),
+            full_mel.clone().abs().max().into_scalar().elem::<f32>(),
+        );
+        let mel_shape = full_mel.dims().to_vec();
+        let mel_data = flatten_tensor_for_host_read(full_mel.clone(), &mel_shape).into_data();
+        let mel_dtype = format!("{:?}", mel_data.dtype);
+        let mel_vals = sanitize_non_finite(tensor_data_to_f32_vec(mel_data));
+        let mel_stats = tensor_debug_stats(&mel_vals);
+
+        let dec_step0 = if let Some(sot) = bpe.special_token(SpecialToken::StartofTranscript) {
+            let token_tensor = Tensor::<WgpuF32, 2, Int>::from_ints(
+                TensorData::new(vec![sot as u32], [1, 1]),
+                &device,
+            );
+            let logits = whisper
+                .forward_decoder_cached_with_cross_attention(
+                    token_tensor,
+                    whisper.create_decoder_cache(enc.clone()),
+                )
+                .logits;
+            let logits_preflight = (
+                logits.clone().sum().into_scalar().elem::<f32>(),
+                logits.clone().abs().max().into_scalar().elem::<f32>(),
+            );
+            let logits_shape = logits.dims().to_vec();
+            let logits_data = flatten_tensor_for_host_read(logits, &logits_shape).into_data();
+            let logits_dtype = format!("{:?}", logits_data.dtype);
+            let logits_vals = sanitize_non_finite(tensor_data_to_f32_vec(logits_data));
+            Some((logits_shape, logits_dtype, logits_vals, logits_preflight))
+        } else {
+            None
+        };
 
         let mut params = WhisperParams::default();
         params.language = "en".to_string();
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
         params.use_f16_compute = false;
-        params.debug_mode = false;
+        params.debug_mode = whisper_decode_trace_from_env();
         params.no_timestamps = true;
         params.single_segment = true;
         params.detect_language = false;
@@ -234,55 +304,12 @@ pub fn transcribe_waveform_with_intermediates(
         let waveform_vals = sanitize_non_finite(waveform.to_vec());
         let wf_len = waveform_vals.len();
         let wf_stats = tensor_debug_stats(&waveform_vals);
-        let mel_shape = mel_na.dims().to_vec();
-        let mel_data = mel_na.into_data();
-        let mel_dtype = format!("{:?}", mel_data.dtype);
-        let mel_vals = sanitize_non_finite(
-            mel_data
-                .convert::<f32>()
-                .to_vec::<f32>()
-                .map_err(|e| format!("mel to_vec: {e}"))?,
-        );
-        let mel_stats = tensor_debug_stats(&mel_vals);
-        let enc_data = enc.clone().into_data();
-        let enc_dtype = format!("{:?}", enc_data.dtype);
-        let enc_vals = sanitize_non_finite(
-            enc_data
-                .convert::<f32>()
-                .to_vec::<f32>()
-                .map_err(|e| format!("encoder to_vec: {e}"))?,
-        );
-        let enc_stats = tensor_debug_stats(&enc_vals);
-        let dec_step0 = if let Some(sot) = bpe.special_token(SpecialToken::StartofTranscript) {
-            let token_tensor = Tensor::<WgpuF32, 2, Int>::from_ints(
-                TensorData::new(vec![sot as u32], [1, 1]),
-                &device,
-            );
-            let logits = whisper
-                .forward_decoder_cached_with_cross_attention(
-                    token_tensor,
-                    whisper.create_decoder_cache(enc.clone()),
-                )
-                .logits;
-            let logits_shape = logits.dims().to_vec();
-            let logits_data = logits.into_data();
-            let logits_dtype = format!("{:?}", logits_data.dtype);
-            let logits_vals = sanitize_non_finite(
-                logits_data
-                    .convert::<f32>()
-                    .to_vec::<f32>()
-                    .map_err(|e| format!("decoder logits to_vec: {e}"))?,
-            );
-            Some((logits_shape, logits_dtype, logits_vals))
-        } else {
-            None
-        };
-        let (dec_shape, dec_dtype, dec_vals, dec_stats) = match dec_step0 {
-            Some((shape, dtype, vals)) => {
+        let (dec_shape, dec_dtype, dec_vals, dec_stats, dec_preflight) = match dec_step0 {
+            Some((shape, dtype, vals, pre)) => {
                 let st = tensor_debug_stats(&vals);
-                (shape, dtype, vals, st)
+                (shape, dtype, vals, st, Some(pre))
             }
-            None => (vec![], "F32".to_string(), vec![], None),
+            None => (vec![], "F32".to_string(), vec![], None, None),
         };
         let steps = vec![
             ActivationStep {
@@ -291,6 +318,7 @@ pub fn transcribe_waveform_with_intermediates(
                 dtype: "F32".to_string(),
                 values: waveform_vals,
                 full_stats: wf_stats,
+                device_preflight: None,
             },
             ActivationStep {
                 name: Some("input.mel".to_string()),
@@ -298,13 +326,15 @@ pub fn transcribe_waveform_with_intermediates(
                 dtype: mel_dtype,
                 values: mel_vals,
                 full_stats: mel_stats,
+                device_preflight: Some(mel_preflight),
             },
             ActivationStep {
                 name: Some("encoder.output".to_string()),
-                shape: enc.dims().to_vec(),
+                shape: enc_shape,
                 dtype: enc_dtype,
                 values: enc_vals,
                 full_stats: enc_stats,
+                device_preflight: Some(enc_preflight),
             },
             ActivationStep {
                 name: Some("decoder.step0.logits".to_string()),
@@ -312,6 +342,7 @@ pub fn transcribe_waveform_with_intermediates(
                 dtype: dec_dtype,
                 values: dec_vals,
                 full_stats: dec_stats,
+                device_preflight: dec_preflight,
             },
             ActivationStep {
                 name: None,
@@ -319,6 +350,7 @@ pub fn transcribe_waveform_with_intermediates(
                 dtype: "string".to_string(),
                 values: vec![],
                 full_stats: None,
+                device_preflight: None,
             },
         ];
         Ok((text, steps))

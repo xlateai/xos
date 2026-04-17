@@ -24,7 +24,8 @@ use std::{
 
 /// Compute mel spectrogram on CPU (NdArray backend) to avoid GPU kernel launch
 /// overhead for the many small STFT operations, then upload to the target device.
-fn compute_mel_cpu<B: CustomKernelsBackend>(
+/// Compute mel on the NdArray backend and upload to `device` — same path as [`transcribe`].
+pub fn compute_mel_cpu<B: CustomKernelsBackend>(
     waveform: &[f32],
     sample_rate: usize,
     n_mels: usize,
@@ -2428,7 +2429,7 @@ fn sequence_score_from_result(result: &SegmentDecodeResult, length_penalty: f32)
 
 fn decode_segment<B: CustomKernelsBackend>(
     whisper: &Whisper<B>,
-    _bpe: &Gpt2Tokenizer,
+    bpe: &Gpt2Tokenizer,
     encoder_output: &Tensor<B, 3>,
     prompt: &[usize],
     temperature: f32,
@@ -2496,6 +2497,7 @@ fn decode_segment<B: CustomKernelsBackend>(
             suppress_mask,
             nst_suppress_ids,
             params,
+            bpe,
             seek,
             seek_end,
             delta_min,
@@ -2554,6 +2556,7 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
     suppress_mask: &[bool],
     nst_suppress_ids: &[usize],
     params: &WhisperParams,
+    bpe: &Gpt2Tokenizer,
     seek: usize,
     seek_end: usize,
     delta_min: usize,
@@ -2638,20 +2641,23 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         Tensor::from_floats(blank_suppress_data.as_slice(), device);
     let gpu_indices: Tensor<B, 1, Int> = Tensor::arange(0..vocab_size as i64, device);
 
+    if params.debug_mode {
+        eprintln!(
+            "[whisper decode] greedy: seek={}..{}  prompt_len={}  n_max={}  no_timestamps={}  suppress_blank={}  temp={}",
+            seek,
+            seek_end,
+            prompt.len(),
+            n_max,
+            params.no_timestamps,
+            params.suppress_blank,
+            temperature
+        );
+    }
+
     for i in 0..n_max {
         // Use cached logits from previous step (or prompt output)
         let logits = pending_logits.clone();
         let attention = pending_attention.clone();
-
-        if i == 0 {
-            let probs = softmax(logits.clone(), 0);
-            if token_nosp < vocab_size {
-                no_speech_prob = probs
-                    .slice([token_nosp..token_nosp + 1])
-                    .into_scalar()
-                    .elem();
-            }
-        }
 
         let is_initial = tokens_out.is_empty();
 
@@ -2744,6 +2750,19 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             .to_vec::<f32>()
             .unwrap();
 
+        // NaN/Inf logits (e.g. bad GPU read / numerics) make argmax pick an arbitrary index — often
+        // the last vocab slot (a timestamp). Treat as -inf so masking and max behave.
+        for x in lp.iter_mut() {
+            if !x.is_finite() {
+                *x = f32::NEG_INFINITY;
+            }
+        }
+
+        if i == 0 && token_nosp < lp.len() {
+            // Same distribution as decoding (post mask + log_softmax); exp(lp) = probability.
+            no_speech_prob = lp[token_nosp].exp().clamp(0.0, 1.0);
+        }
+
         // Timestamp vs text logprob comparison on CPU
         if !params.no_timestamps {
             let ts_slice = &lp[token_beg..vocab_size];
@@ -2780,8 +2799,20 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
 
         // Token selection on CPU
         let sampled_id = if use_sampling {
-            let probs: Vec<f32> = lp.iter().map(|&x| x.exp()).collect();
+            let mut probs: Vec<f32> = lp.iter().map(|&x| x.exp()).collect();
+            if params.no_timestamps && token_beg > 0 {
+                for p in probs[token_beg..].iter_mut() {
+                    *p = 0.0;
+                }
+            }
             sample_from_probs(&probs, rng.as_deref_mut().expect("sampling requires RNG"))
+        } else if params.no_timestamps && token_beg > 0 {
+            lp[..token_beg]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0)
         } else {
             lp.iter()
                 .enumerate()
@@ -2800,6 +2831,16 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         tokens_out.push((sampled_id, log_prob, final_tid));
         token_alignments.push(attention);
         full_tokens.push(sampled_id);
+
+        if params.debug_mode {
+            let piece = bpe
+                .decode(&[sampled_id], false)
+                .unwrap_or_else(|e| format!("<decode_err {sampled_id}: {e:?}>"));
+            eprintln!(
+                "[whisper decode] step {:4}  id {:6}  logp {:9.4}  {}",
+                i, sampled_id, log_prob, piece
+            );
+        }
 
         if sampled_id > token_beg {
             let seek_delta_new = 2 * (sampled_id - token_beg);
@@ -2860,6 +2901,40 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
         } else {
             Vec::new()
         };
+    }
+
+    if params.debug_mode {
+        let ids: Vec<usize> = tokens_out.iter().map(|t| t.0).collect();
+        let n_show = ids.len().min(64);
+        eprintln!(
+            "[whisper decode] segment finished: failed={}  result_len={}  steps={}  no_speech_prob={:.5}",
+            failed,
+            result_len,
+            tokens_out.len(),
+            no_speech_prob
+        );
+        if !ids.is_empty() {
+            eprintln!(
+                "[whisper decode] token_ids[..{}]={:?}{}",
+                n_show,
+                &ids[..n_show],
+                if ids.len() > n_show {
+                    format!(" ... (+{} ids)", ids.len() - n_show)
+                } else {
+                    String::new()
+                }
+            );
+        }
+        let skip = bpe.decode(&ids, true).unwrap_or_default();
+        let keep = bpe.decode(&ids, false).unwrap_or_default();
+        eprintln!(
+            "[whisper decode] text skip_special=true : {:?}",
+            skip.trim()
+        );
+        eprintln!(
+            "[whisper decode] text skip_special=false: {:?}",
+            keep
+        );
     }
 
     let mut sum_logprobs_subset = 0.0;

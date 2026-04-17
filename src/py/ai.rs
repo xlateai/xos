@@ -323,6 +323,14 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
                         .set_item("full_max", vm.ctx.new_float(f64::from(fs.max)).into(), vm)
                         .ok();
                 }
+                if let Some((ds, dam)) = s.device_preflight {
+                    stats
+                        .set_item("device_sum", vm.ctx.new_float(f64::from(ds)).into(), vm)
+                        .ok();
+                    stats
+                        .set_item("device_abs_max", vm.ctx.new_float(f64::from(dam)).into(), vm)
+                        .ok();
+                }
                 d.set_item("stats", stats.into(), vm).ok();
                 d.into()
             })
