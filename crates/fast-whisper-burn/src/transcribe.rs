@@ -700,12 +700,15 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
 
         if params.encoder_trace {
             let mel_dims = mel_chunk.dims();
+            let mel_elems: usize = mel_dims.iter().product();
+            let mel_sum = mel_chunk.clone().sum().into_scalar().elem::<f32>();
+            let mel_abs_max = mel_chunk.clone().abs().max().into_scalar().elem::<f32>();
             let mel_v = debug_pull_tensor_flat_f32(mel_chunk.clone());
             eprintln!(
-                "[whisper encode] seek={} mel spectrogram (encoder input activations, not weights) dim={mel_dims:?}\n             {}",
+                "[whisper encode] seek={} mel (prep_audio features → encoder input) dim={mel_dims:?} elem_count={mel_elems} (= product(dims), not encoder seq)\n             device_scalar_preflight: sum={mel_sum:.6} abs_max={mel_abs_max:.6}\n             {}",
                 seek,
                 debug_tensor_value_stats(
-                    "one flattened buffer: nonfinite counts + stats over finite values only",
+                    "flattened mel only; consumed by conv+transformer encoder below",
                     &mel_v
                 )
             );
@@ -729,12 +732,17 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
 
         if params.encoder_trace {
             let enc_dims = encoder_output.dims();
+            let enc_elems: usize = enc_dims.iter().product();
+            // Same idea as `whisper.rs` `transcribe_waveform_with_intermediates`: reductions on the
+            // live tensor force a coherent device read; compare to flattened-buffer stats below.
+            let enc_sum = encoder_output.clone().sum().into_scalar().elem::<f32>();
+            let enc_abs_max = encoder_output.clone().abs().max().into_scalar().elem::<f32>();
             let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
             eprintln!(
-                "[whisper encode] seek={} encoder_output (forward activations after AudioEncoder; not checkpoint tensors) dim={enc_dims:?}\n             {}",
+                "[whisper encode] seek={} encoder_output (after full AudioEncoder, including ln_post) dim={enc_dims:?} elem_count={enc_elems} (= batch×enc_time×d_model; NOT mel reshaped — mel was [1,80,3000])\n             device_scalar_preflight: sum={enc_sum:.6} abs_max={enc_abs_max:.6} (large mismatch vs finite_stats min/max → suspect WGPU host readback; both huge → real activations)\n             {}",
                 seek,
                 debug_tensor_value_stats(
-                    "one flattened buffer: nonfinite counts + stats over finite values only",
+                    "flattened encoder activations (different shape & meaning than mel line)",
                     &enc_v
                 )
             );
