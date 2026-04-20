@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 pub mod audio;
 pub mod beam;
 pub mod custom_kernels;
