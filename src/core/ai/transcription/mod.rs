@@ -199,6 +199,14 @@ pub fn transcribe_waveform_with_intermediates(
     }
 }
 
+/// Populate `models/whisper/{model_key}-burn/` (download + convert) if nothing usable is already cached.
+/// `model_key` is the canonical stem only (`tiny`, `small`) — not `tiny-f16`.
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub fn ensure_burn_whisper_artifacts_for_load(model_key: &str) -> Result<(), String> {
+    let _root = burn::whisper::prepare_whisper_models_root(model_key)?;
+    Ok(())
+}
+
 /// Live / committed text state for iterators / Python.
 pub struct TranscriptionEngine {
     transcript_epoch: u64,

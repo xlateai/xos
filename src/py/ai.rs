@@ -158,6 +158,19 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     });
 
+    // Match native transcription: populate ~/.xos/models/whisper/{tiny,small}-burn/ before opening burnpack.
+    if override_path.is_none() {
+        let model_trim = model.trim();
+        let stem = model_trim.strip_suffix("-f16").unwrap_or(model_trim);
+        if !stem.is_empty() {
+            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            {
+                crate::ai::transcription::ensure_burn_whisper_artifacts_for_load(stem)
+                    .map_err(|e| to_py_err(vm, e))?;
+            }
+        }
+    }
+
     let weights_path = resolve_weights_path(&model, override_path).map_err(|e| to_py_err(vm, e))?;
     let weights_s = weights_path
         .to_str()

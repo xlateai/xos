@@ -415,7 +415,7 @@ fn legacy_transcription_burn_dir(model_key: &str) -> Result<PathBuf, String> {
 
 /// Download / convert into `xos path --data`/models/whisper/{model}-burn/ if needed, then resolve load path.
 /// Skips fetching when the repo-bundled tree already has a complete model pack.
-fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
+pub(crate) fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
     let primary =
         crate::auth::whisper_model_backend_cache_dir(model_key, "burn").map_err(|e| e.to_string())?;
     let legacy_transcription = legacy_transcription_burn_dir(model_key)?;
