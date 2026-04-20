@@ -8,7 +8,7 @@
 pub const WHISPER_HZ: u32 = 16_000;
 
 /// How often we re-run Whisper on the **full** growing clip for live text (lower = snappier UI, more CPU).
-pub const GROWING_CLIP_PARTIAL_DECODE_MS: u64 = 48;
+pub const GROWING_CLIP_PARTIAL_DECODE_MS: u64 = 53;
 /// Minimum 16 kHz samples per decode (~55 ms @ 16 kHz). Lower = earlier first words; too low can hurt quality.
 pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 18;
 
@@ -19,22 +19,22 @@ pub const VAD_SLOW_TAIL_MS: u32 = 10;
 
 /// Loud enough to count as “speech” for gate / new segment start. **Above** typical room/loopback idle
 /// so [`!voice_on`] can happen between phrases; if commits are rare, lower slightly.
-pub const VOICE_ON_RMS: f32 = 0.0039;
-pub const VOICE_ON_PEAK: f32 = 0.012;
+pub const VOICE_ON_RMS: f32 = 0.00405;
+pub const VOICE_ON_PEAK: f32 = 0.0123;
 
 /// Running speech envelope: decays per second when current RMS is below the peak (see mod.rs).
-pub const VAD_ENVELOPE_RELEASE_PER_S: f32 = 5.5;
+pub const VAD_ENVELOPE_RELEASE_PER_S: f32 = 5.0;
 /// Commit when current RMS is below this fraction of the envelope (dip between words / clauses).
-pub const VAD_PAUSE_TO_ENVELOPE_RMS: f32 = 0.38;
+pub const VAD_PAUSE_TO_ENVELOPE_RMS: f32 = 0.42;
 /// Peak must also drop vs envelope scale (peaks ≫ RMS).
-pub const VAD_PAUSE_PEAK_ENVELOPE_SCALE: f32 = 5.8;
+pub const VAD_PAUSE_PEAK_ENVELOPE_SCALE: f32 = 5.25;
 pub const VAD_PAUSE_PEAK_CAP: f32 = 0.048;
 /// Ignore relative rule until envelope has meaning (avoids commits on noise-only buildup).
-pub const VAD_ENVELOPE_MIN_REF: f32 = 0.0024;
+pub const VAD_ENVELOPE_MIN_REF: f32 = 0.00265;
 
 /// Time a pause (relative and/or absolute) must persist before commit (ms).
 /// 0 means: finalize immediately on the first detected phrase-gap tick.
-pub const END_SILENCE_MS: u64 = 0;
+pub const END_SILENCE_MS: u64 = 32;
 /// Wall time to wait for a final decode before stdout fallback (ms).
 pub const RESULT_GRACE_MS: u64 = 0;
 
