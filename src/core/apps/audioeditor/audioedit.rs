@@ -1,4 +1,5 @@
 use crate::engine::{Application, EngineState};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
 #[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::basic_shapes;
@@ -26,7 +27,6 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
 
 #[cfg(target_os = "linux")]
 pub struct AudioEditApp {
-    #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     button_size: f32,
 }
@@ -74,6 +74,7 @@ pub struct AudioEditApp {
     sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
+    #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     #[cfg(not(target_arch = "wasm32"))]
     audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
@@ -116,6 +117,7 @@ impl AudioEditApp {
             sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
+            #[cfg(not(target_arch = "wasm32"))]
             track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,

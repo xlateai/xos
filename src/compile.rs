@@ -135,18 +135,18 @@ fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
 fn run_cargo_release_verbose(project_root: &Path) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(project_root);
-    cmd.args(["build", "--release", "-p", "xos"]);
+    cmd.args(["build", "--release", "-p", "xos", "--bins"]);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// `cargo build --release -p xos` with no compiler output — spinner line only.
+/// `cargo build --release -p xos --bins` with no compiler output — spinner line only.
 fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
     let path_str = project_root.display().to_string();
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
-    cargo_cmd.args(["build", "--release", "-p", "xos"]);
+    cargo_cmd.args(["build", "--release", "-p", "xos", "--bins"]);
     cargo_cmd.stdout(Stdio::null());
     cargo_cmd.stderr(Stdio::piped());
 
