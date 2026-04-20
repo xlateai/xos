@@ -4,8 +4,9 @@ import xos
 # LANGUAGE = "english"  # "english" or "japanese"
 LANGUAGE = "japanese"  # "english" or "japanese"
 
-# SIZE = "tiny"
-SIZE = "base"
+SIZE = "tiny"
+# SIZE = "base"
+# SIZE = "small"
 
 
 audio = xos.audio.system(buffer_duration=10.0)
