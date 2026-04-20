@@ -486,6 +486,27 @@ impl TranscriptionEngine {
         }
     }
 
+    /// Approximate seconds currently buffered for the active segment decode window.
+    pub fn buffered_segment_seconds(&self) -> f32 {
+        #[cfg(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            let sr = self.segment_input_rate.max(1) as f32;
+            return self.segment_pcm.len() as f32 / sr;
+        }
+        #[cfg(not(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        {
+            0.0
+        }
+    }
+
     /// Last Silero speech probability \[0, 1\] when `silero_vad` is enabled; otherwise `0`.
     pub fn last_vad_speech_prob(&self) -> f32 {
         #[cfg(all(
