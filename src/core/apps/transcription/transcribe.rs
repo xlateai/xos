@@ -15,15 +15,25 @@ const WAVE_SILENT: (u8, u8, u8) = (230, 230, 235);
 const WAVE_SPEECH: (u8, u8, u8) = (90, 230, 140);
 const PANEL_BG: (u8, u8, u8) = (25, 28, 36);
 const PANEL_FG: (u8, u8, u8) = (210, 214, 220);
+const STATE_ACTIVE: (u8, u8, u8) = (92, 230, 142);
+const STATE_SILENCE: (u8, u8, u8) = (168, 172, 182);
+const TEXTBOX_BG: (u8, u8, u8) = (18, 21, 28);
+const TEXTBOX_BORDER: (u8, u8, u8) = (52, 58, 70);
+const TEXTBOX_SCROLL: (u8, u8, u8) = (90, 98, 114);
 const TEXT_COLOR: (u8, u8, u8) = (230, 236, 240);
-const VAD_DISPLAY_THRESHOLD_DEFAULT: f32 = 0.12;
+const THRESHOLD_DEFAULT: f32 = 0.30;
+const THRESHOLD_MIN: f32 = 0.01;
+const THRESHOLD_MAX: f32 = 1.0;
 const VAD_PROB_EMA_ALPHA: f32 = 0.22;
 const WAVE_SMOOTH_WINDOW: usize = 7;
+const SPEECH_START_FRAMES: u32 = 3;
+const SILENCE_COMMIT_FRAMES: u32 = 8;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
-const WAVE_BAND_FRAC: f32 = 0.50;
-const WAVE_HEADROOM_FRAC: f32 = 0.08;
+const WAVE_BAND_FRAC: f32 = 0.375;
+const WAVE_HEADROOM_FRAC: f32 = 0.0;
 const LEVEL_PANEL_H_FRAC: f32 = 0.17;
+const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -32,33 +42,14 @@ fn transcribe_backend_from_env() -> WhisperBackend {
         .unwrap_or(WhisperBackend::Ct2)
 }
 
-fn vad_binary_threshold() -> f32 {
-    #[cfg(all(
-        feature = "silero_vad",
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    {
-        return crate::ai::transcription::SILERO_VAD_SPEECH_THRESHOLD;
-    }
-    #[cfg(not(all(
-        feature = "silero_vad",
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    )))]
-    {
-        0.35
-    }
+fn clamp_threshold(v: f32) -> f32 {
+    v.clamp(THRESHOLD_MIN, THRESHOLD_MAX)
 }
 
-fn vad_display_threshold() -> f32 {
-    std::env::var("XOS_VAD_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .map(|v| v.clamp(0.0, 1.0))
-        .unwrap_or(VAD_DISPLAY_THRESHOLD_DEFAULT)
+#[derive(Clone, Copy, Debug, Default)]
+struct UiBounds {
+    transcript: Option<(f32, f32, f32, f32)>,
+    slider: Option<(f32, f32, f32, f32)>,
 }
 
 struct VisualCanvas {
@@ -212,9 +203,13 @@ impl VisualCanvas {
         listener: &audio::AudioListener,
         vad_prob: f32,
         vad_label: &TextRasterizer,
-        transcript_lines: &[(String, f32)],
+        state_label: &TextRasterizer,
+        state_color: (u8, u8, u8),
+        threshold: f32,
+        transcript_lines: &[String],
+        scroll_fraction: Option<(f32, f32)>,
         font: &Font,
-    ) {
+    ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
@@ -236,15 +231,20 @@ impl VisualCanvas {
         let bar_y1 = bar_y0 + panel_h * 0.24;
 
         let transcript_top = wave_top + wave_h + h * 0.02;
-        let transcript_bottom = panel_top - h * 0.02;
+        let transcript_bottom = panel_top - h * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
+        let textbox_x0 = pad;
+        let textbox_x1 = w - pad;
+        let textbox_y0 = transcript_top;
+        let textbox_y1 = transcript_bottom;
 
         let all_samples = listener.get_samples_by_channel();
         if all_samples.is_empty() {
-            return;
+            return UiBounds::default();
         }
         let samples = &all_samples[0];
         if samples.is_empty() {
-            return;
+            return UiBounds::default();
         }
 
         // waveform
@@ -289,16 +289,48 @@ impl VisualCanvas {
             prev_y = y;
         }
 
-        // transcript lines (max 3; older lines faded)
-        if transcript_bottom > transcript_top {
-            let row_h = (transcript_bottom - transcript_top) / 3.0;
-            let text_size = (row_h * 0.45).clamp(14.0, 28.0);
-            for (i, (line, alpha)) in transcript_lines.iter().enumerate() {
+        // low-key transcript textbox
+        if transcript_h > 10.0 {
+            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BG);
+            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y0 + 1.0, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, textbox_x0, textbox_y1 - 1.0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
+
+            let line_count = transcript_lines.len().max(1);
+            let row_h = transcript_h / line_count as f32;
+            let text_size = (row_h * 0.46).clamp(12.0, 24.0);
+            let text_left = textbox_x0 + (w * 0.012).max(8.0);
+            let text_right = textbox_x1 - (w * 0.02).max(12.0);
+            let text_w = (text_right - text_left).max(20.0);
+
+            for (i, line) in transcript_lines.iter().enumerate() {
                 let mut tr = TextRasterizer::new(font.clone(), text_size);
-                tr.set_text(line.clone());
-                tr.tick(w, h);
-                let y = transcript_top + row_h * i as f32 + row_h * 0.08;
-                self.blend_text(buffer, width, height, &tr, pad, y, TEXT_COLOR, *alpha);
+                tr.set_text(line.to_string());
+                tr.tick(text_w, row_h.max(1.0));
+                let y = textbox_y0 + row_h * i as f32 + row_h * 0.1;
+                self.blend_text(buffer, width, height, &tr, text_left, y, TEXT_COLOR, 0.95);
+            }
+
+            if let Some((thumb_top_frac, thumb_h_frac)) = scroll_fraction {
+                let track_x0 = textbox_x1 - (w * 0.008).max(6.0);
+                let track_x1 = textbox_x1 - (w * 0.004).max(3.0);
+                let track_y0 = textbox_y0 + 2.0;
+                let track_y1 = textbox_y1 - 2.0;
+                self.draw_rect(buffer, width, height, track_x0, track_y0, track_x1, track_y1, TEXTBOX_BORDER);
+                let track_h = (track_y1 - track_y0).max(1.0);
+                let thumb_h = (track_h * thumb_h_frac.clamp(0.08, 1.0)).max(6.0);
+                let thumb_y0 = track_y0 + (track_h - thumb_h) * thumb_top_frac.clamp(0.0, 1.0);
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    track_x0,
+                    thumb_y0,
+                    track_x1,
+                    (thumb_y0 + thumb_h).min(track_y1),
+                    TEXTBOX_SCROLL,
+                );
             }
         }
 
@@ -308,6 +340,26 @@ impl VisualCanvas {
         let prob_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
         let fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_prob.clamp(0.0, 1.0);
         self.draw_rect(buffer, width, height, bar_x0, bar_y0, fill_x1, bar_y1, prob_color);
+
+        let tx = bar_x0 + (bar_x1 - bar_x0) * threshold.clamp(0.0, 1.0);
+        self.draw_rect(buffer, width, height, tx - 1.0, bar_y0 - 2.0, tx + 1.0, bar_y1 + 2.0, (255, 255, 255));
+
+        let slider_x0 = bar_x0;
+        let slider_x1 = bar_x1;
+        let slider_y0 = panel_top + panel_h * 0.82;
+        let slider_y1 = slider_y0 + panel_h * 0.10;
+        self.draw_rect(buffer, width, height, slider_x0, slider_y0, slider_x1, slider_y1, WAVE_BASELINE);
+        self.draw_rect(
+            buffer,
+            width,
+            height,
+            tx - 4.0,
+            slider_y0 - panel_h * 0.05,
+            tx + 4.0,
+            slider_y1 + panel_h * 0.05,
+            (235, 235, 238),
+        );
+
         self.blend_text(
             buffer,
             width,
@@ -318,6 +370,25 @@ impl VisualCanvas {
             PANEL_FG,
             1.0,
         );
+        self.blend_text(
+            buffer,
+            width,
+            height,
+            state_label,
+            bar_x1 - w * 0.16,
+            panel_top + panel_h * 0.10,
+            state_color,
+            1.0,
+        );
+
+        UiBounds {
+            transcript: if transcript_h > 10.0 {
+                Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
+            } else {
+                None
+            },
+            slider: Some((slider_x0, slider_y0 - panel_h * 0.1, slider_x1, slider_y1 + panel_h * 0.1)),
+        }
     }
 }
 
@@ -326,9 +397,18 @@ pub struct TranscribeApp {
     engine: TranscriptionEngine,
     canvas: VisualCanvas,
     vad_label: TextRasterizer,
+    state_label: TextRasterizer,
     text_font: Font,
     vad_prob_ema: f32,
+    threshold: f32,
     committed_lines: VecDeque<String>,
+    segment_live_text: String,
+    speech_run_frames: u32,
+    silence_run_frames: u32,
+    in_speech_segment: bool,
+    transcript_scroll_offset: usize,
+    ui_bounds: UiBounds,
+    slider_dragging: bool,
 }
 
 impl TranscribeApp {
@@ -336,15 +416,34 @@ impl TranscribeApp {
         let font = fonts::jetbrains_mono();
         let mut vad_label = TextRasterizer::new(font.clone(), 24.0);
         vad_label.set_text("VAD: 0.000".to_string());
+        let mut state_label = TextRasterizer::new(font.clone(), 24.0);
+        state_label.set_text("SILENCE".to_string());
         Self {
             listener: None,
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
             canvas: VisualCanvas::new(),
             vad_label,
+            state_label,
             text_font: font,
             vad_prob_ema: 0.0,
+            threshold: THRESHOLD_DEFAULT,
             committed_lines: VecDeque::new(),
+            segment_live_text: String::new(),
+            speech_run_frames: 0,
+            silence_run_frames: 0,
+            in_speech_segment: false,
+            transcript_scroll_offset: 0,
+            ui_bounds: UiBounds::default(),
+            slider_dragging: false,
         }
+    }
+
+    fn update_threshold_from_mouse(&mut self, state: &EngineState) {
+        let Some((x0, _y0, x1, _y1)) = self.ui_bounds.slider else {
+            return;
+        };
+        let t = ((state.mouse.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0);
+        self.threshold = clamp_threshold(t);
     }
 
     fn pause_input(&self) {
@@ -371,10 +470,7 @@ impl Application for TranscribeApp {
             "transcribe: backend={backend_label} · visual waveform + rolling transcript + VAD level · Esc to quit"
         );
         let _ = io::stdout().flush();
-        println!(
-            "transcribe: display threshold={:.2} (override with XOS_VAD_THRESHOLD=0..1)",
-            vad_display_threshold()
-        );
+        println!("transcribe: threshold slider 1..100% (default 30%)");
         let _ = io::stdout().flush();
 
         let all_devices = audio::devices();
@@ -475,65 +571,102 @@ impl Application for TranscribeApp {
         };
 
         self.engine.process_snapshot(sr, &channels, ingested);
-        for line in self.engine.drain_stdout_commits() {
-            let t = line.trim();
-            if !t.is_empty() {
-                if self.committed_lines.back().map(|s| s.as_str()) != Some(t) {
-                    self.committed_lines.push_back(t.to_string());
-                }
-            }
-        }
-        while self.committed_lines.len() > 16 {
-            let _ = self.committed_lines.pop_front();
-        }
-
-        let live = self.engine.caption().trim().to_string();
-        let keep_history = if live.is_empty() { 3 } else { 2 };
-        let mut lines: Vec<String> = self
-            .committed_lines
-            .iter()
-            .rev()
-            .take(keep_history)
-            .cloned()
-            .collect();
-        lines.reverse();
-        if !live.is_empty() {
-            lines.push(live);
-        }
-        if lines.len() > 3 {
-            lines = lines[lines.len() - 3..].to_vec();
-        }
-        let mut display_lines = Vec::with_capacity(lines.len());
-        let denom = (lines.len().saturating_sub(1)).max(1) as f32;
-        for (i, line) in lines.into_iter().enumerate() {
-            let alpha = if display_lines.is_empty() && denom == 0.0 {
-                1.0
-            } else {
-                0.35 + 0.65 * (i as f32 / denom)
-            };
-            display_lines.push((line, alpha));
-        }
-
         let p_raw = self.engine.last_vad_speech_prob();
         self.vad_prob_ema = self.vad_prob_ema * (1.0 - VAD_PROB_EMA_ALPHA) + p_raw * VAD_PROB_EMA_ALPHA;
         let p = self.vad_prob_ema.clamp(0.0, 1.0);
-        let th = vad_display_threshold();
-        let engine_th = vad_binary_threshold();
-        let state_label = if p >= th { "speech" } else { "silence" };
-        self.vad_label.set_text(format!(
-            "VAD raw:{:.3}  ema:{:.3}  th:{:.2}  engine:{:.2}  {}",
-            p_raw, p, th, engine_th, state_label
-        ));
+        let th = self.threshold;
+        let seg_start = th;
+        let seg_end = (th * 0.80).max(0.01);
+        let active = p >= th;
+
+        let live_caption = self.engine.caption().trim();
+        if p >= seg_start {
+            self.speech_run_frames = self.speech_run_frames.saturating_add(1);
+            self.silence_run_frames = 0;
+            if self.speech_run_frames >= SPEECH_START_FRAMES {
+                self.in_speech_segment = true;
+            }
+            if self.in_speech_segment && !live_caption.is_empty() {
+                self.segment_live_text = live_caption.to_string();
+            }
+        } else {
+            // Segment end uses a lower threshold than start (hysteresis) to avoid rapid toggling.
+            if p < seg_end {
+                self.silence_run_frames = self.silence_run_frames.saturating_add(1);
+            } else {
+                self.silence_run_frames = 0;
+            }
+            self.speech_run_frames = 0;
+            if self.in_speech_segment && self.silence_run_frames >= SILENCE_COMMIT_FRAMES {
+                let finalized = self.segment_live_text.trim();
+                if !finalized.is_empty()
+                    && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized)
+                {
+                    self.committed_lines.push_back(finalized.to_string());
+                }
+                self.segment_live_text.clear();
+                self.in_speech_segment = false;
+            }
+        }
+
+        while self.committed_lines.len() > 16 {
+            let _ = self.committed_lines.pop_front();
+        }
+        let all_lines: Vec<String> = self.committed_lines.iter().cloned().collect();
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
-        let font_size = (height.min(width) * 0.03).clamp(16.0, 36.0);
+        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = height - panel_h - height * 0.03;
+        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
+        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
+        let text_size = ((transcript_h / 3.0) * 0.46).clamp(12.0, 24.0);
+        let visible_lines = ((transcript_h / (text_size * 1.35)).floor() as usize).max(1);
+        let max_offset = all_lines.len().saturating_sub(visible_lines);
+        self.transcript_scroll_offset = self.transcript_scroll_offset.min(max_offset);
+        let start = all_lines.len().saturating_sub(visible_lines + self.transcript_scroll_offset);
+        let end = (start + visible_lines).min(all_lines.len());
+        let display_lines = if start < end {
+            all_lines[start..end].to_vec()
+        } else {
+            vec![]
+        };
+        let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
+            None
+        } else {
+            let top_frac = if max_offset == 0 {
+                0.0
+            } else {
+                1.0 - (self.transcript_scroll_offset as f32 / max_offset as f32)
+            };
+            let h_frac = visible_lines as f32 / all_lines.len() as f32;
+            Some((top_frac, h_frac))
+        };
+
+        self.vad_label
+            .set_text(format!("VAD {:>3.0}%   THR {:>3.0}%", p * 100.0, th * 100.0));
+        self.state_label
+            .set_text(if active { "ACTIVE".to_string() } else { "SILENCE".to_string() });
+        let font_size = (height.min(width) * 0.018).clamp(12.0, 18.0);
         self.vad_label.set_font_size(font_size);
         self.vad_label.tick(width, height);
+        self.state_label.set_font_size(font_size);
+        self.state_label.tick(width, height);
 
         let l = self.listener.as_ref().expect("checked above");
-        self.canvas
-            .tick_draw(state, l, p, &self.vad_label, &display_lines, &self.text_font);
+        self.ui_bounds = self.canvas.tick_draw(
+            state,
+            l,
+            p,
+            &self.vad_label,
+            &self.state_label,
+            if active { STATE_ACTIVE } else { STATE_SILENCE },
+            th,
+            &display_lines,
+            scroll_fraction,
+            &self.text_font,
+        );
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
@@ -549,9 +682,46 @@ impl Application for TranscribeApp {
         }
     }
 
-    fn on_mouse_down(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_down(&mut self, state: &mut EngineState) {
+        if let Some((x0, y0, x1, y1)) = self.ui_bounds.slider {
+            let mx = state.mouse.x;
+            let my = state.mouse.y;
+            if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.slider_dragging = true;
+                self.update_threshold_from_mouse(state);
+            }
+        }
+    }
 
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+        self.slider_dragging = false;
+    }
 
-    fn on_mouse_move(&mut self, _state: &mut EngineState) {}
+    fn on_mouse_move(&mut self, state: &mut EngineState) {
+        if self.slider_dragging {
+            self.update_threshold_from_mouse(state);
+        }
+    }
+
+    fn on_scroll(&mut self, state: &mut EngineState, _delta_x: f32, delta_y: f32) {
+        let Some((x0, y0, x1, y1)) = self.ui_bounds.transcript else {
+            return;
+        };
+        let mx = state.mouse.x;
+        let my = state.mouse.y;
+        if mx < x0 || mx > x1 || my < y0 || my > y1 {
+            return;
+        }
+        if delta_y.abs() < 0.01 {
+            return;
+        }
+        let total = self.committed_lines.len();
+        if total <= 1 {
+            return;
+        }
+        let step = delta_y.signum() as i32;
+        let max_offset = total.saturating_sub(1) as i32;
+        let next = (self.transcript_scroll_offset as i32 + step).clamp(0, max_offset);
+        self.transcript_scroll_offset = next as usize;
+    }
 }
