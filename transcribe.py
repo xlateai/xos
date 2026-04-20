@@ -1,8 +1,16 @@
 import xos
 
 # Same defaults as xos.ai.whisper.load: tiny + CT2.
+# LANGUAGE = "english"  # "english" or "japanese"
+LANGUAGE = "japanese"  # "english" or "japanese"
+
+SIZE = "tiny"
+# SIZE = "base"
+# SIZE = "small"
+
+
 audio = xos.audio.system(buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio, size="tiny")
+transcriber = xos.audio.transcription(audio, size=SIZE, language=LANGUAGE)
 if xos.flags.record:
     recorder = xos.audio.recording(audio, "test.mp3")
 

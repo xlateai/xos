@@ -29,7 +29,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         obj.clone()
     } else {
         return Err(vm.new_type_error(
-            "xos.audio.transcription(audio, size='tiny|small', backend='ct2|burn') expects a microphone object"
+            "xos.audio.transcription(audio, size='tiny|small|base', backend='ct2|burn', language='english|japanese') expects a microphone object"
                 .to_string(),
         ));
     };
@@ -42,9 +42,9 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
     if let Some(sz) = size.as_deref() {
         let lower = sz.trim().to_ascii_lowercase();
-        if lower != "small" && lower != "tiny" {
+        if lower != "small" && lower != "tiny" && lower != "base" {
             return Err(vm.new_value_error(
-                "size must be 'small' or 'tiny'".to_string(),
+                "size must be 'small', 'tiny', or 'base'".to_string(),
             ));
         }
     }
@@ -62,6 +62,11 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             )
         })?,
     };
+    let language: Option<String> = if let Some(v) = args.kwargs.get("language") {
+        Some(v.clone().try_into_value::<String>(vm)?)
+    } else {
+        None
+    };
     let listener_ptr_obj = mic_obj
         .get_attr("_listener_ptr", vm)
         .map_err(|_| vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string()))?;
@@ -70,7 +75,12 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
 
-    let mut engine = TranscriptionEngine::new_with_size_and_backend(size.as_deref(), backend);
+    let mut engine = TranscriptionEngine::new_with_size_backend_language(
+        size.as_deref(),
+        backend,
+        language.as_deref(),
+    )
+    .map_err(|e| vm.new_value_error(e))?;
     let listener = unsafe { &*(listener_ptr as *const AudioListener) };
     engine.set_device_hint("python-mic", listener.buffer().sample_rate());
 

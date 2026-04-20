@@ -103,6 +103,20 @@ fn whisper_encoder_trace_from_env() -> bool {
     )
 }
 
+fn normalize_language(language: Option<&str>) -> Result<&'static str, String> {
+    let Some(raw) = language.map(|s| s.trim().to_ascii_lowercase()) else {
+        return Ok("en");
+    };
+    if raw.is_empty() {
+        return Ok("en");
+    }
+    match raw.as_str() {
+        "english" | "en" => Ok("en"),
+        "japanese" | "ja" => Ok("ja"),
+        _ => Err("language must be 'english' or 'japanese'".to_string()),
+    }
+}
+
 /// Host values for debugging: uses [`TensorData::iter`] so Flex32 and F32 both round-trip like
 /// `transcribe` / the Burn CLI (avoids relying on `convert` + `to_vec` alone).
 fn tensor_data_to_f32_vec(data: TensorData) -> Vec<f32> {
@@ -156,7 +170,10 @@ fn tensor_debug_stats(vals: &[f32]) -> Option<TensorDebugStats> {
 }
 
 /// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
-pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
+pub fn spawn_decode_thread(
+    size: Option<&str>,
+    language: Option<&str>,
+) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
     use crate::ai::transcription::burn::whisper_burn::transcribe::SamplingStrategy;
 
     let sel = parse_whisper_model_arg(size)?;
@@ -170,6 +187,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
         &device,
     )?;
     let use_f16_compute = sel.use_f16_compute;
+    let decode_lang = normalize_language(language)?;
     let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = std::sync::mpsc::channel::<String>();
 
@@ -177,7 +195,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
         .name("xos-whisper-decode".into())
         .spawn(move || {
             let mut params = WhisperParams::default();
-            params.language = "en".to_string();
+            params.language = decode_lang.to_string();
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
             params.use_f16_compute = use_f16_compute;
             params.debug_mode = whisper_decode_trace_from_env();
@@ -215,15 +233,17 @@ pub fn transcribe_waveform_once(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
+    language: Option<&str>,
 ) -> Result<String, String> {
     use crate::ai::transcription::burn::whisper_burn::transcribe::SamplingStrategy;
 
     let sel = parse_whisper_model_arg(size)?;
+    let decode_lang = normalize_language(language)?;
     let models_root = prepare_whisper_models_root(&sel.canonical)?;
     validate_artifacts(&models_root, &sel.canonical)?;
     with_cached_model(&models_root, &sel, |bpe, whisper| {
         let mut params = WhisperParams::default();
-        params.language = "en".to_string();
+        params.language = decode_lang.to_string();
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
         params.use_f16_compute = sel.use_f16_compute;
         params.debug_mode = whisper_decode_trace_from_env();
