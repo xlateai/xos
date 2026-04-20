@@ -1,4 +1,8 @@
 use rustpython_vm::{VirtualMachine, builtins::PyModule, PyRef};
+use rustpython_vm::{PyResult, function::FuncArgs};
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::fs::File;
 
 mod microphone;
 mod speakers;
@@ -9,6 +13,89 @@ mod recording;
 // Re-export cleanup functions for use by other modules
 pub use microphone::cleanup_all_microphones_rust;
 pub use speakers::cleanup_all_speakers_rust;
+
+fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
+    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
+        if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
+            return Ok(wrapped);
+        }
+    }
+    Ok(dict)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if input.is_empty() || src_rate == 0 || dst_rate == 0 || src_rate == dst_rate {
+        return input.to_vec();
+    }
+    let out_len = ((input.len() as u64) * (dst_rate as u64) / (src_rate as u64)).max(1) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    let scale = src_rate as f32 / dst_rate as f32;
+    for i in 0..out_len {
+        let pos = i as f32 * scale;
+        let idx = pos.floor() as usize;
+        let frac = pos - idx as f32;
+        let a = input.get(idx).copied().unwrap_or(0.0);
+        let b = input.get(idx + 1).copied().unwrap_or(a);
+        out.push(a + (b - a) * frac);
+    }
+    out
+}
+
+/// Load audio to mono **f32** PCM, default **16_000 Hz** — the rate Whisper / `fast-whisper-burn`
+/// expect for `transcribe(..., sample_rate, ...)`. Samples are roughly **[-1, 1]** after decode.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    use rodio::{Decoder, Source};
+    use crate::python_api::dtypes::DType;
+    use crate::python_api::tensors::{Tensor, create_tensor_from_data};
+
+    let path: String = if let Some(v) = args.args.first() {
+        v.clone().try_into_value(vm)?
+    } else {
+        return Err(vm.new_type_error(
+            "xos.audio.load(path, sample_rate=16000) requires path".to_string(),
+        ));
+    };
+    let target_sample_rate: i64 = if let Some(v) = args.args.get(1) {
+        v.clone().try_into_value(vm)?
+    } else {
+        16_000
+    };
+    if target_sample_rate <= 0 {
+        return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
+    }
+
+    let file = File::open(&path).map_err(|e| vm.new_runtime_error(format!("open audio file: {e}")))?;
+    let decoder =
+        Decoder::try_from(file).map_err(|e| vm.new_runtime_error(format!("decode audio file: {e}")))?;
+    let src_rate = decoder.sample_rate();
+    let channels = decoder.channels().max(1) as usize;
+
+    let mut mono = Vec::<f32>::new();
+    let mut frame = Vec::<f32>::with_capacity(channels);
+    for s in decoder {
+        frame.push(s);
+        if frame.len() == channels {
+            let avg = frame.iter().sum::<f32>() / channels as f32;
+            mono.push(avg);
+            frame.clear();
+        }
+    }
+
+    let mono = resample_linear(&mono, src_rate, target_sample_rate as u32);
+    let shape = vec![mono.len()];
+    let py_tensor: Tensor = create_tensor_from_data(mono, shape, DType::Float32);
+    wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?, vm)
+}
+
+#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+fn audio_load(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(vm.new_runtime_error(
+        "xos.audio.load is only available on desktop (macOS/Linux/Windows), not iOS/WASM"
+            .to_string(),
+    ))
+}
 
 #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
 fn recording_stub_new(
@@ -28,6 +115,9 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("get_input_devices", vm.new_function("get_input_devices", microphone::get_input_devices), vm).unwrap();
     module.set_attr("Microphone", vm.new_function("Microphone", microphone::microphone_new), vm).unwrap();
     module.set_attr("system", vm.new_function("system", microphone::microphone_system), vm).unwrap();
+    module
+        .set_attr("load", vm.new_function("load", audio_load), vm)
+        .unwrap();
     module.set_attr("cleanup_all_microphones", vm.new_function("cleanup_all_microphones", microphone::cleanup_all_microphones), vm).unwrap();
     module.set_attr("transcription", vm.new_function("transcription", transcription::transcription_new), vm).unwrap();
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -86,7 +176,7 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module.set_attr("_speaker_get_buffer_size", vm.new_function("_speaker_get_buffer_size", speakers::speaker_get_buffer_size), vm).unwrap();
     module.set_attr("_speaker_get_buffer", vm.new_function("_speaker_get_buffer", speakers::speaker_get_buffer), vm).unwrap();
     module.set_attr("_speaker_cleanup", vm.new_function("_speaker_cleanup", speakers::speaker_cleanup), vm).unwrap();
-    
+
     module
 }
 

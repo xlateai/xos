@@ -32,7 +32,6 @@ use std::fmt;
 // Import platform-specific submodules
 pub mod microphone;
 pub mod speakers;
-pub mod transcription;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "macos"))]
 mod macos_sck;

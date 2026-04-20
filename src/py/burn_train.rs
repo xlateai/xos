@@ -414,7 +414,7 @@ pub fn linear_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .weight
         .val()
         .shape()
-        .dims[0];
+        .dims::<2>()[0];
 
     if flat.len() != d_in {
         return Err(vm.new_value_error(format!(
@@ -537,7 +537,8 @@ pub fn mse_loss(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     let dev = device();
-    let target: Tensor<TrainAD, 2> = Tensor::from_data(TensorData::new(target_flat, pred.shape().dims), &dev);
+    let target: Tensor<TrainAD, 2> =
+        Tensor::from_data(TensorData::new(target_flat, pred.shape().dims::<2>()), &dev);
     let diff = pred - target;
     let loss = diff.powi_scalar(2).mean();
     let loss_scalar = loss.clone().into_scalar();

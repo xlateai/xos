@@ -114,9 +114,48 @@ class Module:
         for _k, v in self.__dict__.items():
             if isinstance(v, Linear):
                 out.append(v)
+            elif isinstance(v, Parameter):
+                out.append(v)
             elif hasattr(v, "parameters"):
                 out.extend(v.parameters())
         return out
+
+class Parameter:
+    """Lightweight parameter wrapper used by model inspectors."""
+    def __init__(self, name, shape, dtype, values=None, stats=None):
+        self.name = str(name)
+        self.shape = tuple(int(d) for d in shape)
+        self.dtype = str(dtype)
+        self.values = list(values) if values is not None else []
+        self.stats = dict(stats) if stats is not None else {}
+
+    def mean(self):
+        if "mean" in self.stats:
+            return float(self.stats["mean"])
+        if not self.values:
+            return 0.0
+        return float(sum(float(v) for v in self.values) / len(self.values))
+
+    def min(self):
+        if "min" in self.stats:
+            return float(self.stats["min"])
+        if not self.values:
+            return 0.0
+        return float(min(float(v) for v in self.values))
+
+    def max(self):
+        if "max" in self.stats:
+            return float(self.stats["max"])
+        if not self.values:
+            return 0.0
+        return float(max(float(v) for v in self.values))
+
+    def std(self):
+        if not self.values:
+            return 0.0
+        m = self.mean()
+        var = sum((float(v) - m) ** 2 for v in self.values) / float(len(self.values))
+        return var ** 0.5
 
 class Conv2d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, averaged=True):
@@ -292,6 +331,9 @@ class Adam:
             }
             if let Ok(relu_cls) = scope.globals.get_item("ReLU", vm) {
                 module.set_attr("ReLU", relu_cls, vm).unwrap();
+            }
+            if let Ok(param_cls) = scope.globals.get_item("Parameter", vm) {
+                module.set_attr("Parameter", param_cls, vm).unwrap();
             }
             let losses = vm.new_module("xos.nn.losses", vm.ctx.new_dict(), None);
             if let Ok(mse_cls) = scope.globals.get_item("MSELoss", vm) {

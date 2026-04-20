@@ -1115,6 +1115,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add auth helpers.
     let auth_module = crate::python_api::auth::make_auth_module(vm);
     module.set_attr("auth", auth_module, vm).unwrap();
+
+    // Add AI helpers.
+    let ai_module = crate::python_api::ai::make_ai_module(vm);
+    module.set_attr("ai", ai_module, vm).unwrap();
     
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);

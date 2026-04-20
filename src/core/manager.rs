@@ -57,6 +57,19 @@ static PROC_VERSION: AtomicU64 = AtomicU64::new(1);
 static SELF_CHANNELS: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// When LAN join fell back to loopback, retry upgrading to LAN on this interval (ms).
+#[cfg(not(target_arch = "wasm32"))]
+static LAST_PROC_LAN_UPGRADE_TRY_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(not(target_arch = "wasm32"))]
+const PROC_LAN_UPGRADE_INTERVAL_MS: u64 = 2500;
+
+#[cfg(not(target_arch = "wasm32"))]
+const PROC_LAN_JOIN_ATTEMPTS: u32 = 16;
+
+#[cfg(not(target_arch = "wasm32"))]
+const PROC_LAN_JOIN_GAP_MS: u64 = 120;
+
 #[cfg(not(target_arch = "wasm32"))]
 fn now_ms() -> u64 {
     crate::mesh::nodes::now_unix_ms()
@@ -156,15 +169,27 @@ fn emit_hello(session: &MeshSession, label: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn reconnect_proc_session(label: &str) -> Option<Arc<MeshSession>> {
-    let session_result = if has_identity() {
+    let session_result: Result<MeshSession, String> = if has_identity() {
         match load_node_identity() {
-            Ok(identity) => MeshSession::join_with_identity(
-                PROC_MESH_ID,
-                MeshMode::Lan,
-                Arc::new(identity),
-                None,
-            )
-            .or_else(|_| MeshSession::join(PROC_MESH_ID, MeshMode::Local)),
+            Ok(identity) => {
+                let id = Arc::new(identity);
+                for attempt in 0..PROC_LAN_JOIN_ATTEMPTS {
+                    match MeshSession::join_with_identity(
+                        PROC_MESH_ID,
+                        MeshMode::Lan,
+                        Arc::clone(&id),
+                        None,
+                    ) {
+                        Ok(s) => return finalize_proc_session(s, label),
+                        Err(_) => {
+                            if attempt + 1 < PROC_LAN_JOIN_ATTEMPTS {
+                                thread::sleep(Duration::from_millis(PROC_LAN_JOIN_GAP_MS));
+                            }
+                        }
+                    }
+                }
+                MeshSession::join(PROC_MESH_ID, MeshMode::Local)
+            }
             Err(_) => MeshSession::join(PROC_MESH_ID, MeshMode::Local),
         }
     } else {
@@ -173,12 +198,19 @@ fn reconnect_proc_session(label: &str) -> Option<Arc<MeshSession>> {
     let Ok(session) = session_result else {
         return None;
     };
+    finalize_proc_session(session, label)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finalize_proc_session(session: MeshSession, label: &str) -> Option<Arc<MeshSession>> {
     let session = Arc::new(session);
     if let Ok(mut g) = PROC_SESSION.lock() {
         *g = Some(Arc::clone(&session));
     }
     remember_snapshot(self_snapshot(&session, label));
     emit_hello(&session, label);
+    let mode = if session.is_lan_transport() { "lan" } else { "local" };
+    register_mesh(PROC_MESH_ID, mode);
     Some(session)
 }
 
@@ -189,8 +221,23 @@ fn current_or_reconnect_session(label: &str) -> Option<Arc<MeshSession>> {
         .ok()
         .and_then(|g| g.as_ref().cloned())
         .filter(|s| s.is_connected());
-    if current.is_some() {
-        return current;
+
+    if let Some(s) = current {
+        // If we have an offline identity but fell back to loopback, keep retrying LAN so
+        // `xos status` / proc hellos merge across machines (same mesh as `xos term`).
+        if has_identity() && !s.is_lan_transport() {
+            let now = now_ms();
+            let last = LAST_PROC_LAN_UPGRADE_TRY_MS.load(Ordering::Relaxed);
+            if now.saturating_sub(last) >= PROC_LAN_UPGRADE_INTERVAL_MS {
+                LAST_PROC_LAN_UPGRADE_TRY_MS.store(now, Ordering::Relaxed);
+                if let Ok(mut g) = PROC_SESSION.lock() {
+                    *g = None;
+                }
+                drop(s);
+                return reconnect_proc_session(label);
+            }
+        }
+        return Some(s);
     }
     reconnect_proc_session(label)
 }
@@ -266,7 +313,6 @@ pub fn bootstrap(label: &str) {
     let Some(_) = reconnect_proc_session(label) else {
         return;
     };
-    register_mesh(PROC_MESH_ID, "local");
     let label_for_reader = label.to_string();
     thread::spawn(move || handle_incoming(label_for_reader));
 

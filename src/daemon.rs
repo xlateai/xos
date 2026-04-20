@@ -18,6 +18,12 @@ pub struct DaemonStatus {
     pub pid: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DaemonGuard {
+    pub daemon_enabled: bool,
+    pub logged_in: bool,
+}
+
 fn daemon_data_dir() -> Result<PathBuf, String> {
     let dir = xos::auth::auth_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -26,6 +32,55 @@ fn daemon_data_dir() -> Result<PathBuf, String> {
 
 fn daemon_pid_path() -> Result<PathBuf, String> {
     Ok(daemon_data_dir()?.join(DAEMON_PID_FILE))
+}
+
+fn daemon_guard() -> Result<DaemonGuard, String> {
+    Ok(DaemonGuard {
+        daemon_enabled: xos::runtime_config::daemon_enabled()?,
+        logged_in: xos::auth::is_logged_in(),
+    })
+}
+
+pub fn daemon_launch_allowed() -> Result<bool, String> {
+    let guard = daemon_guard()?;
+    Ok(guard.daemon_enabled && guard.logged_in)
+}
+
+pub fn daemon_guard_message() -> Result<Option<String>, String> {
+    let guard = daemon_guard()?;
+    if !guard.daemon_enabled {
+        return Ok(Some(
+            "daemon usage is disabled (`daemon_enabled: false`). Run `xos on` to enable it."
+                .to_string(),
+        ));
+    }
+    if !guard.logged_in {
+        return Ok(Some(
+            "daemon requires login identity. Run `xos login` first, then `xos on`.".to_string(),
+        ));
+    }
+    Ok(None)
+}
+
+pub fn maybe_ensure_daemon_running() -> Result<Option<u32>, String> {
+    if !daemon_launch_allowed()? {
+        let _ = stop_daemon();
+        return Ok(None);
+    }
+    ensure_daemon_running().map(Some)
+}
+
+pub fn enable_daemon_usage() -> Result<u32, String> {
+    if !xos::auth::is_logged_in() {
+        return Err("cannot enable daemon before login. Run `xos login` first.".to_string());
+    }
+    xos::runtime_config::set_daemon_enabled(true)?;
+    ensure_daemon_running()
+}
+
+pub fn disable_daemon_usage() -> Result<bool, String> {
+    xos::runtime_config::set_daemon_enabled(false)?;
+    stop_daemon()
 }
 
 fn read_pid_file() -> Result<Option<u32>, String> {
@@ -135,6 +190,13 @@ pub fn daemon_status() -> Result<DaemonStatus, String> {
 }
 
 pub fn ensure_daemon_running() -> Result<u32, String> {
+    if !daemon_launch_allowed()? {
+        let _ = stop_daemon();
+        let reason = daemon_guard_message()?
+            .unwrap_or_else(|| "daemon launch blocked by runtime policy".to_string());
+        return Err(reason);
+    }
+
     let status = daemon_status()?;
     if status.online {
         return Ok(status.pid.unwrap_or(0));
@@ -174,6 +236,13 @@ pub fn stop_daemon() -> Result<bool, String> {
 }
 
 pub fn run_daemon_forever() -> Result<(), String> {
+    if !daemon_launch_allowed()? {
+        let _ = stop_daemon();
+        let reason = daemon_guard_message()?
+            .unwrap_or_else(|| "daemon launch blocked by runtime policy".to_string());
+        return Err(reason);
+    }
+
     let me = std::process::id();
     if let Some(pid) = read_pid_file()? {
         if pid != me && process_is_running(pid) {
@@ -193,16 +262,36 @@ pub fn run_daemon_forever() -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     let (_global_mesh, global_mode) = {
         use xos::mesh::{MeshMode, MeshSession};
+        const GLOBAL_LAN_ATTEMPTS: u32 = 16;
+        const GLOBAL_LAN_GAP_MS: u64 = 120;
         match xos::auth::load_node_identity() {
-            Ok(identity) => match MeshSession::join_with_identity(
-                GLOBAL_MESH_ID,
-                MeshMode::Lan,
-                Arc::new(identity),
-                None,
-            ) {
-                Ok(s) => (s, "lan"),
-                Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
-            },
+            Ok(identity) => {
+                let id = Arc::new(identity);
+                let mut lan_session: Option<MeshSession> = None;
+                for attempt in 0..GLOBAL_LAN_ATTEMPTS {
+                    match MeshSession::join_with_identity(
+                        GLOBAL_MESH_ID,
+                        MeshMode::Lan,
+                        Arc::clone(&id),
+                        None,
+                    ) {
+                        Ok(s) => {
+                            lan_session = Some(s);
+                            break;
+                        }
+                        Err(_) => {
+                            if attempt + 1 < GLOBAL_LAN_ATTEMPTS {
+                                thread::sleep(Duration::from_millis(GLOBAL_LAN_GAP_MS));
+                            }
+                        }
+                    }
+                }
+                if let Some(s) = lan_session {
+                    (s, "lan")
+                } else {
+                    (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local")
+                }
+            }
             Err(_) => (MeshSession::join(GLOBAL_MESH_ID, MeshMode::Local)?, "local"),
         }
     };

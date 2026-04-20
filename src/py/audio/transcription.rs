@@ -1,4 +1,5 @@
-use crate::engine::audio::{AudioListener, transcription::TranscriptionEngine};
+use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
+use crate::engine::audio::AudioListener;
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -28,7 +29,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         obj.clone()
     } else {
         return Err(vm.new_type_error(
-            "xos.audio.transcription(audio, size='small|tiny') expects a microphone object"
+            "xos.audio.transcription(audio, size='tiny|small', backend='ct2|burn') expects a microphone object"
                 .to_string(),
         ));
     };
@@ -47,6 +48,20 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             ));
         }
     }
+    let backend_kw = args.kwargs.get("backend").cloned();
+    let backend_s: Option<String> = if let Some(b) = backend_kw {
+        Some(b.try_into_value::<String>(vm)?)
+    } else {
+        None
+    };
+    let backend = match backend_s.as_deref().map(str::trim) {
+        None | Some("") => WhisperBackend::Ct2,
+        Some(s) => WhisperBackend::from_str(s).ok_or_else(|| {
+            vm.new_value_error(
+                "backend must be 'ct2' or 'burn' (same as xos.ai.whisper.CT2 / BURN)".to_string(),
+            )
+        })?,
+    };
     let listener_ptr_obj = mic_obj
         .get_attr("_listener_ptr", vm)
         .map_err(|_| vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string()))?;
@@ -55,7 +70,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
 
-    let mut engine = TranscriptionEngine::new_with_size(size.as_deref());
+    let mut engine = TranscriptionEngine::new_with_size_and_backend(size.as_deref(), backend);
     let listener = unsafe { &*(listener_ptr as *const AudioListener) };
     engine.set_device_hint("python-mic", listener.buffer().sample_rate());
 

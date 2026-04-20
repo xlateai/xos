@@ -20,7 +20,7 @@ use super::lan_crypto::{
     client_handshake, decrypt_mesh_line, encrypt_mesh_line, server_handshake, LanWireKeys,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use crate::auth::{load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
+use crate::auth::{is_logged_in, load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
 
 const WIRE_VERSION: u32 = 2;
 
@@ -183,6 +183,20 @@ pub enum MeshMode {
     Local,
     /// Coordinator binds `0.0.0.0` on TCP; LAN peers locate it via UDP broadcast on a derived port.
     Lan,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn require_authorized_non_local_mesh(mode: MeshMode) -> Result<(), String> {
+    if mode == MeshMode::Local {
+        return Ok(());
+    }
+    if !is_logged_in() {
+        return Err(
+            "unauthorized mesh access: LAN/online mesh requires a local login identity. Run `xos login` first."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {
@@ -981,6 +995,17 @@ impl MeshSession {
         self.connected.load(Ordering::SeqCst) != 0
     }
 
+    /// True when this session uses encrypted LAN transport (vs plaintext loopback-only local mesh).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_lan_transport(&self) -> bool {
+        self.lan_host.is_some() || self.lan_client.is_some()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn is_lan_transport(&self) -> bool {
+        false
+    }
+
     pub fn join(mesh_id: &str, mode: MeshMode) -> Result<Self, String> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -1023,6 +1048,7 @@ impl MeshSession {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            require_authorized_non_local_mesh(mode)?;
             let port = port_for_mesh_id(mesh_id);
             match mode {
                 MeshMode::Local => {
@@ -1033,7 +1059,7 @@ impl MeshSession {
                     }
                 }
                 MeshMode::Lan => Err(
-                    "LAN mesh requires a local identity. Run `xos login --offline` first."
+                    "LAN mesh requires a local login identity. Run `xos login` first."
                         .into(),
                 ),
             }
@@ -1047,6 +1073,7 @@ impl MeshSession {
         identity: Arc<UnlockedNodeIdentity>,
         max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
+        require_authorized_non_local_mesh(mode)?;
         let port = port_for_mesh_id(mesh_id);
         let account_aid = {
             let auth = load_identity().map_err(|e| e.to_string())?;

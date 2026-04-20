@@ -16,13 +16,11 @@ fn login_offline_interactive() -> Result<(), String> {
     if has_identity() {
         let p = auth_data_dir()
             .map(|d| {
-                format!(
-                    "{} + {}",
-                    d.join("authentication.json").display(),
-                    d.join("node_identity.json").display()
-                )
+                let a = d.join("auth").join("authentication.json");
+                let n = d.join("auth").join("node_identity.json");
+                format!("{} + {}", a.display(), n.display())
             })
-            .unwrap_or_else(|_| "authentication.json + node_identity.json".to_string());
+            .unwrap_or_else(|_| "auth/authentication.json + auth/node_identity.json".to_string());
         return Err(format!(
             "identity already exists ({p}). Use xos login --reset to replace credentials, or xos login --delete to remove identity."
         ));
@@ -132,6 +130,9 @@ enum Commands {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
+        /// Run `cargo clean` in the project root before building (full rebuild).
+        #[arg(long)]
+        clean: bool,
     },
     /// Execute Python scripts (`xpy` is a shortcut for this command).
     #[command(name = "py", visible_alias = "python")]
@@ -142,15 +143,22 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
     },
-    /// Print the xos repo root (directory that contains `src/`, for `xos compile`), or `--exe` for this binary
+    /// Print git repo root, app data dir (credentials, etc.), and this CLI binary path.
+    /// With `--code`, `--data`, or `--cli-exe`, print only that path (plain, no colors) for shell use, e.g. `cd "$(xos path --data)"`.
     Path {
-        /// Print the path of this running `xos` / `xpy` / `xrs` executable instead of the repo root
+        /// Print only the xos project / repository root
         #[arg(long)]
-        exe: bool,
+        code: bool,
+        /// Print only the app data directory (`~/.xos` on Unix, `%LocalAppData%\\xos` on Windows)
+        #[arg(long)]
+        data: bool,
+        /// Print only the path of this `xos` / `xpy` executable
+        #[arg(long = "cli-exe")]
+        cli_exe: bool,
     },
     /// Sign in for cloud mesh / API access (browser OAuth and API keys — not wired up yet).
     Login {
-        /// Remove local `authentication.json` and `node_identity.json` (and legacy `identity.json`).
+        /// Remove local `auth/authentication.json` and `auth/node_identity.json` (and legacy `identity.json`).
         #[arg(long)]
         delete: bool,
         /// Replace existing credentials safely (requires an existing identity).
@@ -166,6 +174,12 @@ enum Commands {
     /// Print daemon status without auto-starting.
     #[command(name = "status")]
     Status,
+    /// Enable daemon usage globally (`daemon_enabled: true`) and start it.
+    #[command(name = "on")]
+    On,
+    /// Disable daemon usage globally (`daemon_enabled: false`) and stop it.
+    #[command(name = "off")]
+    Off,
     #[command(name = "daemon-internal", hide = true)]
     DaemonInternal,
 }
@@ -173,6 +187,98 @@ enum Commands {
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
 const ORANGE_UNCOMMITTED: &str = "\x1b[38;5;208m";
 const ANSI_RESET: &str = "\x1b[0m";
+
+/// `xos path`: gray → yellow-green → green (256-color) when stdout is a TTY.
+const PATH_LINE_GRAY: &str = "\x1b[38;5;240m";
+const PATH_LINE_MID: &str = "\x1b[38;5;107m";
+const PATH_LINE_GREEN: &str = "\x1b[38;5;40m";
+
+fn resolve_xos_paths() -> (
+    Result<PathBuf, String>,
+    Result<PathBuf, String>,
+    Result<PathBuf, String>,
+) {
+    use xos::auth::auth_data_dir;
+    (
+        xos::find_xos_project_root().map_err(|e| e.to_string()),
+        auth_data_dir().map_err(|e| e.to_string()),
+        std::env::current_exe().map_err(|e| e.to_string()),
+    )
+}
+
+fn print_xos_paths() {
+    let color = io::stdout().is_terminal();
+    let (c1, c2, c3) = if color {
+        (PATH_LINE_GRAY, PATH_LINE_MID, PATH_LINE_GREEN)
+    } else {
+        ("", "", "")
+    };
+    let reset = if color { ANSI_RESET } else { "" };
+
+    let (code_r, data_r, exe_r) = resolve_xos_paths();
+
+    let code = match code_r {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let data = match data_r {
+        Ok(p) => p.display().to_string(),
+        Err(e) => format!("({e})"),
+    };
+
+    let exe = match exe_r {
+        Ok(p) => p.display().to_string(),
+        Err(e) => {
+            eprintln!("❌ Could not resolve path of running executable: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Fixed label width so paths align after a tab.
+    println!("{}{:<9}\t{}{}", c1, "code:", code, reset);
+    println!("{}{:<9}\t{}{}", c2, "data:", data, reset);
+    println!("{}{:<9}\t{}{}", c3, "cli-exe:", exe, reset);
+}
+
+fn run_path_command(code: bool, data: bool, cli_exe: bool) {
+    if !code && !data && !cli_exe {
+        print_xos_paths();
+        return;
+    }
+
+    let (code_r, data_r, exe_r) = resolve_xos_paths();
+    if code {
+        match code_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if data {
+        match data_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if cli_exe {
+        match exe_r {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => {
+                eprintln!("❌ Could not resolve path of running executable: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
 
 /// Second line for `xos -v` / `xpy -v`: full commit hash, optional colored dirty suffix, or a fixed message if no git tree.
 fn version_git_second_line(color_uncommitted: bool) -> String {
@@ -271,6 +377,8 @@ fn main() {
                     | "terminal"
                     | "kill"
                     | "status"
+                    | "on"
+                    | "off"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -303,6 +411,8 @@ fn main() {
                     | "terminal"
                     | "kill"
                     | "status"
+                    | "on"
+                    | "off"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -370,48 +480,36 @@ fn main() {
             | Some(Commands::Terminal)
     );
     if should_ensure_daemon {
-        if let Err(e) = daemon::ensure_daemon_running() {
+        if let Err(e) = daemon::maybe_ensure_daemon_running() {
             eprintln!("❌ failed to start xos daemon: {e}");
             std::process::exit(1);
         }
     }
 
     match cli.command {
-        Some(Commands::Compile { ios }) => {
+        Some(Commands::Compile { ios, clean }) => {
             if let Err(e) = daemon::stop_daemon() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
             let compile_ok = if ios {
-                compile::compile_ios_rust()
+                compile::compile_ios_rust(clean)
             } else {
-                compile::xos_compile_command(true)
+                compile::xos_compile_command(true, clean)
             };
-            if let Err(e) = daemon::ensure_daemon_running() {
-                eprintln!("❌ compile finished, but failed to restart daemon: {e}");
+            if let Err(e) = daemon::maybe_ensure_daemon_running() {
+                eprintln!("❌ compile finished, but failed to enforce daemon state: {e}");
                 std::process::exit(1);
             }
             if !compile_ok {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Path { exe }) => {
-            if exe {
-                match std::env::current_exe() {
-                    Ok(path) => println!("{}", path.display()),
-                    Err(e) => {
-                        eprintln!("❌ Could not resolve path of running executable: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                match xos::find_xos_project_root() {
-                    Ok(root) => println!("{}", root.display()),
-                    Err(e) => {
-                        eprintln!("❌ {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
+        Some(Commands::Path {
+            code,
+            data,
+            cli_exe,
+        }) => {
+            run_path_command(code, data, cli_exe);
         }
         Some(Commands::Rs { app }) => {
             run_app_command(app);
@@ -435,7 +533,7 @@ fn main() {
                 use xos::auth::delete_identity;
                 match delete_identity() {
                     Ok(()) => println!(
-                        "Removed local identity (authentication.json, node_identity.json, legacy identity.json)."
+                        "Removed local identity (auth/authentication.json, auth/node_identity.json, legacy identity.json)."
                     ),
                     Err(e) => {
                         eprintln!("❌ {e}");
@@ -447,7 +545,7 @@ fn main() {
                 match login_offline_reset_interactive() {
                     Ok(()) => {
                         println!(
-                            "Reset identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA)."
+                            "Reset identity: auth/authentication.json (username + account RSA) and auth/node_identity.json (machine name + node RSA)."
                         );
                     }
                     Err(e) => {
@@ -459,7 +557,7 @@ fn main() {
                 match login_offline_interactive() {
                     Ok(()) => {
                         println!(
-                            "Saved identity: authentication.json (username + account RSA) and node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
+                            "Saved identity: auth/authentication.json (username + account RSA) and auth/node_identity.json (machine name + node RSA). Node id is derived from the node public key (not stored). LAN mesh loads node keys from disk — no password prompt."
                         );
                     }
                     Err(e) => {
@@ -488,6 +586,14 @@ fn main() {
             println!("xos daemon offline");
         }
         Some(Commands::Status) => {
+            let daemon_enabled = match xos::runtime_config::daemon_enabled() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("❌ failed to read daemon config: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let logged_in = xos::auth::is_logged_in();
             match daemon::daemon_status() {
                 Ok(s) if s.online => {
                     println!("daemon: online (pid: {})", s.pid.unwrap_or(0));
@@ -500,6 +606,8 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            println!("daemon_enabled: {}", daemon_enabled);
+            println!("logged_in: {}", logged_in);
 
             xos::manager::bootstrap("xos-status");
             let root = match xos::find_xos_project_root() {
@@ -516,6 +624,30 @@ fn main() {
             }
             run_python_file(&script, &[]);
         }
+        Some(Commands::On) => match daemon::enable_daemon_usage() {
+            Ok(pid) => {
+                println!("daemon enabled");
+                println!("daemon: online (pid: {pid})");
+            }
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        },
+        Some(Commands::Off) => match daemon::disable_daemon_usage() {
+            Ok(was_running) => {
+                println!("daemon disabled");
+                if was_running {
+                    println!("daemon: stopped");
+                } else {
+                    println!("daemon: already offline");
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+        },
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {
                 eprintln!("❌ daemon error: {e}");

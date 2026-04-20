@@ -9,11 +9,16 @@ license = "MIT"
 default-run = "xos"
 
 [dependencies]
-burn = "0.20"
-burn-autodiff = "0.20"
-burn-backend = "0.20"
-burn-ndarray = "0.20"
-burn-wgpu = "0.20"
+burn         = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "autodiff"] }
+burn-store   = { version = "=0.21.0-pre.3", features = ["burnpack", "pytorch"] }
+burn-cubecl  = { version = "=0.21.0-pre.3" }
+burn-fusion  = { version = "=0.21.0-pre.3" }
+burn-ir      = { version = "=0.21.0-pre.3" }
+burn-backend = { version = "=0.21.0-pre.3" }
+burn-autodiff = { version = "=0.21.0-pre.3", default-features = false }
+burn-ndarray = { version = "=0.21.0-pre.3", default-features = false }
+burn-wgpu    = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
+cubecl       = { version = "=0.10.0-pre.3", features = ["stdlib"] }
 pixels = "0.15.0"
 winit = "0.30.12"
 winapi = { version = "0.3.9", features = ["winuser", "wingdi", "winbase"] }
@@ -72,8 +77,10 @@ ctrlc = "3.4"
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 rfd = "0.16.0"
 mp3lame-encoder = "0.2.3"
-# CTranslate2 (vendored C++ via ct2rs; not Python). Requires CMake + C/C++ toolchain on PATH (e.g. `brew install cmake`, Xcode CLT). Long compile.
-ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "ruy"], optional = true }
+fast-whisper-burn = { path = "crates/fast-whisper-burn", optional = true }
+ureq = { version = "2.12", optional = true }
+ct2rs = { version = "0.9.18", optional = true, default-features = false, features = ["whisper", "ruy"] }
+zip = { version = "2.2", optional = true, default-features = false, features = ["deflate"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -125,9 +132,11 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = []
-## Whisper in CTranslate2 format. Opt-in with `--features whisper_ct2` when needed. Bundled path prefers `transcription/models/whisper-tiny-ct2/`, then `whisper-small-ct2/`, when complete. Overrides: `XOS_WHISPER_CT2_PATH`, `XOS_WHISPER_LANG` (default `en`). Desktop only (not iOS / WASM).
-whisper_ct2 = ["dep:ct2rs"]
+default = ["whisper", "whisper_ct2"]
+## Burn (fast-whisper-burn + WGPU). Bundled: `src/core/ai/transcription/models/burn/`; cache: `xos path --data` → `models/whisper/{tiny,small}-burn/`.
+whisper = ["dep:fast-whisper-burn", "dep:ureq"]
+## CTranslate2 Whisper (`ct2rs`). Cache: `xos path --data` → `models/whisper/{size}-ct2/`; first run downloads a ZIP from `ct2/whisper_ct2_download_links.json` and extracts (needs `ureq` + `zip`). Optional bundled tree: `src/core/ai/transcription/models/ct2/`.
+whisper_ct2 = ["dep:ct2rs", "dep:ureq", "dep:zip"]
 
 [lib]
 path = "src/core/lib.rs"
@@ -146,7 +155,7 @@ name = "xrs"
 path = "src/main.rs"
 
 [workspace]
-members = [".", "src/core/crates/xos-java"]
+members = [".", "src/core/crates/xos-java", "crates/fast-whisper-burn"]
 resolver = "2"
 
 # gpu-allocator 0.27 allows windows 0.53–0.58; Cargo resolves 0.54 while wgpu-hal 26 uses 0.58, so DX12 types

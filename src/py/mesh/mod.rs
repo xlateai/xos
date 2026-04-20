@@ -244,7 +244,8 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         "online" => {
             return Err(vm.new_exception_msg(
                 vm.ctx.exceptions.not_implemented_error.to_owned(),
-                "xos.mesh mode 'online' is not implemented yet".to_owned(),
+                "xos.mesh mode 'online' is not implemented yet (and will require login identity)."
+                    .to_owned(),
             ));
         }
         _ => {
@@ -257,7 +258,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let session = if mode == MeshMode::Lan {
         if !has_identity() {
             return Err(vm.new_runtime_error(
-                "xos.mesh.connect(mode='lan') requires a local identity. Run `xos login --offline` first."
+                "xos.mesh.connect(mode='lan') requires a local login identity. Run `xos login` first."
                     .to_string(),
             ));
         }

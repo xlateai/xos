@@ -1,7 +1,6 @@
 # 🐍 xos
 
-Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
-
+Python, cross-platform (+ios📱) with built-in ai models, viewports, audio drivers, ml/sci/compute operations/kernels, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!
 
 YouTube [@xlateai](https://youtube.com/@xlateai) • X/Twitter [@xlateai](https://x.com/xlateai) • Discord [xlateai](https://discord.gg/WvPaPG7DYh)
 
@@ -12,6 +11,24 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 - All apps write directly to tensorized viewports
 - Designed to be an alternative to React-Native
 - ❌ no JavaScript, no HTML, no CSS ❌
+
+## 🧠 Available AI Models
+
+The current AI integration is focused on local inference with a simple runtime surface across CLI, Python, and Rust. The goal is practical access to models in native apps with zero setup.
+
+1. Real-time Whisper transcription is available in 3 ways:
+  1. Usage from the CLI after installation: `xos app transcribe`
+  2. Python module entrypoint: `xos.audio.transcription(...)`
+  3. Rust integration through the transcription engine (`src/core/ai/transcription/` and `crates/xos-transcription-whisper/`)
+2. TODO: Llama2
+3. TODO: OCR
+
+Model docs are still in progress. Current behavior for supported models:
+
+1. Weights are downloaded, converted, and cached automatically on first use.
+2. The model path is exposed through a standalone CLI app flow.
+3. The same functionality is callable from `xpy` scripts.
+4. Rust APIs are available for embedding in native apps.
 
 ## 🤝 Help Wanted!
 
@@ -33,7 +50,7 @@ Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaP
 
 ## 📁 Code Examples
 
-As of `v0.3.x`, apps are single-file Python scripts run with **`xpy`** (same as **`xos py`** — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
+As of `v0.3.x`, apps are single-file Python scripts run with `**xpy**` (same as `**xos py**` — shorter alias, one binary). Use the xos Python runtime for cross-platform drivers. See `example-scripts`.
 
 - 🚀 `xpy ./example-scripts/ball_lines.py`
 
@@ -132,7 +149,7 @@ cargo build --release
 cargo install --path .
 ```
 
-That installs **`xos`**, **`xpy`**, and **`xrs`** on your `PATH`. Then run Python scripts with `xpy path/to/code.py` (same as `xos py path/to/code.py`), and Rust apps with `xrs whiteboard` (same as `xos rs whiteboard`).
+That installs `**xos**`, `**xpy**`, and `**xrs**` on your `PATH`. Then run Python scripts with `xpy path/to/code.py` (same as `xos py path/to/code.py`), and Rust apps with `xrs whiteboard` (same as `xos rs whiteboard`).
 
 ### 🧰 Common Commands
 
@@ -152,9 +169,9 @@ xos path
 xos path --exe
 ```
 
-- **`xpy`** / **`xpy <file>`** is the same as **`xos py`** / **`xos py <file>`** (shorter binary; same CLI).
-- **`xrs`** / **`xrs <app-name>`** is the same as **`xos rs`** / **`xos rs <app-name>`** (shorter binary for Rust apps).
-- Subcommand aliases: **`xos rust`** / **`xos app`** → **`xos rs`**; **`xos python`** → **`xos py`**.
+- `**xpy**` / `**xpy <file>**` is the same as `**xos py**` / `**xos py <file>**` (shorter binary; same CLI).
+- `**xrs**` / `**xrs <app-name>**` is the same as `**xos rs**` / `**xos rs <app-name>**` (shorter binary for Rust apps).
+- Subcommand aliases: `**xos rust**` / `**xos app**` → `**xos rs**`; `**xos python**` → `**xos py**`.
 
 ### 📱 Using `--ios`
 
@@ -168,10 +185,10 @@ Coming soon: RN/Expo-style builds.
 
 ### 🔁 Recompile + CLI Fixes
 
-- After you change **Rust**, run **`xos compile`** (or **`xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
+- After you change **Rust**, run `**xos compile`** (or `**xos build`** — same subcommand, alias only). There is no automatic compile; the CLI does not rebuild for you.
 - If CLI behavior looks stale, run `cargo install --path .`.
-- Use **`xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and **`xos path --exe`** for the running executable path.
-- **`xos -v`** (or **`xpy -v`**, **`xrs -v`**) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with **`(uncommitted changes)`** in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
+- Use `**xos path`** for the repo root (folder with `src/`, where you run `xos compile`), and `**xos path --exe**` for the running executable path.
+- `**xos -v**` (or `**xpy -v**`, `**xrs -v**`) prints `xos` / `xpy` / `xrs` and `v<semver>` on the first line, then a second line: full git commit hash, with `**(uncommitted changes)**` in orange when stdout is a terminal and the tree is dirty—or `git tree not available` if there is no usable git checkout.
 
 ## 🚧 Package Limitations
 

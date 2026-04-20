@@ -9,6 +9,7 @@ use webbrowser;
 
 pub mod random;
 pub mod tuneable;
+pub mod ai;
 pub mod engine;
 pub mod video;
 pub mod apps;
@@ -25,6 +26,8 @@ pub mod rasterizer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runtime_config;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).
 pub fn is_xos_project_root(path: &Path) -> bool {
@@ -78,22 +81,10 @@ fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Locate the xos repo: `XOS_PROJECT_ROOT`, then the repo containing a `target/release|debug`
-/// `xos` binary (if that is what is running), else walk parents of the executable, then
-/// compile-time [`CARGO_MANIFEST_DIR`] (for `cargo install` copies), then walk up from
-/// [`std::env::current_dir`].
+/// Locate the xos repo: the repo containing a `target/release|debug` `xos` binary (when that is
+/// what is running), else walk parents of the executable, then compile-time
+/// [`CARGO_MANIFEST_DIR`] (for `cargo install` copies), then walk up from [`std::env::current_dir`].
 pub fn find_xos_project_root() -> Result<PathBuf, String> {
-    if let Ok(env) = std::env::var("XOS_PROJECT_ROOT") {
-        let p = PathBuf::from(env.trim());
-        if is_xos_project_root(&p) {
-            return Ok(p);
-        }
-        return Err(format!(
-            "XOS_PROJECT_ROOT is set but does not look like the xos repo: {}",
-            p.display()
-        ));
-    }
-
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = project_root_from_target_executable(&exe) {
             return Ok(root);
@@ -132,7 +123,7 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
             Some(parent) => current = parent.to_path_buf(),
             None => {
                 return Err(
-                    "could not find xos project root (set XOS_PROJECT_ROOT to your clone, or run from inside the repo)"
+                    "could not find xos project root (run the binary from inside the repo, or from a path whose parents contain the xos tree)"
                         .into(),
                 );
             }

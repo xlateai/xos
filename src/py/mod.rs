@@ -21,6 +21,7 @@ pub mod mouse;
 pub mod terminal;
 pub mod manager;
 pub mod auth;
+pub mod ai;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 

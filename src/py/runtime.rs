@@ -57,46 +57,19 @@ pub type PrintCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Format a Python exception with traceback (like standard Python)
 pub fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
-    let mut output = String::new();
-    
-    // Try to show traceback info if available
-    if let Some(traceback) = py_exc.traceback() {
-        output.push_str("Traceback (most recent call last):\n");
-        
-        // Use the debug format which should show file/line info
-        let tb_str = format!("{:?}", traceback);
-        if !tb_str.is_empty() && tb_str.len() < 500 {
-            // Try to extract useful info from the debug string
-            for line in tb_str.lines() {
-                if line.contains("File") || line.contains("line") {
-                    output.push_str("  ");
-                    output.push_str(line.trim());
-                    output.push('\n');
-                }
-            }
-        }
+    let mut buf = String::new();
+    if vm.write_exception(&mut buf, py_exc).is_ok() {
+        return buf.trim_end().to_string();
     }
-    
-    // Get exception class name
     let class_name = py_exc.class().name().to_string();
-    
-    // Try to get the exception message by calling __str__
-    let msg_result = vm.call_method(py_exc.as_object(), "__str__", ())
+    let msg_result = vm
+        .call_method(py_exc.as_object(), "__str__", ())
         .ok()
         .and_then(|result| result.str(vm).ok().map(|s| s.to_string()));
-    
-    // Add exception info
-    if let Some(msg) = msg_result {
-        if msg.trim().is_empty() {
-            output.push_str(&class_name);
-        } else {
-            output.push_str(&format!("{}: {}", class_name, msg));
-        }
-    } else {
-        output.push_str(&class_name);
+    match msg_result {
+        Some(msg) if !msg.trim().is_empty() => format!("{}: {}", class_name, msg),
+        _ => class_name,
     }
-    
-    output
 }
 
 /// Execute Python code with optional print capture
