@@ -408,7 +408,7 @@ pub fn compile_wasm(clean: bool) -> bool {
     }
 
     if !command_available("wasm-pack") {
-        eprintln!("❌ `wasm-pack` not found. Install it from https://rustwasm.github.io/wasm-pack/installer/");
+        eprintln!("❌ `wasm-pack` not found. Install it by running `cargo install wasm-pack`.");
         return false;
     }
     if !command_available("rustup") {
