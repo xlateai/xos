@@ -44,8 +44,10 @@ fn ct2_size_stem(size: Option<&str>) -> Result<&'static str, String> {
         .filter(|s| !s.is_empty());
     match raw.as_deref() {
         None | Some("tiny") => Ok("tiny"),
+        Some("small") => Ok("small"),
+        Some("base") => Ok("base"),
         Some(other) => Err(format!(
-            "Whisper CT2 supports only model id 'tiny' right now (got '{other}')."
+            "Whisper CT2 supports model ids 'tiny', 'small', and 'base' right now (got '{other}')."
         )),
     }
 }
@@ -54,6 +56,8 @@ fn ct2_size_stem(size: Option<&str>) -> Result<&'static str, String> {
 fn ct2_manifest_key(size: Option<&str>) -> Result<&'static str, String> {
     match ct2_size_stem(size)? {
         "tiny" => Ok("tiny-ct2"),
+        "small" => Ok("small-ct2"),
+        "base" => Ok("base-ct2"),
         _ => Err("ct2_manifest_key: unsupported stem".to_string()),
     }
 }
@@ -91,7 +95,14 @@ fn resolve_model_dir(size: Option<&str>) -> Result<PathBuf, String> {
         return Ok(legacy_bundled);
     }
 
-    for legacy_name in ["whisper-tiny-ct2", "tiny-ct2"] {
+    for legacy_name in [
+        "whisper-tiny-ct2",
+        "tiny-ct2",
+        "whisper-small-ct2",
+        "small-ct2",
+        "whisper-base-ct2",
+        "base-ct2",
+    ] {
         let legacy_cache = legacy_transcription_ct2_dir(legacy_name)?;
         if super::whisper_ensure::model_ready(&legacy_cache) {
             return Ok(legacy_cache);

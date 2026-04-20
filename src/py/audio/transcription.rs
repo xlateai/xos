@@ -29,7 +29,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         obj.clone()
     } else {
         return Err(vm.new_type_error(
-            "xos.audio.transcription(audio, size='tiny|small', backend='ct2|burn', language='english|japanese') expects a microphone object"
+            "xos.audio.transcription(audio, size='tiny|small|base', backend='ct2|burn', language='english|japanese') expects a microphone object"
                 .to_string(),
         ));
     };
@@ -42,9 +42,9 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
     if let Some(sz) = size.as_deref() {
         let lower = sz.trim().to_ascii_lowercase();
-        if lower != "small" && lower != "tiny" {
+        if lower != "small" && lower != "tiny" && lower != "base" {
             return Err(vm.new_value_error(
-                "size must be 'small' or 'tiny'".to_string(),
+                "size must be 'small', 'tiny', or 'base'".to_string(),
             ));
         }
     }
