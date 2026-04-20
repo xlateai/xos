@@ -42,7 +42,7 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     out
 }
 
-/// Load audio to mono **f32** PCM, default **16_000 Hz** — the rate Whisper / `fast-whisper-burn`
+/// Load audio to mono **f32** PCM, default **16_000 Hz** — the rate Whisper / in-tree `whisper_burn`
 /// expect for `transcribe(..., sample_rate, ...)`. Samples are roughly **[-1, 1]** after decode.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {

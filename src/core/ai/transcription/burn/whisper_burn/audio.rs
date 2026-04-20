@@ -1,6 +1,6 @@
 use burn::tensor::{ElementConversion, Tensor, activation::relu, backend::Backend};
 
-use crate::helper::*;
+use super::helper::*;
 
 const N_FFT: usize = 400;
 const HOP_LENGTH: usize = 160;

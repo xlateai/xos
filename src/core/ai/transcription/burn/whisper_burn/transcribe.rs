@@ -1,10 +1,10 @@
-use crate::audio::prep_audio;
-use crate::beam::{
+use super::audio::prep_audio;
+use super::beam::{
     decode_segment_beam, decoder_count_for_iteration, effective_beam_size, effective_best_of,
 };
-use crate::custom_kernels::CustomKernelsBackend;
-use crate::model::*;
-use crate::token::{self, *};
+use super::custom_kernels::CustomKernelsBackend;
+use super::model::*;
+use super::token::{self, *};
 use burn::tensor::TensorData;
 use burn::{
     backend::ndarray::NdArray,
@@ -1075,7 +1075,7 @@ pub fn transcribe_regions_batched<B: CustomKernelsBackend, F: FnMut(usize, usize
 
     let use_beam = matches!(params.strategy, SamplingStrategy::BeamSearch { .. });
     let beam_size = if use_beam {
-        crate::beam::effective_beam_size(&params.strategy)
+        super::beam::effective_beam_size(&params.strategy)
     } else {
         1
     };

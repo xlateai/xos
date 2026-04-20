@@ -3334,27 +3334,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
-name = "fast-whisper-burn"
-version = "0.1.0"
-dependencies = [
- "burn",
- "burn-backend",
- "burn-cubecl",
- "burn-fusion",
- "burn-ir",
- "burn-store",
- "cubecl",
- "half 2.7.1",
- "hound",
- "log",
- "mt19937",
- "serde",
- "strum 0.28.0",
- "strum_macros 0.28.0",
- "tokenizers",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11292,16 +11271,19 @@ dependencies = [
  "dialoguer",
  "dirs 5.0.1",
  "enigo",
- "fast-whisper-burn",
  "fontdue",
  "getrandom 0.3.4",
+ "half 2.7.1",
  "hkdf",
+ "hound",
  "image 0.25.10",
  "include_dir",
  "js-sys",
  "libc",
+ "log",
  "metal 0.32.0",
  "mp3lame-encoder",
+ "mt19937",
  "nokhwa",
  "objc",
  "once_cell",
@@ -11320,7 +11302,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strum 0.28.0",
+ "strum_macros 0.28.0",
  "tiny_http",
+ "tokenizers",
  "ureq",
  "uuid",
  "variadics_please",
