@@ -1,6 +1,7 @@
 //! `xos.mesh` and `xos.input` — mesh (`local` / `lan`) + terminal line editor (Rust-backed).
 //! Python surface lives in `bootstrap.py` (included at compile time).
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 use crate::mesh::{MeshMode, MeshSession, Packet};
 use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
@@ -81,6 +82,7 @@ fn py_to_json_inner(
     ))
 }
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyObjectRef {
     match v {
         serde_json::Value::Null => vm.ctx.none(),
@@ -110,6 +112,7 @@ fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyOb
     }
 }
 
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
     let dict = vm.ctx.new_dict();
     dict.set_item(

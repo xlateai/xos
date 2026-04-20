@@ -26,6 +26,7 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
 
 #[cfg(target_os = "linux")]
 pub struct AudioEditApp {
+    #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     button_size: f32,
 }
@@ -115,6 +116,7 @@ impl AudioEditApp {
             sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
+            #[cfg(not(target_arch = "wasm32"))]
             track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
@@ -909,9 +911,10 @@ impl Application for AudioEditApp {
         self.render_play_pause_button(state);
     }
 
-    fn on_mouse_down(&mut self, state: &mut EngineState) {
+    fn on_mouse_down(&mut self, _state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let state = _state;
             let shape = state.frame.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
@@ -959,9 +962,10 @@ impl Application for AudioEditApp {
         }
     }
     
-    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+    fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let ch = _ch;
             // Spacebar toggles play/pause
             if ch == ' ' {
                 self.is_paused = !self.is_paused;
@@ -996,9 +1000,10 @@ impl Application for AudioEditApp {
         }
     }
     
-    fn on_mouse_move(&mut self, state: &mut EngineState) {
+    fn on_mouse_move(&mut self, _state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let state = _state;
             // Update zoom slider if dragging
             if self.is_dragging_zoom_slider && state.mouse.is_left_clicking {
                 let shape = state.frame.shape();

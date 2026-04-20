@@ -1026,7 +1026,8 @@ mod wasm {
         let processor = context.create_script_processor_with_buffer_size(1024)?;
 
         let closure = Closure::<dyn FnMut(_)>::wrap(Box::new(move |event: AudioProcessingEvent| {
-            let input = event.get_channel_data(0).unwrap();
+            let input_buf = event.input_buffer().unwrap();
+            let input = input_buf.get_channel_data(0).unwrap();
 
             BUFFER.with(|cell| {
                 if let Some(buffer) = &*cell.borrow() {
