@@ -35,7 +35,7 @@ def render_live_paragraph():
 try:
     while True:
         # Short yield so the audio thread can fill the ring without spinning the CPU at 100%.
-        xos.sleep(0.004)
+        xos.sleep(0.01)
 
         if xos.flags.record:
             recorder.record(wait=False)

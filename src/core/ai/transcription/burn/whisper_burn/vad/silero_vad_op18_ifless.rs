@@ -10,7 +10,7 @@ use burn::tensor::Bytes;
 use burn_store::BurnpackStore;
 use burn_store::ModuleSnapshot;
 
-use crate::custom_kernels::{CustomKernelsBackend, lstm_cell_fused};
+use super::super::custom_kernels::{CustomKernelsBackend, lstm_cell_fused};
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {

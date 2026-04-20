@@ -6,7 +6,7 @@ use rustpython_vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine, buil
 
 use crate::tensor::tensor::tensor_flat_data_list;
 
-/// Mono `f32` samples — same contract as [`fast_whisper_burn::transcribe`]: one contiguous buffer,
+/// Mono `f32` samples — same contract as in-tree `whisper_burn::transcribe`: one contiguous buffer,
 /// values typically in ~`[-1, 1]`, `sample_rate` Hz (Whisper expects 16 kHz).
 fn waveform_vec_from_py(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<f32>> {
     match tensor_flat_data_list(obj, vm) {
@@ -507,7 +507,7 @@ def _waveform_to_list(x):
     return [float(x)]
 
 def _flatten_batch_dim1(wave):
-    # Shape (1, N) from xos often appears as one row: match fast-whisper-burn's flat &[f32].
+    # Shape (1, N) from xos often appears as one row: match whisper_burn's flat &[f32].
     if (
         len(wave) == 1
         and isinstance(wave[0], (list, tuple))

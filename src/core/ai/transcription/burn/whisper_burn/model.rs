@@ -9,7 +9,7 @@ use burn::{
     tensor::{Bool, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
 };
 
-use crate::custom_kernels::{
+use super::custom_kernels::{
     CustomKernelsBackend, fused_single_query_attn, layer_norm_mixed, softmax_mixed,
 };
 

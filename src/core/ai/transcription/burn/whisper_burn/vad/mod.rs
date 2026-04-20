@@ -52,7 +52,7 @@ pub enum SileroVAD6Error {
     InvalidInputSize { expected: usize, found: usize },
 }
 
-impl<B: crate::custom_kernels::CustomKernelsBackend> SileroVAD6Model<B> {
+impl<B: super::custom_kernels::CustomKernelsBackend> SileroVAD6Model<B> {
     pub const SILERO_VAD6_WEIGHTS: &[u8] = include_bytes!("silero_vad_op18_ifless.bpk");
 
     pub fn new(

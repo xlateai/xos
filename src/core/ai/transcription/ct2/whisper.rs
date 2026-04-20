@@ -1,6 +1,14 @@
 //! CTranslate2 Whisper (`ct2rs`): load CT2 model folders from `auth_data_dir()` (same as
 //! `xos path --data`) under `models/whisper/{size}-ct2/`, or the repo bundle — one-shot for Python
 //! `backend=CT2`, and live decode queue for [`spawn_decode_thread`].
+//!
+//! ## Latency notes (live path)
+//! - One **dedicated decode thread** runs `Whisper::generate` (blocking); the capture thread only
+//!   `try_send`s jobs on a `sync_channel(1)` so backlog is dropped instead of queuing stale audio.
+//! - **`Config::num_threads_per_replica = 1`**: single-threaded CT2 compute (no intra-op parallelism).
+//! - **`WhisperOptions::beam_size = 1`**: greedy decoding.
+//! - Remaining latency is almost entirely **model time** per `generate` call; UI polls as fast as
+//!   Python sleeps (`transcribe.py`), while the Rust side targets ~100 Hz partial decode scheduling.
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
@@ -126,7 +134,10 @@ pub fn spawn_decode_thread(
     thread::Builder::new()
         .name("xos-whisper-ct2-decode".into())
         .spawn(move || {
-            let whisper = match Ct2Whisper::new(&dir, Config::default()) {
+            let mut cfg = Config::default();
+            cfg.num_threads_per_replica = 1;
+            cfg.tensor_parallel = false;
+            let whisper = match Ct2Whisper::new(&dir, cfg) {
                 Ok(w) => w,
                 Err(e) => {
                     let _ = result_tx.send(format!("(Whisper CT2 load error: {e})"));
@@ -156,7 +167,10 @@ pub fn transcribe_waveform_once(
     _sample_rate: u32,
 ) -> Result<String, String> {
     let dir = resolve_model_dir(size)?;
-    let whisper = Ct2Whisper::new(&dir, Config::default())
+    let mut cfg = Config::default();
+    cfg.num_threads_per_replica = 1;
+    cfg.tensor_parallel = false;
+    let whisper = Ct2Whisper::new(&dir, cfg)
         .map_err(|e| format!("Whisper CT2 load {}: {e}", dir.display()))?;
 
     let mut opts = WhisperOptions::default();

@@ -97,8 +97,9 @@ class _Transcriber:
         """
         One poll of the transcription engine. Returns ``(transcription, was_committed, is_new)``.
 
-        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step`` (silence-end
-        commits surface ``was_committed`` on the poll after the utterance closes). ``is_new`` is
+        ``transcription`` / ``was_committed`` come from ``_transcriber_transcribe_step`` (commits are
+        rare in the baseline pipeline; use ``finish()`` / ``flush_live_to_stdout_commits`` for a
+        final push). ``is_new`` is
         driven by the engine's ``transcript_epoch`` (no string equality): false when the epoch is
         unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved; callers can
         sleep between polls (see ``record.py``).
@@ -164,12 +165,10 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
 
 /// One transcription poll: returns `(transcription, was_committed, is_new)`.
 ///
-/// `transcription` is the live caption while building an utterance; on ticks where a phrase
-/// commits it is that finalized phrase. `was_committed` is true iff at least one commit
-/// reached the iterator queue **this** poll. Silence-end commits are deferred one snapshot so
-/// this flag and the finalized string align with the tick **after** the utterance closes (not
-/// the same poll as the last live partial). `is_new` compares [`TranscriptionEngine::transcript_epoch`]
-/// to the last seen value (bumped when the engine queues live or commit iterator events).
+/// `transcription` is normally the **live** caption string. `was_committed` is true when at least
+/// one finalized line was queued to the iterator this poll (e.g. explicit flush), not during
+/// ordinary partial streaming. `is_new` compares [`TranscriptionEngine::transcript_epoch`]
+/// to the last seen value (bumped when the engine queues iterator events).
 pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let ptr: usize = args.bind(vm)?;
     let mut map = transcribers()

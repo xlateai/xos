@@ -1,5 +1,5 @@
 //! Download OpenAI `.pt` + Hugging Face `tokenizer.json`, then convert to Burnpack (same pipeline as
-//! `crates/fast-whisper-burn/src/bin/convert/main.rs`) into `auth_data_dir()/models/whisper/{size}-burn/`.
+//! the upstream convert pipeline) into `auth_data_dir()/models/whisper/{size}-burn/`.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -11,11 +11,11 @@ use burn::backend::wgpu::Wgpu;
 use burn::config::Config;
 use burn_store::pytorch::PytorchReader;
 use burn_store::{BurnpackStore, ModuleSnapshot, PytorchStore};
-use fast_whisper_burn::MixedPrecisionAdapter;
-use fast_whisper_burn::custom_kernels::CustomKernelsBackend;
-use fast_whisper_burn::model::{
+use crate::ai::transcription::burn::whisper_burn::custom_kernels::CustomKernelsBackend;
+use crate::ai::transcription::burn::whisper_burn::model::{
     AudioEncoderConfig, TextDecoderConfig, Whisper, WhisperConfig,
 };
+use crate::ai::transcription::burn::whisper_burn::MixedPrecisionAdapter;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -101,7 +101,7 @@ fn save_whisper_artifacts<B: CustomKernelsBackend>(
     Ok(())
 }
 
-/// Same logic as `fast-whisper-burn` convert binary `load_whisper`, without stdout noise.
+/// Same logic as the whisper_burn convert binary `load_whisper`, without stdout noise.
 fn load_whisper_from_pt<B: CustomKernelsBackend>(
     pt_path: &str,
 ) -> Result<(Whisper<B>, WhisperConfig), Box<dyn Error>> {
