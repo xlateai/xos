@@ -9,56 +9,64 @@ on:
     paths:
       - "Cargo.toml"
       - ".github/workflows/xos.yml"
+      - ".github/workflows/wasm.yml"
   workflow_dispatch:
 
 jobs:
   detect-version-bump:
-    name: Detect Cargo version bump
+    name: Detect release need
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.check.outputs.changed }}
       bumped: ${{ steps.check.outputs.bumped }}
       current_version: ${{ steps.check.outputs.current_version }}
-      previous_version: ${{ steps.check.outputs.previous_version }}
       crate_name: ${{ steps.check.outputs.crate_name }}
+      tag: ${{ steps.check.outputs.tag }}
+      release_exists: ${{ steps.check.outputs.release_exists }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
       - id: check
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
           current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
-
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            previous_version=$(git show HEAD^:Cargo.toml | grep '^version =' | head -n1 | cut -d '"' -f2 || true)
-          else
-            previous_version=""
-          fi
+          tag="v${current_version}"
 
           changed=false
           bumped=false
+          release_exists=false
 
-          if [ -n "${previous_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            release_exists=true
+          else
             changed=true
-            highest=$(printf "%s\n%s\n" "${previous_version}" "${current_version}" | sort -V | tail -n1)
-            if [ "${highest}" = "${current_version}" ] && [ "${current_version}" != "${previous_version}" ]; then
-              bumped=true
-            fi
+          fi
+
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${release_exists}" != "true" ]; then
+            bumped=true
           fi
 
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
-          echo "previous_version=${previous_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release_exists=${release_exists}" >> "$GITHUB_OUTPUT"
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
+
+  wasm-build:
+    name: Build wasm package
+    needs: [detect-version-bump]
+    if: needs.detect-version-bump.outputs.bumped == 'true'
+    uses: ./.github/workflows/wasm.yml
+    secrets: inherit
 
   publish-rust:
     name: Publish Rust crate
     runs-on: ubuntu-latest
-    needs: [detect-version-bump]
+    needs: [detect-version-bump, wasm-build]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -90,12 +98,26 @@ jobs:
   publish-github-release:
     name: Tag commit and publish GitHub release
     runs-on: ubuntu-latest
-    needs: [detect-version-bump]
+    needs: [detect-version-bump, wasm-build, publish-rust]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Download wasm zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xos-wasm-zip
+          path: wasm-artifact
+
+      - name: Assert downloaded wasm zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s wasm-artifact/xos-wasm.zip
+          ls -lh wasm-artifact/xos-wasm.zip
+
       - name: Create and push tag
         id: tag
         shell: bash
@@ -132,3 +154,12 @@ jobs:
               --title "${tag}" \
               --generate-notes
           fi
+
+      - name: Upload wasm zip asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          gh release upload "${tag}" wasm-artifact/xos-wasm.zip --clobber
