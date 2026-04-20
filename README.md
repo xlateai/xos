@@ -16,10 +16,7 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 
 The current AI integration is focused on local inference with a simple runtime surface across CLI, Python, and Rust. The goal is practical access to models in native apps with zero setup.
 
-1. Real-time Whisper transcription is available in 3 ways:
-  1. Usage from the CLI after installation: `xos app transcribe`
-  2. Python module entrypoint: `xos.audio.transcription(...)`
-  3. Rust integration through the transcription engine (`src/core/ai/transcription/` and `crates/xos-transcription-whisper/`)
+1. Whisper
 2. TODO: Llama2
 3. TODO: OCR
 
