@@ -1,7 +1,7 @@
 //! Real-time transcription: Whisper on desktop — **Burn** (in-tree `whisper_burn`) and/or **CT2**
-//! (`ct2rs`) when the corresponding Cargo features are enabled. Live CT2 path: **growing buffer**
-//! (append new frames) → periodic **full-buffer** partial decodes (~100 Hz UI cadence). No VAD,
-//! silence splitting, or phrase commits in the hot path (stabilization baseline).
+//! (`ct2rs`) when the corresponding Cargo features are enabled. Live path: **growing buffer** with
+//! optional **Silero VAD** (ONNX) to gate Whisper decodes during silence, plus ~100 Hz partial decode
+//! scheduling.
 
 #[cfg(all(
     feature = "whisper",
@@ -25,10 +25,13 @@ mod burn;
 mod ct2;
 
 #[cfg(all(
+    feature = "silero_vad",
     feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
+mod silero;
+
 #[cfg(all(
     feature = "whisper",
     not(target_arch = "wasm32"),
@@ -277,6 +280,51 @@ pub struct TranscriptionEngine {
     ))]
     /// Only append mono samples whose global frame index is **≥** this (skip ring audio already seen after a buffer reset).
     pcm_first_frame_inclusive: u64,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// 16 kHz float PCM queued for Silero (512-sample ONNX frames).
+    vad_16k_pending: Vec<f32>,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_session: Option<silero::SileroVadSession>,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// If set, ONNX load failed and we decode without gating (always on).
+    vad_disabled: bool,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_last_speech_prob: f32,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_hangover_until: Instant,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// After at least one Silero forward, partial 16 kHz buffers use prob + hangover (not always-on).
+    vad_evaluated_once: bool,
 }
 
 impl TranscriptionEngine {
@@ -327,6 +375,42 @@ impl TranscriptionEngine {
                 last_ingested_frames: None,
                 ingested_cursor_watermark: 0,
                 pcm_first_frame_inclusive: 0,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_16k_pending: Vec::new(),
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_session: None,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_disabled: false,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_last_speech_prob: 0.0,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_hangover_until: Instant::now(),
+                vad_evaluated_once: false,
             };
         }
         #[cfg(not(all(
@@ -393,6 +477,28 @@ impl TranscriptionEngine {
             return self.last_level_rms;
         }
         #[cfg(not(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        {
+            0.0
+        }
+    }
+
+    /// Last Silero speech probability \[0, 1\] when `silero_vad` is enabled; otherwise `0`.
+    pub fn last_vad_speech_prob(&self) -> f32 {
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            return self.vad_last_speech_prob;
+        }
+        #[cfg(not(all(
+            feature = "silero_vad",
             feature = "whisper",
             not(target_arch = "wasm32"),
             not(target_os = "ios")
@@ -478,6 +584,28 @@ fn normalize_transcript_ws(s: &str) -> String {
 }
 
 #[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+pub const SILERO_VAD_SPEECH_THRESHOLD: f32 = 0.35;
+#[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+const SILERO_VAD_THRESHOLD: f32 = SILERO_VAD_SPEECH_THRESHOLD;
+#[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+const SILERO_VAD_HANGOVER: Duration = Duration::from_millis(280);
+
+#[cfg(all(
     feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
@@ -493,6 +621,104 @@ impl TranscriptionEngine {
         if let Some(rx) = &self.decode_result_rx {
             while rx.try_recv().is_ok() {}
         }
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            self.vad_16k_pending.clear();
+            self.vad_evaluated_once = false;
+            if let Some(s) = self.vad_session.as_mut() {
+                s.reset();
+            }
+        }
+    }
+
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Returns whether Whisper decode should run this tick (speech or hangover). On load failure, always `true`.
+    fn vad_update_and_allow_decode(
+        &mut self,
+        sample_rate: u32,
+        mono: &[f32],
+        first_snapshot: bool,
+        ingested_frames: u64,
+        prev_g: u64,
+    ) -> bool {
+        if self.vad_disabled {
+            return true;
+        }
+
+        let delta_16k: Vec<f32> = if first_snapshot {
+            sample::resample_linear(mono, sample_rate, sample::WHISPER_HZ)
+        } else if ingested_frames > prev_g {
+            let delta = (ingested_frames - prev_g) as usize;
+            let n = delta.min(mono.len());
+            if n == 0 {
+                Vec::new()
+            } else {
+                let tail = &mono[mono.len() - n..];
+                sample::resample_linear(tail, sample_rate, sample::WHISPER_HZ)
+            }
+        } else {
+            Vec::new()
+        };
+        self.vad_16k_pending.extend(delta_16k);
+
+        if self.vad_session.is_none() {
+            match silero::open_silero_session() {
+                Ok(s) => self.vad_session = Some(s),
+                Err(e) => {
+                    self.vad_disabled = true;
+                    self.load_note = Some(format!(
+                        "Silero VAD unavailable ({e}); running Whisper without VAD gating."
+                    ));
+                    return true;
+                }
+            }
+        }
+
+        let sess = self.vad_session.as_mut().expect("vad_session");
+
+        if self.vad_16k_pending.len() < 512 {
+            return !self.vad_evaluated_once
+                || self.vad_last_speech_prob >= SILERO_VAD_THRESHOLD
+                || Instant::now() < self.vad_hangover_until;
+        }
+
+        let mut saw_speech = false;
+        while self.vad_16k_pending.len() >= 512 {
+            let chunk: Vec<f32> = self.vad_16k_pending.drain(..512).collect();
+            match sess.predict_chunk(&chunk) {
+                Ok(p) => {
+                    self.vad_evaluated_once = true;
+                    self.vad_last_speech_prob = p;
+                    if p >= SILERO_VAD_THRESHOLD {
+                        saw_speech = true;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+
+        const MAX_VAD_BACKLOG: usize = 48_000;
+        if self.vad_16k_pending.len() > MAX_VAD_BACKLOG {
+            let trim = self.vad_16k_pending.len() - MAX_VAD_BACKLOG;
+            self.vad_16k_pending.drain(..trim);
+        }
+
+        if saw_speech {
+            self.vad_hangover_until = Instant::now() + SILERO_VAD_HANGOVER;
+        }
+
+        let now = Instant::now();
+        self.vad_last_speech_prob >= SILERO_VAD_THRESHOLD || now < self.vad_hangover_until
     }
 
     /// Append the last `tail_len` samples of `mono` (the newest frames), skipping frames `< pcm_first_frame_inclusive`.
@@ -619,7 +845,29 @@ impl TranscriptionEngine {
             }
         }
 
-        if !self.segment_pcm.is_empty()
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        let allow_whisper = self.vad_update_and_allow_decode(
+            sample_rate,
+            &mono,
+            first_snapshot,
+            ingested_frames,
+            prev_g,
+        );
+        #[cfg(not(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        let allow_whisper = true;
+
+        if allow_whisper
+            && !self.segment_pcm.is_empty()
             && self.last_partial_decode.elapsed()
                 >= Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS)
             && self.queue_segment_decode()
