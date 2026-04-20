@@ -13,6 +13,9 @@ jobs:
   wasm-build-test:
     name: Build and verify wasm zip
     runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTC_WRAPPER: sccache
 
     steps:
       - name: Checkout
@@ -31,12 +34,16 @@ jobs:
       - name: Ensure wasm target installed
         run: rustup target add wasm32-unknown-unknown
 
+      - name: Setup compiler cache (sccache)
+        uses: mozilla-actions/sccache-action@v0.0.5
+
       - name: Cache Rust dependencies and build outputs
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
           cache-all-crates: true
+          shared-key: xos-rust-global-cache
 
       - name: Cache wasm-pack binary
         id: cache-wasm-pack
