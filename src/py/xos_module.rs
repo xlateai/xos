@@ -792,13 +792,14 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// xos.frame._standalone_tensor_data(viewport_id) -> list[int]
 /// Returns a flat copy of RGBA bytes for a standalone viewport buffer.
-fn frame_standalone_tensor_data(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+fn frame_standalone_tensor_data(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
     {
         Ok(vm.ctx.new_list(vec![]).into())
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
+        let args = _args;
         let viewport_id: u64 = if !args.args.is_empty() {
             let id: i64 = args.args[0].clone().try_into_value(vm)?;
             id.max(0) as u64
