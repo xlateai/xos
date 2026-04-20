@@ -130,6 +130,9 @@ enum Commands {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
+        /// Build WebAssembly output into `wasm-compiled-xos-output/` and create `xos-wasm.zip`.
+        #[arg(long)]
+        wasm: bool,
         /// Run `cargo clean` in the project root before building (full rebuild).
         #[arg(long)]
         clean: bool,
@@ -487,12 +490,18 @@ fn main() {
     }
 
     match cli.command {
-        Some(Commands::Compile { ios, clean }) => {
+        Some(Commands::Compile { ios, wasm, clean }) => {
+            if ios && wasm {
+                eprintln!("❌ use either --ios or --wasm, not both");
+                std::process::exit(1);
+            }
             if let Err(e) = daemon::stop_daemon() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
             let compile_ok = if ios {
                 compile::compile_ios_rust(clean)
+            } else if wasm {
+                compile::compile_wasm(clean)
             } else {
                 compile::xos_compile_command(true, clean)
             };

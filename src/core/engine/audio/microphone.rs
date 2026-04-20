@@ -316,10 +316,10 @@ impl AudioBuffer {
 }
 
 // ================================================================================================
-// NATIVE (macOS/Linux) IMPLEMENTATION using CPAL
+// NATIVE (macOS/Windows) IMPLEMENTATION using CPAL
 // ================================================================================================
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 mod native {
     use super::*;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -609,8 +609,62 @@ mod native {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 pub use native::{AudioListener, default_input, all_input_devices};
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+mod linux_no_audio {
+    use super::*;
+
+    pub struct AudioListener {
+        buffer: AudioBuffer,
+        device_name: String,
+    }
+
+    impl AudioListener {
+        pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
+            let sample_rate = 48_000u32;
+            let channels = 1u16;
+            let capacity = (buffer_duration_secs.max(0.1) * sample_rate as f32) as usize;
+            let _listener = Self {
+                buffer: AudioBuffer::new(capacity.max(1), sample_rate, channels),
+                device_name: audio_device.name.clone(),
+            };
+            Err("native audio input is disabled on this Linux build".to_string())
+        }
+
+        pub fn buffer(&self) -> &AudioBuffer {
+            &self.buffer
+        }
+
+        pub fn device_name(&self) -> &str {
+            &self.device_name
+        }
+
+        pub fn pause(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn record(&self) -> Result<(), String> {
+            Err("native audio input is disabled on this Linux build".to_string())
+        }
+
+        pub fn get_samples_by_channel(&self) -> Vec<Vec<f32>> {
+            self.buffer.get_samples_by_channel()
+        }
+    }
+
+    pub fn default_input() -> Option<AudioDevice> {
+        None
+    }
+
+    pub fn all_input_devices() -> Vec<AudioDevice> {
+        Vec::new()
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+pub use linux_no_audio::{AudioListener, all_input_devices, default_input};
 
 // ================================================================================================
 // iOS IMPLEMENTATION using AVAudioEngine via Swift FFI

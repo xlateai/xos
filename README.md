@@ -134,7 +134,16 @@ Linux extras
 
 - Advanced Linux Sound Architecture library (audio):
   ```bash
-  sudo apt-get update && sudo apt-get install -y libasound2-dev
+    sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev
+    ```
+
+WASM extras
+
+- Required for `xos compile --wasm`:
+    ```bash
+    rustup target add wasm32-unknown-unknown
+    cargo install wasm-pack
+    sudo apt-get update && sudo apt-get install -y zip
   ```
 
 ### ⚡ How to Install

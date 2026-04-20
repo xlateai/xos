@@ -120,10 +120,10 @@ impl PlaybackBuffer {
 }
 
 // ================================================================================================
-// NATIVE (macOS/Linux) IMPLEMENTATION using CPAL
+// NATIVE (macOS/Windows) IMPLEMENTATION using CPAL
 // ================================================================================================
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 mod native {
     use super::*;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -425,8 +425,67 @@ mod native {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 pub use native::{AudioPlayer, default_output, all_output_devices};
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+mod linux_no_audio {
+    use super::*;
+
+    pub struct AudioPlayer {
+        sample_rate: u32,
+        channels: u16,
+    }
+
+    impl AudioPlayer {
+        pub fn new(_audio_device: &AudioDevice, sample_rate: u32, channels: u16) -> Result<Self, String> {
+            Err(format!(
+                "native audio output is disabled on this Linux build (requested {sample_rate} Hz, {channels} ch)"
+            ))
+        }
+
+        pub fn play_samples(&self, _samples: &[f32]) -> Result<(), String> {
+            Err("native audio output is disabled on this Linux build".to_string())
+        }
+
+        pub fn get_buffer_size(&self) -> usize {
+            0
+        }
+
+        pub fn device_name(&self) -> &str {
+            "linux-no-audio"
+        }
+
+        pub fn start(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn stop(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn clear(&self) {}
+
+        pub fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        pub fn channels(&self) -> u16 {
+            self.channels
+        }
+    }
+
+    pub fn default_output() -> Option<AudioDevice> {
+        None
+    }
+
+    pub fn all_output_devices() -> Vec<AudioDevice> {
+        Vec::new()
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+pub use linux_no_audio::{AudioPlayer, all_output_devices, default_output};
 
 // ================================================================================================
 // iOS IMPLEMENTATION using AVAudioEngine via Swift FFI
