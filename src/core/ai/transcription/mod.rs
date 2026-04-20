@@ -338,6 +338,13 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
+    /// Decaying peak of [`rms_eff`] within the utterance — dips below this (ratio) commit phrases even when noise keeps absolute levels high.
+    vad_envelope: f32,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
     load_note: Option<String>,
     #[cfg(all(
         feature = "whisper",
@@ -345,6 +352,20 @@ pub struct TranscriptionEngine {
         not(target_os = "ios")
     ))]
     last_ingested_frames: Option<u64>,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Current snapshot’s `ingested_frame_count` (updated at start of [`process_snapshot_live`]).
+    ingested_cursor_watermark: u64,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Only append mono samples whose global frame index is **≥** this (skip ring audio already committed).
+    pcm_first_frame_inclusive: u64,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
@@ -410,8 +431,11 @@ impl TranscriptionEngine {
                 last_committed_text: String::new(),
                 last_stdout_commit_key: String::new(),
                 last_level_rms: 0.0,
+                vad_envelope: 0.0,
                 load_note,
                 last_ingested_frames: None,
+                ingested_cursor_watermark: 0,
+                pcm_first_frame_inclusive: 0,
                 deferred_silence_commit_iter: Vec::new(),
             };
         }
@@ -572,6 +596,8 @@ impl TranscriptionEngine {
         self.awaiting_final_commit = false;
         self.accept_results_until = Instant::now();
         self.prev_gate_voice_on = false;
+        self.vad_envelope = 0.0;
+        self.pcm_first_frame_inclusive = 0;
         if let Some(rx) = &self.decode_result_rx {
             while rx.try_recv().is_ok() {}
         }
@@ -622,10 +648,50 @@ impl TranscriptionEngine {
         self.segment_pcm.clear();
         self.has_open_segment = false;
         self.final_decode_submitted = false;
-        self.pending_decode_is_final.clear();
         self.awaiting_final_commit = false;
         self.voice_active = false;
         self.quiet_for = Duration::ZERO;
+        self.vad_envelope = 0.0;
+        // Drop any ring-buffer audio at or before this frame; new segment only sees post-commit capture.
+        self.pcm_first_frame_inclusive = self.ingested_cursor_watermark;
+        if let Some(rx) = &self.decode_result_rx {
+            while rx.try_recv().is_ok() {}
+        }
+        self.pending_decode_is_final.clear();
+    }
+
+
+    /// Append the last `tail_len` samples of `mono` (the newest frames), skipping frames `< pcm_first_frame_inclusive`.
+    fn append_tail_respecting_pcm_watermark(
+        &mut self,
+        mono: &[f32],
+        ingested_frames: u64,
+        tail_len: usize,
+    ) {
+        if tail_len == 0 || mono.is_empty() {
+            return;
+        }
+        let n = tail_len.min(mono.len());
+        let tail = &mono[mono.len() - n..];
+        let tail_first_frame = ingested_frames.saturating_sub(n as u64);
+        let skip = (self.pcm_first_frame_inclusive.saturating_sub(tail_first_frame)) as usize;
+        let skip = skip.min(n);
+        if skip < n {
+            self.segment_pcm.extend_from_slice(&tail[skip..]);
+        }
+    }
+
+    /// Seed segment from full `mono` peek (shared ring), only including frames `>= pcm_first_frame_inclusive`.
+    fn seed_mono_respecting_pcm_watermark(&mut self, mono: &[f32], ingested_frames: u64) {
+        let g = ingested_frames;
+        let l = mono.len();
+        if l == 0 {
+            return;
+        }
+        let oldest_in_buffer = g.saturating_sub(l as u64);
+        let skip = (self.pcm_first_frame_inclusive.saturating_sub(oldest_in_buffer)) as usize;
+        let skip = skip.min(l);
+        self.segment_pcm.extend_from_slice(&mono[skip..]);
     }
 
     fn apply_decode_result(&mut self, line: &str, is_final: bool) {
@@ -693,6 +759,8 @@ impl TranscriptionEngine {
             return;
         }
 
+        self.ingested_cursor_watermark = ingested_frames;
+
         let first_snapshot = self.last_ingested_frames.is_none();
         if first_snapshot {
             self.last_ingested_frames = Some(ingested_frames);
@@ -731,6 +799,22 @@ impl TranscriptionEngine {
 
         let gate_rising = voice_on && !self.prev_gate_voice_on;
 
+        let dt_sec = dt.as_secs_f32().max(1.0 / 96_000.0);
+        if gate_rising {
+            self.vad_envelope = rms_eff;
+        } else if rms_eff > self.vad_envelope {
+            self.vad_envelope = rms_eff;
+        } else {
+            self.vad_envelope *= (-dt_sec * sample::VAD_ENVELOPE_RELEASE_PER_S).exp();
+        }
+
+        let rel_pause = self.vad_envelope >= sample::VAD_ENVELOPE_MIN_REF
+            && rms_eff < self.vad_envelope * sample::VAD_PAUSE_TO_ENVELOPE_RMS
+            && peak_eff
+                < (self.vad_envelope * sample::VAD_PAUSE_PEAK_ENVELOPE_SCALE).min(sample::VAD_PAUSE_PEAK_CAP);
+        // Dip vs recent speech envelope and/or below absolute speech gate.
+        let in_phrase_gap = self.voice_active && (rel_pause || !voice_on);
+
         if voice_on && self.awaiting_final_commit {
             self.awaiting_final_commit = false;
             self.final_decode_submitted = false;
@@ -744,9 +828,7 @@ impl TranscriptionEngine {
             self.voice_active = true;
             self.quiet_for = Duration::ZERO;
             self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
-        } else if !voice_on && self.voice_active {
-            // Any frame below the “on” gate counts toward a phrase break (avoids a dead band between
-            // VOICE_ON_* and strict VOICE_OFF_* where silence never accumulated).
+        } else if in_phrase_gap {
             self.quiet_for = self.quiet_for.saturating_add(dt);
             if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
                 self.voice_active = false;
@@ -769,7 +851,7 @@ impl TranscriptionEngine {
 
         if gate_rising {
             self.segment_pcm.clear();
-            self.segment_pcm.extend_from_slice(&mono);
+            self.seed_mono_respecting_pcm_watermark(&mono, ingested_frames);
             self.segment_input_rate = sample_rate;
             self.has_open_segment = true;
             self.live_transcript.clear();
@@ -784,8 +866,7 @@ impl TranscriptionEngine {
             let delta = (ingested_frames - prev_g) as usize;
             let n = delta.min(mono.len());
             if n > 0 {
-                self.segment_pcm
-                    .extend_from_slice(&mono[mono.len().saturating_sub(n)..]);
+                self.append_tail_respecting_pcm_watermark(&mono, ingested_frames, n);
             }
         }
 
