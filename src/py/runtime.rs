@@ -392,6 +392,7 @@ pub fn run_python_interactive() {
 
 /// Run a Python application with the xos engine
 pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::python_api::engine::pyapp::PyApp;
     let resolved_file_path = file_path
         .canonicalize()
