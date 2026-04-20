@@ -4,9 +4,10 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - "**"
+  # push:
+  #   branches:
+  #     - "**"
+  workflow_call:
   workflow_dispatch:
 
 jobs:
@@ -106,3 +107,10 @@ jobs:
         run: |
           test -s wasm-compiled-xos-output/xos-wasm.zip
           echo "Found wasm-compiled-xos-output/xos-wasm.zip"
+
+      - name: Upload wasm zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-wasm-zip
+          path: wasm-compiled-xos-output/xos-wasm.zip
+          if-no-files-found: error
