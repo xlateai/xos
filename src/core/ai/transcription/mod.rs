@@ -1,21 +1,7 @@
-//! Real-time transcription: Whisper on desktop — **Burn** (`fast-whisper-burn`) and/or **CT2**
-//! (`ct2rs`) when the corresponding Cargo features are enabled. Live pipeline: voice gate (RMS +
-//! peak) → **growing clip** (append new frames) → periodic **full-clip** partial decodes → on end of
-//! speech (silence) a **final full-clip** decode for commit, then reset (no overlap stitching).
-
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
-mod filter;
-
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
-mod merge;
+//! Real-time transcription: Whisper on desktop — **Burn** (in-tree `whisper_burn`) and/or **CT2**
+//! (`ct2rs`) when the corresponding Cargo features are enabled. Live path: **growing buffer** with
+//! optional **Silero VAD** (ONNX) to gate Whisper decodes during silence, plus ~100 Hz partial decode
+//! scheduling.
 
 #[cfg(all(
     feature = "whisper",
@@ -39,11 +25,13 @@ mod burn;
 mod ct2;
 
 #[cfg(all(
+    feature = "silero_vad",
     feature = "whisper",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-use std::collections::VecDeque;
+mod silero;
+
 #[cfg(all(
     feature = "whisper",
     not(target_arch = "wasm32"),
@@ -240,7 +228,7 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    /// Mono PCM for the current utterance (input device rate), grown by appending new frames.
+    /// Mono PCM (input device rate), grown continuously while capturing (no phrase segmentation).
     segment_pcm: Vec<f32>,
     #[cfg(all(
         feature = "whisper",
@@ -259,87 +247,13 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    prev_gate_voice_on: bool,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    has_open_segment: bool,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    final_decode_submitted: bool,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    /// One bool per queued decode job (matches decode thread output order).
-    pending_decode_is_final: VecDeque<bool>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
     live_transcript: String,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    voice_active: bool,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    quiet_for: Duration,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    last_snapshot: Instant,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    accept_results_until: Instant,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    awaiting_final_commit: bool,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    last_committed_text: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    last_stdout_commit_key: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
     last_level_rms: f32,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    /// Decaying peak of [`rms_eff`] within the utterance — dips below this (ratio) commit phrases even when noise keeps absolute levels high.
-    vad_envelope: f32,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
@@ -364,16 +278,53 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    /// Only append mono samples whose global frame index is **≥** this (skip ring audio already committed).
+    /// Only append mono samples whose global frame index is **≥** this (skip ring audio already seen after a buffer reset).
     pcm_first_frame_inclusive: u64,
     #[cfg(all(
+        feature = "silero_vad",
         feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    /// Silence-end commits: iterator `Some`/`None` delivered on the **next** [`process_snapshot`]
-    /// so Python `was_committed` aligns one tick after the last live partial of the utterance.
-    deferred_silence_commit_iter: Vec<Option<String>>,
+    /// 16 kHz float PCM queued for Silero (512-sample ONNX frames).
+    vad_16k_pending: Vec<f32>,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_session: Option<silero::SileroVadSession>,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// If set, ONNX load failed and we decode without gating (always on).
+    vad_disabled: bool,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_last_speech_prob: f32,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    vad_hangover_until: Instant,
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// After at least one Silero forward, partial 16 kHz buffers use prob + hangover (not always-on).
+    vad_evaluated_once: bool,
 }
 
 impl TranscriptionEngine {
@@ -418,25 +369,48 @@ impl TranscriptionEngine {
                 segment_input_rate: sample::WHISPER_HZ,
                 last_partial_decode: Instant::now()
                     - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS),
-                prev_gate_voice_on: false,
-                has_open_segment: false,
-                final_decode_submitted: false,
-                pending_decode_is_final: VecDeque::new(),
                 live_transcript: String::new(),
-                voice_active: false,
-                quiet_for: Duration::ZERO,
-                last_snapshot: Instant::now(),
-                accept_results_until: Instant::now(),
-                awaiting_final_commit: false,
-                last_committed_text: String::new(),
-                last_stdout_commit_key: String::new(),
                 last_level_rms: 0.0,
-                vad_envelope: 0.0,
                 load_note,
                 last_ingested_frames: None,
                 ingested_cursor_watermark: 0,
                 pcm_first_frame_inclusive: 0,
-                deferred_silence_commit_iter: Vec::new(),
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_16k_pending: Vec::new(),
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_session: None,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_disabled: false,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_last_speech_prob: 0.0,
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
+                vad_hangover_until: Instant::now(),
+                vad_evaluated_once: false,
             };
         }
         #[cfg(not(all(
@@ -512,6 +486,49 @@ impl TranscriptionEngine {
         }
     }
 
+    /// Approximate seconds currently buffered for the active segment decode window.
+    pub fn buffered_segment_seconds(&self) -> f32 {
+        #[cfg(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            let sr = self.segment_input_rate.max(1) as f32;
+            return self.segment_pcm.len() as f32 / sr;
+        }
+        #[cfg(not(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        {
+            0.0
+        }
+    }
+
+    /// Last Silero speech probability \[0, 1\] when `silero_vad` is enabled; otherwise `0`.
+    pub fn last_vad_speech_prob(&self) -> f32 {
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            return self.vad_last_speech_prob;
+        }
+        #[cfg(not(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        {
+            0.0
+        }
+    }
+
     pub fn drain_stdout_commits(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_stdout)
     }
@@ -520,17 +537,10 @@ impl TranscriptionEngine {
         std::mem::take(&mut self.pending_iter_events)
     }
 
-    /// Promotes any silence-deferred `Some`/`None` iterator pair into [`Self::pending_iter_events`].
-    /// Call before shutdown if you will not run another [`Self::process_snapshot`].
-    pub fn flush_deferred_iter_delivery(&mut self) {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
-        self.flush_deferred_silence_commit_iter();
-    }
+    /// Reserved for future deferred iterator delivery; currently a no-op.
+    pub fn flush_deferred_iter_delivery(&mut self) {}
 
+    /// Push the current live line to stdout / iterator queues (e.g. shutdown), without clearing PCM.
     pub fn flush_live_to_stdout_commits(&mut self) {
         #[cfg(all(
             feature = "whisper",
@@ -541,8 +551,37 @@ impl TranscriptionEngine {
             if self.decode_job_tx.is_none() {
                 return;
             }
-            let candidate = self.live_transcript.clone();
-            self.try_push_stdout_commit(&candidate, false);
+            let t = normalize_transcript_ws(&self.live_transcript);
+            if t.is_empty() {
+                return;
+            }
+            self.pending_stdout.push(t.clone());
+            self.pending_iter_events.push(Some(t));
+            self.pending_iter_events.push(None);
+            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        }
+    }
+
+    /// Mark the currently ingested audio as consumed for the active segment.
+    ///
+    /// This advances the segment watermark so subsequent decodes only consider audio captured after
+    /// this call, and clears pending partial state/result backlog from the previous segment.
+    pub fn clip_consumed_audio_cursor(&mut self) {
+        #[cfg(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            self.pcm_first_frame_inclusive = self.ingested_cursor_watermark;
+            self.segment_pcm.clear();
+            self.resample_buf.clear();
+            self.live_transcript.clear();
+            self.last_partial_decode = Instant::now()
+                - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+            if let Some(rx) = &self.decode_result_rx {
+                while rx.try_recv().is_ok() {}
+            }
         }
     }
 
@@ -584,82 +623,152 @@ impl TranscriptionEngine {
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
+fn normalize_transcript_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+pub const SILERO_VAD_SPEECH_THRESHOLD: f32 = 0.35;
+#[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+const SILERO_VAD_THRESHOLD: f32 = SILERO_VAD_SPEECH_THRESHOLD;
+#[cfg(all(
+    feature = "silero_vad",
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+const SILERO_VAD_HANGOVER: Duration = Duration::from_millis(280);
+
+#[cfg(all(
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
 impl TranscriptionEngine {
     fn reset_utterance_state(&mut self) {
         self.live_transcript.clear();
         self.segment_pcm.clear();
-        self.has_open_segment = false;
-        self.final_decode_submitted = false;
-        self.pending_decode_is_final.clear();
-        self.voice_active = false;
-        self.quiet_for = Duration::ZERO;
-        self.awaiting_final_commit = false;
-        self.accept_results_until = Instant::now();
-        self.prev_gate_voice_on = false;
-        self.vad_envelope = 0.0;
+        self.last_partial_decode = Instant::now()
+            - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
         self.pcm_first_frame_inclusive = 0;
+        self.last_ingested_frames = None;
         if let Some(rx) = &self.decode_result_rx {
             while rx.try_recv().is_ok() {}
         }
-        self.deferred_silence_commit_iter.clear();
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            self.vad_16k_pending.clear();
+            self.vad_evaluated_once = false;
+            if let Some(s) = self.vad_session.as_mut() {
+                s.reset();
+            }
+        }
     }
 
-    /// Move [`Self::deferred_silence_commit_iter`] into [`Self::pending_iter_events`] and bump
-    /// [`Self::transcript_epoch`] once per flush (paired with Python-visible commit delivery).
-    fn flush_deferred_silence_commit_iter(&mut self) {
-        if self.deferred_silence_commit_iter.is_empty() {
-            return;
+    #[cfg(all(
+        feature = "silero_vad",
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// Returns whether Whisper decode should run this tick (speech or hangover). On load failure, always `true`.
+    fn vad_update_and_allow_decode(
+        &mut self,
+        sample_rate: u32,
+        mono: &[f32],
+        first_snapshot: bool,
+        ingested_frames: u64,
+        prev_g: u64,
+    ) -> bool {
+        if self.vad_disabled {
+            return true;
         }
-        self.pending_iter_events
-            .extend(self.deferred_silence_commit_iter.drain(..));
-        self.transcript_epoch = self.transcript_epoch.saturating_add(1);
-    }
 
-    /// `defer_iter_delivery`: silence-end phrase commits only — queue `Some`/`None` for the next
-    /// [`process_snapshot_live`] so callers see `was_committed` on the tick **after** utterance
-    /// state is cleared (avoids pairing the flag with the previous live string).
-    fn try_push_stdout_commit(&mut self, line: &str, defer_iter_delivery: bool) -> bool {
-        let t = merge::normalize_ws(line);
-        if t.is_empty() || filter::is_spurious_line(&t) || filter::looks_degenerate(&t) {
-            return false;
-        }
-        let key = t.to_ascii_lowercase();
-        if self.last_stdout_commit_key == key {
-            return false;
-        }
-        self.last_stdout_commit_key = key;
-        self.pending_stdout.push(t.clone());
-        if defer_iter_delivery {
-            self.deferred_silence_commit_iter.push(Some(t.clone()));
-            self.deferred_silence_commit_iter.push(None);
+        let delta_16k: Vec<f32> = if first_snapshot {
+            sample::resample_linear(mono, sample_rate, sample::WHISPER_HZ)
+        } else if ingested_frames > prev_g {
+            let delta = (ingested_frames - prev_g) as usize;
+            let n = delta.min(mono.len());
+            if n == 0 {
+                Vec::new()
+            } else {
+                let tail = &mono[mono.len() - n..];
+                sample::resample_linear(tail, sample_rate, sample::WHISPER_HZ)
+            }
         } else {
-            self.pending_iter_events.push(Some(t.clone()));
-            self.pending_iter_events.push(None);
-            self.transcript_epoch = self.transcript_epoch.saturating_add(1);
-        }
-        self.last_committed_text = t;
-        self.live_transcript.clear();
-        self.clear_segment_after_commit();
-        true
-    }
+            Vec::new()
+        };
+        self.vad_16k_pending.extend(delta_16k);
 
-    /// Reset utterance PCM and segment flags after a successful stdout commit.
-    fn clear_segment_after_commit(&mut self) {
-        self.segment_pcm.clear();
-        self.has_open_segment = false;
-        self.final_decode_submitted = false;
-        self.awaiting_final_commit = false;
-        self.voice_active = false;
-        self.quiet_for = Duration::ZERO;
-        self.vad_envelope = 0.0;
-        // Drop any ring-buffer audio at or before this frame; new segment only sees post-commit capture.
-        self.pcm_first_frame_inclusive = self.ingested_cursor_watermark;
-        if let Some(rx) = &self.decode_result_rx {
-            while rx.try_recv().is_ok() {}
+        if self.vad_session.is_none() {
+            match silero::open_silero_session() {
+                Ok(s) => self.vad_session = Some(s),
+                Err(e) => {
+                    self.vad_disabled = true;
+                    self.load_note = Some(format!(
+                        "Silero VAD unavailable ({e}); running Whisper without VAD gating."
+                    ));
+                    return true;
+                }
+            }
         }
-        self.pending_decode_is_final.clear();
-    }
 
+        let sess = self.vad_session.as_mut().expect("vad_session");
+
+        const SILERO_CHUNK_SAMPLES: usize = 512;
+        const SILERO_HOP_SAMPLES: usize = 160; // 10 ms @ 16 kHz for finer VAD updates
+
+        if self.vad_16k_pending.len() < SILERO_CHUNK_SAMPLES {
+            return !self.vad_evaluated_once
+                || self.vad_last_speech_prob >= SILERO_VAD_THRESHOLD
+                || Instant::now() < self.vad_hangover_until;
+        }
+
+        let mut saw_speech = false;
+        while self.vad_16k_pending.len() >= SILERO_CHUNK_SAMPLES {
+            let chunk: Vec<f32> = self.vad_16k_pending[..SILERO_CHUNK_SAMPLES].to_vec();
+            match sess.predict_chunk(&chunk) {
+                Ok(p) => {
+                    self.vad_evaluated_once = true;
+                    self.vad_last_speech_prob = p;
+                    if p >= SILERO_VAD_THRESHOLD {
+                        saw_speech = true;
+                    }
+                }
+                Err(_) => {}
+            }
+            let drain_n = SILERO_HOP_SAMPLES.min(self.vad_16k_pending.len());
+            self.vad_16k_pending.drain(..drain_n);
+        }
+
+        const MAX_VAD_BACKLOG: usize = 48_000;
+        if self.vad_16k_pending.len() > MAX_VAD_BACKLOG {
+            let trim = self.vad_16k_pending.len() - MAX_VAD_BACKLOG;
+            self.vad_16k_pending.drain(..trim);
+        }
+
+        if saw_speech {
+            self.vad_hangover_until = Instant::now() + SILERO_VAD_HANGOVER;
+        }
+
+        let now = Instant::now();
+        self.vad_last_speech_prob >= SILERO_VAD_THRESHOLD || now < self.vad_hangover_until
+    }
 
     /// Append the last `tail_len` samples of `mono` (the newest frames), skipping frames `< pcm_first_frame_inclusive`.
     fn append_tail_respecting_pcm_watermark(
@@ -694,26 +803,12 @@ impl TranscriptionEngine {
         self.segment_pcm.extend_from_slice(&mono[skip..]);
     }
 
-    fn apply_decode_result(&mut self, line: &str, is_final: bool) {
-        if !is_final && !self.has_open_segment {
+    fn apply_partial_decode_line(&mut self, line: &str) {
+        let raw = normalize_transcript_ws(line);
+        if raw.is_empty() {
             return;
         }
-        if is_final && !self.awaiting_final_commit {
-            return;
-        }
-        let raw = merge::normalize_ws(line);
-        if is_final {
-            if !raw.is_empty() && !filter::looks_degenerate(&raw) && !filter::is_spurious_line(&raw) {
-                let _ = self.try_push_stdout_commit(&raw, true);
-            } else if !self.live_transcript.is_empty() {
-                let fb = self.live_transcript.clone();
-                let _ = self.try_push_stdout_commit(&fb, true);
-            } else {
-                self.clear_segment_after_commit();
-            }
-            return;
-        }
-        if raw.is_empty() || filter::looks_degenerate(&raw) || filter::is_spurious_line(&raw) {
+        if raw.starts_with("(Whisper") {
             return;
         }
         if raw != self.live_transcript {
@@ -723,8 +818,8 @@ impl TranscriptionEngine {
         }
     }
 
-    /// Full growing-clip resample + queue (partial or final pass over [`Self::segment_pcm`]).
-    fn queue_segment_decode(&mut self, is_final: bool) -> bool {
+    /// Full growing-buffer resample + queue one decode job (`try_send` drops if the CT2 thread is busy).
+    fn queue_segment_decode(&mut self) -> bool {
         if self.segment_pcm.is_empty() {
             return false;
         }
@@ -737,12 +832,7 @@ impl TranscriptionEngine {
             return false;
         }
         let tx = self.decode_job_tx.as_ref().expect("checked");
-        if tx.try_send(self.resample_buf.clone()).is_ok() {
-            self.pending_decode_is_final.push_back(is_final);
-            true
-        } else {
-            false
-        }
+        tx.try_send(self.resample_buf.clone()).is_ok()
     }
 
     fn process_snapshot_live(
@@ -754,171 +844,87 @@ impl TranscriptionEngine {
         if self.decode_job_tx.is_none() {
             return;
         }
-        self.flush_deferred_silence_commit_iter();
         if channels.is_empty() || channels[0].is_empty() || ingested_frames == 0 {
             return;
         }
 
         self.ingested_cursor_watermark = ingested_frames;
 
+        if let Some(prev) = self.last_ingested_frames {
+            if ingested_frames < prev {
+                self.reset_utterance_state();
+            }
+        }
+
         let first_snapshot = self.last_ingested_frames.is_none();
         if first_snapshot {
             self.last_ingested_frames = Some(ingested_frames);
         }
         let prev_g = self.last_ingested_frames.expect("checked");
-        if ingested_frames < prev_g {
-            self.reset_utterance_state();
-        }
-
-        let dt = if first_snapshot {
-            Duration::ZERO
-        } else {
-            self.last_snapshot.elapsed()
-        };
-        self.last_snapshot = Instant::now();
 
         let mono = sample::downmix_mono(channels);
         let n = mono.len().max(1);
-        let tail_fast = ((sample_rate as usize).saturating_mul(sample::VAD_FAST_TAIL_MS as usize)
+        let tail_slow = ((sample_rate as usize).saturating_mul(sample::LEVEL_METER_TAIL_MS as usize)
             / 1000)
             .max(64)
             .min(n);
-        let tail_slow = ((sample_rate as usize).saturating_mul(sample::VAD_SLOW_TAIL_MS as usize)
-            / 1000)
-            .max(128)
-            .min(n);
-        let rms_fast = sample::rms_tail(&mono, tail_fast);
-        let rms_slow = sample::rms_tail(&mono, tail_slow);
-        let rms_eff = rms_fast.min(rms_slow);
-        let peak_fast = sample::peak_tail(&mono, tail_fast);
-        let peak_slow = sample::peak_tail(&mono, tail_slow);
-        let peak_eff = peak_fast.max(peak_slow);
-        self.last_level_rms = rms_slow;
-        let voice_on =
-            rms_eff >= sample::VOICE_ON_RMS || peak_eff >= sample::VOICE_ON_PEAK;
+        self.last_level_rms = sample::rms_tail(&mono, tail_slow);
 
-        let gate_rising = voice_on && !self.prev_gate_voice_on;
-
-        let dt_sec = dt.as_secs_f32().max(1.0 / 96_000.0);
-        if gate_rising {
-            self.vad_envelope = rms_eff;
-        } else if rms_eff > self.vad_envelope {
-            self.vad_envelope = rms_eff;
-        } else {
-            self.vad_envelope *= (-dt_sec * sample::VAD_ENVELOPE_RELEASE_PER_S).exp();
-        }
-
-        let rel_pause = self.vad_envelope >= sample::VAD_ENVELOPE_MIN_REF
-            && rms_eff < self.vad_envelope * sample::VAD_PAUSE_TO_ENVELOPE_RMS
-            && peak_eff
-                < (self.vad_envelope * sample::VAD_PAUSE_PEAK_ENVELOPE_SCALE).min(sample::VAD_PAUSE_PEAK_CAP);
-        // Dip vs recent speech envelope and/or below absolute speech gate.
-        let in_phrase_gap = self.voice_active && (rel_pause || !voice_on);
-
-        if voice_on && self.awaiting_final_commit {
-            self.awaiting_final_commit = false;
-            self.final_decode_submitted = false;
-        }
-
-        if voice_on {
-            if !self.voice_active {
-                self.last_partial_decode = Instant::now()
-                    - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
-            }
-            self.voice_active = true;
-            self.quiet_for = Duration::ZERO;
-            self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
-        } else if in_phrase_gap {
-            if sample::END_SILENCE_MS == 0 {
-                // Zero-delay mode: commit immediately from the current live text.
-                self.voice_active = false;
-                self.awaiting_final_commit = false;
-                self.quiet_for = Duration::ZERO;
-                let live_now = merge::normalize_ws(&self.live_transcript);
-                if !live_now.is_empty() {
-                    let _ = self.try_push_stdout_commit(&live_now, true);
-                } else {
-                    self.clear_segment_after_commit();
-                }
-            } else {
-                self.quiet_for = self.quiet_for.saturating_add(dt);
-                if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
-                    self.voice_active = false;
-                    self.awaiting_final_commit = true;
-                    self.quiet_for = Duration::ZERO;
-                    self.accept_results_until =
-                        Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
-                }
-            }
-        }
-
-        let mut decoded: Vec<(String, bool)> = Vec::new();
+        let mut decoded: Vec<String> = Vec::new();
         if let Some(rx) = &self.decode_result_rx {
             while let Ok(line) = rx.try_recv() {
-                let was_final = self.pending_decode_is_final.pop_front().unwrap_or(false);
-                decoded.push((line, was_final));
+                decoded.push(line);
             }
         }
-        for (line, was_final) in decoded {
-            self.apply_decode_result(&line, was_final);
+        for line in decoded {
+            self.apply_partial_decode_line(&line);
         }
 
-        if gate_rising {
+        if first_snapshot {
             self.segment_pcm.clear();
             self.seed_mono_respecting_pcm_watermark(&mono, ingested_frames);
             self.segment_input_rate = sample_rate;
-            self.has_open_segment = true;
-            self.live_transcript.clear();
-            self.final_decode_submitted = false;
-            self.awaiting_final_commit = false;
             self.last_partial_decode = Instant::now()
                 - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
-        } else if self.has_open_segment
-            && !self.awaiting_final_commit
-            && ingested_frames > prev_g
-        {
+        } else if ingested_frames > prev_g {
             let delta = (ingested_frames - prev_g) as usize;
-            let n = delta.min(mono.len());
-            if n > 0 {
-                self.append_tail_respecting_pcm_watermark(&mono, ingested_frames, n);
+            let take = delta.min(mono.len());
+            if take > 0 {
+                self.append_tail_respecting_pcm_watermark(&mono, ingested_frames, take);
             }
         }
 
-        if self.has_open_segment
-            && !self.awaiting_final_commit
+        #[cfg(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        let allow_whisper = self.vad_update_and_allow_decode(
+            sample_rate,
+            &mono,
+            first_snapshot,
+            ingested_frames,
+            prev_g,
+        );
+        #[cfg(not(all(
+            feature = "silero_vad",
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        )))]
+        let allow_whisper = true;
+
+        if allow_whisper
+            && !self.segment_pcm.is_empty()
             && self.last_partial_decode.elapsed()
                 >= Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS)
+            && self.queue_segment_decode()
         {
-            if self.queue_segment_decode(false) {
-                self.last_partial_decode = Instant::now();
-            }
-        }
-
-        if self.awaiting_final_commit && !self.final_decode_submitted {
-            if self.queue_segment_decode(true) {
-                self.final_decode_submitted = true;
-            }
-        }
-
-        if self.awaiting_final_commit && Instant::now() > self.accept_results_until {
-            let live = merge::normalize_ws(&self.live_transcript);
-            if !live.is_empty() {
-                if !self.try_push_stdout_commit(&live, true) {
-                    self.clear_segment_after_commit();
-                }
-            } else {
-                self.clear_segment_after_commit();
-            }
-            self.awaiting_final_commit = false;
-            self.accept_results_until = Instant::now();
-            if let Some(rx) = &self.decode_result_rx {
-                while rx.try_recv().is_ok() {}
-            }
-            self.pending_decode_is_final.clear();
+            self.last_partial_decode = Instant::now();
         }
 
         self.last_ingested_frames = Some(ingested_frames);
-        self.prev_gate_voice_on = voice_on;
     }
 }
 

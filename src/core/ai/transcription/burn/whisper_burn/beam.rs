@@ -1,6 +1,6 @@
-use crate::custom_kernels::CustomKernelsBackend;
-use crate::model::*;
-use crate::transcribe::{
+use super::custom_kernels::CustomKernelsBackend;
+use super::model::*;
+use super::transcribe::{
     CHUNK_SIZE, SamplingStrategy, SegmentDecodeResult, WhisperParams,
     average_cross_attention_for_token, compute_entropy, sequence_score,
 };

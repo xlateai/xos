@@ -97,14 +97,35 @@ class _Transcriber:
         """
         One poll of the transcription engine. Returns ``(transcription, was_committed, is_new)``.
 
-        ``transcription`` / ``was_committed`` match ``_transcriber_transcribe_step`` (silence-end
-        commits surface ``was_committed`` on the poll after the utterance closes). ``is_new`` is
+        ``transcription`` / ``was_committed`` come from ``_transcriber_transcribe_step`` (commits are
+        rare in the baseline pipeline; use ``finish()`` / ``flush_live_to_stdout_commits`` for a
+        final push). ``is_new`` is
         driven by the engine's ``transcript_epoch`` (no string equality): false when the epoch is
         unchanged since the last ``transcribe`` call. ``poll_interval`` is reserved; callers can
         sleep between polls (see ``record.py``).
         """
         import xos
         return xos.audio._transcriber_transcribe_step(self._ptr)
+
+    def vad_prob(self):
+        """Current Silero VAD speech probability [0, 1]."""
+        import xos
+        return xos.audio._transcriber_vad_prob(self._ptr)
+
+    def buffered_seconds(self):
+        """Approximate audio seconds currently buffered in the decode segment."""
+        import xos
+        return xos.audio._transcriber_buffered_seconds(self._ptr)
+
+    def clip_cursor(self):
+        """Advance decode cursor to current audio ingestion point (drop old segment backlog)."""
+        import xos
+        return xos.audio._transcriber_clip_cursor(self._ptr)
+
+    def flush_commit(self):
+        """Flush current live hypothesis to finalized commit(s), returning list[str]."""
+        import xos
+        return xos.audio._transcriber_flush_commit(self._ptr)
 
     def iterate(self, poll_interval=0.03):
         import xos
@@ -162,14 +183,64 @@ pub fn transcriber_next_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult 
     Ok(vm.ctx.new_list(py_list).into())
 }
 
+pub fn transcriber_vad_prob(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    Ok(vm.ctx.new_float(state.engine.last_vad_speech_prob() as f64).into())
+}
+
+pub fn transcriber_buffered_seconds(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    Ok(vm.ctx.new_float(state.engine.buffered_segment_seconds() as f64).into())
+}
+
+pub fn transcriber_clip_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let mut map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get_mut(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    state.engine.clip_consumed_audio_cursor();
+    Ok(vm.ctx.none())
+}
+
+pub fn transcriber_flush_commit(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let ptr: usize = args.bind(vm)?;
+    let mut map = transcribers()
+        .lock()
+        .map_err(|_| vm.new_runtime_error("transcriber lock poisoned".to_string()))?;
+    let state = map
+        .get_mut(&ptr)
+        .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
+    state.engine.flush_live_to_stdout_commits();
+    let out = state
+        .engine
+        .drain_stdout_commits()
+        .into_iter()
+        .map(|s| vm.ctx.new_str(s).into())
+        .collect::<Vec<PyObjectRef>>();
+    Ok(vm.ctx.new_list(out).into())
+}
+
 /// One transcription poll: returns `(transcription, was_committed, is_new)`.
 ///
-/// `transcription` is the live caption while building an utterance; on ticks where a phrase
-/// commits it is that finalized phrase. `was_committed` is true iff at least one commit
-/// reached the iterator queue **this** poll. Silence-end commits are deferred one snapshot so
-/// this flag and the finalized string align with the tick **after** the utterance closes (not
-/// the same poll as the last live partial). `is_new` compares [`TranscriptionEngine::transcript_epoch`]
-/// to the last seen value (bumped when the engine queues live or commit iterator events).
+/// `transcription` is normally the **live** caption string. `was_committed` is true when at least
+/// one finalized line was queued to the iterator this poll (e.g. explicit flush), not during
+/// ordinary partial streaming. `is_new` compares [`TranscriptionEngine::transcript_epoch`]
+/// to the last seen value (bumped when the engine queues iterator events).
 pub fn transcriber_transcribe_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let ptr: usize = args.bind(vm)?;
     let mut map = transcribers()

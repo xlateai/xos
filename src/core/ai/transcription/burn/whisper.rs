@@ -1,4 +1,4 @@
-//! Whisper via **fast-whisper-burn** (Burn + WGPU + Burnpack). Runs decode on a background thread.
+//! Whisper via **Burn** (in-tree `whisper_burn` + WGPU + Burnpack). Runs decode on a background thread.
 #![cfg(all(
     feature = "whisper",
     not(target_arch = "wasm32"),
@@ -11,18 +11,18 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
 
 use burn_store::{BurnpackStore, ModuleSnapshot};
-use fast_whisper_burn::MixedPrecisionAdapter;
-use fast_whisper_burn::model::{Whisper, WhisperConfig};
-use fast_whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
-use fast_whisper_burn::transcribe::{WhisperParams, compute_mel_cpu, transcribe as fw_transcribe};
-use fast_whisper_burn::{self};
-
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
 
+use crate::ai::transcription::burn::whisper_burn::model::{Whisper, WhisperConfig};
+use crate::ai::transcription::burn::whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
+use crate::ai::transcription::burn::whisper_burn::transcribe::{
+    WhisperParams, compute_mel_cpu, transcribe as fw_transcribe,
+};
+use crate::ai::transcription::burn::whisper_burn::MixedPrecisionAdapter;
 use crate::ai::transcription::{ActivationStep, TensorDebugStats};
 
 type WgpuF32 = Wgpu<f32>;
@@ -157,7 +157,7 @@ fn tensor_debug_stats(vals: &[f32]) -> Option<TensorDebugStats> {
 
 /// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
 pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
-    use fast_whisper_burn::transcribe::SamplingStrategy;
+    use crate::ai::transcription::burn::whisper_burn::transcribe::SamplingStrategy;
 
     let sel = parse_whisper_model_arg(size)?;
     let models_root = prepare_whisper_models_root(&sel.canonical)?;
@@ -216,7 +216,7 @@ pub fn transcribe_waveform_once(
     waveform: &[f32],
     sample_rate: u32,
 ) -> Result<String, String> {
-    use fast_whisper_burn::transcribe::SamplingStrategy;
+    use crate::ai::transcription::burn::whisper_burn::transcribe::SamplingStrategy;
 
     let sel = parse_whisper_model_arg(size)?;
     let models_root = prepare_whisper_models_root(&sel.canonical)?;
@@ -253,7 +253,7 @@ pub fn transcribe_waveform_with_intermediates(
     waveform: &[f32],
     sample_rate: u32,
 ) -> Result<(String, Vec<ActivationStep>), String> {
-    use fast_whisper_burn::transcribe::SamplingStrategy;
+    use crate::ai::transcription::burn::whisper_burn::transcribe::SamplingStrategy;
 
     let sel = parse_whisper_model_arg(size)?;
     let models_root = prepare_whisper_models_root(&sel.canonical)?;
@@ -261,7 +261,7 @@ pub fn transcribe_waveform_with_intermediates(
     with_cached_model(&models_root, &sel, |bpe, whisper| {
         let device = whisper.devices()[0].clone();
         let use_f16 = sel.use_f16_compute;
-        // Same mel + device path as `fast_whisper_burn::transcribe::transcribe_inner`.
+        // Same mel + device path as `whisper_burn::transcribe::transcribe_inner`.
         let full_mel = compute_mel_cpu::<WgpuF32>(
             waveform,
             sample_rate as usize,

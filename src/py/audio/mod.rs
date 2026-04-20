@@ -42,7 +42,7 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     out
 }
 
-/// Load audio to mono **f32** PCM, default **16_000 Hz** — the rate Whisper / `fast-whisper-burn`
+/// Load audio to mono **f32** PCM, default **16_000 Hz** — the rate Whisper / in-tree `whisper_burn`
 /// expect for `transcribe(..., sample_rate, ...)`. Samples are roughly **[-1, 1]** after decode.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -164,6 +164,37 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         vm,
     )
     .unwrap();
+    module
+        .set_attr(
+            "_transcriber_vad_prob",
+            vm.new_function("_transcriber_vad_prob", transcription::transcriber_vad_prob),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_buffered_seconds",
+            vm.new_function(
+                "_transcriber_buffered_seconds",
+                transcription::transcriber_buffered_seconds,
+            ),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_clip_cursor",
+            vm.new_function("_transcriber_clip_cursor", transcription::transcriber_clip_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_flush_commit",
+            vm.new_function("_transcriber_flush_commit", transcription::transcriber_flush_commit),
+            vm,
+        )
+        .unwrap();
     module.set_attr("_transcriber_cleanup", vm.new_function("_transcriber_cleanup", transcription::transcriber_cleanup), vm).unwrap();
     
     // --- Speaker API ---

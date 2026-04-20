@@ -246,7 +246,7 @@ pub fn merge_vad_segments(
 }
 
 pub fn detect_speech_regions<
-    B: crate::custom_kernels::CustomKernelsBackend,
+    B: super::super::custom_kernels::CustomKernelsBackend,
     F: FnMut(usize, usize) -> bool,
 >(
     vad: &SileroVAD6Model<B>,
