@@ -10,19 +10,19 @@ whisper = xos.ai.whisper.load()  # most stable defaults
 # whisper = xos.ai.whisper.load("tiny", backend=KERNEL_BACKEND)  # 32 bit
 # whisper = xos.ai.whisper.load("tiny-f16", backend=KERNEL_BACKEND)  # 16 bit
 
-def get_color(param_name):
-    if "encoder" in param_name:
-        return "&3"
-    elif "decoder" in param_name:
-        return "&4"
-    return ""
+# def get_color(param_name):
+#     if "encoder" in param_name:
+#         return "&3"
+#     elif "decoder" in param_name:
+#         return "&4"
+#     return ""
 
-# let's us look directly into all of the parameters like you can with pytorch
-for i, (name, param) in enumerate(whisper.named_parameters()):
-    color = get_color(name)
-    # print stats of the layer
-    xos.print_color(f"{color}{i}: {name}: {param.shape}")
-    xos.print_color(f"{color}Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
+# # let's us look directly into all of the parameters like you can with pytorch
+# for i, (name, param) in enumerate(whisper.named_parameters()):
+#     color = get_color(name)
+#     # print stats of the layer
+#     xos.print_color(f"{color}{i}: {name}: {param.shape}")
+#     xos.print_color(f"{color}Stats: mean={param.mean():.4f}, std={param.std():.4f}, min={param.min():.4f}, max={param.max():.4f}")
 
 
 # inference on synthetic audio: must be ~[-1, 1] float PCM at sample_rate (default 16 kHz).
