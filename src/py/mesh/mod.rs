@@ -171,7 +171,6 @@ fn preprocess_remote_frame_send(
             "remote_frame with stream_frame is only supported on Windows and macOS".to_string(),
         ));
     }
-    Ok(())
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]

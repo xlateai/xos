@@ -1,16 +1,20 @@
 use crate::engine::{Application, EngineState};
+#[cfg(not(target_os = "linux"))]
 use crate::ui::Selector;
+#[cfg(not(target_os = "linux"))]
 use crate::apps::audiovis::waveform::WaveformVisualizer;
+#[cfg(not(target_os = "linux"))]
 use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
+#[cfg(not(target_os = "linux"))]
 use crate::apps::audiovis::media_control_bar::MediaControlBar;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use rodio::{Decoder, OutputStream, Sink, Source};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use rodio::OutputStreamBuilder;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use dialoguer::Select;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use crate::engine::audio;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::fs::File;
@@ -24,6 +28,7 @@ use std::collections::VecDeque;
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
+#[cfg(not(target_os = "linux"))]
 const BUFFER_SIZE: usize = 512; // Number of audio samples to process per frame
 
 #[cfg(target_os = "linux")]

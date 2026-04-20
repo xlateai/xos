@@ -46,6 +46,7 @@ pub struct AudioBuffer {
     /// Raw audio samples stored per channel: Vec[channel_idx] -> samples for that channel
     channel_samples: Arc<Mutex<Vec<VecDeque<f32>>>>,
     /// Maximum buffer capacity per channel
+    #[allow(dead_code)]
     capacity: usize,
     /// Sample rate of the audio
     sample_rate: u32,
@@ -76,6 +77,7 @@ impl AudioBuffer {
     }
 
     /// Add samples to the buffer (one sample per channel)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn push_sample_batch(&self, samples: &[f32]) {
         let mut channel_buffers = self.channel_samples.lock().unwrap();
         
@@ -105,6 +107,7 @@ impl AudioBuffer {
     }
 
     /// Interleaved `channels`-wide PCM (e.g. ScreenCaptureKit).
+    #[cfg(target_os = "macos")]
     pub(crate) fn push_interleaved_f32(&self, samples: &[f32], channels: u16) {
         let c = channels as usize;
         if c == 0 {
