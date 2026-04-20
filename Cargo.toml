@@ -23,7 +23,6 @@ pixels = "0.15.0"
 winit = "0.30.12"
 winapi = { version = "0.3.9", features = ["winuser", "wingdi", "winbase"] }
 clap = { version = "4.4.10", features = ["derive"] }
-cpal = "0.16.0"
 dialoguer = "0.11"
 tiny_http = "0.12"
 webbrowser = "1.0.6"
@@ -67,7 +66,6 @@ dirs = "5"
 rand_pcg = "0.9.0"
 rayon = "1.10"
 image = { version = "0.25", features = ["default-formats"] }
-rodio = { version = "0.21.1", features = ["mp3", "flac", "vorbis", "wav"] }
 ctrlc = "3.4"
 
 # -------------------------------------------------------------------
@@ -89,6 +87,13 @@ ct2rs = { version = "0.9.18", optional = true, default-features = false, feature
 zip = { version = "2.2", optional = true, default-features = false, features = ["deflate"] }
 # Silero VAD (ONNX) — CPU via ONNX Runtime; `download-binaries` bundles ORT for the host target at build time.
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-24"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))'.dependencies]
+cpal = "0.16.0"
+rodio = { version = "0.21.1", features = ["mp3", "flac", "vorbis", "wav"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))'.dependencies]
+rodio = { version = "0.21.1", default-features = false, features = ["mp3", "flac", "vorbis", "wav"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
