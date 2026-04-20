@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
-      RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_CACHE_SIZE: 2G
 
@@ -38,6 +37,19 @@ jobs:
 
       - name: Setup compiler cache (sccache)
         uses: mozilla-actions/sccache-action@v0.0.5
+
+      - name: Enable sccache if available
+        shell: bash
+        run: |
+          set +e
+          if sccache --start-server && sccache --show-stats >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+            echo "Using sccache for this run."
+          else
+            echo "Sccache backend unavailable; falling back to plain rustc."
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+          fi
+          set -e
 
       - name: Cache Rust dependencies and build outputs
         uses: Swatinem/rust-cache@v2
