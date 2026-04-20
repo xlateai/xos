@@ -1,5 +1,5 @@
 //! Download OpenAI `.pt` + Hugging Face `tokenizer.json`, then convert to Burnpack (same pipeline as
-//! `crates/fast-whisper-burn/src/bin/convert/main.rs`) into `auth_data_dir()/models/transcription/burn/{size}/`.
+//! `crates/fast-whisper-burn/src/bin/convert/main.rs`) into `auth_data_dir()/models/whisper/{size}-burn/`.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -19,7 +19,7 @@ use fast_whisper_burn::model::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const DOWNLOAD_MANIFEST: &str = include_str!("../whisper_download_links.json");
+const DOWNLOAD_MANIFEST: &str = include_str!("burn_whisper_download_links.json");
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
@@ -211,9 +211,9 @@ pub(crate) fn artifacts_ready(dir: &Path, model_key: &str) -> bool {
         && (f32.is_file() || f16.is_file())
 }
 
-/// Populate `~/.xos/models/transcription/burn/{model_key}/` (see `xos path --data`).
+/// Populate `{data}/models/whisper/{model_key}-burn/` (see `xos path --data`).
 pub(crate) fn ensure_whisper_artifacts(model_key: &str) -> Result<(), String> {
-    let dir: PathBuf = crate::auth::transcription_burn_model_cache_dir(model_key)
+    let dir: PathBuf = crate::auth::whisper_model_backend_cache_dir(model_key, "burn")
         .map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 
@@ -229,11 +229,11 @@ pub(crate) fn ensure_whisper_artifacts(model_key: &str) -> Result<(), String> {
         .get(model_key)
         .ok_or_else(|| {
             format!(
-                "no PyTorch URL in whisper_download_links.json for model '{model_key}' (supported: tiny, small, …)"
+                "no PyTorch URL in burn_whisper_download_links.json for model '{model_key}' (supported: tiny, small, …)"
             )
         })?;
     let tok_url = manifest.tokenizer.get(model_key).ok_or_else(|| {
-        format!("no tokenizer URL in whisper_download_links.json for '{model_key}'")
+        format!("no tokenizer URL in burn_whisper_download_links.json for '{model_key}'")
     })?;
 
     let pt_path = dir.join(format!("{model_key}.pt"));

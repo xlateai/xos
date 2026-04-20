@@ -72,9 +72,5 @@
     "large": "https://huggingface.co/openai/whisper-large-v3/resolve/main/tokenizer.json",
     "large-v3-turbo": "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/main/tokenizer.json",
     "turbo": "https://huggingface.co/openai/whisper-large-v3-turbo/resolve/main/tokenizer.json"
-  },
-  "ct2_convert_models": {
-    "whisper-tiny-ct2": "openai/whisper-tiny",
-    "whisper-small-ct2": "openai/whisper-small"
   }
 }

@@ -1,5 +1,6 @@
 //! CTranslate2 Whisper (`ct2rs`): load CT2 model folders from `auth_data_dir()` (same as
-//! `xos path --data`) or the repo bundle — one-shot for Python `backend=CT2`.
+//! `xos path --data`) under `models/whisper/{size}-ct2/`, or the repo bundle — one-shot for Python
+//! `backend=CT2`.
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
@@ -15,48 +16,77 @@ const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/ct2";
 /// Fixed decoding language (no env); extend via API later if needed.
 const DEFAULT_LANG: &str = "en";
 
-fn ct2_folder_name(size: Option<&str>) -> Result<&'static str, String> {
-    match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("small") => Ok("whisper-small-ct2"),
-        Some("tiny") | None => Ok("whisper-tiny-ct2"),
+/// Stem for [`crate::auth::whisper_model_backend_cache_dir`] (e.g. `tiny` → `…/tiny-ct2/`).
+fn ct2_size_stem(size: Option<&str>) -> Result<&'static str, String> {
+    let raw = size
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    match raw.as_deref() {
+        None | Some("tiny") => Ok("tiny"),
         Some(other) => Err(format!(
-            "unknown whisper size '{other}' for CT2 (expected 'tiny' or 'small')"
+            "Whisper CT2 supports only model id 'tiny' right now (got '{other}')."
         )),
     }
 }
 
+/// Key in `whisper_ct2_download_links.json` (matches folder name `{stem}-ct2`).
+fn ct2_manifest_key(size: Option<&str>) -> Result<&'static str, String> {
+    match ct2_size_stem(size)? {
+        "tiny" => Ok("tiny-ct2"),
+        _ => Err("ct2_manifest_key: unsupported stem".to_string()),
+    }
+}
+
+fn legacy_transcription_ct2_dir(old_name: &str) -> Result<PathBuf, String> {
+    Ok(crate::auth::auth_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models")
+        .join("transcription")
+        .join("ct2")
+        .join(old_name))
+}
+
 fn resolve_model_dir(size: Option<&str>) -> Result<PathBuf, String> {
-    let name = ct2_folder_name(size)?;
-    let cache = crate::auth::transcription_ct2_model_cache_dir(name).map_err(|e| e.to_string())?;
+    let stem = ct2_size_stem(size)?;
+    let manifest_key = ct2_manifest_key(size)?;
+    let cache =
+        crate::auth::whisper_model_backend_cache_dir(stem, "ct2").map_err(|e| e.to_string())?;
     if super::whisper_ensure::model_ready(&cache) {
         return Ok(cache);
     }
 
     let root = crate::find_xos_project_root().map_err(|e| e.to_string())?;
-    let bundled = root.join(MODELS_SUBDIR).join(name);
-    if super::whisper_ensure::model_ready(&bundled) {
-        return Ok(bundled);
+    for sub in [manifest_key, "whisper-tiny-ct2"] {
+        let bundled = root.join(MODELS_SUBDIR).join(sub);
+        if super::whisper_ensure::model_ready(&bundled) {
+            return Ok(bundled);
+        }
     }
 
-    // Older checkout / main-branch layout.
     let legacy_bundled = root
         .join("src/core/engine/audio/transcription/models")
-        .join(name);
+        .join("whisper-tiny-ct2");
     if super::whisper_ensure::model_ready(&legacy_bundled) {
         return Ok(legacy_bundled);
     }
 
-    super::whisper_ensure::ensure_ct2_artifacts(name, &cache)?;
+    for legacy_name in ["whisper-tiny-ct2", "tiny-ct2"] {
+        let legacy_cache = legacy_transcription_ct2_dir(legacy_name)?;
+        if super::whisper_ensure::model_ready(&legacy_cache) {
+            return Ok(legacy_cache);
+        }
+    }
+
+    super::whisper_ensure::ensure_ct2_artifacts(manifest_key, &cache)?;
     if super::whisper_ensure::model_ready(&cache) {
         return Ok(cache);
     }
 
     Err(format!(
-        "Whisper CT2 setup failed for '{name}' under {}. With pip: \
-         pip install -U 'ctranslate2>=4' 'transformers>=4.23' \
-         then re-run (or place a converted tree under {}).",
+        "Whisper CT2 setup failed for '{manifest_key}' under {}. Fix whisper_ct2_download_links.json (zip_url), \
+         or place a converted tree under {}.",
         cache.display(),
-        bundled.display(),
+        root.join(MODELS_SUBDIR).join(manifest_key).display(),
     ))
 }
 

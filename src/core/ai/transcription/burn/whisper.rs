@@ -404,14 +404,26 @@ pub fn transcribe_waveform_with_intermediates(
     })
 }
 
-/// Download / convert into `xos path --data`/models/whisper/{model}/ if needed, then resolve load path.
+fn legacy_transcription_burn_dir(model_key: &str) -> Result<PathBuf, String> {
+    Ok(crate::auth::auth_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models")
+        .join("transcription")
+        .join("burn")
+        .join(model_key))
+}
+
+/// Download / convert into `xos path --data`/models/whisper/{model}-burn/ if needed, then resolve load path.
 /// Skips fetching when the repo-bundled tree already has a complete model pack.
 fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let cache = crate::auth::transcription_burn_model_cache_dir(model_key).map_err(|e| e.to_string())?;
-    let legacy = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
-    let cache_ok = super::whisper_ensure::artifacts_ready(&cache, model_key);
-    let legacy_ok = super::whisper_ensure::artifacts_ready(&legacy, model_key);
-    if !cache_ok && !legacy_ok {
+    let primary =
+        crate::auth::whisper_model_backend_cache_dir(model_key, "burn").map_err(|e| e.to_string())?;
+    let legacy_transcription = legacy_transcription_burn_dir(model_key)?;
+    let legacy_flat = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    let primary_ok = super::whisper_ensure::artifacts_ready(&primary, model_key);
+    let legacy_t_ok = super::whisper_ensure::artifacts_ready(&legacy_transcription, model_key);
+    let legacy_w_ok = super::whisper_ensure::artifacts_ready(&legacy_flat, model_key);
+    if !primary_ok && !legacy_t_ok && !legacy_w_ok {
         let bundled_ok = crate::find_xos_project_root()
             .ok()
             .map(|root| {
@@ -426,16 +438,21 @@ fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
     resolve_models_root(model_key)
 }
 
-/// Prefer `~/.xos/models/transcription/burn/{model}/`, then legacy `~/.xos/models/whisper/{model}/`,
-/// then the repo bundle `models/burn/` when developing from source.
+/// Prefer `{data}/models/whisper/{model}-burn/`, then legacy `transcription/burn/{model}/`,
+/// then legacy flat `whisper/{model}/`, then the repo bundle `models/burn/`.
 fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let cache = crate::auth::transcription_burn_model_cache_dir(model_key).map_err(|e| e.to_string())?;
-    if whisper_artifacts_present(&cache, model_key) {
-        return Ok(cache);
+    let primary =
+        crate::auth::whisper_model_backend_cache_dir(model_key, "burn").map_err(|e| e.to_string())?;
+    if whisper_artifacts_present(&primary, model_key) {
+        return Ok(primary);
     }
-    let legacy = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
-    if whisper_artifacts_present(&legacy, model_key) {
-        return Ok(legacy);
+    let legacy_t = legacy_transcription_burn_dir(model_key)?;
+    if whisper_artifacts_present(&legacy_t, model_key) {
+        return Ok(legacy_t);
+    }
+    let legacy_flat = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    if whisper_artifacts_present(&legacy_flat, model_key) {
+        return Ok(legacy_flat);
     }
 
     if let Ok(root) = crate::find_xos_project_root() {
@@ -450,7 +467,7 @@ fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
         }
     }
 
-    Ok(cache)
+    Ok(primary)
 }
 
 fn whisper_artifacts_present(dir: &std::path::Path, model_key: &str) -> bool {

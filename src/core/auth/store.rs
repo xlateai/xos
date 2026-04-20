@@ -83,25 +83,24 @@ pub fn auth_identity_dir() -> Result<PathBuf, AuthError> {
     Ok(auth_data_dir()?.join("auth"))
 }
 
-/// Burn Whisper cache: `{data_dir}/models/transcription/burn/{model_key}/` (e.g. `tiny`, `small`).
-pub fn transcription_burn_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
-    Ok(auth_data_dir()?
-        .join("models")
-        .join("transcription")
-        .join("burn")
-        .join(model_key))
+/// Whisper weights cache: `{data_dir}/models/whisper/{stem}-burn/` or `{stem}-ct2/`
+/// (e.g. `tiny-burn`, `tiny-f16-burn`, `tiny-ct2`).
+pub fn whisper_model_backend_cache_dir(stem: &str, backend: &str) -> Result<PathBuf, AuthError> {
+    let b = backend.trim().to_ascii_lowercase();
+    match b.as_str() {
+        "burn" | "ct2" => Ok(
+            auth_data_dir()?
+                .join("models")
+                .join("whisper")
+                .join(format!("{}-{}", stem.trim(), b)),
+        ),
+        _ => Err(AuthError::Io(
+            "whisper_model_backend_cache_dir: backend must be \"burn\" or \"ct2\"".to_string(),
+        )),
+    }
 }
 
-/// CT2 Whisper model folder: `{data_dir}/models/transcription/ct2/{subdir}/` (e.g. `whisper-tiny-ct2`).
-pub fn transcription_ct2_model_cache_dir(subdir: &str) -> Result<PathBuf, AuthError> {
-    Ok(auth_data_dir()?
-        .join("models")
-        .join("transcription")
-        .join("ct2")
-        .join(subdir))
-}
-
-/// Legacy Burn cache (`{data_dir}/models/whisper/{model_key}/`) — still read for migration.
+/// Legacy flat layout (`{data_dir}/models/whisper/{model_key}/`, no `-burn` suffix) — read-only migration.
 pub fn whisper_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
     Ok(auth_data_dir()?.join("models").join("whisper").join(model_key))
 }

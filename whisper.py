@@ -1,8 +1,8 @@
 import xos
 
 
-KERNEL_BACKEND = xos.ai.whisper.BURN
-# KERNEL_BACKEND = xos.ai.whisper.CT2
+# KERNEL_BACKEND = xos.ai.whisper.BURN
+KERNEL_BACKEND = xos.ai.whisper.CT2
 
 
 # load the whisper model

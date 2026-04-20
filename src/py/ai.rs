@@ -93,7 +93,13 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
     };
     // Same tree as `xos path --data` (`auth_data_dir()`): `%LOCALAPPDATA%/xos` on Windows, `~/.xos` elsewhere.
     let new_root =
-        crate::auth::transcription_burn_model_cache_dir(dir_name).map_err(|e| e.to_string())?;
+        crate::auth::whisper_model_backend_cache_dir(dir_name, "burn").map_err(|e| e.to_string())?;
+    let legacy_transcription = crate::auth::auth_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models")
+        .join("transcription")
+        .join("burn")
+        .join(dir_name);
     let legacy_root = crate::auth::whisper_model_cache_dir(dir_name).map_err(|e| e.to_string())?;
     let pick_pack = |root: &PathBuf| -> Option<PathBuf> {
         let f32 = root.join(format!("{dir_name}.bpk"));
@@ -109,6 +115,9 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
     if let Some(p) = pick_pack(&new_root) {
         return Ok(p);
     }
+    if let Some(p) = pick_pack(&legacy_transcription) {
+        return Ok(p);
+    }
     if let Some(p) = pick_pack(&legacy_root) {
         return Ok(p);
     }
@@ -122,8 +131,9 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
         ));
     }
     Err(format!(
-        "weights not found under {} or {} (expected {} or {})",
+        "weights not found under {} or {} or {} (expected {} or {})",
         new_root.display(),
+        legacy_transcription.display(),
         legacy_root.display(),
         f32.display(),
         f16.display()
