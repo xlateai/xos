@@ -829,12 +829,26 @@ impl TranscriptionEngine {
             self.quiet_for = Duration::ZERO;
             self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
         } else if in_phrase_gap {
-            self.quiet_for = self.quiet_for.saturating_add(dt);
-            if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
+            if sample::END_SILENCE_MS == 0 {
+                // Zero-delay mode: commit immediately from the current live text.
                 self.voice_active = false;
-                self.awaiting_final_commit = true;
+                self.awaiting_final_commit = false;
                 self.quiet_for = Duration::ZERO;
-                self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
+                let live_now = merge::normalize_ws(&self.live_transcript);
+                if !live_now.is_empty() {
+                    let _ = self.try_push_stdout_commit(&live_now, true);
+                } else {
+                    self.clear_segment_after_commit();
+                }
+            } else {
+                self.quiet_for = self.quiet_for.saturating_add(dt);
+                if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
+                    self.voice_active = false;
+                    self.awaiting_final_commit = true;
+                    self.quiet_for = Duration::ZERO;
+                    self.accept_results_until =
+                        Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
+                }
             }
         }
 
@@ -868,16 +882,6 @@ impl TranscriptionEngine {
             if n > 0 {
                 self.append_tail_respecting_pcm_watermark(&mono, ingested_frames, n);
             }
-        }
-
-        let max_len = (self.segment_input_rate as usize)
-            .saturating_mul(sample::MAX_SEGMENT_SECS as usize);
-        if self.has_open_segment && self.segment_pcm.len() > max_len {
-            self.segment_pcm.truncate(max_len);
-            self.voice_active = false;
-            self.awaiting_final_commit = true;
-            self.final_decode_submitted = false;
-            self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
         }
 
         if self.has_open_segment

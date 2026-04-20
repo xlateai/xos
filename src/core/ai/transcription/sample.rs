@@ -7,9 +7,6 @@
 
 pub const WHISPER_HZ: u32 = 16_000;
 
-/// Upper bound on a single live utterance clip (memory / model input safety).
-pub const MAX_SEGMENT_SECS: u32 = 600;
-
 /// How often we re-run Whisper on the **full** growing clip for live text (lower = snappier UI, more CPU).
 pub const GROWING_CLIP_PARTIAL_DECODE_MS: u64 = 48;
 /// Minimum 16 kHz samples per decode (~55 ms @ 16 kHz). Lower = earlier first words; too low can hurt quality.
@@ -36,9 +33,10 @@ pub const VAD_PAUSE_PEAK_CAP: f32 = 0.048;
 pub const VAD_ENVELOPE_MIN_REF: f32 = 0.0024;
 
 /// Time a pause (relative and/or absolute) must persist before commit (ms).
-pub const END_SILENCE_MS: u64 = 72;
+/// 0 means: finalize immediately on the first detected phrase-gap tick.
+pub const END_SILENCE_MS: u64 = 0;
 /// Wall time to wait for a final decode before stdout fallback (ms).
-pub const RESULT_GRACE_MS: u64 = 900;
+pub const RESULT_GRACE_MS: u64 = 0;
 
 pub fn downmix_mono(channels: &[Vec<f32>]) -> Vec<f32> {
     if channels.is_empty() {
