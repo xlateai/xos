@@ -164,6 +164,37 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         vm,
     )
     .unwrap();
+    module
+        .set_attr(
+            "_transcriber_vad_prob",
+            vm.new_function("_transcriber_vad_prob", transcription::transcriber_vad_prob),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_buffered_seconds",
+            vm.new_function(
+                "_transcriber_buffered_seconds",
+                transcription::transcriber_buffered_seconds,
+            ),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_clip_cursor",
+            vm.new_function("_transcriber_clip_cursor", transcription::transcriber_clip_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_transcriber_flush_commit",
+            vm.new_function("_transcriber_flush_commit", transcription::transcriber_flush_commit),
+            vm,
+        )
+        .unwrap();
     module.set_attr("_transcriber_cleanup", vm.new_function("_transcriber_cleanup", transcription::transcriber_cleanup), vm).unwrap();
     
     // --- Speaker API ---
