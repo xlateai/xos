@@ -116,7 +116,6 @@ impl AudioEditApp {
             sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
-            #[cfg(not(target_arch = "wasm32"))]
             track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
