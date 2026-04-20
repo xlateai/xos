@@ -35,6 +35,9 @@ const WAVE_BAND_FRAC: f32 = 0.375;
 const WAVE_HEADROOM_FRAC: f32 = 0.0;
 const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
+const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 12.0;
+const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 20.0;
+const TRANSCRIPT_LINE_HEIGHT: f32 = 1.35;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -307,9 +310,8 @@ impl VisualCanvas {
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
 
-            let line_count = transcript_lines.len().max(1);
-            let row_h = transcript_h / line_count as f32;
-            let text_size = (row_h * 0.46).clamp(12.0, 24.0);
+            let text_size = (h * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
+            let line_h = (text_size * TRANSCRIPT_LINE_HEIGHT).max(1.0);
             let text_left = textbox_x0 + (w * 0.012).max(8.0);
             let text_right = textbox_x1 - (w * 0.02).max(12.0);
             let text_w = (text_right - text_left).max(20.0);
@@ -317,8 +319,8 @@ impl VisualCanvas {
             for (i, line) in transcript_lines.iter().enumerate() {
                 let mut tr = TextRasterizer::new(font.clone(), text_size);
                 tr.set_text(line.to_string());
-                tr.tick(text_w, row_h.max(1.0));
-                let y = textbox_y0 + row_h * i as f32 + row_h * 0.1;
+                tr.tick(text_w, line_h);
+                let y = textbox_y0 + i as f32 * line_h + line_h * 0.12;
                 self.blend_text(buffer, width, height, &tr, text_left, y, TEXT_COLOR, 0.95);
             }
 
@@ -470,6 +472,20 @@ impl TranscribeApp {
         }
     }
 
+    fn transcript_text_size(height: f32) -> f32 {
+        (height * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
+    }
+
+    fn visible_transcript_lines(height: f32) -> usize {
+        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = height - panel_h - height * 0.03;
+        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
+        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
+        let text_size = Self::transcript_text_size(height);
+        ((transcript_h / (text_size * TRANSCRIPT_LINE_HEIGHT)).floor() as usize).max(1)
+    }
+
     fn rebuild_transcript_hitboxes(&mut self, width: f32, height: f32, transcript_lines: &[String]) {
         self.transcript_visible_text.clear();
         self.transcript_glyph_boxes.clear();
@@ -484,8 +500,8 @@ impl TranscribeApp {
         let pad = (width * 0.03).max(12.0);
         let textbox_x0 = pad;
         let textbox_x1 = width - pad;
-        let row_h = transcript_h / transcript_lines.len().max(1) as f32;
-        let text_size = (row_h * 0.46).clamp(12.0, 24.0);
+        let text_size = Self::transcript_text_size(height);
+        let line_h = (text_size * TRANSCRIPT_LINE_HEIGHT).max(1.0);
         let text_left = textbox_x0 + (width * 0.012).max(8.0);
         let text_right = textbox_x1 - (width * 0.02).max(12.0);
         let text_w = (text_right - text_left).max(20.0);
@@ -493,8 +509,8 @@ impl TranscribeApp {
         for (line_i, line) in transcript_lines.iter().enumerate() {
             let mut tr = TextRasterizer::new(self.text_font.clone(), text_size);
             tr.set_text(line.clone());
-            tr.tick(text_w, row_h.max(1.0));
-            let base_y = transcript_top + row_h * line_i as f32 + row_h * 0.1;
+            tr.tick(text_w, line_h);
+            let base_y = transcript_top + line_h * line_i as f32 + line_h * 0.12;
             let chars: Vec<char> = line.chars().collect();
             let n = chars.len().min(tr.characters.len());
             for (i, ch) in chars.into_iter().take(n).enumerate() {
@@ -573,10 +589,10 @@ impl TranscribeApp {
             for y in sy..ey {
                 for x in sx..ex {
                     let i = ((y as u32 * width + x as u32) * 4) as usize;
-                    let a = 0.32_f32;
-                    buf[i] = (70.0 * a + buf[i] as f32 * (1.0 - a)) as u8;
-                    buf[i + 1] = (120.0 * a + buf[i + 1] as f32 * (1.0 - a)) as u8;
-                    buf[i + 2] = (220.0 * a + buf[i + 2] as f32 * (1.0 - a)) as u8;
+                    let a = 0.30_f32;
+                    buf[i] = (STATE_ACTIVE.0 as f32 * a + buf[i] as f32 * (1.0 - a)) as u8;
+                    buf[i + 1] = (STATE_ACTIVE.1 as f32 * a + buf[i + 1] as f32 * (1.0 - a)) as u8;
+                    buf[i + 2] = (STATE_ACTIVE.2 as f32 * a + buf[i + 2] as f32 * (1.0 - a)) as u8;
                     buf[i + 3] = 255;
                 }
             }
@@ -751,13 +767,7 @@ impl Application for TranscribeApp {
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let text_size = ((transcript_h / 3.0) * 0.46).clamp(12.0, 24.0);
-        let visible_lines = ((transcript_h / (text_size * 1.35)).floor() as usize).max(1);
+        let visible_lines = Self::visible_transcript_lines(height);
         let max_offset = all_lines.len().saturating_sub(visible_lines);
         self.transcript_scroll_offset = self.transcript_scroll_offset.min(max_offset);
         let start = all_lines.len().saturating_sub(visible_lines + self.transcript_scroll_offset);
@@ -781,8 +791,11 @@ impl Application for TranscribeApp {
 
         self.vad_label
             .set_text(format!("VAD {:>3.0}%   THR {:>3.0}%", p * 100.0, th * 100.0));
-        self.state_label
-            .set_text(if active { "ACTIVE".to_string() } else { "SILENCE".to_string() });
+        self.state_label.set_text(format!(
+            "{:.2}s {}",
+            self.engine.buffered_segment_seconds(),
+            if active { "ACTIVE" } else { "SILENCE" }
+        ));
         let font_size = (height.min(width) * 0.018).clamp(12.0, 18.0);
         self.vad_label.set_font_size(font_size);
         self.vad_label.tick(width, height);
@@ -878,13 +891,7 @@ impl Application for TranscribeApp {
         }
         let shape = state.frame.shape();
         let height = shape[0] as f32;
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let text_size = ((transcript_h / 3.0) * 0.46).clamp(12.0, 24.0);
-        let visible_lines = ((transcript_h / (text_size * 1.35)).floor() as usize).max(1);
+        let visible_lines = Self::visible_transcript_lines(height);
         let max_offset = total.saturating_sub(visible_lines) as i32;
         let step = (-delta_y.signum()) as i32;
         let next = (self.transcript_scroll_offset as i32 + step).clamp(0, max_offset);
