@@ -517,13 +517,28 @@ impl TranscribeApp {
     }
 
     fn hit_test_transcript_index(&self, x: f32, y: f32) -> Option<usize> {
-        self.transcript_glyph_boxes.iter().find_map(|g| {
+        if let Some(i) = self.transcript_glyph_boxes.iter().find_map(|g| {
             if x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1 {
                 Some(g.idx)
             } else {
                 None
             }
-        })
+        }) {
+            return Some(i);
+        }
+        // Fallback: nearest glyph center so clicks in line gaps still select predictably.
+        self.transcript_glyph_boxes
+            .iter()
+            .min_by(|a, b| {
+                let acx = (a.x0 + a.x1) * 0.5;
+                let acy = (a.y0 + a.y1) * 0.5;
+                let bcx = (b.x0 + b.x1) * 0.5;
+                let bcy = (b.y0 + b.y1) * 0.5;
+                let ad = (acx - x) * (acx - x) + (acy - y) * (acy - y);
+                let bd = (bcx - x) * (bcx - x) + (bcy - y) * (bcy - y);
+                ad.partial_cmp(&bd).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|g| g.idx)
     }
 
     fn selection_range(&self) -> Option<(usize, usize)> {
@@ -712,14 +727,20 @@ impl Application for TranscribeApp {
             }
             self.speech_run_frames = 0;
             if self.in_speech_segment && self.silence_run_frames >= SILENCE_COMMIT_FRAMES {
-                let finalized = self.segment_live_text.trim();
+                let finalized = self
+                    .segment_live_text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 if !finalized.is_empty()
-                    && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized)
+                    && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized.as_str())
                 {
-                    self.committed_lines.push_back(finalized.to_string());
+                    self.committed_lines.push_back(finalized);
                 }
                 self.segment_live_text.clear();
                 self.in_speech_segment = false;
+                // Critical: clip old audio out of the decode segment so we don't reprocess it.
+                self.engine.clip_consumed_audio_cursor();
             }
         }
 
@@ -855,8 +876,17 @@ impl Application for TranscribeApp {
         if total <= 1 {
             return;
         }
-        let step = delta_y.signum() as i32;
-        let max_offset = total.saturating_sub(1) as i32;
+        let shape = state.frame.shape();
+        let height = shape[0] as f32;
+        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = height - panel_h - height * 0.03;
+        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
+        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
+        let text_size = ((transcript_h / 3.0) * 0.46).clamp(12.0, 24.0);
+        let visible_lines = ((transcript_h / (text_size * 1.35)).floor() as usize).max(1);
+        let max_offset = total.saturating_sub(visible_lines) as i32;
+        let step = (-delta_y.signum()) as i32;
         let next = (self.transcript_scroll_offset as i32 + step).clamp(0, max_offset);
         self.transcript_scroll_offset = next as usize;
     }
