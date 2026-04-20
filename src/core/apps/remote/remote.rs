@@ -10,8 +10,23 @@
 
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 use serde_json::json;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 use std::sync::Arc;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 use std::time::{Duration, Instant};
 
 #[cfg(all(
@@ -28,12 +43,37 @@ use crate::auth::load_node_identity;
 use crate::mesh::{MeshMode, MeshSession, Packet};
 
 /// Distinct mesh id so this app does not collide with mesh chat defaults.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 const REMOTE_MESH_ID: &str = "xos-remote";
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 const KIND_FRAME: &str = "remote_frame";
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 const KIND_INPUT: &str = "remote_input";
 /// Target stream frame rate (~30 fps); balance bandwidth vs responsiveness.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 const FRAME_MIN_INTERVAL: Duration = Duration::from_nanos(33_333_333);
 /// Max width after downscale before JPEG encode.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
 const STREAM_MAX_W: u32 = 1280;
 
 pub struct RemoteApp {

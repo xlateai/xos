@@ -53,6 +53,8 @@ fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f
     }
 }
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
+#[allow(dead_code)]
 fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
     if !args.args.is_empty() {
         Ok(args.args[0].clone().try_into_value::<f64>(vm)? as f32)

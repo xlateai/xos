@@ -41,6 +41,8 @@ pub struct PlaybackBuffer {
 }
 
 impl PlaybackBuffer {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[allow(dead_code)]
     fn new(sample_rate: u32, channels: u16) -> Self {
         // Create a vector of empty VecDeques, one for each channel
         let mut channel_buffers = Vec::with_capacity(channels as usize);
@@ -73,6 +75,8 @@ impl PlaybackBuffer {
     
     /// Pop a frame of samples (one per channel) for playback
     /// Returns None if any channel is empty
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[allow(dead_code)]
     fn pop_frame(&self) -> Option<Vec<f32>> {
         let mut channel_queues = self.channel_queues.lock().unwrap();
         

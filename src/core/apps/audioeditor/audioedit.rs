@@ -1,6 +1,8 @@
 use crate::engine::{Application, EngineState};
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
+#[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::basic_shapes;
+#[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::niche_shapes;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
@@ -653,26 +655,26 @@ impl AudioEditApp {
 }
 
 // Helper trait to convert samples to f32
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 trait ToF32 {
     fn to_f32(self) -> f32;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for f32 {
     fn to_f32(self) -> f32 {
         self
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for i16 {
     fn to_f32(self) -> f32 {
         self as f32 / i16::MAX as f32
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for u16 {
     fn to_f32(self) -> f32 {
         (self as f32 / u16::MAX as f32) * 2.0 - 1.0
