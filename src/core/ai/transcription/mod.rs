@@ -71,23 +71,24 @@ impl WhisperBackend {
 fn spawn_live_decode_thread(
     preferred_size: Option<&str>,
     backend: WhisperBackend,
+    language: Option<&str>,
 ) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
     match backend {
         WhisperBackend::Ct2 => {
             #[cfg(feature = "whisper_ct2")]
             {
-                return ct2::whisper::spawn_decode_thread(preferred_size);
+                return ct2::whisper::spawn_decode_thread(preferred_size, language);
             }
             #[cfg(not(feature = "whisper_ct2"))]
             {
-                let _ = preferred_size;
+                let _ = (preferred_size, language);
                 Err(
                     "Whisper CT2 backend is unavailable in this build (enable whisper_ct2)"
                         .to_string(),
                 )
             }
         }
-        WhisperBackend::Burn => burn::whisper::spawn_decode_thread(preferred_size),
+        WhisperBackend::Burn => burn::whisper::spawn_decode_thread(preferred_size, language),
     }
 }
 
@@ -102,7 +103,7 @@ pub fn transcribe_waveform_once(
         WhisperBackend::Burn => {
             #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
             {
-                return burn::whisper::transcribe_waveform_once(size, waveform, sample_rate);
+                return burn::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
             }
             #[cfg(not(all(
                 feature = "whisper",
@@ -121,7 +122,7 @@ pub fn transcribe_waveform_once(
                 not(target_os = "ios")
             ))]
             {
-                return ct2::whisper::transcribe_waveform_once(size, waveform, sample_rate);
+                return ct2::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
             }
             #[cfg(not(all(
                 feature = "whisper_ct2",
@@ -328,6 +329,20 @@ pub struct TranscriptionEngine {
 }
 
 impl TranscriptionEngine {
+    fn normalize_decode_language(language: Option<&str>) -> Result<Option<String>, String> {
+        let Some(raw) = language.map(|s| s.trim().to_ascii_lowercase()) else {
+            return Ok(None);
+        };
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        match raw.as_str() {
+            "english" | "en" => Ok(Some("en".to_string())),
+            "japanese" | "ja" => Ok(Some("ja".to_string())),
+            _ => Err("language must be 'english' or 'japanese'".to_string()),
+        }
+    }
+
     pub fn new() -> Self {
         Self::new_with_size_and_backend(None, WhisperBackend::Ct2)
     }
@@ -340,6 +355,100 @@ impl TranscriptionEngine {
         preferred_size: Option<&str>,
         backend: WhisperBackend,
     ) -> Self {
+        Self::new_with_size_backend_language(preferred_size, backend, None).unwrap_or_else(|e| {
+            #[cfg(all(
+                feature = "whisper",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            ))]
+            {
+                Self {
+                    transcript_epoch: 0,
+                    caption: format!("Transcriber init error: {e}"),
+                    device_hint: String::new(),
+                    pending_stdout: Vec::new(),
+                    pending_iter_events: Vec::new(),
+                    decode_job_tx: None,
+                    decode_result_rx: None,
+                    resample_buf: Vec::new(),
+                    segment_pcm: Vec::new(),
+                    segment_input_rate: sample::WHISPER_HZ,
+                    last_partial_decode: Instant::now()
+                        - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS),
+                    live_transcript: String::new(),
+                    last_level_rms: 0.0,
+                    load_note: Some(e),
+                    last_ingested_frames: None,
+                    ingested_cursor_watermark: 0,
+                    pcm_first_frame_inclusive: 0,
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_16k_pending: Vec::new(),
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_session: None,
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_disabled: false,
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_last_speech_prob: 0.0,
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_hangover_until: Instant::now(),
+                    #[cfg(all(
+                        feature = "silero_vad",
+                        feature = "whisper",
+                        not(target_arch = "wasm32"),
+                        not(target_os = "ios")
+                    ))]
+                    vad_evaluated_once: false,
+                }
+            }
+            #[cfg(not(all(
+                feature = "whisper",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            )))]
+            {
+                let _ = e;
+                Self {
+                    transcript_epoch: 0,
+                    caption: String::new(),
+                    device_hint: String::new(),
+                    pending_stdout: Vec::new(),
+                    pending_iter_events: Vec::new(),
+                }
+            }
+        })
+    }
+
+    pub fn new_with_size_backend_language(
+        preferred_size: Option<&str>,
+        backend: WhisperBackend,
+        language: Option<&str>,
+    ) -> Result<Self, String> {
+        let language = Self::normalize_decode_language(language)?;
         #[cfg(all(
             feature = "whisper",
             not(target_arch = "wasm32"),
@@ -347,7 +456,7 @@ impl TranscriptionEngine {
         ))]
         {
             let (decode_job_tx, decode_result_rx, load_note) =
-                match spawn_live_decode_thread(preferred_size, backend) {
+                match spawn_live_decode_thread(preferred_size, backend, language.as_deref()) {
                     Ok((tx, rx)) => (Some(tx), Some(rx), None),
                     Err(e) => (None, None, Some(e)),
                 };
@@ -356,7 +465,7 @@ impl TranscriptionEngine {
             } else {
                 load_note.clone().unwrap_or_else(|| "Waiting for audio…".to_string())
             };
-            return Self {
+            return Ok(Self {
                 transcript_epoch: 0,
                 caption,
                 device_hint: String::new(),
@@ -410,8 +519,14 @@ impl TranscriptionEngine {
                     not(target_os = "ios")
                 ))]
                 vad_hangover_until: Instant::now(),
+                #[cfg(all(
+                    feature = "silero_vad",
+                    feature = "whisper",
+                    not(target_arch = "wasm32"),
+                    not(target_os = "ios")
+                ))]
                 vad_evaluated_once: false,
-            };
+            });
         }
         #[cfg(not(all(
             feature = "whisper",
@@ -419,14 +534,14 @@ impl TranscriptionEngine {
             not(target_os = "ios")
         )))]
         {
-            let _ = (preferred_size, backend);
-            Self {
+            let _ = (preferred_size, backend, language);
+            Ok(Self {
                 transcript_epoch: 0,
                 caption: String::new(),
                 device_hint: String::new(),
                 pending_stdout: Vec::new(),
                 pending_iter_events: Vec::new(),
-            }
+            })
         }
     }
 

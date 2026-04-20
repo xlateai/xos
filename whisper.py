@@ -4,8 +4,11 @@ import xos
 Live Whisper + Silero VAD segmentation (same behavior style as `xos app transcribe`).
 """
 
+# LANGUAGE = "english"  # "english" or "japanese"
+LANGUAGE = "japanese"  # "english" or "japanese"
+
 audio = xos.audio.system(buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio, size="tiny")
+transcriber = xos.audio.transcription(audio, size="tiny", language=LANGUAGE)
 
 THRESHOLD = 0.30
 SPEECH_START_FRAMES = 2

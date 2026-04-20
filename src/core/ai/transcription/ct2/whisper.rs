@@ -23,8 +23,19 @@ use ct2rs::sys::WhisperOptions;
 use ct2rs::{Config, Whisper as Ct2Whisper};
 
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/ct2";
-/// Fixed decoding language (no env); extend via API later if needed.
-const DEFAULT_LANG: &str = "en";
+fn normalize_language(language: Option<&str>) -> Result<&'static str, String> {
+    let Some(raw) = language.map(|s| s.trim().to_ascii_lowercase()) else {
+        return Ok("en");
+    };
+    if raw.is_empty() {
+        return Ok("en");
+    }
+    match raw.as_str() {
+        "english" | "en" => Ok("en"),
+        "japanese" | "ja" => Ok("ja"),
+        _ => Err("language must be 'english' or 'japanese'".to_string()),
+    }
+}
 
 /// Stem for [`crate::auth::whisper_model_backend_cache_dir`] (e.g. `tiny` → `…/tiny-ct2/`).
 fn ct2_size_stem(size: Option<&str>) -> Result<&'static str, String> {
@@ -126,8 +137,10 @@ fn cleanup_whisper_text(s: &str) -> String {
 /// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
 pub fn spawn_decode_thread(
     size: Option<&str>,
+    language: Option<&str>,
 ) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
     let dir = resolve_model_dir(size)?;
+    let decode_lang = normalize_language(language)?;
     let (job_tx, job_rx) = sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = channel::<String>();
 
@@ -147,7 +160,7 @@ pub fn spawn_decode_thread(
             let mut opts = WhisperOptions::default();
             opts.beam_size = 1;
             while let Ok(buf) = job_rx.recv() {
-                let line = match whisper.generate(&buf, Some(DEFAULT_LANG), false, &opts) {
+                let line = match whisper.generate(&buf, Some(decode_lang), false, &opts) {
                     Ok(parts) => cleanup_whisper_text(&parts.join(" ")),
                     Err(e) => format!("(Whisper CT2 error: {e})"),
                 };
@@ -165,8 +178,10 @@ pub fn transcribe_waveform_once(
     size: Option<&str>,
     waveform: &[f32],
     _sample_rate: u32,
+    language: Option<&str>,
 ) -> Result<String, String> {
     let dir = resolve_model_dir(size)?;
+    let decode_lang = normalize_language(language)?;
     let mut cfg = Config::default();
     cfg.num_threads_per_replica = 1;
     cfg.tensor_parallel = false;
@@ -178,7 +193,7 @@ pub fn transcribe_waveform_once(
     let parts = whisper
         .generate(
             waveform,
-            Some(DEFAULT_LANG),
+            Some(decode_lang),
             false,
             &opts,
         )
