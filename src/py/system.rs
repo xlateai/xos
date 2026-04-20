@@ -7,6 +7,7 @@ pub enum SystemType {
     MacOS,
     Windows,
     Linux,
+    Wasm,
 }
 
 impl SystemType {
@@ -16,6 +17,7 @@ impl SystemType {
             SystemType::MacOS => "MacOS",
             SystemType::Windows => "Windows",
             SystemType::Linux => "Linux",
+            SystemType::Wasm => "Wasm",
         }
     }
     
@@ -32,6 +34,9 @@ impl SystemType {
         
         #[cfg(target_os = "linux")]
         return SystemType::Linux;
+
+        #[cfg(target_arch = "wasm32")]
+        return SystemType::Wasm;
     }
 }
 
@@ -119,6 +124,9 @@ _types = _TypesNamespace()
     }
     if let Some(st) = create_system_type("Linux") {
         let _ = types_ns.set_attr("Linux", st, vm);
+    }
+    if let Some(st) = create_system_type("Wasm") {
+        let _ = types_ns.set_attr("Wasm", st, vm);
     }
     
     // Add types namespace as an attribute

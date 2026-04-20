@@ -877,6 +877,7 @@ impl Application for TranscribeApp {
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         if ch == '\u{1b}' {
             self.pause_input();
+            #[cfg(not(target_arch = "wasm32"))]
             crate::engine::native_engine::request_exit();
         }
     }

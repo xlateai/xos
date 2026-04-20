@@ -229,13 +229,20 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 (player, device_name)
             }
             
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
             {
                 // On native, create directly with the device
                 let device = &output_devices[device_id];
                 let inner = audio::AudioPlayer::new(device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
                 (AudioPlayer { inner }, device_name)
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                let player = AudioPlayer::new(device_id as u32, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
+                (player, device_name)
             }
         } else {
             // Use default output device
@@ -255,12 +262,19 @@ pub fn speaker_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 (player, device_name)
             }
             
-            #[cfg(not(target_os = "ios"))]
+            #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
             {
                 // On native, create directly with the default device
                 let inner = audio::AudioPlayer::new(&default_device, sample_rate as u32, channels as u16)
                     .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
                 (AudioPlayer { inner }, device_name)
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                let player = AudioPlayer::new(0, sample_rate as u32, channels as u16)
+                    .map_err(|e| vm.new_runtime_error(format!("Failed to initialize speaker: {}", e)))?;
+                (player, device_name)
             }
         };
     
