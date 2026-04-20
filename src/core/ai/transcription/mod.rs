@@ -541,6 +541,29 @@ impl TranscriptionEngine {
         }
     }
 
+    /// Mark the currently ingested audio as consumed for the active segment.
+    ///
+    /// This advances the segment watermark so subsequent decodes only consider audio captured after
+    /// this call, and clears pending partial state/result backlog from the previous segment.
+    pub fn clip_consumed_audio_cursor(&mut self) {
+        #[cfg(all(
+            feature = "whisper",
+            not(target_arch = "wasm32"),
+            not(target_os = "ios")
+        ))]
+        {
+            self.pcm_first_frame_inclusive = self.ingested_cursor_watermark;
+            self.segment_pcm.clear();
+            self.resample_buf.clear();
+            self.live_transcript.clear();
+            self.last_partial_decode = Instant::now()
+                - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+            if let Some(rx) = &self.decode_result_rx {
+                while rx.try_recv().is_ok() {}
+            }
+        }
+    }
+
     /// `ingested_frames`: monotonic frame counter from the same listener; used to detect new
     /// audio vs idle polls and buffer resets. Pass `0` only if unavailable (engine may skip work).
     pub fn process_snapshot(
