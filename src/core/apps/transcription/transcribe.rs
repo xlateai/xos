@@ -27,8 +27,8 @@ const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
 const THRESHOLD_MAX: f32 = 1.0;
 const WAVE_SMOOTH_WINDOW: usize = 7;
-const SPEECH_START_FRAMES: u32 = 1;
-const SILENCE_COMMIT_FRAMES: u32 = 1;
+const SPEECH_START_FRAMES: u32 = 2;
+const SILENCE_COMMIT_FRAMES: u32 = 5;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
 const WAVE_BAND_FRAC: f32 = 0.375;
@@ -472,6 +472,10 @@ impl TranscribeApp {
         }
     }
 
+    fn normalize_text(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     fn transcript_text_size(height: f32) -> f32 {
         (height * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
     }
@@ -743,11 +747,18 @@ impl Application for TranscribeApp {
             }
             self.speech_run_frames = 0;
             if self.in_speech_segment && self.silence_run_frames >= SILENCE_COMMIT_FRAMES {
-                let finalized = self
-                    .segment_live_text
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                // Force one final emit from engine so we commit the best available end-of-utterance text.
+                self.engine.flush_live_to_stdout_commits();
+                let mut finalized = String::new();
+                for line in self.engine.drain_stdout_commits() {
+                    let t = Self::normalize_text(&line);
+                    if !t.is_empty() {
+                        finalized = t;
+                    }
+                }
+                if finalized.is_empty() {
+                    finalized = Self::normalize_text(&self.segment_live_text);
+                }
                 if !finalized.is_empty()
                     && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized.as_str())
                 {
