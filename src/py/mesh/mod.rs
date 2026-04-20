@@ -160,21 +160,19 @@ fn preprocess_remote_frame_send(
                 dict.set_item("jpeg", vm.ctx.new_str(jpeg_b64.as_str()).into(), vm)?;
                 dict.set_item("w", vm.ctx.new_int(w as isize).into(), vm)?;
                 dict.set_item("h", vm.ctx.new_int(h as isize).into(), vm)?;
+                Ok(())
             }
-            None => {
-                return Err(vm.new_runtime_error(
-                    "remote_frame send: desktop capture failed (permissions / display?)".to_string(),
-                ));
-            }
+            None => Err(vm.new_runtime_error(
+                "remote_frame send: desktop capture failed (permissions / display?)".to_string(),
+            )),
         }
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        return Err(vm.new_runtime_error(
+        Err(vm.new_runtime_error(
             "remote_frame with stream_frame is only supported on Windows and macOS".to_string(),
-        ));
+        ))
     }
-    Ok(())
 }
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
