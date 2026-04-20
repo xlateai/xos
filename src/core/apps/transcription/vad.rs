@@ -1,18 +1,20 @@
-//! `xos app vad` — live mic / loopback with Silero speech probability: status circle + thin waveform strip.
+//! `xos app vad` — live mic / loopback with Silero VAD probability visualization.
 
 use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use crate::engine::audio;
 use crate::engine::{Application, EngineState};
-use crate::rasterizer::{circles, fill};
+use crate::rasterizer::fill;
+use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
 #[cfg(not(target_os = "ios"))]
 use dialoguer::Select;
 use std::io::{self, Write};
 
 const BG: (u8, u8, u8, u8) = (12, 14, 20, 255);
-const CIRCLE_SILENT: [u8; 4] = [96, 96, 100, 255];
-const CIRCLE_SPEECH: [u8; 4] = [72, 210, 120, 255];
-const WAVE_SILENT: (u8, u8, u8) = (220, 220, 225);
-const WAVE_SPEECH: (u8, u8, u8) = (110, 230, 150);
+const WAVE_BASELINE: (u8, u8, u8) = (120, 124, 132);
+const WAVE_SILENT: (u8, u8, u8) = (230, 230, 235);
+const WAVE_SPEECH: (u8, u8, u8) = (90, 230, 140);
+const PANEL_BG: (u8, u8, u8) = (25, 28, 36);
+const PANEL_FG: (u8, u8, u8) = (210, 214, 220);
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -42,31 +44,20 @@ fn vad_binary_threshold() -> f32 {
     }
 }
 
-/// Bottom strip: scrolling horizontal lines, amplitude from channel 0, color by speech vs silence.
 struct VadStripCanvas {
-    sample_buffer: Vec<f32>,
-    speech_buffer: Vec<bool>,
-    buffer_index: usize,
-    lines_to_add: f32,
+    waveform_points: usize,
 }
 
-const STRIP_LINES: usize = 256;
-const BASELINE_LENGTH: f32 = 0.02;
-const MAX_EXTRA_LENGTH: f32 = 0.42;
-const LINE_THICKNESS: f32 = 0.0022;
-const PROPAGATION_TIME_SECS: f32 = 1.0;
+const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
-const SAMPLE_RATE: f32 = 44100.0;
-const TARGET_FPS: f32 = 60.0;
-const BAND_FRAC: f32 = 0.09;
+const WAVE_BAND_FRAC: f32 = 0.62;
+const WAVE_HEADROOM_FRAC: f32 = 0.08;
+const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 
 impl VadStripCanvas {
     fn new() -> Self {
         Self {
-            sample_buffer: vec![0.0; STRIP_LINES],
-            speech_buffer: vec![false; STRIP_LINES],
-            buffer_index: 0,
-            lines_to_add: 0.0,
+            waveform_points: DEFAULT_WAVE_POINTS,
         }
     }
 
@@ -87,30 +78,68 @@ impl VadStripCanvas {
         }
     }
 
-    fn draw_horizontal_line(
+    fn lerp_color(&self, t: f32, a: (u8, u8, u8), b: (u8, u8, u8)) -> (u8, u8, u8) {
+        let t = t.clamp(0.0, 1.0);
+        (
+            (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
+            (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
+            (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
+        )
+    }
+
+    fn draw_pixel(&self, buffer: &mut [u8], width: u32, height: u32, x: i32, y: i32, c: (u8, u8, u8)) {
+        if x < 0 || x >= width as i32 || y < 0 || y >= height as i32 {
+            return;
+        }
+        let i = ((y as u32 * width + x as u32) * 4) as usize;
+        if i + 3 < buffer.len() {
+            buffer[i] = c.0;
+            buffer[i + 1] = c.1;
+            buffer[i + 2] = c.2;
+            buffer[i + 3] = 255;
+        }
+    }
+
+    fn draw_line(
         &self,
         buffer: &mut [u8],
         width: u32,
         height: u32,
-        y: f32,
-        half_length: f32,
-        color: (u8, u8, u8),
-        thickness: f32,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        c: (u8, u8, u8),
     ) {
-        let center_x = width as f32 * 0.5;
-        let x0 = (center_x - half_length).max(0.0);
-        let x1 = (center_x + half_length).min(width as f32 - 1.0);
-        let y_start = (y - thickness * 0.5).max(0.0) as u32;
-        let y_end = (y + thickness * 0.5).min(height as f32 - 1.0) as u32;
-        for y_pos in y_start..=y_end {
-            for x_pos in x0 as u32..=x1 as u32 {
-                let i = (y_pos * width + x_pos) as usize * 4;
-                if i + 3 < buffer.len() {
-                    buffer[i] = color.0;
-                    buffer[i + 1] = color.1;
-                    buffer[i + 2] = color.2;
-                    buffer[i + 3] = 255;
-                }
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let steps = dx.abs().max(dy.abs()).max(1.0) as i32;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let x = x0 + dx * t;
+            let y = y0 + dy * t;
+            self.draw_pixel(buffer, width, height, x.round() as i32, y.round() as i32, c);
+        }
+    }
+
+    fn draw_rect(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        c: (u8, u8, u8),
+    ) {
+        let sx = x0.floor().max(0.0) as i32;
+        let sy = y0.floor().max(0.0) as i32;
+        let ex = x1.ceil().min(width as f32) as i32;
+        let ey = y1.ceil().min(height as f32) as i32;
+        for y in sy..ey {
+            for x in sx..ex {
+                self.draw_pixel(buffer, width, height, x, y, c);
             }
         }
     }
@@ -119,15 +148,27 @@ impl VadStripCanvas {
         &mut self,
         state: &mut EngineState,
         listener: &audio::AudioListener,
-        speech_now: bool,
+        vad_prob: f32,
+        vad_label: &TextRasterizer,
     ) {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
         let buffer = state.frame_buffer_mut();
 
-        let band_top = (height as f32 * (1.0 - BAND_FRAC)).max(0.0);
-        let band_h = height as f32 - band_top;
+        let w = width as f32;
+        let h = height as f32;
+        let wave_top = h * WAVE_HEADROOM_FRAC;
+        let wave_h = h * WAVE_BAND_FRAC;
+        let wave_center_y = wave_top + wave_h * 0.5;
+        let wave_half_amp = wave_h * 0.45;
+        let panel_h = (h * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = h - panel_h - h * 0.03;
+        let pad = (w * 0.03).max(12.0);
+        let bar_x0 = pad;
+        let bar_x1 = w - pad;
+        let bar_y0 = panel_top + panel_h * 0.52;
+        let bar_y1 = bar_y0 + panel_h * 0.24;
 
         let all_samples = listener.get_samples_by_channel();
         if all_samples.is_empty() {
@@ -138,51 +179,73 @@ impl VadStripCanvas {
             return;
         }
 
-        let lines_per_frame = STRIP_LINES as f32 / (PROPAGATION_TIME_SECS * TARGET_FPS);
-        self.lines_to_add += lines_per_frame;
-        let lines_to_process = (self.lines_to_add.floor() as usize).min(20);
-        self.lines_to_add -= lines_to_process as f32;
-        if lines_to_process == 0 {
-            return;
+        // Panel + level bar based on raw VAD probability [0, 1].
+        self.draw_rect(buffer, width, height, bar_x0, panel_top, bar_x1, panel_top + panel_h, PANEL_BG);
+        self.draw_rect(buffer, width, height, bar_x0, bar_y0, bar_x1, bar_y1, WAVE_BASELINE);
+        let prob_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
+        let fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_prob.clamp(0.0, 1.0);
+        self.draw_rect(buffer, width, height, bar_x0, bar_y0, fill_x1, bar_y1, prob_color);
+
+        // Baseline for center-origin waveform.
+        self.draw_line(
+            buffer,
+            width,
+            height,
+            0.0,
+            wave_center_y,
+            width as f32 - 1.0,
+            wave_center_y,
+            WAVE_BASELINE,
+        );
+
+        // True left-to-right waveform from recent mono samples.
+        let points = self.waveform_points.max(2).min(width as usize).min(samples.len());
+        let start_idx = samples.len().saturating_sub(points);
+        let active = &samples[start_idx..];
+        let wave_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
+        let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
+        let mut prev_x = 0.0;
+        let mut prev_y = wave_center_y;
+        for i in 0..points {
+            let s = active[i];
+            let amp = self.amplify_nonlinear(s).clamp(-1.0, 1.0);
+            let x = i as f32 * x_scale;
+            let y = wave_center_y - amp * wave_half_amp;
+            if i > 0 {
+                self.draw_line(buffer, width, height, prev_x, prev_y, x, y, wave_color);
+            }
+            prev_x = x;
+            prev_y = y;
         }
 
-        let samples_per_line = ((SAMPLE_RATE * PROPAGATION_TIME_SECS) / STRIP_LINES as f32) as usize;
-        let total_samples = samples.len();
-
-        for _ in 0..lines_to_process {
-            let window_size = samples_per_line.min(total_samples);
-            let start_idx = total_samples.saturating_sub(window_size);
-            if start_idx >= total_samples {
-                break;
+        // Blend pre-rasterized text.
+        for character in &vad_label.characters {
+            let char_x = bar_x0 + character.x;
+            let char_y = panel_top + panel_h * 0.12 + character.y;
+            let cw = character.width as usize;
+            if cw == 0 {
+                continue;
             }
-            let chunk_samples = &samples[start_idx..total_samples];
-            let mut rms_sum = 0.0f32;
-            for &sample in chunk_samples {
-                rms_sum += sample * sample;
+            for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
+                for (bitmap_x, &alpha) in row.iter().enumerate() {
+                    if alpha == 0 {
+                        continue;
+                    }
+                    let px = (char_x + bitmap_x as f32) as i32;
+                    let py = (char_y + bitmap_y as f32) as i32;
+                    if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                        let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                        let alpha_f = alpha as f32 / 255.0;
+                        let inv = 1.0 - alpha_f;
+                        buffer[idx] = (PANEL_FG.0 as f32 * alpha_f + buffer[idx] as f32 * inv) as u8;
+                        buffer[idx + 1] =
+                            (PANEL_FG.1 as f32 * alpha_f + buffer[idx + 1] as f32 * inv) as u8;
+                        buffer[idx + 2] =
+                            (PANEL_FG.2 as f32 * alpha_f + buffer[idx + 2] as f32 * inv) as u8;
+                        buffer[idx + 3] = 255;
+                    }
+                }
             }
-            let rms = (rms_sum / chunk_samples.len() as f32).sqrt();
-            let amplified = self.amplify_nonlinear(rms);
-            let normalized = amplified.clamp(0.0, 1.0);
-            self.sample_buffer[self.buffer_index] = normalized;
-            self.speech_buffer[self.buffer_index] = speech_now;
-            self.buffer_index = (self.buffer_index + 1) % STRIP_LINES;
-        }
-
-        let spacing = band_h / STRIP_LINES as f32;
-        let thickness_px = LINE_THICKNESS * band_h.max(1.0);
-        for line_idx in 0..STRIP_LINES {
-            let buf_idx = (self.buffer_index + line_idx) % STRIP_LINES;
-            let amp = self.sample_buffer[buf_idx];
-            let half_len = (BASELINE_LENGTH + amp * MAX_EXTRA_LENGTH) * width as f32 * 0.5;
-            let y_from_band_bottom = line_idx as f32 * spacing;
-            let y = band_top + band_h - y_from_band_bottom - spacing * 0.5;
-            let y = y.clamp(0.0, height as f32 - 1.0);
-            let color = if self.speech_buffer[buf_idx] {
-                WAVE_SPEECH
-            } else {
-                WAVE_SILENT
-            };
-            self.draw_horizontal_line(buffer, width, height, y, half_len, color, thickness_px);
         }
     }
 }
@@ -191,14 +254,19 @@ pub struct VadApp {
     listener: Option<audio::AudioListener>,
     engine: TranscriptionEngine,
     strip: VadStripCanvas,
+    vad_label: TextRasterizer,
 }
 
 impl VadApp {
     pub fn new() -> Self {
+        let font = fonts::jetbrains_mono();
+        let mut vad_label = TextRasterizer::new(font, 24.0);
+        vad_label.set_text("VAD: 0.000".to_string());
         Self {
             listener: None,
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
             strip: VadStripCanvas::new(),
+            vad_label,
         }
     }
 
@@ -223,7 +291,7 @@ impl Application for VadApp {
             WhisperBackend::Burn => "burn",
         };
         println!(
-            "vad: backend={backend_label} (XOS_TRANSCRIBE_BACKEND) · Silero circle + strip · Esc to quit"
+            "vad: backend={backend_label} (XOS_TRANSCRIBE_BACKEND) · waveform + VAD level [0..1] · Esc to quit"
         );
         let _ = io::stdout().flush();
 
@@ -327,25 +395,18 @@ impl Application for VadApp {
         self.engine.process_snapshot(sr, &channels, ingested);
 
         let p = self.engine.last_vad_speech_prob();
-        let th = vad_binary_threshold();
-        let speech = p >= th;
-
         let l = self.listener.as_ref().expect("checked");
-        self.strip.tick_draw(state, l, speech);
-
+        let th = vad_binary_threshold();
+        let state_label = if p >= th { "speech" } else { "silence" };
+        self.vad_label
+            .set_text(format!("VAD: {:.3}   threshold: {:.2}   {}", p, th, state_label));
         let shape = state.frame.shape();
-        let w = shape[1] as f32;
-        let h = shape[0] as f32;
-        let cx = w * 0.5;
-        let cy = h * (0.5 - BAND_FRAC * 0.35);
-        let r = (w.min(h)) * 0.14;
-        let circle_color = if speech { CIRCLE_SPEECH } else { CIRCLE_SILENT };
-        let _ = circles(
-            &mut state.frame,
-            &[(cx, cy)],
-            &[r],
-            std::slice::from_ref(&circle_color),
-        );
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let font_size = (height.min(width) * 0.03).clamp(16.0, 36.0);
+        self.vad_label.set_font_size(font_size);
+        self.vad_label.tick(width, height);
+        self.strip.tick_draw(state, l, p, &self.vad_label);
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
