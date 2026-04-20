@@ -1,8 +1,8 @@
 import xos
 
 # Same defaults as xos.ai.whisper.load: tiny + CT2.
-# LANGUAGE = "english"  # "english" or "japanese"
-LANGUAGE = "japanese"  # "english" or "japanese"
+LANGUAGE = "english"  # "english" or "japanese"
+# LANGUAGE = "japanese"  # "english" or "japanese"
 
 SIZE = "tiny"
 # SIZE = "base"
