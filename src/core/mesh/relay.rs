@@ -721,7 +721,7 @@ fn mesh_session_from_host_listener(
         let udp_port = udp_port_for_mesh_id(&mid);
         let sd_udp = Arc::clone(&shutdown);
         thread::spawn(move || {
-            lan_discovery_responder_loop(mid, tcp_port, udp_port, sd_udp);
+            lan_discovery_responder_loop(mid, tcp_port, udp_port, None, sd_udp);
         });
     }
 
@@ -790,7 +790,7 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let sd_c = Arc::clone(&shutdown);
     let connected_r = Arc::clone(&connected);
     thread::spawn(move || {
-        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, connected_r, None);
+        client_read_loop(reader, inbox_r, rank_reader, num_r, sd_c, connected_r);
     });
 
     let session = MeshSession {
@@ -1130,6 +1130,7 @@ impl MeshSession {
         wire_line(env)
     }
 
+    #[allow(dead_code)]
     fn wire_inner(env: &WireEnvelope) -> Result<String, String> {
         serde_json::to_string(env).map_err(|e| e.to_string())
     }

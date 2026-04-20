@@ -1,32 +1,80 @@
 use crate::engine::{Application, EngineState};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::apps::audioeditor::track_visualizer::TrackVisualizer;
+#[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::basic_shapes;
+#[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::niche_shapes;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use rodio::{Decoder, OutputStream, Sink, Source};
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use rodio::OutputStreamBuilder;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::fs::File;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::collections::VecDeque;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::time::Instant;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
 
+#[cfg(target_os = "linux")]
+pub struct AudioEditApp {
+    track_visualizer: TrackVisualizer,
+    button_size: f32,
+}
+
+#[cfg(target_os = "linux")]
+impl AudioEditApp {
+    pub fn new() -> Self {
+        Self {
+            track_visualizer: TrackVisualizer::new(),
+            button_size: 60.0,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Application for AudioEditApp {
+    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+        Err("AudioEdit is unavailable on Linux in this no-audio build".to_string())
+    }
+
+    fn tick(&mut self, state: &mut EngineState) {
+        let _ = &self.track_visualizer;
+        let _ = self.button_size;
+        let shape = state.frame.shape();
+        let width = shape[1] as u32;
+        let height = shape[0] as u32;
+        let buffer = state.frame_buffer_mut();
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                if idx + 3 < buffer.len() {
+                    buffer[idx + 0] = BACKGROUND_COLOR.0;
+                    buffer[idx + 1] = BACKGROUND_COLOR.1;
+                    buffer[idx + 2] = BACKGROUND_COLOR.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 pub struct AudioEditApp {
     #[cfg(not(target_arch = "wasm32"))]
     sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
     #[cfg(not(target_arch = "wasm32"))]
     _stream: Option<OutputStream>, // Keep the stream alive
+    #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     #[cfg(not(target_arch = "wasm32"))]
     audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
@@ -61,6 +109,7 @@ pub struct AudioEditApp {
     button_size: f32, // Size of play/pause button
 }
 
+#[cfg(not(target_os = "linux"))]
 impl AudioEditApp {
     pub fn new() -> Self {
         Self {
@@ -68,6 +117,7 @@ impl AudioEditApp {
             sink: None,
             #[cfg(not(target_arch = "wasm32"))]
             _stream: None,
+            #[cfg(not(target_arch = "wasm32"))]
             track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
             audio_samples: None,
@@ -608,32 +658,33 @@ impl AudioEditApp {
 }
 
 // Helper trait to convert samples to f32
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 trait ToF32 {
     fn to_f32(self) -> f32;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for f32 {
     fn to_f32(self) -> f32 {
         self
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for i16 {
     fn to_f32(self) -> f32 {
         self as f32 / i16::MAX as f32
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 impl ToF32 for u16 {
     fn to_f32(self) -> f32 {
         (self as f32 / u16::MAX as f32) * 2.0 - 1.0
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Application for AudioEditApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -861,9 +912,10 @@ impl Application for AudioEditApp {
         self.render_play_pause_button(state);
     }
 
-    fn on_mouse_down(&mut self, state: &mut EngineState) {
+    fn on_mouse_down(&mut self, _state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let state = _state;
             let shape = state.frame.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
@@ -911,9 +963,10 @@ impl Application for AudioEditApp {
         }
     }
     
-    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+    fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let ch = _ch;
             // Spacebar toggles play/pause
             if ch == ' ' {
                 self.is_paused = !self.is_paused;
@@ -948,9 +1001,10 @@ impl Application for AudioEditApp {
         }
     }
     
-    fn on_mouse_move(&mut self, state: &mut EngineState) {
+    fn on_mouse_move(&mut self, _state: &mut EngineState) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let state = _state;
             // Update zoom slider if dragging
             if self.is_dragging_zoom_slider && state.mouse.is_left_clicking {
                 let shape = state.frame.shape();

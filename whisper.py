@@ -34,7 +34,7 @@ def render():
     if full_transcription:
         xos.print_color("\n".join(full_transcription[-8:]))
     if in_speech_segment and segment_live_text.strip():
-        xos.print_color("&8LIVE: " + segment_live_text.strip())
+        xos.print_color("&8" + segment_live_text.strip())
     raw = transcriber.vad_prob()
     xos.print_color(
         f"&7RAW {raw*100:5.1f}%  EMA {vad_ema*100:5.1f}%  THR {THRESHOLD*100:5.1f}%  BUF {transcriber.buffered_seconds():.2f}s"

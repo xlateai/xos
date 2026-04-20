@@ -53,6 +53,8 @@ fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f
     }
 }
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
+#[allow(dead_code)]
 fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
     if !args.args.is_empty() {
         Ok(args.args[0].clone().try_into_value::<f64>(vm)? as f32)
@@ -138,7 +140,7 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "xos.audio.system is only available on desktop (macOS / Linux / Windows)".to_string(),
         ));
     }
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
     {
         let buffer_duration = parse_system_buffer_duration(&args, vm)?;
         let device = audio::preferred_system_audio_input_device().ok_or_else(|| {
@@ -148,6 +150,14 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             )
         })?;
         microphone_from_resolved_device(&device, buffer_duration, vm)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+    {
+        let _ = args;
+        Err(vm.new_runtime_error(
+            "xos.audio.system is unavailable on this Linux no-audio build".to_string(),
+        ))
     }
 }
 

@@ -129,10 +129,12 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 if state.frame_pan_dragging {
                     f3_menu_boost_interaction_fade(&mut state.engine_state);
                     let shape = state.engine_state.frame.shape();
+                    let pan_dx = state.engine_state.mouse.dx;
+                    let pan_dy = state.engine_state.mouse.dy;
                     frame_view_pan_by_pixels(
                         &mut state.engine_state,
-                        state.engine_state.mouse.dx,
-                        state.engine_state.mouse.dy,
+                        pan_dx,
+                        pan_dy,
                         shape[1] as f32,
                         shape[0] as f32,
                     );
@@ -191,7 +193,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         return;
                     }
                 }
-                if (event.ctrl_key() || event.meta_key()) {
+                if event.ctrl_key() || event.meta_key() {
                     event.prevent_default();
                 }
                 state.app.on_scroll(&mut state.engine_state, dx, dy);
@@ -402,7 +404,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.engine_state.f3_menu.toggle_visible();
                         event.prevent_default();
                     }
-                    "Escape" | "Shift" | "Control" | "Alt" | "Meta" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
+                    "Escape" | "Alt" | "CapsLock" | "Home" | "End" | "PageUp" | "PageDown" => {
                         // Do nothing — non-character keys
                     }
                     _ => {
@@ -546,7 +548,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     let (buffer, keyboard) = {
                         let buffer_ptr = state.engine_state.frame.buffer_mut() as *mut [u8];
                         let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut state.engine_state.keyboard.onscreen;
-                        (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
+                        (&mut *buffer_ptr, &mut *keyboard_ptr)
                     };
                     keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
                 }
@@ -555,7 +557,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();
-                let data = wasm_bindgen::Clamped(buffer);
+                let data = wasm_bindgen::Clamped(&buffer[..]);
                 let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
                     .expect("Failed to create ImageData");
                     

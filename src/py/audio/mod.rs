@@ -14,6 +14,7 @@ mod recording;
 pub use microphone::cleanup_all_microphones_rust;
 pub use speakers::cleanup_all_speakers_rust;
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {

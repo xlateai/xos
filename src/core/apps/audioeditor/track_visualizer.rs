@@ -1,7 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
 use crate::engine::EngineState;
 
 const WAVEFORM_HEIGHT_PERCENT: f32 = 0.15; // Bottom 15% of screen
+#[cfg(not(target_arch = "wasm32"))]
 const WAVEFORM_BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
+#[cfg(not(target_arch = "wasm32"))]
 const WAVEFORM_COLOR: (u8, u8, u8) = (57, 255, 20); // Neon green (#39ff14)
 
 pub struct TrackVisualizer {

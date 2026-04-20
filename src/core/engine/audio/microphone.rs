@@ -46,6 +46,7 @@ pub struct AudioBuffer {
     /// Raw audio samples stored per channel: Vec[channel_idx] -> samples for that channel
     channel_samples: Arc<Mutex<Vec<VecDeque<f32>>>>,
     /// Maximum buffer capacity per channel
+    #[allow(dead_code)]
     capacity: usize,
     /// Sample rate of the audio
     sample_rate: u32,
@@ -76,6 +77,7 @@ impl AudioBuffer {
     }
 
     /// Add samples to the buffer (one sample per channel)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn push_sample_batch(&self, samples: &[f32]) {
         let mut channel_buffers = self.channel_samples.lock().unwrap();
         
@@ -105,6 +107,7 @@ impl AudioBuffer {
     }
 
     /// Interleaved `channels`-wide PCM (e.g. ScreenCaptureKit).
+    #[cfg(target_os = "macos")]
     pub(crate) fn push_interleaved_f32(&self, samples: &[f32], channels: u16) {
         let c = channels as usize;
         if c == 0 {
@@ -316,10 +319,10 @@ impl AudioBuffer {
 }
 
 // ================================================================================================
-// NATIVE (macOS/Linux) IMPLEMENTATION using CPAL
+// NATIVE (macOS/Windows) IMPLEMENTATION using CPAL
 // ================================================================================================
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 mod native {
     use super::*;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -609,8 +612,62 @@ mod native {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 pub use native::{AudioListener, default_input, all_input_devices};
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+mod linux_no_audio {
+    use super::*;
+
+    pub struct AudioListener {
+        buffer: AudioBuffer,
+        device_name: String,
+    }
+
+    impl AudioListener {
+        pub fn new(audio_device: &AudioDevice, buffer_duration_secs: f32) -> Result<Self, String> {
+            let sample_rate = 48_000u32;
+            let channels = 1u16;
+            let capacity = (buffer_duration_secs.max(0.1) * sample_rate as f32) as usize;
+            let _listener = Self {
+                buffer: AudioBuffer::new(capacity.max(1), sample_rate, channels),
+                device_name: audio_device.name.clone(),
+            };
+            Err("native audio input is disabled on this Linux build".to_string())
+        }
+
+        pub fn buffer(&self) -> &AudioBuffer {
+            &self.buffer
+        }
+
+        pub fn device_name(&self) -> &str {
+            &self.device_name
+        }
+
+        pub fn pause(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn record(&self) -> Result<(), String> {
+            Err("native audio input is disabled on this Linux build".to_string())
+        }
+
+        pub fn get_samples_by_channel(&self) -> Vec<Vec<f32>> {
+            self.buffer.get_samples_by_channel()
+        }
+    }
+
+    pub fn default_input() -> Option<AudioDevice> {
+        None
+    }
+
+    pub fn all_input_devices() -> Vec<AudioDevice> {
+        Vec::new()
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+pub use linux_no_audio::{AudioListener, all_input_devices, default_input};
 
 // ================================================================================================
 // iOS IMPLEMENTATION using AVAudioEngine via Swift FFI
@@ -901,11 +958,11 @@ mod wasm {
     impl AudioListener {
         pub fn new(_device: &AudioDevice, duration_secs: f32) -> Result<Self, String> {
             BUFFER.with(|cell| {
-                *cell.borrow_mut() = Some(AudioBuffer::new(
+                *cell.borrow_mut() = Some(Arc::new(AudioBuffer::new(
                     (duration_secs * 44100.0) as usize,
                     44100,
                     1,
-                ));
+                )));
             });
 
             Ok(Self {

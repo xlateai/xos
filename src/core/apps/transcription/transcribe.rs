@@ -824,7 +824,7 @@ impl Application for TranscribeApp {
         if self.in_speech_segment {
             let live = Self::normalize_text(&live_caption);
             if !live.is_empty() {
-                display_lines.push(format!("LIVE: {live}"));
+                display_lines.push(live);
             }
         }
         let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
@@ -877,6 +877,7 @@ impl Application for TranscribeApp {
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
         if ch == '\u{1b}' {
             self.pause_input();
+            #[cfg(not(target_arch = "wasm32"))]
             crate::engine::native_engine::request_exit();
         }
     }

@@ -7,7 +7,9 @@ const BACKGROUND_COLOR: (u8, u8, u8) = (10, 10, 10);
 const LED_ON_COLOR: (u8, u8, u8) = (255, 0, 0);
 const LED_OFF_COLOR: (u8, u8, u8) = (20, 20, 20);
 /// Animation update rate (logic steps per second), independent of render rate.
+#[allow(dead_code)]
 const ANIM_FPS: f32 = 60.0;
+#[allow(dead_code)]
 const ANIM_FRAME_MS: f32 = 1000.0 / ANIM_FPS;
 
 pub struct Leds {

@@ -109,11 +109,13 @@ impl FrameState {
 
     /// # Safety
     /// Same contract as the former `FrameTensor::set_pixels_mirror_buffer`.
+    #[allow(dead_code)]
     pub(crate) unsafe fn set_pixels_mirror_buffer(&mut self, ptr: *mut u8, len: usize) {
         debug_assert_eq!(len, (self.width * self.height * 4) as usize);
         self.pixels_mirror = Some((NonNull::new(ptr).expect("pixels mirror ptr"), len));
     }
 
+    #[allow(dead_code)]
     pub(crate) fn clear_pixels_mirror_buffer(&mut self) {
         self.pixels_mirror = None;
     }

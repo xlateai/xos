@@ -60,15 +60,15 @@ pub struct AudioDevice {
     pub is_output: bool,
 
     /// Windows: this row captures **system audio** from the paired output endpoint (WASAPI loopback).
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
     pub wasapi_loopback: bool,
 
     /// macOS: ScreenCaptureKit system audio (not a CPAL device; `device_cpal` is a placeholder).
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
     pub macos_sck_system_audio: bool,
     
     // Platform-specific device handles
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
     pub device_cpal: cpal::Device,
     
     #[cfg(target_os = "ios")]
@@ -115,7 +115,7 @@ impl AudioDevice {
         if !self.is_input {
             return None;
         }
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
         if self.wasapi_loopback || self.macos_sck_system_audio {
             return Some(InputDeviceKind::LoopbackOrVirtual);
         }
@@ -148,7 +148,7 @@ impl AudioDevice {
         if !self.is_input {
             return self.name.clone();
         }
-        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
         if self.wasapi_loopback || self.macos_sck_system_audio {
             return self.name.clone();
         }
@@ -176,7 +176,7 @@ impl AudioDevice {
 /// require separate device handles for input vs output operations.
 /// Prefer ScreenCaptureKit **System audio** (macOS), WASAPI **loopback** (Windows), or any
 /// input whose name looks like a virtual loopback / stereo mix driver.
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
 pub fn preferred_system_audio_input_device() -> Option<AudioDevice> {
     let list = all_input_devices();
     if let Some(d) = list
@@ -204,11 +204,11 @@ pub fn devices() -> Vec<AudioDevice> {
             name: device.name.clone(),
             is_input: device.is_input,
             is_output: device.is_output,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             wasapi_loopback: device.wasapi_loopback,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             macos_sck_system_audio: device.macos_sck_system_audio,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             device_cpal: device.device_cpal.clone(),
             #[cfg(target_os = "ios")]
             device_id: device.device_id,
@@ -221,11 +221,11 @@ pub fn devices() -> Vec<AudioDevice> {
             name: device.name.clone(),
             is_input: device.is_input,
             is_output: device.is_output,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             wasapi_loopback: false,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             macos_sck_system_audio: false,
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
             device_cpal: device.device_cpal.clone(),
             #[cfg(target_os = "ios")]
             device_id: device.device_id,
