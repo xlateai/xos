@@ -12,6 +12,8 @@ Xos is a cross-platform application framework with a game-engine core in rust wi
 - Designed to be an alternative to React-Native
 - ❌ no JavaScript, no HTML, no CSS ❌
 
+Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
+
 ## 🧠 Available AI Models
 
 The current AI integration is focused on local inference with a simple runtime surface across CLI, Python, and Rust. The goal is practical access to models in native apps with zero setup.
@@ -26,10 +28,6 @@ Model docs are still in progress. Current behavior for supported models:
 2. The model path is exposed through a standalone CLI app flow.
 3. The same functionality is callable from `xpy` scripts.
 4. Rust APIs are available for embedding in native apps.
-
-## 🤝 Help Wanted!
-
-Spot any bugs/missing features? [Come join our discord](https://discord.gg/WvPaPG7DYh)! Even if you just want to chat or share what you've built. We would love to have you!
 
 ## Progress
 - [x] Headless mode for applications without viewports.
