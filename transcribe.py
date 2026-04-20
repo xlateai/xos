@@ -4,9 +4,12 @@ import xos
 # LANGUAGE = "english"  # "english" or "japanese"
 LANGUAGE = "japanese"  # "english" or "japanese"
 
+# SIZE = "tiny"
+SIZE = "base"
+
 
 audio = xos.audio.system(buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio, size="tiny", language=LANGUAGE)
+transcriber = xos.audio.transcription(audio, size=SIZE, language=LANGUAGE)
 if xos.flags.record:
     recorder = xos.audio.recording(audio, "test.mp3")
 
