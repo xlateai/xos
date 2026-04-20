@@ -134,7 +134,7 @@ pub fn spawn_decode_thread(
                 }
             };
             let mut opts = WhisperOptions::default();
-            opts.beam_size = 2;
+            opts.beam_size = 1;
             while let Ok(buf) = job_rx.recv() {
                 let line = match whisper.generate(&buf, Some(DEFAULT_LANG), false, &opts) {
                     Ok(parts) => cleanup_whisper_text(&parts.join(" ")),
@@ -160,7 +160,7 @@ pub fn transcribe_waveform_once(
         .map_err(|e| format!("Whisper CT2 load {}: {e}", dir.display()))?;
 
     let mut opts = WhisperOptions::default();
-    opts.beam_size = 2;
+    opts.beam_size = 1;
     let parts = whisper
         .generate(
             waveform,

@@ -1,11 +1,8 @@
 import xos
 
-KERNEL_BACKEND = xos.ai.whisper.CT2
-# KERNEL_BACKEND = xos.ai.whisper.BURN
-
-
+# Same defaults as xos.ai.whisper.load: tiny + CT2.
 audio = xos.audio.system(buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio, size="tiny", backend=KERNEL_BACKEND)
+transcriber = xos.audio.transcription(audio, size="tiny")
 if xos.flags.record:
     recorder = xos.audio.recording(audio, "test.mp3")
 
@@ -13,14 +10,12 @@ full_transcription = []
 
 try:
     while True:
-        # let the buffer accrue a bit before processing
-        xos.sleep(0.02)
+        # Short yield so the audio thread can fill the ring without spinning the CPU at 100%.
+        xos.sleep(0.004)
 
-        # record the audio
         if xos.flags.record:
             recorder.record(wait=False)
-        
-        # transcribe the audio
+
         transcription, was_committed, is_new = transcriber.transcribe()
         if is_new:
             if was_committed:

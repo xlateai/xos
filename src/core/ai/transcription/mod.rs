@@ -1,6 +1,7 @@
 //! Real-time transcription: Whisper on desktop — **Burn** (`fast-whisper-burn`) and/or **CT2**
 //! (`ct2rs`) when the corresponding Cargo features are enabled. Live pipeline: voice gate (RMS +
-//! peak) → frequent tail decodes → hypothesis stabilization → phrase commits.
+//! peak) → **growing clip** (append new frames) → periodic **full-clip** partial decodes → on end of
+//! speech (silence) a **final full-clip** decode for commit, then reset (no overlap stitching).
 
 #[cfg(all(
     feature = "whisper",
@@ -55,20 +56,6 @@ use std::sync::mpsc::{Receiver, SyncSender};
     not(target_os = "ios")
 ))]
 use std::time::{Duration, Instant};
-
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
-fn transcribe_debug_enabled() -> bool {
-    std::env::var("XOS_TRANSCRIBE_DEBUG")
-        .map(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes" || v == "on"
-        })
-        .unwrap_or(false)
-}
 
 /// Which native Whisper stack to use (`xos.ai.whisper.load(..., backend=...)`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,25 +240,51 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    last_decode: Instant,
+    /// Mono PCM for the current utterance (input device rate), grown by appending new frames.
+    segment_pcm: Vec<f32>,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    segment_input_rate: u32,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    last_partial_decode: Instant,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    prev_gate_voice_on: bool,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    has_open_segment: bool,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    final_decode_submitted: bool,
+    #[cfg(all(
+        feature = "whisper",
+        not(target_arch = "wasm32"),
+        not(target_os = "ios")
+    ))]
+    /// One bool per queued decode job (matches decode thread output order).
+    pending_decode_is_final: VecDeque<bool>,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
     live_transcript: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    stable_transcript: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    hypotheses: VecDeque<String>,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
@@ -313,18 +326,6 @@ pub struct TranscriptionEngine {
         not(target_arch = "wasm32"),
         not(target_os = "ios")
     ))]
-    block_stale_until: Instant,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    utterance_best: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
     last_stdout_commit_key: String,
     #[cfg(all(
         feature = "whisper",
@@ -344,13 +345,6 @@ pub struct TranscriptionEngine {
         not(target_os = "ios")
     ))]
     last_ingested_frames: Option<u64>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
-    /// Last time we committed from [`Self::maybe_commit_phrase_restart`] (debounce spam).
-    last_phrase_restart_commit: Option<Instant>,
     #[cfg(all(
         feature = "whisper",
         not(target_arch = "wasm32"),
@@ -399,24 +393,25 @@ impl TranscriptionEngine {
                 decode_job_tx,
                 decode_result_rx,
                 resample_buf: Vec::new(),
-                last_decode: Instant::now()
-                    - Duration::from_millis(sample::DECODE_INTERVAL_MS),
+                segment_pcm: Vec::new(),
+                segment_input_rate: sample::WHISPER_HZ,
+                last_partial_decode: Instant::now()
+                    - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS),
+                prev_gate_voice_on: false,
+                has_open_segment: false,
+                final_decode_submitted: false,
+                pending_decode_is_final: VecDeque::new(),
                 live_transcript: String::new(),
-                stable_transcript: String::new(),
-                hypotheses: VecDeque::new(),
                 voice_active: false,
                 quiet_for: Duration::ZERO,
                 last_snapshot: Instant::now(),
                 accept_results_until: Instant::now(),
                 awaiting_final_commit: false,
                 last_committed_text: String::new(),
-                block_stale_until: Instant::now(),
-                utterance_best: String::new(),
                 last_stdout_commit_key: String::new(),
                 last_level_rms: 0.0,
                 load_note,
                 last_ingested_frames: None,
-                last_phrase_restart_commit: None,
                 deferred_silence_commit_iter: Vec::new(),
             };
         }
@@ -522,15 +517,7 @@ impl TranscriptionEngine {
             if self.decode_job_tx.is_none() {
                 return;
             }
-            let mut candidate = if !self.stable_transcript.is_empty() {
-                self.stable_transcript.clone()
-            } else {
-                self.live_transcript.clone()
-            };
-            merge::fold_overlap_longer_into(&mut candidate, &self.utterance_best);
-            for h in self.hypotheses.iter() {
-                merge::fold_overlap_longer_into(&mut candidate, h);
-            }
+            let candidate = self.live_transcript.clone();
             self.try_push_stdout_commit(&candidate, false);
         }
     }
@@ -576,17 +563,18 @@ impl TranscriptionEngine {
 impl TranscriptionEngine {
     fn reset_utterance_state(&mut self) {
         self.live_transcript.clear();
-        self.stable_transcript.clear();
-        self.hypotheses.clear();
-        self.utterance_best.clear();
+        self.segment_pcm.clear();
+        self.has_open_segment = false;
+        self.final_decode_submitted = false;
+        self.pending_decode_is_final.clear();
         self.voice_active = false;
         self.quiet_for = Duration::ZERO;
         self.awaiting_final_commit = false;
         self.accept_results_until = Instant::now();
+        self.prev_gate_voice_on = false;
         if let Some(rx) = &self.decode_result_rx {
             while rx.try_recv().is_ok() {}
         }
-        self.last_phrase_restart_commit = None;
         self.deferred_silence_commit_iter.clear();
     }
 
@@ -624,109 +612,70 @@ impl TranscriptionEngine {
             self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         }
         self.last_committed_text = t;
-        self.block_stale_until = Instant::now() + Duration::from_millis(sample::POST_COMMIT_STALE_MS);
         self.live_transcript.clear();
-        self.stable_transcript.clear();
-        self.hypotheses.clear();
-        self.utterance_best.clear();
+        self.clear_segment_after_commit();
         true
     }
 
-    /// Commit current phrase and start `clean` fresh when the model jumps to a new line.
-    fn maybe_commit_phrase_restart(&mut self, clean: &str) -> bool {
-        let anchor = if !self.utterance_best.is_empty() {
-            self.utterance_best.as_str()
-        } else {
-            self.live_transcript.as_str()
-        };
-        let aw = anchor.split_whitespace().count();
-        let cw = clean.split_whitespace().count();
-        if aw < sample::RESTART_MIN_ANCHOR_WORDS || cw < sample::RESTART_MIN_CLEAN_WORDS {
-            return false;
-        }
-        if merge::hypothesis_continues_anchor(anchor, clean) {
-            return false;
-        }
-        let now = Instant::now();
-        if let Some(t) = self.last_phrase_restart_commit {
-            if now.duration_since(t)
-                < Duration::from_millis(sample::PHRASE_RESTART_COMMIT_DEBOUNCE_MS)
-            {
-                return false;
-            }
-        }
-        let mut to_commit = if !self.utterance_best.is_empty() {
-            self.utterance_best.clone()
-        } else {
-            self.live_transcript.clone()
-        };
-        merge::fold_overlap_longer_into(&mut to_commit, &self.stable_transcript);
-        for h in self.hypotheses.iter() {
-            merge::fold_overlap_longer_into(&mut to_commit, h);
-        }
-        if !self.try_push_stdout_commit(&to_commit, false) {
-            return false;
-        }
-        self.last_phrase_restart_commit = Some(Instant::now());
-        self.ingest_hypothesis(clean.to_string());
-        true
+    /// Reset utterance PCM and segment flags after a successful stdout commit.
+    fn clear_segment_after_commit(&mut self) {
+        self.segment_pcm.clear();
+        self.has_open_segment = false;
+        self.final_decode_submitted = false;
+        self.pending_decode_is_final.clear();
+        self.awaiting_final_commit = false;
+        self.voice_active = false;
+        self.quiet_for = Duration::ZERO;
     }
 
-    fn ingest_hypothesis(&mut self, text: String) {
-        let raw = merge::normalize_ws(&text);
-        if raw.is_empty() || filter::looks_degenerate(&raw) {
+    fn apply_decode_result(&mut self, line: &str, is_final: bool) {
+        if !is_final && !self.has_open_segment {
             return;
         }
-        if filter::is_spurious_line(&raw) {
+        if is_final && !self.awaiting_final_commit {
             return;
         }
-        if Instant::now() < self.block_stale_until && !self.last_committed_text.is_empty() {
-            let cw = self.last_committed_text.split_whitespace().count();
-            let clean_words = raw.split_whitespace().count();
-            let common = merge::common_prefix_word_count(&self.last_committed_text, &raw);
-            let extends_committed = clean_words > cw && common >= cw;
-            if !extends_committed {
-                let threshold = cw.min(clean_words).max(4);
-                if common >= threshold {
-                    return;
-                }
+        let raw = merge::normalize_ws(line);
+        if is_final {
+            if !raw.is_empty() && !filter::looks_degenerate(&raw) && !filter::is_spurious_line(&raw) {
+                let _ = self.try_push_stdout_commit(&raw, true);
+            } else if !self.live_transcript.is_empty() {
+                let fb = self.live_transcript.clone();
+                let _ = self.try_push_stdout_commit(&fb, true);
+            } else {
+                self.clear_segment_after_commit();
             }
-        }
-        if self.maybe_commit_phrase_restart(&raw) {
             return;
         }
-        let clean = merge::strip_committed_word_prefix(&self.last_committed_text, &raw);
-        let clean = merge::normalize_ws(&clean);
-        if clean.is_empty() {
+        if raw.is_empty() || filter::looks_degenerate(&raw) || filter::is_spurious_line(&raw) {
             return;
         }
-        self.hypotheses.push_back(clean.clone());
-        while self.hypotheses.len() > 3 {
-            self.hypotheses.pop_front();
-        }
-        if self.hypotheses.len() >= 2 {
-            let mut prefix = self.hypotheses[0].clone();
-            for h in self.hypotheses.iter().skip(1) {
-                prefix = merge::common_prefix_words(&prefix, h);
-                if prefix.is_empty() {
-                    break;
-                }
-            }
-            if !prefix.is_empty()
-                && prefix.split_whitespace().count()
-                    >= self.stable_transcript.split_whitespace().count()
-            {
-                self.stable_transcript = prefix;
-            }
-        }
-        let next = merge::overlap_stable_into_latest(&self.stable_transcript, &clean);
-        if next.split_whitespace().count() > self.utterance_best.split_whitespace().count() {
-            self.utterance_best = next.clone();
-        }
-        if next != self.live_transcript {
-            self.live_transcript = next.clone();
-            self.pending_iter_events.push(Some(next));
+        if raw != self.live_transcript {
+            self.live_transcript = raw;
+            self.pending_iter_events.push(Some(self.live_transcript.clone()));
             self.transcript_epoch = self.transcript_epoch.saturating_add(1);
+        }
+    }
+
+    /// Full growing-clip resample + queue (partial or final pass over [`Self::segment_pcm`]).
+    fn queue_segment_decode(&mut self, is_final: bool) -> bool {
+        if self.segment_pcm.is_empty() {
+            return false;
+        }
+        sample::resample_to_whisper_rate(
+            self.segment_input_rate,
+            &self.segment_pcm,
+            &mut self.resample_buf,
+        );
+        if self.resample_buf.len() < sample::MIN_DECODE_SAMPLES {
+            return false;
+        }
+        let tx = self.decode_job_tx.as_ref().expect("checked");
+        if tx.try_send(self.resample_buf.clone()).is_ok() {
+            self.pending_decode_is_final.push_back(is_final);
+            true
+        } else {
+            false
         }
     }
 
@@ -744,42 +693,60 @@ impl TranscriptionEngine {
             return;
         }
 
-        if self.last_ingested_frames.is_none() {
+        let first_snapshot = self.last_ingested_frames.is_none();
+        if first_snapshot {
             self.last_ingested_frames = Some(ingested_frames);
-            self.last_snapshot = Instant::now();
-            return;
         }
-
-        let prev = self.last_ingested_frames.expect("checked");
-        if ingested_frames < prev {
+        let prev_g = self.last_ingested_frames.expect("checked");
+        if ingested_frames < prev_g {
             self.reset_utterance_state();
-            self.last_ingested_frames = Some(ingested_frames);
-        } else {
-            self.last_ingested_frames = Some(ingested_frames);
         }
 
-        let dt = self.last_snapshot.elapsed();
+        let dt = if first_snapshot {
+            Duration::ZERO
+        } else {
+            self.last_snapshot.elapsed()
+        };
         self.last_snapshot = Instant::now();
 
         let mono = sample::downmix_mono(channels);
-        let tail = (sample_rate as usize).saturating_mul(80) / 1000;
-        let tail = tail.max(256).min(mono.len().max(1));
-        self.last_level_rms = sample::rms_tail(&mono, tail);
-        let last_peak = sample::peak_tail(&mono, tail);
-        let voice_on = self.last_level_rms >= sample::VOICE_ON_RMS
-            || last_peak >= sample::VOICE_ON_PEAK;
-        let voice_off = self.last_level_rms < sample::VOICE_OFF_RMS
-            && last_peak < sample::VOICE_OFF_PEAK;
+        let n = mono.len().max(1);
+        let tail_fast = ((sample_rate as usize).saturating_mul(sample::VAD_FAST_TAIL_MS as usize)
+            / 1000)
+            .max(64)
+            .min(n);
+        let tail_slow = ((sample_rate as usize).saturating_mul(sample::VAD_SLOW_TAIL_MS as usize)
+            / 1000)
+            .max(128)
+            .min(n);
+        let rms_fast = sample::rms_tail(&mono, tail_fast);
+        let rms_slow = sample::rms_tail(&mono, tail_slow);
+        let rms_eff = rms_fast.min(rms_slow);
+        let peak_fast = sample::peak_tail(&mono, tail_fast);
+        let peak_slow = sample::peak_tail(&mono, tail_slow);
+        let peak_eff = peak_fast.max(peak_slow);
+        self.last_level_rms = rms_slow;
+        let voice_on =
+            rms_eff >= sample::VOICE_ON_RMS || peak_eff >= sample::VOICE_ON_PEAK;
+
+        let gate_rising = voice_on && !self.prev_gate_voice_on;
+
+        if voice_on && self.awaiting_final_commit {
+            self.awaiting_final_commit = false;
+            self.final_decode_submitted = false;
+        }
 
         if voice_on {
             if !self.voice_active {
-                self.last_decode = Instant::now() - Duration::from_millis(sample::DECODE_INTERVAL_MS);
+                self.last_partial_decode = Instant::now()
+                    - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
             }
             self.voice_active = true;
-            self.awaiting_final_commit = false;
             self.quiet_for = Duration::ZERO;
             self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
-        } else if voice_off && self.voice_active {
+        } else if !voice_on && self.voice_active {
+            // Any frame below the “on” gate counts toward a phrase break (avoids a dead band between
+            // VOICE_ON_* and strict VOICE_OFF_* where silence never accumulated).
             self.quiet_for = self.quiet_for.saturating_add(dt);
             if self.quiet_for >= Duration::from_millis(sample::END_SILENCE_MS) {
                 self.voice_active = false;
@@ -789,90 +756,84 @@ impl TranscriptionEngine {
             }
         }
 
-        let mut decoded = Vec::<String>::new();
+        let mut decoded: Vec<(String, bool)> = Vec::new();
         if let Some(rx) = &self.decode_result_rx {
             while let Ok(line) = rx.try_recv() {
-                decoded.push(line);
+                let was_final = self.pending_decode_is_final.pop_front().unwrap_or(false);
+                decoded.push((line, was_final));
             }
         }
-        // Unbounded result queue can deliver many stale lines in one poll; only the latest
-        // reflects the current sliding tail (older lines trigger bogus phrase restarts).
-        let allow_ingest = (self.voice_active || self.awaiting_final_commit)
-            && (self.voice_active || Instant::now() <= self.accept_results_until);
-        if allow_ingest {
-            if let Some(line) = decoded.into_iter().last() {
-                if transcribe_debug_enabled() {
-                    eprintln!(
-                        "[xos-transcribe] ingest: len={} voice_active={} awaiting_final_commit={}",
-                        line.len(),
-                        self.voice_active,
-                        self.awaiting_final_commit
-                    );
-                }
-                self.ingest_hypothesis(line);
-            }
+        for (line, was_final) in decoded {
+            self.apply_decode_result(&line, was_final);
         }
 
-        let max_in = (sample_rate as usize)
-            .saturating_mul(sample::INPUT_TAIL_SECS as usize)
-            .min(mono.len());
-        let mono_tail = &mono[mono.len().saturating_sub(max_in)..];
-        sample::resample_to_whisper_rate(sample_rate, mono_tail, &mut self.resample_buf);
-
-        let allow_trailing_decode = !self.voice_active
-            && self.awaiting_final_commit
-            && Instant::now() <= self.accept_results_until;
-        let allow_idle_probe_decode = !self.voice_active && !self.awaiting_final_commit;
-        let decode_interval_ms = if self.voice_active || allow_trailing_decode {
-            sample::DECODE_INTERVAL_MS
-        } else {
-            sample::IDLE_PROBE_DECODE_INTERVAL_MS
-        };
-        if (self.voice_active || allow_trailing_decode || allow_idle_probe_decode)
-            && self.last_decode.elapsed() >= Duration::from_millis(decode_interval_ms)
-            && self.resample_buf.len() >= sample::MIN_DECODE_SAMPLES
+        if gate_rising {
+            self.segment_pcm.clear();
+            self.segment_pcm.extend_from_slice(&mono);
+            self.segment_input_rate = sample_rate;
+            self.has_open_segment = true;
+            self.live_transcript.clear();
+            self.final_decode_submitted = false;
+            self.awaiting_final_commit = false;
+            self.last_partial_decode = Instant::now()
+                - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+        } else if self.has_open_segment
+            && !self.awaiting_final_commit
+            && ingested_frames > prev_g
         {
-            let tx = self.decode_job_tx.as_ref().expect("checked");
-            if tx.try_send(self.resample_buf.clone()).is_ok() {
-                if transcribe_debug_enabled() {
-                    eprintln!(
-                        "[xos-transcribe] queued decode: samples={} rms={:.6} voice_active={} trailing={} probe={}",
-                        self.resample_buf.len(),
-                        self.last_level_rms,
-                        self.voice_active,
-                        allow_trailing_decode,
-                        allow_idle_probe_decode
-                    );
-                }
-                self.last_decode = Instant::now();
+            let delta = (ingested_frames - prev_g) as usize;
+            let n = delta.min(mono.len());
+            if n > 0 {
+                self.segment_pcm
+                    .extend_from_slice(&mono[mono.len().saturating_sub(n)..]);
+            }
+        }
+
+        let max_len = (self.segment_input_rate as usize)
+            .saturating_mul(sample::MAX_SEGMENT_SECS as usize);
+        if self.has_open_segment && self.segment_pcm.len() > max_len {
+            self.segment_pcm.truncate(max_len);
+            self.voice_active = false;
+            self.awaiting_final_commit = true;
+            self.final_decode_submitted = false;
+            self.accept_results_until = Instant::now() + Duration::from_millis(sample::RESULT_GRACE_MS);
+        }
+
+        if self.has_open_segment
+            && !self.awaiting_final_commit
+            && self.last_partial_decode.elapsed()
+                >= Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS)
+        {
+            if self.queue_segment_decode(false) {
+                self.last_partial_decode = Instant::now();
+            }
+        }
+
+        if self.awaiting_final_commit && !self.final_decode_submitted {
+            if self.queue_segment_decode(true) {
+                self.final_decode_submitted = true;
             }
         }
 
         if self.awaiting_final_commit && Instant::now() > self.accept_results_until {
-            let mut best = if self.live_transcript.split_whitespace().count()
-                >= self.stable_transcript.split_whitespace().count() + 2
-            {
-                self.live_transcript.clone()
-            } else if !self.stable_transcript.is_empty() {
-                self.stable_transcript.clone()
+            let live = merge::normalize_ws(&self.live_transcript);
+            if !live.is_empty() {
+                if !self.try_push_stdout_commit(&live, true) {
+                    self.clear_segment_after_commit();
+                }
             } else {
-                self.live_transcript.clone()
-            };
-            merge::fold_overlap_longer_into(&mut best, &self.utterance_best);
-            for h in self.hypotheses.iter() {
-                merge::fold_overlap_longer_into(&mut best, h);
+                self.clear_segment_after_commit();
             }
-            self.try_push_stdout_commit(&best, true);
             self.awaiting_final_commit = false;
             self.accept_results_until = Instant::now();
-            while self
-                .decode_result_rx
-                .as_ref()
-                .expect("paired decode channels")
-                .try_recv()
-                .is_ok()
-            {}
+            if let Some(rx) = &self.decode_result_rx {
+                while rx.try_recv().is_ok() {}
+            }
+            self.pending_decode_is_final.clear();
         }
+
+        self.last_ingested_frames = Some(ingested_frames);
+        self.prev_gate_voice_on = voice_on;
     }
 }
 

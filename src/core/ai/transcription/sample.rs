@@ -7,32 +7,27 @@
 
 pub const WHISPER_HZ: u32 = 16_000;
 
-/// Last N seconds of the ring buffer are resampled and fed to Whisper (sliding tail).
-pub const INPUT_TAIL_SECS: u32 = 12;
+/// Upper bound on a single live utterance clip (memory / model input safety).
+pub const MAX_SEGMENT_SECS: u32 = 600;
 
-pub const DECODE_INTERVAL_MS: u64 = 90;
-/// While idle (voice gate closed), run occasional probe decodes so low-level system audio can
-/// bootstrap the gate instead of staying permanently silent.
-pub const IDLE_PROBE_DECODE_INTERVAL_MS: u64 = 350;
-pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 12;
+/// How often we re-run Whisper on the **full** growing clip for live text (lower = snappier UI, more CPU).
+pub const GROWING_CLIP_PARTIAL_DECODE_MS: u64 = 48;
+/// Minimum 16 kHz samples per decode (~55 ms @ 16 kHz). Lower = earlier first words; too low can hurt quality.
+pub const MIN_DECODE_SAMPLES: usize = (WHISPER_HZ as usize) / 18;
 
-/// RMS gate (last ~80 ms). System/loopback mixes are often much quieter than close-mic speech;
-/// keep thresholds low so transcription still runs on typical macOS/Windows capture levels.
-pub const VOICE_ON_RMS: f32 = 0.0038;
-pub const VOICE_OFF_RMS: f32 = 0.0028;
+/// Short RMS/peak window (ms) — pause detection reacts at the **first** few ms of a gap.
+pub const VAD_FAST_TAIL_MS: u32 = 4;
+/// Slower companion window for min-RMS (see [`VOICE_ON_RMS`]).
+pub const VAD_SLOW_TAIL_MS: u32 = 10;
 
-/// Peak gate on the same tail as RMS — catches percussive / sparse content when RMS stays low.
-pub const VOICE_ON_PEAK: f32 = 0.012;
-pub const VOICE_OFF_PEAK: f32 = 0.009;
-pub const END_SILENCE_MS: u64 = 900;
-pub const RESULT_GRACE_MS: u64 = 2000;
-pub const POST_COMMIT_STALE_MS: u64 = 1200;
+/// Max sensitivity: keep these **low** so [`!voice_on`] happens often → short clips (tune down if noise splits).
+pub const VOICE_ON_RMS: f32 = 0.00135;
+pub const VOICE_ON_PEAK: f32 = 0.0042;
 
-pub const RESTART_MIN_ANCHOR_WORDS: usize = 18;
-pub const RESTART_MIN_CLEAN_WORDS: usize = 12;
-
-/// Minimum wall time between mid-utterance phrase-split stdout commits (sliding-window false positives).
-pub const PHRASE_RESTART_COMMIT_DEBOUNCE_MS: u64 = 10_000;
+/// Time below the “on” gate before end-of-utterance (ms). Minimal for fastest phrase commits.
+pub const END_SILENCE_MS: u64 = 28;
+/// Wall time to wait for a final decode before stdout fallback (ms).
+pub const RESULT_GRACE_MS: u64 = 900;
 
 pub fn downmix_mono(channels: &[Vec<f32>]) -> Vec<f32> {
     if channels.is_empty() {
