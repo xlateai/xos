@@ -824,7 +824,7 @@ impl Application for TranscribeApp {
         if self.in_speech_segment {
             let live = Self::normalize_text(&live_caption);
             if !live.is_empty() {
-                display_lines.push(format!("LIVE: {live}"));
+                display_lines.push(live);
             }
         }
         let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
