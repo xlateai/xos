@@ -1,8 +1,11 @@
 import xos
 
+KERNEL_BACKEND = xos.ai.whisper.CT2
+# KERNEL_BACKEND = xos.ai.whisper.BURN
+
 
 audio = xos.audio.system(buffer_duration=10.0)
-transcriber = xos.audio.transcription(audio, size="tiny")
+transcriber = xos.audio.transcription(audio, size="tiny", backend=KERNEL_BACKEND)
 if xos.flags.record:
     recorder = xos.audio.recording(audio, "test.mp3")
 

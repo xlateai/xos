@@ -92,12 +92,28 @@ impl WhisperBackend {
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-/// Live caption pipeline uses the Burn (WGPU) decoder only. Python `load(..., backend=CT2)` still
-/// uses CT2 for one-shot `forward`; there is no env-based backend switch.
+/// Live caption pipeline: **CT2** (default) or **Burn** (WGPU), matching `xos.ai.whisper.load(..., backend=...)`.
 fn spawn_live_decode_thread(
     preferred_size: Option<&str>,
+    backend: WhisperBackend,
 ) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
-    burn::whisper::spawn_decode_thread(preferred_size)
+    match backend {
+        WhisperBackend::Ct2 => {
+            #[cfg(feature = "whisper_ct2")]
+            {
+                return ct2::whisper::spawn_decode_thread(preferred_size);
+            }
+            #[cfg(not(feature = "whisper_ct2"))]
+            {
+                let _ = preferred_size;
+                Err(
+                    "Whisper CT2 backend is unavailable in this build (enable whisper_ct2)"
+                        .to_string(),
+                )
+            }
+        }
+        WhisperBackend::Burn => burn::whisper::spawn_decode_thread(preferred_size),
+    }
 }
 
 /// One-shot whisper transcription for Python `xos.ai.whisper.forward`.
@@ -347,10 +363,17 @@ pub struct TranscriptionEngine {
 
 impl TranscriptionEngine {
     pub fn new() -> Self {
-        Self::new_with_size(None)
+        Self::new_with_size_and_backend(None, WhisperBackend::Ct2)
     }
 
     pub fn new_with_size(preferred_size: Option<&str>) -> Self {
+        Self::new_with_size_and_backend(preferred_size, WhisperBackend::Ct2)
+    }
+
+    pub fn new_with_size_and_backend(
+        preferred_size: Option<&str>,
+        backend: WhisperBackend,
+    ) -> Self {
         #[cfg(all(
             feature = "whisper",
             not(target_arch = "wasm32"),
@@ -358,7 +381,7 @@ impl TranscriptionEngine {
         ))]
         {
             let (decode_job_tx, decode_result_rx, load_note) =
-                match spawn_live_decode_thread(preferred_size) {
+                match spawn_live_decode_thread(preferred_size, backend) {
                     Ok((tx, rx)) => (Some(tx), Some(rx), None),
                     Err(e) => (None, None, Some(e)),
                 };
@@ -403,7 +426,7 @@ impl TranscriptionEngine {
             not(target_os = "ios")
         )))]
         {
-            let _ = preferred_size;
+            let _ = (preferred_size, backend);
             Self {
                 transcript_epoch: 0,
                 caption: String::new(),

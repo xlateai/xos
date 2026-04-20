@@ -1,5 +1,5 @@
 use crate::apps::waveform::WaveformCanvas;
-use crate::ai::transcription::TranscriptionEngine;
+use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use crate::engine::audio;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
@@ -8,6 +8,13 @@ use dialoguer::Select;
 use std::io::{self, Write};
 
 const BG: (u8, u8, u8, u8) = (12, 14, 20, 255);
+
+fn transcribe_backend_from_env() -> WhisperBackend {
+    std::env::var("XOS_TRANSCRIBE_BACKEND")
+        .ok()
+        .and_then(|s| WhisperBackend::from_str(&s))
+        .unwrap_or(WhisperBackend::Ct2)
+}
 
 pub struct TranscribeApp {
     listener: Option<audio::AudioListener>,
@@ -22,7 +29,7 @@ impl TranscribeApp {
     pub fn new() -> Self {
         Self {
             listener: None,
-            engine: TranscriptionEngine::new(),
+            engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
             wave: WaveformCanvas::new(),
             last_caption_out: String::new(),
             live_stdout_line: false,
@@ -74,7 +81,14 @@ impl Drop for TranscribeApp {
 
 impl Application for TranscribeApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        println!("transcribe: waveform in window · transcript on stdout (scrollback + live line) · Esc to quit");
+        let backend = transcribe_backend_from_env();
+        let backend_label = match backend {
+            WhisperBackend::Ct2 => "ct2",
+            WhisperBackend::Burn => "burn",
+        };
+        println!(
+            "transcribe: backend={backend_label} (override: XOS_TRANSCRIBE_BACKEND=ct2|burn) · waveform in window · transcript on stdout · Esc to quit"
+        );
         let _ = io::stdout().flush();
 
         let all_devices = audio::devices();

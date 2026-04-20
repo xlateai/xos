@@ -1,6 +1,6 @@
 //! CTranslate2 Whisper (`ct2rs`): load CT2 model folders from `auth_data_dir()` (same as
 //! `xos path --data`) under `models/whisper/{size}-ct2/`, or the repo bundle — one-shot for Python
-//! `backend=CT2`.
+//! `backend=CT2`, and live decode queue for [`spawn_decode_thread`].
 #![cfg(all(
     feature = "whisper_ct2",
     not(target_arch = "wasm32"),
@@ -8,6 +8,8 @@
 ))]
 
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
+use std::thread;
 
 use ct2rs::sys::WhisperOptions;
 use ct2rs::{Config, Whisper as Ct2Whisper};
@@ -111,6 +113,40 @@ fn cleanup_whisper_text(s: &str) -> String {
         out.push(ch);
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Background decode: `sync_channel(1)` drops backlog; results arrive on `result_rx`.
+pub fn spawn_decode_thread(
+    size: Option<&str>,
+) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
+    let dir = resolve_model_dir(size)?;
+    let (job_tx, job_rx) = sync_channel::<Vec<f32>>(1);
+    let (result_tx, result_rx) = channel::<String>();
+
+    thread::Builder::new()
+        .name("xos-whisper-ct2-decode".into())
+        .spawn(move || {
+            let whisper = match Ct2Whisper::new(&dir, Config::default()) {
+                Ok(w) => w,
+                Err(e) => {
+                    let _ = result_tx.send(format!("(Whisper CT2 load error: {e})"));
+                    return;
+                }
+            };
+            let mut opts = WhisperOptions::default();
+            opts.beam_size = 2;
+            while let Ok(buf) = job_rx.recv() {
+                let line = match whisper.generate(&buf, Some(DEFAULT_LANG), false, &opts) {
+                    Ok(parts) => cleanup_whisper_text(&parts.join(" ")),
+                    Err(e) => format!("(Whisper CT2 error: {e})"),
+                };
+                if result_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| format!("spawn whisper CT2 decode thread: {e}"))?;
+    Ok((job_tx, result_rx))
 }
 
 /// One-shot transcription for Python (`backend=CT2`).
