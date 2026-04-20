@@ -15,6 +15,9 @@ const WAVE_SILENT: (u8, u8, u8) = (230, 230, 235);
 const WAVE_SPEECH: (u8, u8, u8) = (90, 230, 140);
 const PANEL_BG: (u8, u8, u8) = (25, 28, 36);
 const PANEL_FG: (u8, u8, u8) = (210, 214, 220);
+const VAD_DISPLAY_THRESHOLD_DEFAULT: f32 = 0.12;
+const VAD_PROB_EMA_ALPHA: f32 = 0.22;
+const WAVE_SMOOTH_WINDOW: usize = 7;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -42,6 +45,14 @@ fn vad_binary_threshold() -> f32 {
     {
         0.35
     }
+}
+
+fn vad_display_threshold() -> f32 {
+    std::env::var("XOS_VAD_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or(VAD_DISPLAY_THRESHOLD_DEFAULT)
 }
 
 struct VadStripCanvas {
@@ -120,6 +131,22 @@ impl VadStripCanvas {
             let y = y0 + dy * t;
             self.draw_pixel(buffer, width, height, x.round() as i32, y.round() as i32, c);
         }
+    }
+
+    fn draw_line_thick(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        c: (u8, u8, u8),
+    ) {
+        self.draw_line(buffer, width, height, x0, y0, x1, y1, c);
+        self.draw_line(buffer, width, height, x0, y0 - 1.0, x1, y1 - 1.0, c);
+        self.draw_line(buffer, width, height, x0, y0 + 1.0, x1, y1 + 1.0, c);
     }
 
     fn draw_rect(
@@ -204,15 +231,30 @@ impl VadStripCanvas {
         let active = &samples[start_idx..];
         let wave_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
         let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
+
+        let mut smooth = vec![0.0_f32; points];
+        let half_w = WAVE_SMOOTH_WINDOW / 2;
+        for i in 0..points {
+            let from = i.saturating_sub(half_w);
+            let to = (i + half_w + 1).min(points);
+            let mut sum = 0.0_f32;
+            let mut n = 0usize;
+            for &s in &active[from..to] {
+                sum += s;
+                n += 1;
+            }
+            smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
+        }
+
         let mut prev_x = 0.0;
         let mut prev_y = wave_center_y;
         for i in 0..points {
-            let s = active[i];
+            let s = smooth[i];
             let amp = self.amplify_nonlinear(s).clamp(-1.0, 1.0);
             let x = i as f32 * x_scale;
             let y = wave_center_y - amp * wave_half_amp;
             if i > 0 {
-                self.draw_line(buffer, width, height, prev_x, prev_y, x, y, wave_color);
+                self.draw_line_thick(buffer, width, height, prev_x, prev_y, x, y, wave_color);
             }
             prev_x = x;
             prev_y = y;
@@ -255,6 +297,7 @@ pub struct VadApp {
     engine: TranscriptionEngine,
     strip: VadStripCanvas,
     vad_label: TextRasterizer,
+    vad_prob_ema: f32,
 }
 
 impl VadApp {
@@ -267,6 +310,7 @@ impl VadApp {
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
             strip: VadStripCanvas::new(),
             vad_label,
+            vad_prob_ema: 0.0,
         }
     }
 
@@ -292,6 +336,11 @@ impl Application for VadApp {
         };
         println!(
             "vad: backend={backend_label} (XOS_TRANSCRIBE_BACKEND) · waveform + VAD level [0..1] · Esc to quit"
+        );
+        let _ = io::stdout().flush();
+        println!(
+            "vad: display threshold={:.2} (override with XOS_VAD_THRESHOLD=0..1)",
+            vad_display_threshold()
         );
         let _ = io::stdout().flush();
 
@@ -394,12 +443,17 @@ impl Application for VadApp {
 
         self.engine.process_snapshot(sr, &channels, ingested);
 
-        let p = self.engine.last_vad_speech_prob();
+        let p_raw = self.engine.last_vad_speech_prob();
+        self.vad_prob_ema = self.vad_prob_ema * (1.0 - VAD_PROB_EMA_ALPHA) + p_raw * VAD_PROB_EMA_ALPHA;
+        let p = self.vad_prob_ema.clamp(0.0, 1.0);
         let l = self.listener.as_ref().expect("checked");
-        let th = vad_binary_threshold();
+        let th = vad_display_threshold();
+        let engine_th = vad_binary_threshold();
         let state_label = if p >= th { "speech" } else { "silence" };
-        self.vad_label
-            .set_text(format!("VAD: {:.3}   threshold: {:.2}   {}", p, th, state_label));
+        self.vad_label.set_text(format!(
+            "VAD raw:{:.3}  ema:{:.3}  th:{:.2}  engine:{:.2}  {}",
+            p_raw, p, th, engine_th, state_label
+        ));
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
