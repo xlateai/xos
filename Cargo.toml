@@ -79,6 +79,7 @@ rfd = "0.16.0"
 mp3lame-encoder = "0.2.3"
 fast-whisper-burn = { path = "crates/fast-whisper-burn", optional = true }
 ureq = { version = "2.12", optional = true }
+ct2rs = { version = "0.9.18", optional = true, default-features = false, features = ["whisper", "ruy"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled
@@ -130,9 +131,11 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = ["whisper"]
-## Desktop Whisper (fast-whisper-burn: Burnpack + WGPU). On by default for macOS/Linux/Windows; use `--no-default-features` for iOS/WASM static lib builds. Bundled artifacts: `src/core/ai/transcription/models/fast-whisper-burn/` (`tiny.cfg`, `tiny.bpk`, `tiny-f16.bpk`, `tiny-tokenizer.json`); runtime cache `~/.xos/models/whisper/{tiny,small}/`.
+default = ["whisper", "whisper_ct2"]
+## Burn (fast-whisper-burn + WGPU). Bundled: `src/core/ai/transcription/models/burn/`; cache: `xos path --data` → `models/transcription/burn/{tiny,small}/`.
 whisper = ["dep:fast-whisper-burn", "dep:ureq"]
+## CTranslate2 Whisper (`ct2rs`). Cache: `xos path --data` → `models/transcription/ct2/…`; first run invokes **`ct2-transformers-converter`** (pip: `ctranslate2`, `transformers`) using `whisper_download_links.json` → `ct2_convert_models`. Optional bundled tree: `src/core/ai/transcription/models/ct2/`.
+whisper_ct2 = ["dep:ct2rs"]
 
 [lib]
 path = "src/core/lib.rs"

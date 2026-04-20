@@ -82,22 +82,49 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
     if let Some(p) = override_path {
         return Ok(PathBuf::from(p));
     }
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    let root = PathBuf::from(home)
-        .join(".xos")
-        .join("models")
-        .join("whisper")
-        .join(model);
-    let f32 = root.join(format!("{model}.bpk"));
-    if f32.is_file() {
-        return Ok(f32);
+    let model_trim = model.trim();
+    let (dir_name, require_f16) = if let Some(stem) = model_trim.strip_suffix("-f16") {
+        if stem.is_empty() {
+            return Err("invalid whisper model: use e.g. tiny-f16".to_string());
+        }
+        (stem, true)
+    } else {
+        (model_trim, false)
+    };
+    // Same tree as `xos path --data` (`auth_data_dir()`): `%LOCALAPPDATA%/xos` on Windows, `~/.xos` elsewhere.
+    let new_root =
+        crate::auth::transcription_burn_model_cache_dir(dir_name).map_err(|e| e.to_string())?;
+    let legacy_root = crate::auth::whisper_model_cache_dir(dir_name).map_err(|e| e.to_string())?;
+    let pick_pack = |root: &PathBuf| -> Option<PathBuf> {
+        let f32 = root.join(format!("{dir_name}.bpk"));
+        let f16 = root.join(format!("{dir_name}-f16.bpk"));
+        if require_f16 {
+            return f16.is_file().then_some(f16);
+        }
+        if f32.is_file() {
+            return Some(f32);
+        }
+        f16.is_file().then_some(f16)
+    };
+    if let Some(p) = pick_pack(&new_root) {
+        return Ok(p);
     }
-    let f16 = root.join(format!("{model}-f16.bpk"));
-    if f16.is_file() {
-        return Ok(f16);
+    if let Some(p) = pick_pack(&legacy_root) {
+        return Ok(p);
+    }
+    let f32 = new_root.join(format!("{dir_name}.bpk"));
+    let f16 = new_root.join(format!("{dir_name}-f16.bpk"));
+    if require_f16 {
+        return Err(format!(
+            "F16 Whisper weights not found: {} (expected for model id ending in -f16; also checked {})",
+            f16.display(),
+            legacy_root.join(format!("{dir_name}-f16.bpk")).display()
+        ));
     }
     Err(format!(
-        "weights not found: {} or {}",
+        "weights not found under {} or {} (expected {} or {})",
+        new_root.display(),
+        legacy_root.display(),
         f32.display(),
         f16.display()
     ))
@@ -249,24 +276,21 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
     }
 
-    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
-    {
-        let text = crate::ai::transcription::transcribe_waveform_once(
-            Some(&model),
-            &waveform,
-            sample_rate as u32,
-        )
-        .map_err(|e| to_py_err(vm, e))?;
-        Ok(vm.ctx.new_str(text).into())
-    }
-    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
-    {
-        let _ = (model, waveform, sample_rate);
-        Err(to_py_err(
-            vm,
-            "whisper forward is unavailable on this build/target",
+    let backend_s = parse_string_arg(av.get(3), "burn", vm)?;
+    let backend = crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
+        vm.new_value_error(format!(
+            "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
         ))
-    }
+    })?;
+
+    let text = crate::ai::transcription::transcribe_waveform_once(
+        Some(&model),
+        &waveform,
+        sample_rate as u32,
+        backend,
+    )
+    .map_err(|e| to_py_err(vm, e))?;
+    Ok(vm.ctx.new_str(text).into())
 }
 
 fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -290,16 +314,22 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
         return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
     }
 
-    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
-    {
-        let (text, steps) = crate::ai::transcription::transcribe_waveform_with_intermediates(
-            Some(&model),
-            &waveform,
-            sample_rate as u32,
-        )
-        .map_err(|e| to_py_err(vm, e))?;
+    let backend_s = parse_string_arg(av.get(3), "burn", vm)?;
+    let backend = crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
+        vm.new_value_error(format!(
+            "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
+        ))
+    })?;
 
-        let out_steps: Vec<PyObjectRef> = steps
+    let (text, steps) = crate::ai::transcription::transcribe_waveform_with_intermediates(
+        Some(&model),
+        &waveform,
+        sample_rate as u32,
+        backend,
+    )
+    .map_err(|e| to_py_err(vm, e))?;
+
+    let out_steps: Vec<PyObjectRef> = steps
             .into_iter()
             .map(|s| {
                 let d = vm.ctx.new_dict();
@@ -350,21 +380,12 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
                 d.into()
             })
             .collect();
-        let payload = vm.ctx.new_dict();
-        payload.set_item("text", vm.ctx.new_str(text).into(), vm).ok();
-        payload
-            .set_item("steps", vm.ctx.new_list(out_steps).into(), vm)
-            .ok();
-        Ok(payload.into())
-    }
-    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
-    {
-        let _ = (model, waveform, sample_rate);
-        Err(to_py_err(
-            vm,
-            "whisper forward_layer_by_layer is unavailable on this build/target",
-        ))
-    }
+    let payload = vm.ctx.new_dict();
+    payload.set_item("text", vm.ctx.new_str(text).into(), vm).ok();
+    payload
+        .set_item("steps", vm.ctx.new_list(out_steps).into(), vm)
+        .ok();
+    Ok(payload.into())
 }
 
 pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
@@ -409,6 +430,9 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     }
 
     let glue = r#"
+BURN = "burn"
+CT2 = "ct2"
+
 def _mk_parameter(payload):
     xos = __import__("xos")
     return xos.nn.Parameter(
@@ -459,6 +483,30 @@ def _flatten_batch_dim1(wave):
         return [float(v) for v in wave[0]]
     return wave
 
+class _WhisperCt2Model:
+    """CTranslate2 backend: no Burnpack weights in Python; inference is native CT2."""
+    def __init__(self, model):
+        self._model = model
+    def named_parameters(self):
+        return iter(())
+    def parameters(self):
+        return []
+    def get_parameter(self, name):
+        return None
+    @property
+    def parameter_count(self):
+        return 0
+    @property
+    def weights_file(self):
+        return None
+    def forward(self, x, sample_rate=16000):
+        wave = _flatten_batch_dim1(_waveform_to_list(x))
+        if wave and isinstance(wave[0], (list, tuple)):
+            return [_forward_native(self._model, [float(v) for v in row], int(sample_rate), CT2) for row in wave]
+        return _forward_native(self._model, [float(v) for v in wave], int(sample_rate), CT2)
+    def forward_layer_by_layer(self, x, sample_rate=16000):
+        raise NotImplementedError("forward_layer_by_layer requires backend=BURN")
+
 class _WhisperModel:
     def __init__(self, payload):
         self._payload = payload
@@ -484,8 +532,8 @@ class _WhisperModel:
     def forward(self, x, sample_rate=16000):
         wave = _flatten_batch_dim1(_waveform_to_list(x))
         if wave and isinstance(wave[0], (list, tuple)):
-            return [_forward_native(self._model, [float(v) for v in row], int(sample_rate)) for row in wave]
-        return _forward_native(self._model, [float(v) for v in wave], int(sample_rate))
+            return [_forward_native(self._model, [float(v) for v in row], int(sample_rate), BURN) for row in wave]
+        return _forward_native(self._model, [float(v) for v in wave], int(sample_rate), BURN)
     def forward_layer_by_layer(self, x, sample_rate=16000):
         wave = _flatten_batch_dim1(_waveform_to_list(x))
         if wave and isinstance(wave[0], (list, tuple)):
@@ -494,6 +542,7 @@ class _WhisperModel:
             self._model,
             [float(v) for v in wave],
             int(sample_rate),
+            BURN,
         )
         for step in payload["steps"]:
             name = step.get("name", None)
@@ -509,7 +558,13 @@ class _WhisperModel:
             })
             yield name, act
 
-def load(model="tiny", full_values=False, max_values=128, weights_path=None):
+def load(model="tiny", full_values=False, max_values=128, weights_path=None, backend=CT2):
+    # model: tiny | small | tiny-f16 | small-f16 (Burn only: -f16 selects F16 burnpack + f16 compute)
+    # backend: BURN (Burnpack + WGPU) or CT2 (CTranslate2); default CT2.
+    if backend == CT2:
+        return _WhisperCt2Model(model)
+    if backend != BURN:
+        raise ValueError("whisper.load backend must be BURN or CT2")
     payload = _load_payload(model, full_values, max_values, weights_path)
     payload["model"] = model
     return _WhisperModel(payload)
@@ -523,6 +578,15 @@ def load(model="tiny", full_values=False, max_values=128, weights_path=None):
         }
         if let Ok(cls) = scope.globals.get_item("_WhisperModel", vm) {
             whisper.set_attr("WhisperModel", cls, vm).ok();
+        }
+        if let Ok(cls) = scope.globals.get_item("_WhisperCt2Model", vm) {
+            whisper.set_attr("WhisperCt2Model", cls, vm).ok();
+        }
+        if let Ok(v) = scope.globals.get_item("BURN", vm) {
+            whisper.set_attr("BURN", v, vm).ok();
+        }
+        if let Ok(v) = scope.globals.get_item("CT2", vm) {
+            whisper.set_attr("CT2", v, vm).ok();
         }
     }
 

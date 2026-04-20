@@ -83,7 +83,25 @@ pub fn auth_identity_dir() -> Result<PathBuf, AuthError> {
     Ok(auth_data_dir()?.join("auth"))
 }
 
-/// Cached Whisper Burn artifacts: `{data_dir}/models/whisper/{model_key}/` (e.g. `tiny`, `small`).
+/// Burn Whisper cache: `{data_dir}/models/transcription/burn/{model_key}/` (e.g. `tiny`, `small`).
+pub fn transcription_burn_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?
+        .join("models")
+        .join("transcription")
+        .join("burn")
+        .join(model_key))
+}
+
+/// CT2 Whisper model folder: `{data_dir}/models/transcription/ct2/{subdir}/` (e.g. `whisper-tiny-ct2`).
+pub fn transcription_ct2_model_cache_dir(subdir: &str) -> Result<PathBuf, AuthError> {
+    Ok(auth_data_dir()?
+        .join("models")
+        .join("transcription")
+        .join("ct2")
+        .join(subdir))
+}
+
+/// Legacy Burn cache (`{data_dir}/models/whisper/{model_key}/`) — still read for migration.
 pub fn whisper_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
     Ok(auth_data_dir()?.join("models").join("whisper").join(model_key))
 }

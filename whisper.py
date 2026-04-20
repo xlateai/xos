@@ -1,7 +1,15 @@
 import xos
 
+
+KERNEL_BACKEND = xos.ai.whisper.BURN
+# KERNEL_BACKEND = xos.ai.whisper.CT2
+
+
 # load the whisper model
-whisper = xos.ai.whisper.load("tiny")
+# whisper = xos.ai.whisper.load()  # most stable defaults
+whisper = xos.ai.whisper.load("tiny", backend=KERNEL_BACKEND)  # 16 bit
+# whisper = xos.ai.whisper.load("tiny", backend=KERNEL_BACKEND)  # 32 bit
+# whisper = xos.ai.whisper.load("tiny", backend=KERNEL_BACKEND)  # 32 bit
 
 
 def get_color(param_name):

@@ -8,7 +8,8 @@ pub use store::{
     auth_data_dir, auth_identity_dir, authentication_json_path, auth_json_path, delete_identity,
     has_authentication, has_identity, has_node_identity, is_logged_in, load_identity, load_node_identity,
     login_offline, migrate_legacy_identity_file, node_identity_json_path, node_id_from_public_pem,
-    reset_offline_identity, rsa_sign, rsa_verify, unlock_identity, whisper_model_cache_dir,
+    reset_offline_identity, rsa_sign, rsa_verify, unlock_identity, transcription_burn_model_cache_dir,
+    transcription_ct2_model_cache_dir, whisper_model_cache_dir,
     AuthError, StoredIdentityFile, StoredIdentityV2, StoredIdentityV4, StoredNodeIdentity,
     UnlockedIdentity, UnlockedNodeIdentity,
 };

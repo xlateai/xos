@@ -1,5 +1,6 @@
-//! Real-time transcription: Whisper (fast-whisper-burn) on desktop when the `whisper` feature is enabled; stub elsewhere.
-//! Pipeline: voice gate (RMS + peak) → frequent tail decodes → hypothesis stabilization → phrase commits.
+//! Real-time transcription: Whisper on desktop — **Burn** (`fast-whisper-burn`) and/or **CT2**
+//! (`ct2rs`) when the corresponding Cargo features are enabled. Live pipeline: voice gate (RMS +
+//! peak) → frequent tail decodes → hypothesis stabilization → phrase commits.
 
 #[cfg(all(
     feature = "whisper",
@@ -27,14 +28,14 @@ mod sample;
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-mod whisper;
+mod burn;
 
 #[cfg(all(
-    feature = "whisper",
+    feature = "whisper_ct2",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
-mod whisper_ensure;
+mod ct2;
 
 #[cfg(all(
     feature = "whisper",
@@ -69,20 +70,78 @@ fn transcribe_debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Which native Whisper stack to use (`xos.ai.whisper.load(..., backend=...)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhisperBackend {
+    Burn,
+    Ct2,
+}
+
+impl WhisperBackend {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "burn" | "wgpu" | "burnpack" | "fast_whisper_burn" => Some(Self::Burn),
+            "ct2" | "ctranslate2" | "ct2rs" => Some(Self::Ct2),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "whisper",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
+/// Live caption pipeline uses the Burn (WGPU) decoder only. Python `load(..., backend=CT2)` still
+/// uses CT2 for one-shot `forward`; there is no env-based backend switch.
+fn spawn_live_decode_thread(
+    preferred_size: Option<&str>,
+) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
+    burn::whisper::spawn_decode_thread(preferred_size)
+}
+
 /// One-shot whisper transcription for Python `xos.ai.whisper.forward`.
 pub fn transcribe_waveform_once(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
+    backend: WhisperBackend,
 ) -> Result<String, String> {
-    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
-    {
-        return whisper::transcribe_waveform_once(size, waveform, sample_rate);
-    }
-    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
-    {
-        let _ = (size, waveform, sample_rate);
-        Err("whisper feature unavailable on this target".to_string())
+    match backend {
+        WhisperBackend::Burn => {
+            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            {
+                return burn::whisper::transcribe_waveform_once(size, waveform, sample_rate);
+            }
+            #[cfg(not(all(
+                feature = "whisper",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            )))]
+            {
+                let _ = (size, waveform, sample_rate);
+                Err("Whisper Burn backend is unavailable on this build/target".to_string())
+            }
+        }
+        WhisperBackend::Ct2 => {
+            #[cfg(all(
+                feature = "whisper_ct2",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            ))]
+            {
+                return ct2::whisper::transcribe_waveform_once(size, waveform, sample_rate);
+            }
+            #[cfg(not(all(
+                feature = "whisper_ct2",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            )))]
+            {
+                let _ = (size, waveform, sample_rate);
+                Err("Whisper CT2 backend is unavailable on this build/target".to_string())
+            }
+        }
     }
 }
 
@@ -112,15 +171,31 @@ pub fn transcribe_waveform_with_intermediates(
     size: Option<&str>,
     waveform: &[f32],
     sample_rate: u32,
+    backend: WhisperBackend,
 ) -> Result<(String, Vec<ActivationStep>), String> {
-    #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
-    {
-        return whisper::transcribe_waveform_with_intermediates(size, waveform, sample_rate);
-    }
-    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios"))))]
-    {
-        let _ = (size, waveform, sample_rate);
-        Err("whisper feature unavailable on this target".to_string())
+    match backend {
+        WhisperBackend::Ct2 => Err(
+            "forward_layer_by_layer is only supported for the Burn (WGPU) backend".to_string(),
+        ),
+        WhisperBackend::Burn => {
+            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            {
+                return burn::whisper::transcribe_waveform_with_intermediates(
+                    size,
+                    waveform,
+                    sample_rate,
+                );
+            }
+            #[cfg(not(all(
+                feature = "whisper",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            )))]
+            {
+                let _ = (size, waveform, sample_rate);
+                Err("Whisper Burn backend is unavailable on this build/target".to_string())
+            }
+        }
     }
 }
 
@@ -275,7 +350,7 @@ impl TranscriptionEngine {
         ))]
         {
             let (decode_job_tx, decode_result_rx, load_note) =
-                match whisper::spawn_decode_thread(preferred_size) {
+                match spawn_live_decode_thread(preferred_size) {
                     Ok((tx, rx)) => (Some(tx), Some(rx), None),
                     Err(e) => (None, None, Some(e)),
                 };

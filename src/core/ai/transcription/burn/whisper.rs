@@ -23,7 +23,7 @@ use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
 
-use super::{ActivationStep, TensorDebugStats};
+use crate::ai::transcription::{ActivationStep, TensorDebugStats};
 
 type WgpuF32 = Wgpu<f32>;
 
@@ -37,7 +37,52 @@ thread_local! {
     static WHISPER_MODEL_CACHE: RefCell<Option<CachedWhisperModel>> = const { RefCell::new(None) };
 }
 
-const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/fast-whisper-burn";
+const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/burn";
+
+/// User-facing model id from Python / CLI: `tiny`, `small`, `tiny-f16`, `small-f16`.
+pub(crate) struct WhisperModelArg {
+    /// Thread-local cache key segment (e.g. `tiny` vs `tiny-f16`).
+    pub cache_id: String,
+    /// Directory and artifact stem: `tiny` / `small` (never `tiny-f16`).
+    pub canonical: String,
+    /// Require `{canonical}-f16.bpk` when loading.
+    pub prefer_f16_weights: bool,
+    /// `WhisperParams::use_f16_compute` — mixed f16 compute in transcribe.
+    pub use_f16_compute: bool,
+}
+
+/// Parse `None` / `""` as `tiny`. Suffix `-f16` selects the F16 burnpack and enables f16 compute.
+pub(crate) fn parse_whisper_model_arg(size: Option<&str>) -> Result<WhisperModelArg, String> {
+    let raw = size
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "tiny".to_string());
+    let (stem, f16) = if let Some(b) = raw.strip_suffix("-f16") {
+        if b.is_empty() {
+            return Err(
+                "invalid whisper model: use a name before '-f16', e.g. tiny-f16".to_string(),
+            );
+        }
+        (b.to_string(), true)
+    } else {
+        (raw, false)
+    };
+    match stem.as_str() {
+        "tiny" | "small" => Ok(WhisperModelArg {
+            cache_id: if f16 {
+                format!("{stem}-f16")
+            } else {
+                stem.clone()
+            },
+            canonical: stem,
+            prefer_f16_weights: f16,
+            use_f16_compute: f16,
+        }),
+        other => Err(format!(
+            "unknown whisper model '{other}' (expected tiny, small, tiny-f16, or small-f16)"
+        )),
+    }
+}
 
 /// `XOS_WHISPER_DECODE_DEBUG=1` — decoder tracing on stderr: cross-attn K/V caches, post-prompt
 /// logits, per-step `logits_pre_suppress`, masked latent line, `logits_post_forward`, token picks
@@ -114,20 +159,17 @@ fn tensor_debug_stats(vals: &[f32]) -> Option<TensorDebugStats> {
 pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, Receiver<String>), String> {
     use fast_whisper_burn::transcribe::SamplingStrategy;
 
-    let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("small") => "small",
-        Some("tiny") | None => "tiny",
-        Some(other) => {
-            return Err(format!(
-                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
-            ));
-        }
-    };
-
-    let models_root = prepare_whisper_models_root(model_name)?;
-    validate_artifacts(&models_root, model_name)?;
+    let sel = parse_whisper_model_arg(size)?;
+    let models_root = prepare_whisper_models_root(&sel.canonical)?;
+    validate_artifacts(&models_root, &sel.canonical)?;
     let device = <WgpuF32 as Backend>::Device::default();
-    let (bpe, whisper) = load_whisper(&models_root, model_name, &device)?;
+    let (bpe, whisper) = load_whisper(
+        &models_root,
+        &sel.canonical,
+        sel.prefer_f16_weights,
+        &device,
+    )?;
+    let use_f16_compute = sel.use_f16_compute;
     let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(1);
     let (result_tx, result_rx) = std::sync::mpsc::channel::<String>();
 
@@ -137,7 +179,7 @@ pub fn spawn_decode_thread(size: Option<&str>) -> Result<(SyncSender<Vec<f32>>, 
             let mut params = WhisperParams::default();
             params.language = "en".to_string();
             params.strategy = SamplingStrategy::Greedy { best_of: 1 };
-            params.use_f16_compute = false;
+            params.use_f16_compute = use_f16_compute;
             params.debug_mode = whisper_decode_trace_from_env();
             params.encoder_trace = whisper_encoder_trace_from_env();
             params.no_timestamps = true;
@@ -176,23 +218,14 @@ pub fn transcribe_waveform_once(
 ) -> Result<String, String> {
     use fast_whisper_burn::transcribe::SamplingStrategy;
 
-    let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("small") => "small",
-        Some("tiny") | None => "tiny",
-        Some(other) => {
-            return Err(format!(
-                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
-            ));
-        }
-    };
-
-    let models_root = prepare_whisper_models_root(model_name)?;
-    validate_artifacts(&models_root, model_name)?;
-    with_cached_model(&models_root, model_name, |bpe, whisper| {
+    let sel = parse_whisper_model_arg(size)?;
+    let models_root = prepare_whisper_models_root(&sel.canonical)?;
+    validate_artifacts(&models_root, &sel.canonical)?;
+    with_cached_model(&models_root, &sel, |bpe, whisper| {
         let mut params = WhisperParams::default();
         params.language = "en".to_string();
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
-        params.use_f16_compute = false;
+        params.use_f16_compute = sel.use_f16_compute;
         params.debug_mode = whisper_decode_trace_from_env();
         params.encoder_trace = whisper_encoder_trace_from_env();
         params.no_timestamps = true;
@@ -222,19 +255,12 @@ pub fn transcribe_waveform_with_intermediates(
 ) -> Result<(String, Vec<ActivationStep>), String> {
     use fast_whisper_burn::transcribe::SamplingStrategy;
 
-    let model_name = match size.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
-        Some("small") => "small",
-        Some("tiny") | None => "tiny",
-        Some(other) => {
-            return Err(format!(
-                "unknown whisper size '{other}' (expected 'tiny' or 'small')"
-            ));
-        }
-    };
-    let models_root = prepare_whisper_models_root(model_name)?;
-    validate_artifacts(&models_root, model_name)?;
-    with_cached_model(&models_root, model_name, |bpe, whisper| {
+    let sel = parse_whisper_model_arg(size)?;
+    let models_root = prepare_whisper_models_root(&sel.canonical)?;
+    validate_artifacts(&models_root, &sel.canonical)?;
+    with_cached_model(&models_root, &sel, |bpe, whisper| {
         let device = whisper.devices()[0].clone();
+        let use_f16 = sel.use_f16_compute;
         // Same mel + device path as `fast_whisper_burn::transcribe::transcribe_inner`.
         let full_mel = compute_mel_cpu::<WgpuF32>(
             waveform,
@@ -242,7 +268,11 @@ pub fn transcribe_waveform_with_intermediates(
             whisper.encoder_mel_size(),
             &device,
         );
-        let enc = whisper.forward_encoder(full_mel.clone());
+        let enc = if use_f16 {
+            whisper.forward_encoder_f16(full_mel.clone())
+        } else {
+            whisper.forward_encoder(full_mel.clone())
+        };
 
         // Read GPU tensors to host **before** `fw_transcribe` — full decode can sync/reuse WGPU
         // state such that tensors captured earlier read back as zeros if materialized too late.
@@ -274,7 +304,11 @@ pub fn transcribe_waveform_with_intermediates(
             let logits = whisper
                 .forward_decoder_cached_with_cross_attention(
                     token_tensor,
-                    whisper.create_decoder_cache(enc.clone()),
+                    if use_f16 {
+                        whisper.create_decoder_cache_f16(enc.clone())
+                    } else {
+                        whisper.create_decoder_cache(enc.clone())
+                    },
                 )
                 .logits;
             let logits_preflight = (
@@ -293,7 +327,7 @@ pub fn transcribe_waveform_with_intermediates(
         let mut params = WhisperParams::default();
         params.language = "en".to_string();
         params.strategy = SamplingStrategy::Greedy { best_of: 1 };
-        params.use_f16_compute = false;
+        params.use_f16_compute = use_f16;
         params.debug_mode = whisper_decode_trace_from_env();
         params.encoder_trace = whisper_encoder_trace_from_env();
         params.no_timestamps = true;
@@ -373,9 +407,11 @@ pub fn transcribe_waveform_with_intermediates(
 /// Download / convert into `xos path --data`/models/whisper/{model}/ if needed, then resolve load path.
 /// Skips fetching when the repo-bundled tree already has a complete model pack.
 fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let cache = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    let cache = crate::auth::transcription_burn_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    let legacy = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
     let cache_ok = super::whisper_ensure::artifacts_ready(&cache, model_key);
-    if !cache_ok {
+    let legacy_ok = super::whisper_ensure::artifacts_ready(&legacy, model_key);
+    if !cache_ok && !legacy_ok {
         let bundled_ok = crate::find_xos_project_root()
             .ok()
             .map(|root| {
@@ -390,17 +426,27 @@ fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
     resolve_models_root(model_key)
 }
 
-/// Prefer `~/.xos/models/whisper/{model}/`, else the repo’s bundled `fast-whisper-burn/` tree when developing from source.
+/// Prefer `~/.xos/models/transcription/burn/{model}/`, then legacy `~/.xos/models/whisper/{model}/`,
+/// then the repo bundle `models/burn/` when developing from source.
 fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let cache = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    let cache = crate::auth::transcription_burn_model_cache_dir(model_key).map_err(|e| e.to_string())?;
     if whisper_artifacts_present(&cache, model_key) {
         return Ok(cache);
+    }
+    let legacy = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
+    if whisper_artifacts_present(&legacy, model_key) {
+        return Ok(legacy);
     }
 
     if let Ok(root) = crate::find_xos_project_root() {
         let bundled = root.join(MODELS_SUBDIR);
         if whisper_artifacts_present(&bundled, model_key) {
             return Ok(bundled);
+        }
+        // Older checkout layout (still supported when developing from source).
+        let legacy_bundled = root.join("src/core/ai/transcription/models/fast-whisper-burn");
+        if whisper_artifacts_present(&legacy_bundled, model_key) {
+            return Ok(legacy_bundled);
         }
     }
 
@@ -445,22 +491,27 @@ fn cleanup_whisper_text(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn model_cache_key(models_root: &Path, model_name: &str) -> String {
-    format!("{}::{}", models_root.display(), model_name)
+fn model_cache_key(models_root: &Path, cache_id: &str) -> String {
+    format!("{}::{}", models_root.display(), cache_id)
 }
 
 fn with_cached_model<T>(
     models_root: &Path,
-    model_name: &str,
+    sel: &WhisperModelArg,
     f: impl FnOnce(&Gpt2Tokenizer, &Whisper<WgpuF32>) -> Result<T, String>,
 ) -> Result<T, String> {
-    let key = model_cache_key(models_root, model_name);
+    let key = model_cache_key(models_root, &sel.cache_id);
     let device = <WgpuF32 as Backend>::Device::default();
     WHISPER_MODEL_CACHE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let needs_load = slot.as_ref().map(|m| m.key != key).unwrap_or(true);
         if needs_load {
-            let (bpe, whisper) = load_whisper(models_root, model_name, &device)?;
+            let (bpe, whisper) = load_whisper(
+                models_root,
+                &sel.canonical,
+                sel.prefer_f16_weights,
+                &device,
+            )?;
             *slot = Some(CachedWhisperModel { key, bpe, whisper });
         }
         let entry = slot.as_ref().expect("cache populated");
@@ -492,15 +543,34 @@ fn validate_artifacts(dir: &Path, name: &str) -> Result<(), String> {
 
 fn load_whisper(
     models_root: &Path,
-    model_name: &str,
+    canonical: &str,
+    prefer_f16_pack: bool,
     device: &<WgpuF32 as Backend>::Device,
 ) -> Result<(Gpt2Tokenizer, Whisper<WgpuF32>), String> {
-    let tok_path = models_root.join(format!("{model_name}-tokenizer.json"));
-    let cfg_path = models_root.join(format!("{model_name}.cfg"));
-    let f32_bpk = models_root.join(format!("{model_name}.bpk"));
-    let f16_bpk = models_root.join(format!("{model_name}-f16.bpk"));
-    let use_f16_adapter = !f32_bpk.is_file() && f16_bpk.is_file();
-    let bpk_path = if f32_bpk.is_file() { f32_bpk } else { f16_bpk };
+    let tok_path = models_root.join(format!("{canonical}-tokenizer.json"));
+    let cfg_path = models_root.join(format!("{canonical}.cfg"));
+    let f32_bpk = models_root.join(format!("{canonical}.bpk"));
+    let f16_bpk = models_root.join(format!("{canonical}-f16.bpk"));
+    let (bpk_path, use_f16_adapter) = if prefer_f16_pack {
+        if !f16_bpk.is_file() {
+            return Err(format!(
+                "Whisper F16 weights required for this model id but missing: {}",
+                f16_bpk.display()
+            ));
+        }
+        (f16_bpk, true)
+    } else if f32_bpk.is_file() {
+        (f32_bpk, false)
+    } else if f16_bpk.is_file() {
+        (f16_bpk, true)
+    } else {
+        return Err(format!(
+            "Whisper weights missing under {}: need {} or {}",
+            models_root.display(),
+            f32_bpk.display(),
+            f16_bpk.display()
+        ));
+    };
 
     let tok_s = tok_path
         .to_str()
