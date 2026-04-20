@@ -29,6 +29,8 @@ const THRESHOLD_MAX: f32 = 1.0;
 const WAVE_SMOOTH_WINDOW: usize = 7;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
+const SILENCE_CLIP_FRAMES: u32 = 3;
+const VAD_SEGMENT_EMA_ALPHA: f32 = 0.30;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
 const WAVE_BAND_FRAC: f32 = 0.375;
@@ -214,7 +216,8 @@ impl VisualCanvas {
         &mut self,
         state: &mut EngineState,
         listener: &audio::AudioListener,
-        vad_prob: f32,
+        vad_raw: f32,
+        vad_ema: f32,
         vad_label: &TextRasterizer,
         state_label: &TextRasterizer,
         state_color: (u8, u8, u8),
@@ -274,7 +277,7 @@ impl VisualCanvas {
         let points = self.waveform_points.max(2).min(width as usize).min(samples.len());
         let start_idx = samples.len().saturating_sub(points);
         let active = &samples[start_idx..];
-        let wave_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
+        let wave_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
         let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
         let mut smooth = vec![0.0_f32; points];
         let half_w = WAVE_SMOOTH_WINDOW / 2;
@@ -349,9 +352,13 @@ impl VisualCanvas {
         // VAD panel
         self.draw_rect(buffer, width, height, bar_x0, panel_top, bar_x1, panel_top + panel_h, PANEL_BG);
         self.draw_rect(buffer, width, height, bar_x0, bar_y0, bar_x1, bar_y1, WAVE_BASELINE);
-        let prob_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
-        let fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_prob.clamp(0.0, 1.0);
-        self.draw_rect(buffer, width, height, bar_x0, bar_y0, fill_x1, bar_y1, prob_color);
+        let raw_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
+        let ema_color = (130, 190, 255);
+        let raw_fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_raw.clamp(0.0, 1.0);
+        let ema_fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_ema.clamp(0.0, 1.0);
+        let mid_y = bar_y0 + (bar_y1 - bar_y0) * 0.5;
+        self.draw_rect(buffer, width, height, bar_x0, bar_y0, raw_fill_x1, mid_y, raw_color);
+        self.draw_rect(buffer, width, height, bar_x0, mid_y, ema_fill_x1, bar_y1, ema_color);
 
         let tx = bar_x0 + (bar_x1 - bar_x0) * threshold.clamp(0.0, 1.0);
         self.draw_rect(buffer, width, height, tx - 1.0, bar_y0 - 2.0, tx + 1.0, bar_y1 + 2.0, (255, 255, 255));
@@ -412,10 +419,13 @@ pub struct TranscribeApp {
     state_label: TextRasterizer,
     text_font: Font,
     threshold: f32,
+    vad_prob_seg_ema: f32,
+    vad_prob_visual_ema: f32,
     committed_lines: VecDeque<String>,
     segment_live_text: String,
     speech_run_frames: u32,
     silence_run_frames: u32,
+    silence_idle_clip_frames: u32,
     in_speech_segment: bool,
     transcript_scroll_offset: usize,
     ui_bounds: UiBounds,
@@ -442,10 +452,13 @@ impl TranscribeApp {
             state_label,
             text_font: font,
             threshold: THRESHOLD_DEFAULT,
+            vad_prob_seg_ema: 0.0,
+            vad_prob_visual_ema: 0.0,
             committed_lines: VecDeque::new(),
             segment_live_text: String::new(),
             speech_run_frames: 0,
             silence_run_frames: 0,
+            silence_idle_clip_frames: 0,
             in_speech_segment: false,
             transcript_scroll_offset: 0,
             ui_bounds: UiBounds::default(),
@@ -723,20 +736,26 @@ impl Application for TranscribeApp {
 
         self.engine.process_snapshot(sr, &channels, ingested);
         let p = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
+        self.vad_prob_visual_ema = self.vad_prob_visual_ema * 0.82 + p * 0.18;
+        self.vad_prob_seg_ema =
+            self.vad_prob_seg_ema * (1.0 - VAD_SEGMENT_EMA_ALPHA) + p * VAD_SEGMENT_EMA_ALPHA;
         let th = self.threshold;
-        let seg_start = th;
         let seg_end = (th * 0.80).max(0.01);
-        let active = p >= th;
+        let speech_now = p >= th || self.vad_prob_seg_ema >= seg_end;
+        let active = speech_now;
 
-        let live_caption = self.engine.caption().trim();
-        if p >= seg_start {
+        let live_caption = self.engine.caption().trim().to_string();
+        if speech_now {
             self.speech_run_frames = self.speech_run_frames.saturating_add(1);
             self.silence_run_frames = 0;
+            self.silence_idle_clip_frames = 0;
             if self.speech_run_frames >= SPEECH_START_FRAMES {
                 self.in_speech_segment = true;
             }
             if self.in_speech_segment && !live_caption.is_empty() {
-                self.segment_live_text = live_caption.to_string();
+                if live_caption.len() >= self.segment_live_text.len() {
+                    self.segment_live_text = live_caption.clone();
+                }
             }
         } else {
             // Segment end uses a lower threshold than start (hysteresis) to avoid rapid toggling.
@@ -759,6 +778,10 @@ impl Application for TranscribeApp {
                 if finalized.is_empty() {
                     finalized = Self::normalize_text(&self.segment_live_text);
                 }
+                let live_norm = Self::normalize_text(&self.segment_live_text);
+                if !live_norm.is_empty() && live_norm.len() > finalized.len() {
+                    finalized = live_norm;
+                }
                 if !finalized.is_empty()
                     && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized.as_str())
                 {
@@ -768,6 +791,15 @@ impl Application for TranscribeApp {
                 self.in_speech_segment = false;
                 // Critical: clip old audio out of the decode segment so we don't reprocess it.
                 self.engine.clip_consumed_audio_cursor();
+                self.silence_idle_clip_frames = 0;
+            }
+            if !self.in_speech_segment {
+                self.silence_idle_clip_frames = self.silence_idle_clip_frames.saturating_add(1);
+                if self.silence_idle_clip_frames >= SILENCE_CLIP_FRAMES {
+                    // Don't keep growing silent buffers; keep cursor near "now" while idle.
+                    self.engine.clip_consumed_audio_cursor();
+                    self.silence_idle_clip_frames = 0;
+                }
             }
         }
 
@@ -788,6 +820,13 @@ impl Application for TranscribeApp {
         } else {
             vec![]
         };
+        let mut display_lines = display_lines;
+        if self.in_speech_segment {
+            let live = Self::normalize_text(&live_caption);
+            if !live.is_empty() {
+                display_lines.push(format!("LIVE: {live}"));
+            }
+        }
         let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
             None
         } else {
@@ -800,8 +839,12 @@ impl Application for TranscribeApp {
             Some((top_frac, h_frac))
         };
 
-        self.vad_label
-            .set_text(format!("VAD {:>3.0}%   THR {:>3.0}%", p * 100.0, th * 100.0));
+        self.vad_label.set_text(format!(
+            "RAW {:>3.0}%  EMA {:>3.0}%  THR {:>3.0}%",
+            p * 100.0,
+            self.vad_prob_visual_ema * 100.0,
+            th * 100.0
+        ));
         self.state_label.set_text(format!(
             "{:.2}s {}",
             self.engine.buffered_segment_seconds(),
@@ -818,6 +861,7 @@ impl Application for TranscribeApp {
             state,
             l,
             p,
+            self.vad_prob_visual_ema,
             &self.vad_label,
             &self.state_label,
             if active { STATE_ACTIVE } else { STATE_SILENCE },
