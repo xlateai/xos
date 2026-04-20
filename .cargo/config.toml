@@ -29,4 +29,9 @@ rustflags = [
     "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/usr/lib/swift/macosx",
 ]
 
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "--cfg", "getrandom_backend=\"wasm_js\"",
+]
+
 
