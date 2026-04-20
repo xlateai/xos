@@ -78,6 +78,7 @@ fn summarize(values: &[f32]) -> (usize, usize, usize, f32, f32, f32) {
     (finite, nan, inf, min_v, mean, max_v)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<PathBuf, String> {
     if let Some(p) = override_path {
         return Ok(PathBuf::from(p));
@@ -137,6 +138,16 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
         legacy_root.display(),
         f32.display(),
         f16.display()
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<PathBuf, String> {
+    if let Some(p) = override_path {
+        return Ok(PathBuf::from(p));
+    }
+    Err(format!(
+        "whisper weights path for model '{model}' requires override_path on wasm builds"
     ))
 }
 

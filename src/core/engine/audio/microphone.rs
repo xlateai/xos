@@ -958,11 +958,11 @@ mod wasm {
     impl AudioListener {
         pub fn new(_device: &AudioDevice, duration_secs: f32) -> Result<Self, String> {
             BUFFER.with(|cell| {
-                *cell.borrow_mut() = Some(AudioBuffer::new(
+                *cell.borrow_mut() = Some(Arc::new(AudioBuffer::new(
                     (duration_secs * 44100.0) as usize,
                     44100,
                     1,
-                ));
+                )));
             });
 
             Ok(Self {
@@ -1026,8 +1026,7 @@ mod wasm {
         let processor = context.create_script_processor_with_buffer_size(1024)?;
 
         let closure = Closure::<dyn FnMut(_)>::wrap(Box::new(move |event: AudioProcessingEvent| {
-            let input_buf = event.input_buffer().unwrap();
-            let input = input_buf.get_channel_data(0).unwrap();
+            let input = event.get_channel_data(0).unwrap();
 
             BUFFER.with(|cell| {
                 if let Some(buffer) = &*cell.borrow() {

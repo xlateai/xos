@@ -555,7 +555,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();
-                let data = wasm_bindgen::Clamped(buffer);
+                let data = wasm_bindgen::Clamped(&buffer[..]);
                 let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
                     .expect("Failed to create ImageData");
                     

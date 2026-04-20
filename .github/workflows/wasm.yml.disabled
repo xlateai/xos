@@ -16,6 +16,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: 2G
 
     steps:
       - name: Checkout
@@ -44,6 +46,7 @@ jobs:
             . -> target
           cache-all-crates: true
           shared-key: xos-rust-global-cache
+          add-job-id-key: false
 
       - name: Cache wasm-pack binary
         id: cache-wasm-pack
@@ -51,6 +54,8 @@ jobs:
         with:
           path: ~/.cargo/bin/wasm-pack
           key: wasm-pack-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            wasm-pack-${{ runner.os }}-
 
       - name: Install wasm-pack
         if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
@@ -63,11 +68,17 @@ jobs:
       - name: Verify wasm-pack installation
         run: wasm-pack --version
 
+      - name: Reset sccache stats
+        run: sccache --zero-stats || true
+
       - name: Build xos release
         run: cargo build --release -p xos
 
       - name: Build wasm output zip
         run: cargo run --release --bin xos -- compile --wasm
+
+      - name: Show sccache stats
+        run: sccache --show-stats || true
 
       - name: Print wasm zip size
         run: |
