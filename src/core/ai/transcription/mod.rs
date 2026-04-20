@@ -845,18 +845,15 @@ impl TranscriptionEngine {
 
         let sess = self.vad_session.as_mut().expect("vad_session");
 
-        const SILERO_CHUNK_SAMPLES: usize = 512;
-        const SILERO_HOP_SAMPLES: usize = 160; // 10 ms @ 16 kHz for finer VAD updates
-
-        if self.vad_16k_pending.len() < SILERO_CHUNK_SAMPLES {
+        if self.vad_16k_pending.len() < 512 {
             return !self.vad_evaluated_once
                 || self.vad_last_speech_prob >= SILERO_VAD_THRESHOLD
                 || Instant::now() < self.vad_hangover_until;
         }
 
         let mut saw_speech = false;
-        while self.vad_16k_pending.len() >= SILERO_CHUNK_SAMPLES {
-            let chunk: Vec<f32> = self.vad_16k_pending[..SILERO_CHUNK_SAMPLES].to_vec();
+        while self.vad_16k_pending.len() >= 512 {
+            let chunk: Vec<f32> = self.vad_16k_pending.drain(..512).collect();
             match sess.predict_chunk(&chunk) {
                 Ok(p) => {
                     self.vad_evaluated_once = true;
@@ -867,8 +864,6 @@ impl TranscriptionEngine {
                 }
                 Err(_) => {}
             }
-            let drain_n = SILERO_HOP_SAMPLES.min(self.vad_16k_pending.len());
-            self.vad_16k_pending.drain(..drain_n);
         }
 
         const MAX_VAD_BACKLOG: usize = 48_000;
