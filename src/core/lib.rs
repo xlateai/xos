@@ -413,8 +413,10 @@ struct XosAppArgs {
 
 
 pub fn run<T: engine::Application + 'static>(app: T) {
+    #[cfg(not(target_arch = "wasm32"))]
     let args = XosAppArgs::parse();
 
+    #[cfg(not(target_arch = "wasm32"))]
     let app_name = env!("CARGO_PKG_NAME");
 
     #[cfg(target_arch = "wasm32")]

@@ -450,10 +450,9 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
             });
         }
 
-        let pyapp = PyApp::new(interpreter, app_instance);
-        
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let pyapp = PyApp::new(interpreter, app_instance);
             let result = if headless {
                 crate::engine::start_headless_native(Box::new(pyapp), 800, 600)
             } else {

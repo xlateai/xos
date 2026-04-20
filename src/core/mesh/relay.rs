@@ -1130,6 +1130,7 @@ impl MeshSession {
         wire_line(env)
     }
 
+    #[allow(dead_code)]
     fn wire_inner(env: &WireEnvelope) -> Result<String, String> {
         serde_json::to_string(env).map_err(|e| e.to_string())
     }
