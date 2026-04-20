@@ -4,28 +4,57 @@ use crate::apps::audiovis::waveform::WaveformVisualizer;
 use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
 use crate::apps::audiovis::media_control_bar::MediaControlBar;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use rodio::{Decoder, OutputStream, Sink, Source};
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use rodio::OutputStreamBuilder;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use dialoguer::Select;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use crate::engine::audio;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::fs::File;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::collections::VecDeque;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 const BUFFER_SIZE: usize = 512; // Number of audio samples to process per frame
 
+#[cfg(target_os = "linux")]
+pub struct AudiovisApp;
+
+#[cfg(target_os = "linux")]
+impl AudiovisApp {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Application for AudiovisApp {
+    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
+        Err("Audiovis is unavailable on Linux in this no-audio build".to_string())
+    }
+
+    fn tick(&mut self, state: &mut EngineState) {
+        let buffer = state.frame_buffer_mut();
+        let len = buffer.len();
+        for i in (0..len).step_by(4) {
+            buffer[i + 0] = BACKGROUND_COLOR.0;
+            buffer[i + 1] = BACKGROUND_COLOR.1;
+            buffer[i + 2] = BACKGROUND_COLOR.2;
+            buffer[i + 3] = 0xff;
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 pub struct AudiovisApp {
     #[cfg(not(target_arch = "wasm32"))]
     sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
@@ -51,6 +80,7 @@ pub struct AudiovisApp {
     live_listener: Option<audio::AudioListener>,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl AudiovisApp {
     pub fn new() -> Self {
         Self {
@@ -154,6 +184,7 @@ impl AudiovisApp {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Application for AudiovisApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
