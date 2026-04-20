@@ -88,4 +88,5 @@ define_apps! {
     Mesh => mesh::MeshApp,
     Hang => hang::HangApp,
     Transcribe => transcribe::TranscribeApp,
+    Vad => vad::VadApp,
 }
