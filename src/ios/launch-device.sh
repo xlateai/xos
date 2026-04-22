@@ -45,6 +45,100 @@ fi
 
 echo "📱 Found device: ${DEVICE_NAME:-iPhone} ($DEVICE_UDID)"
 
+# macOS extended attributes (Finder info, com.apple.provenance, etc.) cause:
+#   codesign: resource fork, Finder information, or similar detritus not allowed
+# Strip them from project sources and vendored bits before the build copies them into the .app.
+if command -v xattr &>/dev/null; then
+  echo "🧹 Stripping extended attributes (codesign)…"
+  for path in xos XosModule libs; do
+    if [ -e "$SCRIPT_DIR/$path" ]; then
+      xattr -cr "$SCRIPT_DIR/$path" 2>/dev/null || true
+    fi
+  done
+fi
+
+# If Xcode’s CodeSign step fails with "resource fork / detritus", the .app is usually built but not
+# signed. A Run Script in the project runs *before* "Copy Swift Standard Libraries" and AppIntents
+# (which can add more files to the bundle), so stripping in a script phase is too early. Here we
+# strip the finished bundle and run `codesign` again.
+retry_resign_xos_app() {
+  local _root=$1
+  local orig_app app xcent id stage
+
+  orig_app=$(find "$_root/build" -name "xos.app" -type d 2>/dev/null | head -1)
+  if [ -z "${orig_app:-}" ] || [ ! -d "$orig_app" ]; then
+    echo "   (no xos.app in build/ — cannot re-sign)"
+    return 1
+  fi
+  xcent=$(find "$_root/build" -name "xos.app.xcent" 2>/dev/null | head -1)
+  if [ -z "${xcent:-}" ] || [ ! -f "$xcent" ]; then
+    echo "   (no xos.app.xcent — cannot re-sign)"
+    return 1
+  fi
+  if ! command -v /usr/bin/codesign &>/dev/null; then
+    return 1
+  fi
+  # Recreate the bundle without resource forks / AppleDouble. `xattr -cr` alone is often not
+  # enough for codesign; ditto --norsrc is the usual fix for "detritus not allowed".
+  stage="${_root}/build/_xos.norsrc.$$.$RANDOM.app"
+  rm -rf "$stage"
+  export COPYFILE_DISABLE=1
+  if ! /usr/bin/ditto --norsrc --nocache "$orig_app" "$stage" 2>/dev/null; then
+    if ! /usr/bin/ditto --norsrc "$orig_app" "$stage" 2>/dev/null; then
+      echo "   (ditto --norsrc failed — cannot clone .app without resource forks)"
+      rm -rf "$stage" 2>/dev/null || true
+      return 1
+    fi
+  fi
+  app="$stage"
+  if command -v /usr/bin/xattr &>/dev/null; then
+    /usr/bin/xattr -cr "$app" 2>/dev/null || true
+  fi
+  find "$app" -name '._*' -delete 2>/dev/null || true
+  find "$app" -name '.DS_Store' -delete 2>/dev/null || true
+  if command -v /usr/bin/dot_clean &>/dev/null; then
+    /usr/bin/dot_clean -m "$app" 2>/dev/null || true
+  fi
+
+  id=$(
+    (cd "$_root" && xcodebuild -workspace xos.xcworkspace -scheme xos -configuration Debug \
+      -destination "generic/platform=iOS" -showBuildSettings 2>/dev/null) \
+      | sed -n 's/^[[:space:]]*EXPANDED_CODE_SIGN_IDENTITY[[:space:]]*=[[:space:]]*//p' | head -1 | tr -d '\r'
+  )
+  if [ -z "$id" ] || [ "$id" = "-" ]; then
+    id=$(
+      (cd "$_root" && xcodebuild -workspace xos.xcworkspace -scheme xos -configuration Debug \
+        -destination "generic/platform=iOS" -showBuildSettings 2>/dev/null) \
+        | sed -n 's/^[[:space:]]*CODE_SIGN_IDENTITY[[:space:]]*=[[:space:]]*//p' | head -1 | tr -d '\r'
+    )
+  fi
+  id="${id#"${id%%[![:space:]]*}"}"
+  id="${id%"${id##*[![:space:]]}"}"
+  if [ -z "$id" ] || [ "$id" = "-" ] || [ "$id" = "Sign to Run Locally" ]; then
+    echo "   (could not read signing identity from xcodebuild -showBuildSettings)"
+    return 1
+  fi
+
+  while IFS= read -r fw; do
+    [ -n "$fw" ] && [ -d "$fw" ] && /usr/bin/codesign -f -s "$id" --timestamp=none "$fw" 2>/dev/null || true
+  done < <(find "$app" -name "*.framework" -type d 2>/dev/null)
+  while IFS= read -r df; do
+    [ -n "$df" ] && [ -f "$df" ] && /usr/bin/codesign -f -s "$id" --timestamp=none "$df" 2>/dev/null || true
+  done < <(find "$app" -name "*.dylib" 2>/dev/null)
+  if /usr/bin/codesign -f -s "$id" --entitlements "$xcent" --generate-entitlement-der --timestamp=none "$app"; then
+    rm -rf "$orig_app"
+    if ! /bin/mv "$app" "$orig_app" 2>/dev/null; then
+      echo "   (codesign ok but could not replace $orig_app — left at $app)"
+      return 1
+    fi
+    echo "✅ Re-signed the app after ditto --norsrc + xattr (codesign retried once)."
+    return 0
+  fi
+  rm -rf "$stage" 2>/dev/null || true
+  echo "   (manual codesign still failed after ditto --norsrc — try moving the repo off iCloud Desktop, or: COPYFILE_DISABLE=1 xcodebuild …)"
+  return 1
+}
+
 # Build for device
 echo "🔨 Building app for device..."
 
@@ -57,7 +151,8 @@ echo ""
 # Try to build - if signing fails, provide helpful instructions
 BUILD_OUTPUT=$(mktemp)
 set +e  # Temporarily disable exit on error to capture output
-xcodebuild -workspace xos.xcworkspace \
+# Avoid copy metadata / resource forks from build inputs into the .app
+COPYFILE_DISABLE=1 xcodebuild -workspace xos.xcworkspace \
     -scheme xos \
     -configuration Debug \
     -destination "id=$DEVICE_UDID" \
@@ -68,6 +163,16 @@ xcodebuild -workspace xos.xcworkspace \
     build 2>&1 | tee "$BUILD_OUTPUT"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e  # Re-enable exit on error
+
+if [ $BUILD_STATUS -ne 0 ]; then
+    if grep -qE "resource fork|detritus not allowed" "$BUILD_OUTPUT" 2>/dev/null; then
+        echo ""
+        echo "🔧 The app bundle was built, but CodeSign hit extended-attribute metadata. Stripping the built .app and re-signing…"
+        if retry_resign_xos_app "$SCRIPT_DIR"; then
+            BUILD_STATUS=0
+        fi
+    fi
+fi
 
 if [ $BUILD_STATUS -ne 0 ]; then
     # Check if the error is related to signing

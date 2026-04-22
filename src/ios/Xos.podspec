@@ -14,8 +14,10 @@ Pod::Spec.new do |s|
   s.source         = { git: 'https://github.com/xlateai/xos' }
   s.static_framework = true
 
-  # Rust library - vendored_libraries automatically links it
-  s.vendored_libraries = "libs/libxos.a"
+  # Rust static library is built by `xos compile --ios` → src/ios/libs/libxos.a.
+  # The main **app** target force-loads it (see Podfile): static frameworks do not reliably
+  # propagate a vendored .a through to the final app link.
+  s.preserve_paths = 'libs/libxos.a'
   # Only include files from XosModule directory (not the main app)
   s.source_files = "XosModule/**/*.{h,m,mm,swift,hpp,cpp}"
   s.public_header_files = "XosModule/**/*.h"
@@ -23,7 +25,6 @@ Pod::Spec.new do |s|
   # Required frameworks for CoreAudio and CoreMotion support (used by Rust library)
   s.frameworks = 'AudioToolbox', 'AVFoundation', 'CoreMotion'
   
-  # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
   }
