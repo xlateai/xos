@@ -5,8 +5,6 @@ use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
-#[cfg(not(target_os = "ios"))]
-use dialoguer::Select;
 use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -675,20 +673,29 @@ impl Application for TranscribeApp {
 
         #[cfg(not(target_os = "ios"))]
         {
-            let names: Vec<String> = input_devices
-                .iter()
-                .map(|d| d.input_menu_label())
-                .collect();
-            let selection = Select::new()
-                .with_prompt("Select audio input (mic or loopback for system mix)")
-                .items(&names)
-                .default(0)
-                .interact()
-                .map_err(|e| format!("Device selection failed: {e}"))?;
+            // Prefer native system-audio capture (ScreenCaptureKit / WASAPI loopback), then any
+            // loopback-style virtual input (e.g. BlackHole). No interactive picker for now.
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let preferred = audio::preferred_system_audio_input_device();
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let preferred: Option<audio::AudioDevice> = None;
 
-            let device = input_devices
-                .get(selection)
-                .ok_or_else(|| "Selected device not found".to_string())?;
+            let device = preferred
+                .or_else(|| {
+                    input_devices.iter().find(|d| {
+                        matches!(
+                            d.input_kind_hint(),
+                            Some(audio::InputDeviceKind::LoopbackOrVirtual)
+                        )
+                    })
+                    .cloned()
+                })
+                .ok_or_else(|| {
+                    "No system/loopback audio input found. On macOS, grant Screen Recording; on \
+                     Windows pick a driver that exposes “(system audio)”; on Linux use a virtual \
+                     cable (e.g. PulseAudio monitor / PipeWire loopback)."
+                        .to_string()
+                })?;
 
             #[cfg(all(
                 feature = "whisper",
@@ -702,7 +709,7 @@ impl Application for TranscribeApp {
                 not(target_arch = "wasm32")
             )))]
             let buffer_duration = 3.0_f32;
-            let listener = audio::AudioListener::new(device, buffer_duration)?;
+            let listener = audio::AudioListener::new(&device, buffer_duration)?;
             listener.record()?;
             println!(
                 "transcribe: input {} @ {} Hz",
