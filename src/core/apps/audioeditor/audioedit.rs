@@ -6,12 +6,8 @@ use crate::rasterizer::shapes::basic_shapes;
 #[cfg(not(target_os = "linux"))]
 use crate::rasterizer::shapes::niche_shapes;
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use rodio::{Decoder, OutputStream, Sink, Source};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
-use rodio::OutputStreamBuilder;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use std::fs::File;
+use crate::engine::audio::{decode_path_to_mono_f32, default_output, AudioPlayer};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::path::PathBuf;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
@@ -20,8 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::time::Instant;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0); // Black
 
@@ -70,10 +64,12 @@ impl Application for AudioEditApp {
 
 #[cfg(not(target_os = "linux"))]
 pub struct AudioEditApp {
-    #[cfg(not(target_arch = "wasm32"))]
-    sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
-    #[cfg(not(target_arch = "wasm32"))]
-    _stream: Option<OutputStream>, // Keep the stream alive
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    mono_pcm: Option<Arc<Vec<f32>>>,
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    audio_player: Option<Arc<AudioPlayer>>,
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    feed_cursor: usize,
     #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     #[cfg(not(target_arch = "wasm32"))]
@@ -113,10 +109,12 @@ pub struct AudioEditApp {
 impl AudioEditApp {
     pub fn new() -> Self {
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            sink: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            _stream: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            mono_pcm: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            audio_player: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            feed_cursor: 0,
             #[cfg(not(target_arch = "wasm32"))]
             track_visualizer: TrackVisualizer::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -153,70 +151,27 @@ impl AudioEditApp {
         }
     }
 
-    /// Load all audio samples from the file for visualization
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Load all audio samples from the file for visualization (desktop: Symphonia decode).
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     fn load_full_audio_samples(&mut self, file_path: &PathBuf) -> Result<(), String> {
-        let file = File::open(file_path)
-            .map_err(|e| format!("Failed to open audio file: {}", e))?;
-        
-        let decoder = Decoder::try_from(file)
-            .map_err(|e| format!("Failed to decode audio file: {}", e))?;
-
-        let sample_rate = decoder.sample_rate();
-        let channels = decoder.channels() as usize;
-        
-        // Get the actual duration from the decoder first
-        // This should match the duration we get when loading for playback
-        let decoder_duration = decoder.total_duration()
-            .map(|d| d.as_secs_f32())
-            .unwrap_or(0.0);
-        
-        // Store duration early so it's available
-        self.audio_duration_seconds = decoder_duration;
+        let (sample_rate, decoder_duration, mono_vec) = decode_path_to_mono_f32(file_path)
+            .map_err(|e| format!("Failed to decode audio file: {e}"))?;
         self.sample_rate = sample_rate;
-        
-        // Collect all samples and average channels
-        let mut all_samples = Vec::new();
-        let mut channel_buffer = Vec::with_capacity(channels);
-        let mut sample_count = 0;
-        
-        for sample in decoder {
-            // Convert to f32
-            let sample_f32 = sample.to_f32();
-            channel_buffer.push(sample_f32);
-            
-            // When we have all channels for this frame, average them
-            if channel_buffer.len() == channels {
-                let avg: f32 = channel_buffer.iter().sum::<f32>() / channels as f32;
-                all_samples.push(avg);
-                channel_buffer.clear();
-                sample_count += 1;
-                
-                // Limit to prevent memory issues (e.g., 10 minutes at 44.1kHz = ~26M samples)
-                // We'll downsample for very long files
-                if sample_count > 10_000_000 {
-                    break;
-                }
-            }
-        }
-        
-        // Calculate expected sample count from duration
-        // This is more accurate than counting samples, especially if we break early
+        self.audio_duration_seconds = decoder_duration;
+        self.mono_pcm = Some(Arc::new(mono_vec));
+        let all_samples = self.mono_pcm.as_ref().unwrap().as_ref().clone();
+
+        let sample_count = all_samples.len();
         let expected_sample_count = if decoder_duration > 0.0 && sample_rate > 0 {
             (decoder_duration * sample_rate as f32) as usize
         } else {
             sample_count
         };
-        
-        // Store original sample count before downsampling
-        // Use expected count from duration if we broke early, otherwise use actual count
         let original_count = if sample_count >= 10_000_000 {
             expected_sample_count
         } else {
             all_samples.len()
         };
-        
-        // Downsample if needed (take every Nth sample to fit in reasonable memory)
         let final_samples = if all_samples.len() > 1_000_000 {
             let downsample_factor = (all_samples.len() / 1_000_000) + 1;
             all_samples
@@ -226,91 +181,87 @@ impl AudioEditApp {
         } else {
             all_samples
         };
-        
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.track_visualizer.set_samples(final_samples);
-            self.track_visualizer.set_original_sample_count(original_count);
-        }
-        
-        self.sample_rate = sample_rate;
+
+        self.track_visualizer.set_samples(final_samples);
+        self.track_visualizer.set_original_sample_count(original_count);
         self.original_sample_count = original_count;
         Ok(())
     }
 
     /// Seek to a specific position in the audio (0.0 to 1.0)
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     fn seek_audio(&mut self, position: f32) -> Result<(), String> {
-        let position = position.max(0.0).min(1.0);
-        
-        // Get the file path
-        let file_path = match &self.audio_file_path {
-            Some(path) => path.clone(),
-            None => return Err("No audio file loaded".to_string()),
+        let position = position.clamp(0.0, 1.0);
+        let Some(mono) = &self.mono_pcm else {
+            return Err("No audio file loaded".to_string());
         };
-
-        // Calculate target time in seconds
-        let target_time_seconds = position * self.audio_duration_seconds;
-        let target_samples = (target_time_seconds * self.sample_rate as f32) as usize;
-
-        // Stop and clear the current sink
-        if let Some(sink) = &self.sink {
-            let sink = sink.lock().unwrap();
-            sink.stop();
-            sink.clear();
+        if let Some(player) = &self.audio_player {
+            player.clear();
         }
-
-        // Clear the sample buffer
         if let Some(sample_buffer) = &self.audio_samples {
-            let mut buffer = sample_buffer.lock().unwrap();
-            buffer.clear();
+            sample_buffer.lock().unwrap().clear();
         }
-
-        // Reload the audio file
-        let file = File::open(&file_path)
-            .map_err(|e| format!("Failed to open audio file for seeking: {}", e))?;
-        
-        let mut decoder = Decoder::try_from(file)
-            .map_err(|e| format!("Failed to decode audio file for seeking: {}", e))?;
-
-        // Skip samples to reach the target position
-        let channels = decoder.channels() as usize;
-        let samples_to_skip = target_samples * channels;
-        
-        // Skip samples
-        let mut skipped = 0;
-        for _ in 0..samples_to_skip {
-            if decoder.next().is_none() {
-                break;
-            }
-            skipped += 1;
-        }
-
-        // Update total_samples to reflect the seek position
-        self.total_samples = if skipped > 0 { skipped / channels } else { 0 };
-        
-        // Reset playback timing for the new position
+        let n = mono.len();
+        let target = if n > 0 {
+            ((position * n as f32) as usize).min(n.saturating_sub(1))
+        } else {
+            0
+        };
+        self.feed_cursor = target;
+        self.total_samples = target;
         self.playback_start_position = position;
         self.playback_start_time = Some(Instant::now());
-        
-        // Update zoom center to the new position when seeking
-        // This ensures the view follows the seek
         self.zoom_center = position;
-
-        // Create a new capturing source from the remaining decoder
-        let sample_buffer = self.audio_samples.as_ref().unwrap().clone();
-        let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, self.sample_rate as usize);
-
-        // Append to sink and play
-        if let Some(sink) = &self.sink {
-            let sink = sink.lock().unwrap();
-            sink.append(capturing_source);
+        if let Some(player) = &self.audio_player {
             if !self.is_paused {
-                sink.play();
+                let _ = player.start();
             }
         }
-
         Ok(())
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+    fn seek_audio(&mut self, _position: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    fn feed_file_playback(&mut self, delta_seconds: f32) {
+        let Some(mono) = &self.mono_pcm else {
+            return;
+        };
+        let Some(player) = &self.audio_player else {
+            return;
+        };
+        if self.is_paused {
+            return;
+        }
+        let sr = self.sample_rate.max(1) as f32;
+        let n = ((delta_seconds * sr) as usize).max(1);
+        let len = mono.len();
+        if self.feed_cursor >= len {
+            return;
+        }
+        let end = (self.feed_cursor + n).min(len);
+        let chunk = &mono[self.feed_cursor..end];
+        if let Some(sb) = &self.audio_samples {
+            let mut b = sb.lock().unwrap();
+            let cap = self.sample_rate.max(8_000) as usize;
+            for &s in chunk {
+                b.push_back(s);
+                while b.len() > cap {
+                    b.pop_front();
+                }
+            }
+        }
+        let mut interleaved = Vec::with_capacity(chunk.len() * 2);
+        for &s in chunk {
+            interleaved.push(s);
+            interleaved.push(s);
+        }
+        let _ = player.play_samples(&interleaved);
+        self.feed_cursor = end;
+        self.total_samples = self.feed_cursor;
     }
 
     /// Render the play/pause button at the center of the screen
@@ -657,33 +608,6 @@ impl AudioEditApp {
     }
 }
 
-// Helper trait to convert samples to f32
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-trait ToF32 {
-    fn to_f32(self) -> f32;
-}
-
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-impl ToF32 for f32 {
-    fn to_f32(self) -> f32 {
-        self
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-impl ToF32 for i16 {
-    fn to_f32(self) -> f32 {
-        self as f32 / i16::MAX as f32
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-impl ToF32 for u16 {
-    fn to_f32(self) -> f32 {
-        (self as f32 / u16::MAX as f32) * 2.0 - 1.0
-    }
-}
-
 #[cfg(not(target_os = "linux"))]
 impl Application for AudioEditApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
@@ -701,66 +625,19 @@ impl Application for AudioEditApp {
                 // Store the file path for seeking
                 self.audio_file_path = Some(path.clone());
                 
-                // Load all audio samples for visualization
+                // Load all audio samples for visualization (fills mono_pcm)
                 self.load_full_audio_samples(&path)?;
-                
-                // Get an output stream handle to the default physical sound device
-                let _stream = OutputStreamBuilder::open_default_stream()
-                    .map_err(|e| format!("Failed to get audio output stream: {}", e))?;
 
-                // Create a sink (a queue for audio playback) connected to the mixer
-                let sink = Sink::connect_new(&_stream.mixer());
-
-                // Load the audio file
-                let file = File::open(&path)
-                    .map_err(|e| format!("Failed to open audio file: {}", e))?;
-                
-                // Try to decode the audio file
-                let decoder = Decoder::try_from(file)
-                    .map_err(|e| {
-                        let extension = path.extension()
-                            .and_then(|ext| ext.to_str())
-                            .unwrap_or("unknown");
-                        format!(
-                            "Failed to decode audio file (extension: {}). Error: {}. \
-                            Supported formats: MP3, WAV, FLAC, OGG.",
-                            extension, e
-                        )
-                    })?;
-
-                // Get sample rate and duration
-                // Note: duration should already be set from load_full_audio_samples, but verify it matches
-                let sample_rate = decoder.sample_rate();
-                let duration = decoder.total_duration()
-                    .map(|d| d.as_secs_f32())
-                    .unwrap_or(0.0);
-                
-                // Use the duration from this decoder (should match the one from load_full_audio_samples)
-                // If they differ, use this one as it's the one we'll actually play
-                if (self.audio_duration_seconds - duration).abs() > 0.1 {
-                    // Durations differ significantly - use the playback decoder's duration
-                    crate::print(&format!("Warning: Duration mismatch. Visualization: {:.2}s, Playback: {:.2}s. Using playback duration.", 
-                        self.audio_duration_seconds, duration));
-                    self.audio_duration_seconds = duration;
-                }
-                
-                self.sample_rate = sample_rate;
-
-                // Create a buffer to capture live audio samples (capacity for ~1 second)
-                let buffer_capacity = sample_rate as usize;
+                let sample_rate = self.sample_rate;
+                let buffer_capacity = sample_rate.max(8_000) as usize;
                 let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(buffer_capacity)));
-                self.audio_samples = Some(sample_buffer.clone());
+                self.audio_samples = Some(sample_buffer);
 
-                // Wrap the decoder with our capturing source
-                let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, buffer_capacity);
-
-                // Play the audio
-                sink.append(capturing_source);
-                sink.play();
-
-                // Store the sink and stream to keep them alive
-                self.sink = Some(Arc::new(Mutex::new(sink)));
-                self._stream = Some(_stream);
+                let out = default_output().ok_or_else(|| "No audio output device found".to_string())?;
+                let player = AudioPlayer::new(&out, sample_rate, 2)
+                    .map_err(|e| format!("Failed to open audio output: {e}"))?;
+                self.audio_player = Some(Arc::new(player));
+                self.feed_cursor = 0;
                 self.last_seek_position = 0.0;
                 self.playback_position = 0.0;
                 self.playback_start_position = 0.0;
@@ -880,17 +757,18 @@ impl Application for AudioEditApp {
             }
 
             // Control audio playback based on pause state
-            if let Some(sink) = &self.sink {
-                let sink = sink.lock().unwrap();
-                if self.is_paused {
-                    sink.pause();
-                } else {
-                    sink.play();
-                    // When resuming, reset start time and position to current position
-                    // This accounts for the pause duration
-                    if self.playback_start_time.is_none() {
-                        self.playback_start_position = self.playback_position;
-                        self.playback_start_time = Some(Instant::now());
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            {
+                self.feed_file_playback(state.delta_time_seconds);
+                if let Some(player) = &self.audio_player {
+                    if self.is_paused {
+                        let _ = player.stop();
+                    } else {
+                        let _ = player.start();
+                        if self.playback_start_time.is_none() {
+                            self.playback_start_position = self.playback_position;
+                            self.playback_start_time = Some(Instant::now());
+                        }
                     }
                 }
             }

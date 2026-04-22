@@ -1,9 +1,6 @@
 use rustpython_vm::{VirtualMachine, builtins::PyModule, PyRef};
 use rustpython_vm::{PyResult, function::FuncArgs};
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-use std::fs::File;
-
 mod microphone;
 mod speakers;
 mod transcription;
@@ -47,7 +44,8 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 /// expect for `transcribe(..., sample_rate, ...)`. Samples are roughly **[-1, 1]** after decode.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    use rodio::{Decoder, Source};
+    use std::path::Path;
+    use crate::engine::audio::decode_path_to_mono_f32;
     use crate::python_api::dtypes::DType;
     use crate::python_api::tensors::{Tensor, create_tensor_from_data};
 
@@ -67,22 +65,8 @@ fn audio_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_value_error("sample_rate must be > 0".to_string()));
     }
 
-    let file = File::open(&path).map_err(|e| vm.new_runtime_error(format!("open audio file: {e}")))?;
-    let decoder =
-        Decoder::try_from(file).map_err(|e| vm.new_runtime_error(format!("decode audio file: {e}")))?;
-    let src_rate = decoder.sample_rate();
-    let channels = decoder.channels().max(1) as usize;
-
-    let mut mono = Vec::<f32>::new();
-    let mut frame = Vec::<f32>::with_capacity(channels);
-    for s in decoder {
-        frame.push(s);
-        if frame.len() == channels {
-            let avg = frame.iter().sum::<f32>() / channels as f32;
-            mono.push(avg);
-            frame.clear();
-        }
-    }
+    let (src_rate, _duration, mono) = decode_path_to_mono_f32(Path::new(&path))
+        .map_err(|e| vm.new_runtime_error(format!("decode audio file: {e}")))?;
 
     let mono = resample_linear(&mono, src_rate, target_sample_rate as u32);
     let shape = vec![mono.len()];

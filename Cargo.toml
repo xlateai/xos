@@ -87,13 +87,11 @@ ct2rs = { version = "0.9.18", optional = true, default-features = false, feature
 zip = { version = "2.2", optional = true, default-features = false, features = ["deflate"] }
 # Silero VAD (ONNX) — CPU via ONNX Runtime; `download-binaries` bundles ORT for the host target at build time.
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-24"] }
+# Desktop file decode (Python `xos.audio.load`, audiovis / audioeditor) — pure Rust, no rodio.
+symphonia = { version = "0.5.4", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))'.dependencies]
 cpal = "0.16.0"
-rodio = { version = "0.21.1", features = ["mp3", "flac", "vorbis", "wav"] }
-
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))'.dependencies]
-rodio = { version = "0.21.1", default-features = false, features = ["mp3", "flac", "vorbis", "wav"] }
 
 # -------------------------------------------------------------------
 # Apple platforms → Metal backend automatically enabled

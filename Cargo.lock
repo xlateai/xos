@@ -7676,18 +7676,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5864e7ef1a6b7bcf1d6ca3f655e65e724ed3b52546a0d0a663c991522f552ea"
 
 [[package]]
-name = "rodio"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e40ecf59e742e03336be6a3d53755e789fd05a059fa22dfa0ed624722319e183"
-dependencies = [
- "cpal",
- "dasp_sample",
- "num-rational",
- "symphonia",
-]
-
-[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8674,6 +8662,7 @@ dependencies = [
  "symphonia-bundle-flac",
  "symphonia-bundle-mp3",
  "symphonia-codec-aac",
+ "symphonia-codec-alac",
  "symphonia-codec-pcm",
  "symphonia-codec-vorbis",
  "symphonia-core",
@@ -8714,6 +8703,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c263845aa86881416849c1729a54c7f55164f8b96111dba59de46849e73a790"
 dependencies = [
  "lazy_static",
+ "log",
+ "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-codec-alac"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8413fa754942ac16a73634c9dfd1500ed5c61430956b33728567f667fdd393ab"
+dependencies = [
  "log",
  "symphonia-core",
 ]
@@ -11378,7 +11377,6 @@ dependencies = [
  "rayon",
  "rfd",
  "ringbuf",
- "rodio",
  "rsa",
  "rustpython-vm",
  "screencapturekit",
@@ -11387,6 +11385,7 @@ dependencies = [
  "sha2",
  "strum 0.28.0",
  "strum_macros 0.28.0",
+ "symphonia",
  "tiny_http",
  "tokenizers",
  "ureq 2.12.1",
