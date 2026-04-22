@@ -1,7 +1,6 @@
 use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
-use crate::clipboard;
+use crate::apps::text::TranscriptTextView;
 use crate::engine::audio;
-use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
@@ -20,8 +19,6 @@ const STATE_ACTIVE: (u8, u8, u8) = (92, 230, 142);
 const STATE_SILENCE: (u8, u8, u8) = (168, 172, 182);
 const TEXTBOX_BG: (u8, u8, u8) = (18, 21, 28);
 const TEXTBOX_BORDER: (u8, u8, u8) = (52, 58, 70);
-const TEXTBOX_SCROLL: (u8, u8, u8) = (90, 98, 114);
-const TEXT_COLOR: (u8, u8, u8) = (230, 236, 240);
 const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
 const THRESHOLD_MAX: f32 = 1.0;
@@ -38,29 +35,7 @@ const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
 const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 12.0;
 const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 20.0;
-const TRANSCRIPT_LINE_HEIGHT: f32 = 1.35;
 const TRANSCRIPT_INNER_PAD: f32 = 4.0;
-const TRANSCRIPT_BLOCK_GAP: f32 = 5.0;
-
-/// Vertical span of a laid-out string after `TextRasterizer::tick` (may be several wrapped lines).
-fn wrapped_text_block_height(tr: &TextRasterizer) -> f32 {
-    if tr.characters.is_empty() {
-        return (tr.ascent + tr.descent + tr.line_gap).max(1.0);
-    }
-    let min_y = tr
-        .characters
-        .iter()
-        .map(|c| c.y)
-        .min_by(|a, b| a.total_cmp(b))
-        .unwrap();
-    let max_y = tr
-        .characters
-        .iter()
-        .map(|c| c.y + c.height)
-        .max_by(|a, b| a.total_cmp(b))
-        .unwrap();
-    (max_y - min_y).max(1.0)
-}
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -96,15 +71,6 @@ fn input_device_same(a: &audio::AudioDevice, b: &audio::AudioDevice) -> bool {
 struct UiBounds {
     transcript: Option<(f32, f32, f32, f32)>,
     slider: Option<(f32, f32, f32, f32)>,
-}
-
-#[derive(Clone, Debug)]
-struct GlyphBox {
-    idx: usize,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
 }
 
 struct VisualCanvas {
@@ -224,42 +190,6 @@ impl VisualCanvas {
         rgb: (u8, u8, u8),
         alpha_mul: f32,
     ) {
-        self.blend_text_in_rect(
-            buffer,
-            width,
-            height,
-            rasterizer,
-            ox,
-            oy,
-            rgb,
-            alpha_mul,
-            0.0,
-            0.0,
-            width as f32,
-            height as f32,
-        );
-    }
-
-    /// Like [`Self::blend_text`], but only blends pixels inside `[cx0, cy0] — [cx1, cy1]` (transcript box).
-    fn blend_text_in_rect(
-        &self,
-        buffer: &mut [u8],
-        width: u32,
-        height: u32,
-        rasterizer: &TextRasterizer,
-        ox: f32,
-        oy: f32,
-        rgb: (u8, u8, u8),
-        alpha_mul: f32,
-        cx0: f32,
-        cy0: f32,
-        cx1: f32,
-        cy1: f32,
-    ) {
-        let cx0 = cx0.max(0.0);
-        let cy0 = cy0.max(0.0);
-        let cx1 = cx1.min(width as f32);
-        let cy1 = cy1.min(height as f32);
         for character in &rasterizer.characters {
             let char_x = ox + character.x;
             let char_y = oy + character.y;
@@ -274,11 +204,6 @@ impl VisualCanvas {
                     }
                     let px = (char_x + bitmap_x as f32) as i32;
                     let py = (char_y + bitmap_y as f32) as i32;
-                    let pxf = px as f32;
-                    let pyf = py as f32;
-                    if pxf < cx0 || pxf >= cx1 || pyf < cy0 || pyf >= cy1 {
-                        continue;
-                    }
                     if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
                         let idx = ((py as u32 * width + px as u32) * 4) as usize;
                         let a = (alpha as f32 / 255.0) * alpha_mul.clamp(0.0, 1.0);
@@ -303,8 +228,6 @@ impl VisualCanvas {
         state_label: &TextRasterizer,
         state_color: (u8, u8, u8),
         threshold: f32,
-        transcript_lines: &[String],
-        scroll_fraction: Option<(f32, f32)>,
         font: &Font,
         wave_rect: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
@@ -412,71 +335,13 @@ impl VisualCanvas {
 
         let buffer = state.frame_buffer_mut();
 
-        // low-key transcript textbox
+        // Transcript area: background + border only; text is drawn by [`TranscriptTextView`] (TextApp-style scroll).
         if transcript_h > 10.0 {
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BG);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y0 + 1.0, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y1 - 1.0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
-
-            let text_size = (h * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
-            let text_left = textbox_x0 + (w * 0.012).max(8.0);
-            let text_right = textbox_x1 - (w * 0.02).max(12.0);
-            let text_w = (text_right - text_left).max(20.0);
-            let scroll_reserve = (w * 0.01).max(8.0);
-            let clip_x0 = textbox_x0 + 1.0;
-            let clip_y0 = textbox_y0 + TRANSCRIPT_INNER_PAD;
-            let clip_x1 = (textbox_x1 - scroll_reserve).min(w);
-            let clip_y1 = textbox_y1 - TRANSCRIPT_INNER_PAD;
-
-            let mut y = clip_y0;
-            for line in transcript_lines.iter() {
-                if y > clip_y1 {
-                    break;
-                }
-                let mut tr = TextRasterizer::new(font.clone(), text_size);
-                tr.set_text(line.to_string());
-                // Second arg to `tick` is unused for height; width drives word wrap.
-                tr.tick(text_w, text_size);
-                let h = wrapped_text_block_height(&tr);
-                self.blend_text_in_rect(
-                    buffer,
-                    width,
-                    height,
-                    &tr,
-                    text_left,
-                    y,
-                    TEXT_COLOR,
-                    0.95,
-                    clip_x0,
-                    clip_y0,
-                    clip_x1,
-                    clip_y1,
-                );
-                y += h + TRANSCRIPT_BLOCK_GAP;
-            }
-
-            if let Some((thumb_top_frac, thumb_h_frac)) = scroll_fraction {
-                let track_x0 = textbox_x1 - (w * 0.008).max(6.0);
-                let track_x1 = textbox_x1 - (w * 0.004).max(3.0);
-                let track_y0 = textbox_y0 + 2.0;
-                let track_y1 = textbox_y1 - 2.0;
-                self.draw_rect(buffer, width, height, track_x0, track_y0, track_x1, track_y1, TEXTBOX_BORDER);
-                let track_h = (track_y1 - track_y0).max(1.0);
-                let thumb_h = (track_h * thumb_h_frac.clamp(0.08, 1.0)).max(6.0);
-                let thumb_y0 = track_y0 + (track_h - thumb_h) * thumb_top_frac.clamp(0.0, 1.0);
-                self.draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    track_x0,
-                    thumb_y0,
-                    track_x1,
-                    (thumb_y0 + thumb_h).min(track_y1),
-                    TEXTBOX_SCROLL,
-                );
-            }
         }
 
         // VAD panel
@@ -548,6 +413,7 @@ pub struct TranscribeApp {
     vad_label: TextRasterizer,
     state_label: TextRasterizer,
     text_font: Font,
+    transcript_view: TranscriptTextView,
     threshold: f32,
     vad_prob_seg_ema: f32,
     vad_prob_visual_ema: f32,
@@ -557,14 +423,10 @@ pub struct TranscribeApp {
     silence_run_frames: u32,
     silence_idle_clip_frames: u32,
     in_speech_segment: bool,
-    transcript_scroll_offset: usize,
     ui_bounds: UiBounds,
     slider_dragging: bool,
-    transcript_visible_text: String,
-    transcript_glyph_boxes: Vec<GlyphBox>,
-    selection_anchor: Option<usize>,
-    selection_cursor: Option<usize>,
-    selecting_text: bool,
+    /// Left button down in transcript; drag scrolls (same as standalone text).
+    transcript_pointer_down: bool,
     audio_selector: AudioInputSelector,
 }
 
@@ -575,6 +437,7 @@ impl TranscribeApp {
         vad_label.set_text("VAD: 0.000".to_string());
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);
         state_label.set_text("SILENCE".to_string());
+        let transcript_view = TranscriptTextView::new(font.clone(), 14.0);
         Self {
             listener: None,
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
@@ -582,6 +445,7 @@ impl TranscribeApp {
             vad_label,
             state_label,
             text_font: font,
+            transcript_view,
             threshold: THRESHOLD_DEFAULT,
             vad_prob_seg_ema: 0.0,
             vad_prob_visual_ema: 0.0,
@@ -591,14 +455,9 @@ impl TranscribeApp {
             silence_run_frames: 0,
             silence_idle_clip_frames: 0,
             in_speech_segment: false,
-            transcript_scroll_offset: 0,
             ui_bounds: UiBounds::default(),
             slider_dragging: false,
-            transcript_visible_text: String::new(),
-            transcript_glyph_boxes: Vec::new(),
-            selection_anchor: None,
-            selection_cursor: None,
-            selecting_text: false,
+            transcript_pointer_down: false,
             audio_selector: AudioInputSelector::new(),
         }
     }
@@ -662,165 +521,6 @@ impl TranscribeApp {
 
     fn transcript_text_size(height: f32) -> f32 {
         (height * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
-    }
-
-    /// How many *logical* transcript strings we load into the view window. Long strings wrap to
-    /// several display lines, so this count is conservative to avoid one tick filling the box.
-    fn visible_transcript_lines(height: f32) -> usize {
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let text_size = Self::transcript_text_size(height);
-        let one_row = (text_size * TRANSCRIPT_LINE_HEIGHT).max(1.0);
-        // Allow ~2.5 single-line “slots” per committed line on average (word-wrap expansion).
-        ((transcript_h / (one_row * 2.5)).floor() as usize).max(1)
-    }
-
-    fn rebuild_transcript_hitboxes(&mut self, width: f32, height: f32, transcript_lines: &[String]) {
-        self.transcript_visible_text.clear();
-        self.transcript_glyph_boxes.clear();
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        if transcript_h <= 10.0 {
-            return;
-        }
-        let pad = (width * 0.03).max(12.0);
-        let textbox_x0 = pad;
-        let textbox_x1 = width - pad;
-        let text_size = Self::transcript_text_size(height);
-        let text_left = textbox_x0 + (width * 0.012).max(8.0);
-        let text_right = textbox_x1 - (width * 0.02).max(12.0);
-        let text_w = (text_right - text_left).max(20.0);
-        let inner_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
-        let inner_y1 = transcript_bottom - TRANSCRIPT_INNER_PAD;
-        let mut y = inner_y0;
-        let mut char_idx = 0usize;
-        for (line_i, line) in transcript_lines.iter().enumerate() {
-            let mut tr = TextRasterizer::new(self.text_font.clone(), text_size);
-            tr.set_text(line.clone());
-            tr.tick(text_w, text_size);
-            if y > inner_y1 {
-                break;
-            }
-            let h = wrapped_text_block_height(&tr);
-            let chars: Vec<char> = line.chars().collect();
-            let n = chars.len().min(tr.characters.len());
-            for (i, ch) in chars.into_iter().take(n).enumerate() {
-                let g = &tr.characters[i];
-                let gy0 = y + g.y;
-                let gy1 = y + g.y + g.metrics.height as f32;
-                self.transcript_visible_text.push(ch);
-                self.transcript_glyph_boxes.push(GlyphBox {
-                    idx: char_idx,
-                    x0: text_left + g.x,
-                    y0: gy0,
-                    x1: text_left + g.x + g.metrics.width as f32,
-                    y1: gy1,
-                });
-                char_idx += 1;
-            }
-            if line_i + 1 < transcript_lines.len() {
-                self.transcript_visible_text.push('\n');
-                char_idx += 1;
-            }
-            y += h + TRANSCRIPT_BLOCK_GAP;
-        }
-    }
-
-    fn hit_test_transcript_index(&self, x: f32, y: f32) -> Option<usize> {
-        if let Some((bx0, by0, bx1, by1)) = self.ui_bounds.transcript {
-            if x < bx0 || x > bx1 || y < by0 || y > by1 {
-                return None;
-            }
-        } else {
-            return None;
-        }
-        if let Some(i) = self.transcript_glyph_boxes.iter().find_map(|g| {
-            if x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1 {
-                Some(g.idx)
-            } else {
-                None
-            }
-        }) {
-            return Some(i);
-        }
-        // Fallback: nearest glyph center so clicks in line gaps still select predictably.
-        self.transcript_glyph_boxes
-            .iter()
-            .min_by(|a, b| {
-                let acx = (a.x0 + a.x1) * 0.5;
-                let acy = (a.y0 + a.y1) * 0.5;
-                let bcx = (b.x0 + b.x1) * 0.5;
-                let bcy = (b.y0 + b.y1) * 0.5;
-                let ad = (acx - x) * (acx - x) + (acy - y) * (acy - y);
-                let bd = (bcx - x) * (bcx - x) + (bcy - y) * (bcy - y);
-                ad.partial_cmp(&bd).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|g| g.idx)
-    }
-
-    fn selection_range(&self) -> Option<(usize, usize)> {
-        let a = self.selection_anchor?;
-        let b = self.selection_cursor?;
-        Some((a.min(b), a.max(b)))
-    }
-
-    fn selected_text(&self) -> Option<String> {
-        let (s, e) = self.selection_range()?;
-        let chars: Vec<char> = self.transcript_visible_text.chars().collect();
-        if chars.is_empty() || s >= chars.len() {
-            return None;
-        }
-        let end = e.min(chars.len().saturating_sub(1));
-        Some(chars[s..=end].iter().collect())
-    }
-
-    fn draw_selection_overlay(&self, state: &mut EngineState) {
-        let Some((s, e)) = self.selection_range() else {
-            return;
-        };
-        let shape = state.frame.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let wf = width as f32;
-        let hf = height as f32;
-        let panel_h = (hf * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = hf - panel_h - hf * 0.03;
-        let transcript_top = hf * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + hf * 0.02;
-        let transcript_bottom = panel_top - hf * TEXTBOX_BOTTOM_GAP_FRAC;
-        let pad = (wf * 0.03).max(12.0);
-        let textbox_x0 = pad;
-        let textbox_x1 = wf - pad;
-        let scroll_reserve = (wf * 0.01).max(8.0);
-        let clip_x0 = textbox_x0 + 1.0;
-        let clip_x1 = (textbox_x1 - scroll_reserve).min(wf);
-        let clip_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
-        let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(hf);
-        let buf = state.frame_buffer_mut();
-        for g in self.transcript_glyph_boxes.iter().filter(|g| g.idx >= s && g.idx <= e) {
-            let sx = (g.x0.max(clip_x0)).max(0.0) as i32;
-            let sy = (g.y0.max(clip_y0)).max(0.0) as i32;
-            let ex = (g.x1.min(clip_x1)).min(wf) as i32;
-            let ey = (g.y1.min(clip_y1)).min(hf) as i32;
-            if sx >= ex || sy >= ey {
-                continue;
-            }
-            for y in sy..ey {
-                for x in sx..ex {
-                    let i = ((y as u32 * width + x as u32) * 4) as usize;
-                    let a = 0.30_f32;
-                    buf[i] = (STATE_ACTIVE.0 as f32 * a + buf[i] as f32 * (1.0 - a)) as u8;
-                    buf[i + 1] = (STATE_ACTIVE.1 as f32 * a + buf[i + 1] as f32 * (1.0 - a)) as u8;
-                    buf[i + 2] = (STATE_ACTIVE.2 as f32 * a + buf[i + 2] as f32 * (1.0 - a)) as u8;
-                    buf[i + 3] = 255;
-                }
-            }
-        }
     }
 }
 
@@ -1007,37 +707,20 @@ impl Application for TranscribeApp {
             let _ = self.committed_lines.pop_front();
         }
         let all_lines: Vec<String> = self.committed_lines.iter().cloned().collect();
-        let shape = state.frame.shape();
-        let width = shape[1] as f32;
-        let height = shape[0] as f32;
-        let visible_lines = Self::visible_transcript_lines(height);
-        let max_offset = all_lines.len().saturating_sub(visible_lines);
-        self.transcript_scroll_offset = self.transcript_scroll_offset.min(max_offset);
-        let start = all_lines.len().saturating_sub(visible_lines + self.transcript_scroll_offset);
-        let end = (start + visible_lines).min(all_lines.len());
-        let display_lines = if start < end {
-            all_lines[start..end].to_vec()
-        } else {
-            vec![]
-        };
-        let mut display_lines = display_lines;
+        let mut full_text = all_lines.join("\n");
         if self.in_speech_segment {
             let live = Self::normalize_text(&live_caption);
             if !live.is_empty() {
-                display_lines.push(live);
+                if !full_text.is_empty() {
+                    full_text.push('\n');
+                }
+                full_text.push_str(&live);
             }
         }
-        let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
-            None
-        } else {
-            let top_frac = if max_offset == 0 {
-                0.0
-            } else {
-                1.0 - (self.transcript_scroll_offset as f32 / max_offset as f32)
-            };
-            let h_frac = visible_lines as f32 / all_lines.len() as f32;
-            Some((top_frac, h_frac))
-        };
+
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
 
         self.vad_label.set_text(format!(
             "RAW {:>3.0}%  EMA {:>3.0}%  THR {:>3.0}%",
@@ -1075,14 +758,33 @@ impl Application for TranscribeApp {
             &self.state_label,
             if active { STATE_ACTIVE } else { STATE_SILENCE },
             th,
-            &display_lines,
-            scroll_fraction,
             &self.text_font,
             wave_rect,
             &mut self.audio_selector,
         );
-        self.rebuild_transcript_hitboxes(width, height, &display_lines);
-        self.draw_selection_overlay(state);
+
+        if self.ui_bounds.transcript.is_some() {
+            let h = height;
+            let w = width;
+            let panel_h = (h * LEVEL_PANEL_H_FRAC).max(36.0);
+            let panel_top = h - panel_h - h * 0.03;
+            let pad = (w * 0.03).max(12.0);
+            let wave_top = h * WAVE_HEADROOM_FRAC;
+            let wave_h = h * WAVE_BAND_FRAC;
+            let transcript_top = wave_top + wave_h + h * 0.02;
+            let transcript_bottom = panel_top - h * TEXTBOX_BOTTOM_GAP_FRAC;
+            let textbox_x0 = pad;
+            let textbox_x1 = w - pad;
+            let clip_x0 = textbox_x0 + 1.0;
+            let clip_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
+            let clip_x1 = (textbox_x1 - 1.0).min(w);
+            let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
+            self.transcript_view
+                .set_font_size(Self::transcript_text_size(h));
+            self.transcript_view.set_text(full_text);
+            self.transcript_view
+                .tick(state, (clip_x0, clip_y0, clip_x1, clip_y1));
+        }
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
@@ -1119,7 +821,7 @@ impl Application for TranscribeApp {
                     }
                 }
             }
-            self.selecting_text = false;
+            self.transcript_pointer_down = false;
             self.slider_dragging = false;
             return;
         }
@@ -1127,7 +829,7 @@ impl Application for TranscribeApp {
             .audio_selector
             .on_capture_pointer_down(state.mouse.x, state.mouse.y)
         {
-            self.selecting_text = false;
+            self.transcript_pointer_down = false;
             self.slider_dragging = false;
             return;
         }
@@ -1137,7 +839,7 @@ impl Application for TranscribeApp {
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
                 self.slider_dragging = true;
                 self.update_threshold_from_mouse(state);
-                self.selecting_text = false;
+                self.transcript_pointer_down = false;
                 return;
             }
         }
@@ -1145,11 +847,8 @@ impl Application for TranscribeApp {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
-                if let Some(i) = self.hit_test_transcript_index(mx, my) {
-                    self.selection_anchor = Some(i);
-                    self.selection_cursor = Some(i);
-                    self.selecting_text = true;
-                }
+                self.transcript_pointer_down = true;
+                self.transcript_view.on_mouse_down(my);
             }
         }
     }
@@ -1171,17 +870,19 @@ impl Application for TranscribeApp {
             }
         }
         self.slider_dragging = false;
-        self.selecting_text = false;
+        if self.transcript_pointer_down {
+            self.transcript_view.on_mouse_up();
+            self.transcript_pointer_down = false;
+        }
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         if self.slider_dragging {
             self.update_threshold_from_mouse(state);
+            return;
         }
-        if self.selecting_text {
-            if let Some(i) = self.hit_test_transcript_index(state.mouse.x, state.mouse.y) {
-                self.selection_cursor = Some(i);
-            }
+        if self.transcript_pointer_down && state.mouse.is_left_clicking {
+            self.transcript_view.on_mouse_move_drag(state.mouse.y);
         }
     }
 
@@ -1197,29 +898,6 @@ impl Application for TranscribeApp {
         if delta_y.abs() < 0.01 {
             return;
         }
-        let total = self.committed_lines.len();
-        if total <= 1 {
-            return;
-        }
-        let shape = state.frame.shape();
-        let height = shape[0] as f32;
-        let visible_lines = Self::visible_transcript_lines(height);
-        let max_offset = total.saturating_sub(visible_lines) as i32;
-        // Trackpads send small deltas; scale so scrolling moves several lines for comfort.
-        let mut step = (delta_y * -0.18).round() as i32;
-        if step == 0 {
-            step = if delta_y > 0.0 { 1 } else { -1 };
-        }
-        step = step.clamp(-12, 12);
-        let next = (self.transcript_scroll_offset as i32 + step).clamp(0, max_offset);
-        self.transcript_scroll_offset = next as usize;
-    }
-
-    fn on_key_shortcut(&mut self, _state: &mut EngineState, shortcut: ShortcutAction) {
-        if let ShortcutAction::Copy = shortcut {
-            if let Some(t) = self.selected_text() {
-                let _ = clipboard::set_contents(&t);
-            }
-        }
+        self.transcript_view.on_scroll(delta_y);
     }
 }
