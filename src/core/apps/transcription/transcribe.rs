@@ -9,7 +9,7 @@ use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 
-const BG: (u8, u8, u8, u8) = (12, 14, 20, 255);
+const BG: (u8, u8, u8, u8) = (0, 0, 0, 255);
 const WAVE_BASELINE: (u8, u8, u8) = (120, 124, 132);
 const WAVE_SILENT: (u8, u8, u8) = (230, 230, 235);
 const WAVE_SPEECH: (u8, u8, u8) = (90, 230, 140);
@@ -23,6 +23,7 @@ const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
 const THRESHOLD_MAX: f32 = 1.0;
 const WAVE_SMOOTH_WINDOW: usize = 7;
+const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
 const SILENCE_CLIP_FRAMES: u32 = 3;
@@ -46,6 +47,32 @@ fn transcribe_backend_from_env() -> WhisperBackend {
 
 fn clamp_threshold(v: f32) -> f32 {
     v.clamp(THRESHOLD_MIN, THRESHOLD_MAX)
+}
+
+/// Safe area in **pixel** coordinates: `(left, top, width, height)`.
+fn safe_layout_pixels(state: &EngineState) -> (f32, f32, f32, f32) {
+    let shape = state.frame.shape();
+    let w = shape[1] as f32;
+    let h = shape[0] as f32;
+    let s = &state.frame.safe_region_boundaries;
+    (s.x1 * w, s.y1 * h, (s.x2 - s.x1) * w, (s.y2 - s.y1) * h)
+}
+
+/// iOS `lib` builds have no Silero/Whisper VAD, so `last_vad_speech_prob()` is always 0.
+/// Use a cheap RMS on recent mono samples so levels / waveform coloring stay responsive.
+fn energy_speech_proxy(channels: &[Vec<f32>]) -> f32 {
+    if channels.is_empty() || channels[0].is_empty() {
+        return 0.0;
+    }
+    let c = &channels[0];
+    let n = c.len();
+    if n < 4 {
+        return 0.0;
+    }
+    let take = n.min(2048);
+    let s: f32 = c.iter().rev().take(take).map(|v| v * v).sum();
+    let rms = (s / take as f32).sqrt();
+    (rms * 7.0).min(1.0)
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -75,12 +102,20 @@ struct UiBounds {
 
 struct VisualCanvas {
     waveform_points: usize,
+    wave_smooth_half: usize,
 }
 
 impl VisualCanvas {
     fn new() -> Self {
         Self {
+            #[cfg(target_os = "ios")]
+            waveform_points: 240,
+            #[cfg(not(target_os = "ios"))]
             waveform_points: DEFAULT_WAVE_POINTS,
+            #[cfg(target_os = "ios")]
+            wave_smooth_half: WAVE_SMOOTH_WINDOW_IOS / 2,
+            #[cfg(not(target_os = "ios"))]
+            wave_smooth_half: WAVE_SMOOTH_WINDOW / 2,
         }
     }
 
@@ -230,32 +265,33 @@ impl VisualCanvas {
         threshold: f32,
         font: &Font,
         wave_rect: (f32, f32, f32, f32),
+        safe_layout: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
-        let w = width as f32;
-        let h = height as f32;
+        let (l, t, sw, sh) = safe_layout;
+        let point_cap = (sw as usize).max(2);
 
-        let wave_top = h * WAVE_HEADROOM_FRAC;
-        let wave_h = h * WAVE_BAND_FRAC;
+        let wave_top = t + sh * WAVE_HEADROOM_FRAC;
+        let wave_h = sh * WAVE_BAND_FRAC;
         let wave_center_y = wave_top + wave_h * 0.5;
         let wave_half_amp = wave_h * 0.45;
 
-        let panel_h = (h * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = h - panel_h - h * 0.03;
-        let pad = (w * 0.03).max(12.0);
-        let bar_x0 = pad;
-        let bar_x1 = w - pad;
+        let panel_h = (sh * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = t + sh - panel_h - sh * 0.03;
+        let pad = (sw * 0.03).max(12.0);
+        let bar_x0 = l + pad;
+        let bar_x1 = l + sw - pad;
         let bar_y0 = panel_top + panel_h * 0.52;
         let bar_y1 = bar_y0 + panel_h * 0.24;
 
-        let transcript_top = wave_top + wave_h + h * 0.02;
-        let transcript_bottom = panel_top - h * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_top = wave_top + wave_h + sh * 0.02;
+        let transcript_bottom = panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC;
         let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let textbox_x0 = pad;
-        let textbox_x1 = w - pad;
+        let textbox_x0 = l + pad;
+        let textbox_x1 = l + sw - pad;
         let textbox_y0 = transcript_top;
         let textbox_y1 = transcript_bottom;
 
@@ -269,11 +305,11 @@ impl VisualCanvas {
 
         // waveform
         let points = if samples.is_empty() {
-            self.waveform_points.max(2).min(width as usize)
+            self.waveform_points.max(2).min(point_cap)
         } else {
             self.waveform_points
                 .max(2)
-                .min(width as usize)
+                .min(point_cap)
                 .min(samples.len())
         };
         let start_idx = if samples.is_empty() {
@@ -287,9 +323,9 @@ impl VisualCanvas {
             &samples[start_idx..]
         };
         let wave_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
-        let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
+        let x_scale = (sw - 1.0).max(1.0) / (points.saturating_sub(1) as f32).max(1.0);
         let mut smooth = vec![0.0_f32; points];
-        let half_w = WAVE_SMOOTH_WINDOW / 2;
+        let half_w = self.wave_smooth_half;
         if active.is_empty() {
             // No PCM yet (e.g. immediately after switching iOS input)
         } else {
@@ -305,7 +341,7 @@ impl VisualCanvas {
                 smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
             }
         }
-        let mut prev_x = 0.0;
+        let mut prev_x = l;
         let mut prev_y = wave_center_y;
         {
             let buffer = state.frame_buffer_mut();
@@ -313,15 +349,15 @@ impl VisualCanvas {
                 buffer,
                 width,
                 height,
-                0.0,
+                l,
                 wave_center_y,
-                width as f32 - 1.0,
+                l + sw - 1.0,
                 wave_center_y,
                 WAVE_BASELINE,
             );
             for i in 0..points {
                 let amp = self.amplify_nonlinear(smooth[i]).clamp(-1.0, 1.0);
-                let x = i as f32 * x_scale;
+                let x = l + i as f32 * x_scale;
                 let y = wave_center_y - amp * wave_half_amp;
                 if i > 0 {
                     self.draw_line_thick(buffer, width, height, prev_x, prev_y, x, y, wave_color);
@@ -331,7 +367,7 @@ impl VisualCanvas {
             }
         }
 
-        audio_selector.draw(state, font, wave_rect);
+        audio_selector.draw(state, font, wave_rect, safe_layout);
 
         let buffer = state.frame_buffer_mut();
 
@@ -389,7 +425,7 @@ impl VisualCanvas {
             width,
             height,
             state_label,
-            bar_x1 - w * 0.16,
+            l + sw - sw * 0.16,
             panel_top + panel_h * 0.10,
             state_color,
             1.0,
@@ -635,7 +671,12 @@ impl Application for TranscribeApp {
         };
 
         self.engine.process_snapshot(sr, &channels, ingested);
-        let p = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
+        let p_engine = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
+        // On iOS, optional Whisper/Silero features are usually off: use RMS proxy for live levels.
+        #[cfg(target_os = "ios")]
+        let p = p_engine.max(energy_speech_proxy(&channels));
+        #[cfg(not(target_os = "ios"))]
+        let p = p_engine;
         self.vad_prob_visual_ema = self.vad_prob_visual_ema * 0.82 + p * 0.18;
         self.vad_prob_seg_ema =
             self.vad_prob_seg_ema * (1.0 - VAD_SEGMENT_EMA_ALPHA) + p * VAD_SEGMENT_EMA_ALPHA;
@@ -721,7 +762,8 @@ impl Application for TranscribeApp {
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
-
+        let safe = safe_layout_pixels(state);
+        let (sl, st, ssw, ssh) = safe;
         self.vad_label.set_text(format!(
             "RAW {:>3.0}%  EMA {:>3.0}%  THR {:>3.0}%",
             p * 100.0,
@@ -733,25 +775,27 @@ impl Application for TranscribeApp {
             self.engine.buffered_segment_seconds(),
             if active { "ACTIVE" } else { "SILENCE" }
         ));
-        let font_size = (height.min(width) * 0.018).clamp(12.0, 18.0);
+        let font_size = (ssh.min(ssw) * 0.02).clamp(12.0, 20.0);
         self.vad_label.set_font_size(font_size);
         self.vad_label.tick(width, height);
         self.state_label.set_font_size(font_size);
         self.state_label.tick(width, height);
 
-        let l = self.listener.as_ref().expect("checked above");
+        let listener = self.listener.as_ref().expect("checked above");
         let h = height;
         let w = width;
+        let wave_top = st + ssh * WAVE_HEADROOM_FRAC;
+        let wave_h = ssh * WAVE_BAND_FRAC;
         let wave_rect = (
-            0.0,
-            h * WAVE_HEADROOM_FRAC,
-            w,
-            h * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC),
+            sl,
+            wave_top,
+            sl + ssw,
+            wave_top + wave_h,
         );
 
         self.ui_bounds = self.canvas.tick_draw(
             state,
-            l,
+            listener,
             p,
             self.vad_prob_visual_ema,
             &self.vad_label,
@@ -760,27 +804,24 @@ impl Application for TranscribeApp {
             th,
             &self.text_font,
             wave_rect,
+            safe,
             &mut self.audio_selector,
         );
 
         if self.ui_bounds.transcript.is_some() {
-            let h = height;
-            let w = width;
-            let panel_h = (h * LEVEL_PANEL_H_FRAC).max(36.0);
-            let panel_top = h - panel_h - h * 0.03;
-            let pad = (w * 0.03).max(12.0);
-            let wave_top = h * WAVE_HEADROOM_FRAC;
-            let wave_h = h * WAVE_BAND_FRAC;
-            let transcript_top = wave_top + wave_h + h * 0.02;
-            let transcript_bottom = panel_top - h * TEXTBOX_BOTTOM_GAP_FRAC;
-            let textbox_x0 = pad;
-            let textbox_x1 = w - pad;
+            let panel_h = (ssh * LEVEL_PANEL_H_FRAC).max(36.0);
+            let panel_top = st + ssh - panel_h - ssh * 0.03;
+            let pad = (ssw * 0.03).max(12.0);
+            let transcript_top = wave_top + wave_h + ssh * 0.02;
+            let transcript_bottom = panel_top - ssh * TEXTBOX_BOTTOM_GAP_FRAC;
+            let textbox_x0 = sl + pad;
+            let textbox_x1 = sl + ssw - pad;
             let clip_x0 = textbox_x0 + 1.0;
             let clip_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
             let clip_x1 = (textbox_x1 - 1.0).min(w);
             let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
             self.transcript_view
-                .set_font_size(Self::transcript_text_size(h));
+                .set_font_size(Self::transcript_text_size(ssh));
             self.transcript_view.set_text(full_text);
             self.transcript_view
                 .tick(state, (clip_x0, clip_y0, clip_x1, clip_y1));
@@ -806,9 +847,10 @@ impl Application for TranscribeApp {
         let fw = shape[1] as u32;
         let fh = shape[0] as u32;
         if self.audio_selector.show_menu {
+            let layout = safe_layout_pixels(state);
             match self
                 .audio_selector
-                .on_menu_pointer_down(state.mouse.x, state.mouse.y, fw, fh)
+                .on_menu_pointer_down(state.mouse.x, state.mouse.y, layout)
             {
                 AudioInputMenuDown::Dismiss | AudioInputMenuDown::DismissInColumn => {
                     self.audio_selector.show_menu = false;

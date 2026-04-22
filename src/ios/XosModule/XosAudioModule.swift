@@ -773,3 +773,15 @@ func xos_audio_player_destroy(_ playerId: UInt32) {
     print("[xos_audio_player_destroy] Player ID \(playerId) destroyed successfully")
 }
 
+/// Re-activate the shared `AVAudioSession` when the app returns to the foreground.
+/// Fixes cases where the mic / waveform stay idle until the user backgrounds and returns.
+public enum XosForegroundAudio {
+    public static func reactivateSession() {
+        do {
+            try SharedAudioEngine.shared.configureAudioSession()
+        } catch {
+            print("[XosForegroundAudio] reactivateSession: \(error.localizedDescription)")
+        }
+    }
+}
+

@@ -115,6 +115,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
     
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        // Ensures playAndRecord is active on first launch and after any OS interruption.
+        XosForegroundAudio.reactivateSession()
+    }
+    
     private func setupSignalHandlers() {
         // Signals that indicate crashes
         let signals: [Int32] = [

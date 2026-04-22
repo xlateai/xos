@@ -75,10 +75,25 @@ impl AudioInputSelector {
             .collect();
     }
 
-    /// Place a square control at the bottom center of the waveform band.
-    pub fn layout_button_rect(wave_x0: f32, wave_y0: f32, wave_x1: f32, wave_y1: f32) -> (f32, f32, f32, f32) {
+    /// Place a square capture control at the bottom center of the waveform band.
+    /// `viewport_w` / `viewport_h` are the full frame size in pixels (for a large touch target on iOS).
+    pub fn layout_button_rect(
+        wave_x0: f32,
+        wave_y0: f32,
+        wave_x1: f32,
+        wave_y1: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+    ) -> (f32, f32, f32, f32) {
         let wave_w = (wave_x1 - wave_x0).max(0.0);
         let wave_h = (wave_y1 - wave_y0).max(0.0);
+        // iOS: size from the longer viewport side so the control is easy to hit; desktop: smaller in-band button.
+        #[cfg(target_os = "ios")]
+        let btn_size = {
+            let vm = viewport_w.max(viewport_h).max(1.0);
+            (vm * 0.11).clamp(64.0, 200.0)
+        };
+        #[cfg(not(target_os = "ios"))]
         let btn_size = (wave_w.min(wave_h) * 0.20).clamp(28.0, 64.0);
         let cx = (wave_x0 + wave_x1) * 0.5;
         let btn_x0 = cx - btn_size * 0.5;
@@ -102,17 +117,27 @@ impl AudioInputSelector {
         }
     }
 
-    fn input_menu_geometry(width: usize) -> (usize, usize, usize) {
-        let column_width = ((width as f32 * MENU_COLUMN_WIDTH_RATIO).max(200.0)) as usize;
-        let left_x = width.saturating_sub(column_width) / 2;
+    fn input_menu_geometry(layout_left: usize, layout_width: usize) -> (usize, usize, usize) {
+        let column_width = ((layout_width as f32 * MENU_COLUMN_WIDTH_RATIO).max(200.0)) as usize;
+        let left_x = layout_left + layout_width.saturating_sub(column_width) / 2;
         let menu_y = MENU_PADDING as usize;
         (left_x, column_width, menu_y)
     }
 
     /// While the menu is open: handle a press (same semantics as AudioRelay — picks on down).
-    pub fn on_menu_pointer_down(&mut self, mx: f32, my: f32, width: u32, _height: u32) -> AudioInputMenuDown {
-        let w = width as usize;
-        let (left_x, column_width, menu_y) = Self::input_menu_geometry(w);
+    /// `layout` is the safe-area rectangle in pixels: `(left, top, width, height)`.
+    pub fn on_menu_pointer_down(
+        &mut self,
+        mx: f32,
+        my: f32,
+        layout: (f32, f32, f32, f32),
+    ) -> AudioInputMenuDown {
+        let (l, t, lw, _lh) = layout;
+        let w = lw.max(1.0) as usize;
+        let left_base = l.max(0.0) as usize;
+        let top_base = t.max(0.0) as usize;
+        let (left_x, column_width, menu_y_rel) = Self::input_menu_geometry(left_base, w);
+        let menu_y = top_base + menu_y_rel;
         let mx = mx as usize;
         let my = my as usize;
         if mx < left_x || mx >= left_x + column_width {
@@ -185,15 +210,31 @@ impl AudioInputSelector {
     }
 
     /// Draw the capture button or the input selection overlay. Updates [`AudioInputSelector::last_button_rect`].
-    pub fn draw(&mut self, state: &mut EngineState, font: &Font, wave_rect: (f32, f32, f32, f32)) {
+    /// `safe_layout` is `(left, top, width, height)` in pixels; the menu is centered in that region.
+    pub fn draw(
+        &mut self,
+        state: &mut EngineState,
+        font: &Font,
+        wave_rect: (f32, f32, f32, f32),
+        safe_layout: (f32, f32, f32, f32),
+    ) {
         let shape = state.frame.shape();
+        let full_h = shape[0] as f32;
+        let full_w = shape[1] as f32;
         let height = shape[0] as usize;
         let width = shape[1] as usize;
-        let btn = Self::layout_button_rect(wave_rect.0, wave_rect.1, wave_rect.2, wave_rect.3);
+        let btn = Self::layout_button_rect(
+            wave_rect.0,
+            wave_rect.1,
+            wave_rect.2,
+            wave_rect.3,
+            full_w,
+            full_h,
+        );
         self.last_button_rect = btn;
 
         if self.show_menu {
-            self.draw_input_menu(state, font, width, height);
+            self.draw_input_menu(state, font, width, height, safe_layout);
         } else {
             self.draw_button_pixels(state, btn, width, height);
         }
@@ -237,9 +278,22 @@ impl AudioInputSelector {
         }
     }
 
-    fn draw_input_menu(&mut self, state: &mut EngineState, font: &Font, width: usize, height: usize) {
+    fn draw_input_menu(
+        &mut self,
+        state: &mut EngineState,
+        font: &Font,
+        width: usize,
+        height: usize,
+        safe_layout: (f32, f32, f32, f32),
+    ) {
         let buffer = state.frame_buffer_mut();
-        let (left_x, column_width, menu_y) = Self::input_menu_geometry(width);
+        let (l, t, lw, lh) = safe_layout;
+        let layout_left = l.max(0.0) as usize;
+        let layout_width = lw.max(1.0) as usize;
+        let top_off = t.max(0.0) as usize;
+        let (left_x, column_width, menu_y_rel) = Self::input_menu_geometry(layout_left, layout_width);
+        let menu_y = top_off + menu_y_rel;
+        let safe_bottom_px = (t + lh) as usize;
 
         let item_height = MENU_ITEM_HEIGHT as usize;
 
@@ -258,7 +312,7 @@ impl AudioInputSelector {
 
         for (i, device) in self.input_devices.iter().enumerate() {
             let item_y = default_y + item_height + 5 + i * (item_height + 5);
-            if item_y + item_height >= height {
+            if item_y + item_height > safe_bottom_px.min(height) {
                 break;
             }
             let item_color = if !self.use_default_input && i == self.input_device_index {
