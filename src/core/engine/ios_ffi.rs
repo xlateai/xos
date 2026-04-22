@@ -65,13 +65,15 @@ pub fn log_to_ios(message: &str) {
     // The Swift console manager handles all logging
 }
 
-/// Custom writer that forwards to Swift's logging system
+/// Custom writer that forwards to Swift's logging system (reserved for future `std` hookup).
 #[cfg(target_os = "ios")]
+#[allow(dead_code)]
 struct IosLogWriter {
     buffer: Vec<u8>,
 }
 
 #[cfg(target_os = "ios")]
+#[allow(dead_code)]
 impl IosLogWriter {
     fn new() -> Self {
         Self { buffer: Vec::new() }
@@ -287,7 +289,7 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 #[cfg(target_os = "ios")]
 #[no_mangle]
 pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
-    let state = match ENGINE_STATE.lock() {
+    let mut state = match ENGINE_STATE.lock() {
         Ok(s) => s,
         Err(_) => return ptr::null(),
     };
@@ -308,7 +310,7 @@ pub extern "C" fn xos_engine_get_frame_buffer() -> *const u8 {
 #[cfg(target_os = "ios")]
 #[no_mangle]
 pub extern "C" fn xos_engine_get_frame_buffer_size() -> usize {
-    let state = match ENGINE_STATE.lock() {
+    let mut state = match ENGINE_STATE.lock() {
         Ok(s) => s,
         Err(_) => return 0,
     };

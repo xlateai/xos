@@ -1,17 +1,15 @@
 use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
-use crate::clipboard;
+use crate::apps::text::TranscriptTextView;
 use crate::engine::audio;
-use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
-#[cfg(not(target_os = "ios"))]
-use dialoguer::Select;
+use crate::ui::{AudioInputMenuDown, AudioInputSelector, AudioInputSelectorUp};
 use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 
-const BG: (u8, u8, u8, u8) = (12, 14, 20, 255);
+const BG: (u8, u8, u8, u8) = (0, 0, 0, 255);
 const WAVE_BASELINE: (u8, u8, u8) = (120, 124, 132);
 const WAVE_SILENT: (u8, u8, u8) = (230, 230, 235);
 const WAVE_SPEECH: (u8, u8, u8) = (90, 230, 140);
@@ -21,12 +19,11 @@ const STATE_ACTIVE: (u8, u8, u8) = (92, 230, 142);
 const STATE_SILENCE: (u8, u8, u8) = (168, 172, 182);
 const TEXTBOX_BG: (u8, u8, u8) = (18, 21, 28);
 const TEXTBOX_BORDER: (u8, u8, u8) = (52, 58, 70);
-const TEXTBOX_SCROLL: (u8, u8, u8) = (90, 98, 114);
-const TEXT_COLOR: (u8, u8, u8) = (230, 236, 240);
 const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
 const THRESHOLD_MAX: f32 = 1.0;
 const WAVE_SMOOTH_WINDOW: usize = 7;
+const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
 const SILENCE_CLIP_FRAMES: u32 = 3;
@@ -39,7 +36,7 @@ const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
 const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 12.0;
 const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 20.0;
-const TRANSCRIPT_LINE_HEIGHT: f32 = 1.35;
+const TRANSCRIPT_INNER_PAD: f32 = 4.0;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -52,29 +49,73 @@ fn clamp_threshold(v: f32) -> f32 {
     v.clamp(THRESHOLD_MIN, THRESHOLD_MAX)
 }
 
+/// Safe area in **pixel** coordinates: `(left, top, width, height)`.
+fn safe_layout_pixels(state: &EngineState) -> (f32, f32, f32, f32) {
+    let shape = state.frame.shape();
+    let w = shape[1] as f32;
+    let h = shape[0] as f32;
+    let s = &state.frame.safe_region_boundaries;
+    (s.x1 * w, s.y1 * h, (s.x2 - s.x1) * w, (s.y2 - s.y1) * h)
+}
+
+/// iOS `lib` builds have no Silero/Whisper VAD, so `last_vad_speech_prob()` is always 0.
+/// Use a cheap RMS on recent mono samples so levels / waveform coloring stay responsive.
+fn energy_speech_proxy(channels: &[Vec<f32>]) -> f32 {
+    if channels.is_empty() || channels[0].is_empty() {
+        return 0.0;
+    }
+    let c = &channels[0];
+    let n = c.len();
+    if n < 4 {
+        return 0.0;
+    }
+    let take = n.min(2048);
+    let s: f32 = c.iter().rev().take(take).map(|v| v * v).sum();
+    let rms = (s / take as f32).sqrt();
+    (rms * 7.0).min(1.0)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn input_device_same(a: &audio::AudioDevice, b: &audio::AudioDevice) -> bool {
+    if a.name != b.name || a.is_input != b.is_input {
+        return false;
+    }
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(target_os = "macos", target_os = "windows")
+    ))]
+    {
+        if a.wasapi_loopback != b.wasapi_loopback
+            || a.macos_sck_system_audio != b.macos_sck_system_audio
+        {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct UiBounds {
     transcript: Option<(f32, f32, f32, f32)>,
     slider: Option<(f32, f32, f32, f32)>,
 }
 
-#[derive(Clone, Debug)]
-struct GlyphBox {
-    idx: usize,
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-}
-
 struct VisualCanvas {
     waveform_points: usize,
+    wave_smooth_half: usize,
 }
 
 impl VisualCanvas {
     fn new() -> Self {
         Self {
+            #[cfg(target_os = "ios")]
+            waveform_points: 240,
+            #[cfg(not(target_os = "ios"))]
             waveform_points: DEFAULT_WAVE_POINTS,
+            #[cfg(target_os = "ios")]
+            wave_smooth_half: WAVE_SMOOTH_WINDOW_IOS / 2,
+            #[cfg(not(target_os = "ios"))]
+            wave_smooth_half: WAVE_SMOOTH_WINDOW / 2,
         }
     }
 
@@ -222,131 +263,121 @@ impl VisualCanvas {
         state_label: &TextRasterizer,
         state_color: (u8, u8, u8),
         threshold: f32,
-        transcript_lines: &[String],
-        scroll_fraction: Option<(f32, f32)>,
         font: &Font,
+        wave_rect: (f32, f32, f32, f32),
+        safe_layout: (f32, f32, f32, f32),
+        audio_selector: &mut AudioInputSelector,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
-        let buffer = state.frame_buffer_mut();
-        let w = width as f32;
-        let h = height as f32;
+        let (l, t, sw, sh) = safe_layout;
+        let point_cap = (sw as usize).max(2);
 
-        let wave_top = h * WAVE_HEADROOM_FRAC;
-        let wave_h = h * WAVE_BAND_FRAC;
+        let wave_top = t + sh * WAVE_HEADROOM_FRAC;
+        let wave_h = sh * WAVE_BAND_FRAC;
         let wave_center_y = wave_top + wave_h * 0.5;
         let wave_half_amp = wave_h * 0.45;
 
-        let panel_h = (h * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = h - panel_h - h * 0.03;
-        let pad = (w * 0.03).max(12.0);
-        let bar_x0 = pad;
-        let bar_x1 = w - pad;
+        let panel_h = (sh * LEVEL_PANEL_H_FRAC).max(36.0);
+        let panel_top = t + sh - panel_h - sh * 0.03;
+        let pad = (sw * 0.03).max(12.0);
+        let bar_x0 = l + pad;
+        let bar_x1 = l + sw - pad;
         let bar_y0 = panel_top + panel_h * 0.52;
         let bar_y1 = bar_y0 + panel_h * 0.24;
 
-        let transcript_top = wave_top + wave_h + h * 0.02;
-        let transcript_bottom = panel_top - h * TEXTBOX_BOTTOM_GAP_FRAC;
+        let transcript_top = wave_top + wave_h + sh * 0.02;
+        let transcript_bottom = panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC;
         let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let textbox_x0 = pad;
-        let textbox_x1 = w - pad;
+        let textbox_x0 = l + pad;
+        let textbox_x1 = l + sw - pad;
         let textbox_y0 = transcript_top;
         let textbox_y1 = transcript_bottom;
 
         let all_samples = listener.get_samples_by_channel();
-        if all_samples.is_empty() {
-            return UiBounds::default();
-        }
-        let samples = &all_samples[0];
-        if samples.is_empty() {
-            return UiBounds::default();
-        }
+        let samples_empty = all_samples.is_empty() || all_samples[0].is_empty();
+        let samples: &[f32] = if samples_empty {
+            &[]
+        } else {
+            &all_samples[0]
+        };
 
         // waveform
-        self.draw_line(
-            buffer,
-            width,
-            height,
-            0.0,
-            wave_center_y,
-            width as f32 - 1.0,
-            wave_center_y,
-            WAVE_BASELINE,
-        );
-        let points = self.waveform_points.max(2).min(width as usize).min(samples.len());
-        let start_idx = samples.len().saturating_sub(points);
-        let active = &samples[start_idx..];
+        let points = if samples.is_empty() {
+            self.waveform_points.max(2).min(point_cap)
+        } else {
+            self.waveform_points
+                .max(2)
+                .min(point_cap)
+                .min(samples.len())
+        };
+        let start_idx = if samples.is_empty() {
+            0
+        } else {
+            samples.len().saturating_sub(points)
+        };
+        let active: &[f32] = if samples.is_empty() {
+            &[]
+        } else {
+            &samples[start_idx..]
+        };
         let wave_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
-        let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
+        let x_scale = (sw - 1.0).max(1.0) / (points.saturating_sub(1) as f32).max(1.0);
         let mut smooth = vec![0.0_f32; points];
-        let half_w = WAVE_SMOOTH_WINDOW / 2;
-        for i in 0..points {
-            let from = i.saturating_sub(half_w);
-            let to = (i + half_w + 1).min(points);
-            let mut sum = 0.0_f32;
-            let mut n = 0usize;
-            for &s in &active[from..to] {
-                sum += s;
-                n += 1;
+        let half_w = self.wave_smooth_half;
+        if active.is_empty() {
+            // No PCM yet (e.g. immediately after switching iOS input)
+        } else {
+            for i in 0..points {
+                let from = i.saturating_sub(half_w);
+                let to = (i + half_w + 1).min(points);
+                let mut sum = 0.0_f32;
+                let mut n = 0usize;
+                for &s in &active[from..to] {
+                    sum += s;
+                    n += 1;
+                }
+                smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
             }
-            smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
         }
-        let mut prev_x = 0.0;
+        let mut prev_x = l;
         let mut prev_y = wave_center_y;
-        for i in 0..points {
-            let amp = self.amplify_nonlinear(smooth[i]).clamp(-1.0, 1.0);
-            let x = i as f32 * x_scale;
-            let y = wave_center_y - amp * wave_half_amp;
-            if i > 0 {
-                self.draw_line_thick(buffer, width, height, prev_x, prev_y, x, y, wave_color);
+        {
+            let buffer = state.frame_buffer_mut();
+            self.draw_line(
+                buffer,
+                width,
+                height,
+                l,
+                wave_center_y,
+                l + sw - 1.0,
+                wave_center_y,
+                WAVE_BASELINE,
+            );
+            for i in 0..points {
+                let amp = self.amplify_nonlinear(smooth[i]).clamp(-1.0, 1.0);
+                let x = l + i as f32 * x_scale;
+                let y = wave_center_y - amp * wave_half_amp;
+                if i > 0 {
+                    self.draw_line_thick(buffer, width, height, prev_x, prev_y, x, y, wave_color);
+                }
+                prev_x = x;
+                prev_y = y;
             }
-            prev_x = x;
-            prev_y = y;
         }
 
-        // low-key transcript textbox
+        audio_selector.draw(state, font, wave_rect, safe_layout);
+
+        let buffer = state.frame_buffer_mut();
+
+        // Transcript area: background + border only; text is drawn by [`TranscriptTextView`] (TextApp-style scroll).
         if transcript_h > 10.0 {
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BG);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y0 + 1.0, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y1 - 1.0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
-
-            let text_size = (h * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
-            let line_h = (text_size * TRANSCRIPT_LINE_HEIGHT).max(1.0);
-            let text_left = textbox_x0 + (w * 0.012).max(8.0);
-            let text_right = textbox_x1 - (w * 0.02).max(12.0);
-            let text_w = (text_right - text_left).max(20.0);
-
-            for (i, line) in transcript_lines.iter().enumerate() {
-                let mut tr = TextRasterizer::new(font.clone(), text_size);
-                tr.set_text(line.to_string());
-                tr.tick(text_w, line_h);
-                let y = textbox_y0 + i as f32 * line_h + line_h * 0.12;
-                self.blend_text(buffer, width, height, &tr, text_left, y, TEXT_COLOR, 0.95);
-            }
-
-            if let Some((thumb_top_frac, thumb_h_frac)) = scroll_fraction {
-                let track_x0 = textbox_x1 - (w * 0.008).max(6.0);
-                let track_x1 = textbox_x1 - (w * 0.004).max(3.0);
-                let track_y0 = textbox_y0 + 2.0;
-                let track_y1 = textbox_y1 - 2.0;
-                self.draw_rect(buffer, width, height, track_x0, track_y0, track_x1, track_y1, TEXTBOX_BORDER);
-                let track_h = (track_y1 - track_y0).max(1.0);
-                let thumb_h = (track_h * thumb_h_frac.clamp(0.08, 1.0)).max(6.0);
-                let thumb_y0 = track_y0 + (track_h - thumb_h) * thumb_top_frac.clamp(0.0, 1.0);
-                self.draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    track_x0,
-                    thumb_y0,
-                    track_x1,
-                    (thumb_y0 + thumb_h).min(track_y1),
-                    TEXTBOX_SCROLL,
-                );
-            }
         }
 
         // VAD panel
@@ -394,7 +425,7 @@ impl VisualCanvas {
             width,
             height,
             state_label,
-            bar_x1 - w * 0.16,
+            l + sw - sw * 0.16,
             panel_top + panel_h * 0.10,
             state_color,
             1.0,
@@ -418,6 +449,7 @@ pub struct TranscribeApp {
     vad_label: TextRasterizer,
     state_label: TextRasterizer,
     text_font: Font,
+    transcript_view: TranscriptTextView,
     threshold: f32,
     vad_prob_seg_ema: f32,
     vad_prob_visual_ema: f32,
@@ -427,14 +459,11 @@ pub struct TranscribeApp {
     silence_run_frames: u32,
     silence_idle_clip_frames: u32,
     in_speech_segment: bool,
-    transcript_scroll_offset: usize,
     ui_bounds: UiBounds,
     slider_dragging: bool,
-    transcript_visible_text: String,
-    transcript_glyph_boxes: Vec<GlyphBox>,
-    selection_anchor: Option<usize>,
-    selection_cursor: Option<usize>,
-    selecting_text: bool,
+    /// Left button down in transcript; drag scrolls (same as standalone text).
+    transcript_pointer_down: bool,
+    audio_selector: AudioInputSelector,
 }
 
 impl TranscribeApp {
@@ -444,6 +473,7 @@ impl TranscribeApp {
         vad_label.set_text("VAD: 0.000".to_string());
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);
         state_label.set_text("SILENCE".to_string());
+        let transcript_view = TranscriptTextView::new(font.clone(), 14.0);
         Self {
             listener: None,
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
@@ -451,6 +481,7 @@ impl TranscribeApp {
             vad_label,
             state_label,
             text_font: font,
+            transcript_view,
             threshold: THRESHOLD_DEFAULT,
             vad_prob_seg_ema: 0.0,
             vad_prob_visual_ema: 0.0,
@@ -460,15 +491,50 @@ impl TranscribeApp {
             silence_run_frames: 0,
             silence_idle_clip_frames: 0,
             in_speech_segment: false,
-            transcript_scroll_offset: 0,
             ui_bounds: UiBounds::default(),
             slider_dragging: false,
-            transcript_visible_text: String::new(),
-            transcript_glyph_boxes: Vec::new(),
-            selection_anchor: None,
-            selection_cursor: None,
-            selecting_text: false,
+            transcript_pointer_down: false,
+            audio_selector: AudioInputSelector::new(),
         }
+    }
+
+    fn recreate_input_listener(&mut self) -> Result<(), String> {
+        let Some(device) = self.audio_selector.resolved_input_device() else {
+            return Err("No input device selected".to_string());
+        };
+        if let Some(old) = self.listener.take() {
+            let _ = old.pause();
+            drop(old);
+        }
+        #[cfg(all(
+            feature = "whisper",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let buffer_duration = 10.0_f32;
+        #[cfg(not(all(
+            feature = "whisper",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )))]
+        let buffer_duration = 3.0_f32;
+
+        let listener = audio::AudioListener::new(&device, buffer_duration)?;
+        if self.audio_selector.enabled {
+            listener.record()?;
+        } else {
+            listener.pause()?;
+        }
+        println!(
+            "transcribe: input {} @ {} Hz",
+            device.name,
+            listener.buffer().sample_rate()
+        );
+        let _ = io::stdout().flush();
+        self.engine
+            .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
+        self.listener = Some(listener);
+        Ok(())
     }
 
     fn update_threshold_from_mouse(&mut self, state: &EngineState) {
@@ -492,129 +558,6 @@ impl TranscribeApp {
     fn transcript_text_size(height: f32) -> f32 {
         (height * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
     }
-
-    fn visible_transcript_lines(height: f32) -> usize {
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let text_size = Self::transcript_text_size(height);
-        ((transcript_h / (text_size * TRANSCRIPT_LINE_HEIGHT)).floor() as usize).max(1)
-    }
-
-    fn rebuild_transcript_hitboxes(&mut self, width: f32, height: f32, transcript_lines: &[String]) {
-        self.transcript_visible_text.clear();
-        self.transcript_glyph_boxes.clear();
-        let panel_h = (height * LEVEL_PANEL_H_FRAC).max(36.0);
-        let panel_top = height - panel_h - height * 0.03;
-        let transcript_top = height * (WAVE_HEADROOM_FRAC + WAVE_BAND_FRAC) + height * 0.02;
-        let transcript_bottom = panel_top - height * TEXTBOX_BOTTOM_GAP_FRAC;
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        if transcript_h <= 10.0 {
-            return;
-        }
-        let pad = (width * 0.03).max(12.0);
-        let textbox_x0 = pad;
-        let textbox_x1 = width - pad;
-        let text_size = Self::transcript_text_size(height);
-        let line_h = (text_size * TRANSCRIPT_LINE_HEIGHT).max(1.0);
-        let text_left = textbox_x0 + (width * 0.012).max(8.0);
-        let text_right = textbox_x1 - (width * 0.02).max(12.0);
-        let text_w = (text_right - text_left).max(20.0);
-        let mut char_idx = 0usize;
-        for (line_i, line) in transcript_lines.iter().enumerate() {
-            let mut tr = TextRasterizer::new(self.text_font.clone(), text_size);
-            tr.set_text(line.clone());
-            tr.tick(text_w, line_h);
-            let base_y = transcript_top + line_h * line_i as f32 + line_h * 0.12;
-            let chars: Vec<char> = line.chars().collect();
-            let n = chars.len().min(tr.characters.len());
-            for (i, ch) in chars.into_iter().take(n).enumerate() {
-                let g = &tr.characters[i];
-                self.transcript_visible_text.push(ch);
-                self.transcript_glyph_boxes.push(GlyphBox {
-                    idx: char_idx,
-                    x0: text_left + g.x,
-                    y0: base_y + g.y,
-                    x1: text_left + g.x + g.metrics.width as f32,
-                    y1: base_y + g.y + g.metrics.height as f32,
-                });
-                char_idx += 1;
-            }
-            if line_i + 1 < transcript_lines.len() {
-                self.transcript_visible_text.push('\n');
-                char_idx += 1;
-            }
-        }
-    }
-
-    fn hit_test_transcript_index(&self, x: f32, y: f32) -> Option<usize> {
-        if let Some(i) = self.transcript_glyph_boxes.iter().find_map(|g| {
-            if x >= g.x0 && x <= g.x1 && y >= g.y0 && y <= g.y1 {
-                Some(g.idx)
-            } else {
-                None
-            }
-        }) {
-            return Some(i);
-        }
-        // Fallback: nearest glyph center so clicks in line gaps still select predictably.
-        self.transcript_glyph_boxes
-            .iter()
-            .min_by(|a, b| {
-                let acx = (a.x0 + a.x1) * 0.5;
-                let acy = (a.y0 + a.y1) * 0.5;
-                let bcx = (b.x0 + b.x1) * 0.5;
-                let bcy = (b.y0 + b.y1) * 0.5;
-                let ad = (acx - x) * (acx - x) + (acy - y) * (acy - y);
-                let bd = (bcx - x) * (bcx - x) + (bcy - y) * (bcy - y);
-                ad.partial_cmp(&bd).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|g| g.idx)
-    }
-
-    fn selection_range(&self) -> Option<(usize, usize)> {
-        let a = self.selection_anchor?;
-        let b = self.selection_cursor?;
-        Some((a.min(b), a.max(b)))
-    }
-
-    fn selected_text(&self) -> Option<String> {
-        let (s, e) = self.selection_range()?;
-        let chars: Vec<char> = self.transcript_visible_text.chars().collect();
-        if chars.is_empty() || s >= chars.len() {
-            return None;
-        }
-        let end = e.min(chars.len().saturating_sub(1));
-        Some(chars[s..=end].iter().collect())
-    }
-
-    fn draw_selection_overlay(&self, state: &mut EngineState) {
-        let Some((s, e)) = self.selection_range() else {
-            return;
-        };
-        let shape = state.frame.shape();
-        let width = shape[1] as u32;
-        let height = shape[0] as u32;
-        let buf = state.frame_buffer_mut();
-        for g in self.transcript_glyph_boxes.iter().filter(|g| g.idx >= s && g.idx <= e) {
-            let sx = g.x0.max(0.0) as i32;
-            let sy = g.y0.max(0.0) as i32;
-            let ex = g.x1.min(width as f32) as i32;
-            let ey = g.y1.min(height as f32) as i32;
-            for y in sy..ey {
-                for x in sx..ex {
-                    let i = ((y as u32 * width + x as u32) * 4) as usize;
-                    let a = 0.30_f32;
-                    buf[i] = (STATE_ACTIVE.0 as f32 * a + buf[i] as f32 * (1.0 - a)) as u8;
-                    buf[i + 1] = (STATE_ACTIVE.1 as f32 * a + buf[i + 1] as f32 * (1.0 - a)) as u8;
-                    buf[i + 2] = (STATE_ACTIVE.2 as f32 * a + buf[i + 2] as f32 * (1.0 - a)) as u8;
-                    buf[i + 3] = 255;
-                }
-            }
-        }
-    }
 }
 
 impl Drop for TranscribeApp {
@@ -637,84 +580,75 @@ impl Application for TranscribeApp {
         println!("transcribe: threshold slider 1..100% (default 30%)");
         let _ = io::stdout().flush();
 
-        let all_devices = audio::devices();
-        let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
-
-        if input_devices.is_empty() {
-            return Err("No audio input devices found. On Windows, choose “… (system audio)” for built-in capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS).".to_string());
+        self.audio_selector.refresh_inputs_from_system();
+        if self.audio_selector.input_devices.is_empty() {
+            return Err(
+                "No audio input devices found. On Windows, choose “… (system audio)” for built-in \
+                 capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS)."
+                    .to_string(),
+            );
         }
 
         #[cfg(target_os = "ios")]
         {
-            let device = input_devices.first().ok_or("No input devices available")?;
-            #[cfg(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            let buffer_duration = 10.0_f32;
-            #[cfg(not(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )))]
-            let buffer_duration = 3.0_f32;
-            let listener = audio::AudioListener::new(device, buffer_duration)?;
-            listener.record()?;
-            println!(
-                "transcribe: input {} @ {} Hz",
-                device.name,
-                listener.buffer().sample_rate()
-            );
-            let _ = io::stdout().flush();
-            self.engine
-                .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
-            self.listener = Some(listener);
-            Ok(())
+            self.audio_selector.use_default_input = false;
+            self.audio_selector.input_device_index = audio::default_input()
+                .and_then(|d| {
+                    self.audio_selector
+                        .input_devices
+                        .iter()
+                        .position(|x| x.device_id == d.device_id)
+                })
+                .unwrap_or(0);
         }
 
         #[cfg(not(target_os = "ios"))]
         {
-            let names: Vec<String> = input_devices
-                .iter()
-                .map(|d| d.input_menu_label())
-                .collect();
-            let selection = Select::new()
-                .with_prompt("Select audio input (mic or loopback for system mix)")
-                .items(&names)
-                .default(0)
-                .interact()
-                .map_err(|e| format!("Device selection failed: {e}"))?;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let preferred = audio::preferred_system_audio_input_device();
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            let preferred: Option<audio::AudioDevice> = None;
 
-            let device = input_devices
-                .get(selection)
-                .ok_or_else(|| "Selected device not found".to_string())?;
+            let initial = preferred
+                .or_else(|| {
+                    self.audio_selector.input_devices.iter().find(|d| {
+                        matches!(
+                            d.input_kind_hint(),
+                            Some(audio::InputDeviceKind::LoopbackOrVirtual)
+                        )
+                    }).cloned()
+                })
+                .or_else(|| self.audio_selector.input_devices.first().cloned())
+                .ok_or_else(|| {
+                    "No usable audio input. On macOS, grant Screen Recording for system audio; on \
+                     Windows use a “(system audio)” capture device; on Linux use a virtual cable \
+                     (e.g. PulseAudio monitor / PipeWire loopback)."
+                        .to_string()
+                })?;
 
-            #[cfg(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            let buffer_duration = 10.0_f32;
-            #[cfg(not(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )))]
-            let buffer_duration = 3.0_f32;
-            let listener = audio::AudioListener::new(device, buffer_duration)?;
-            listener.record()?;
+            let def = audio::default_input();
+            if def.as_ref().is_some_and(|d| input_device_same(d, &initial)) {
+                self.audio_selector.use_default_input = true;
+            } else {
+                self.audio_selector.use_default_input = false;
+                self.audio_selector.input_device_index = self
+                    .audio_selector
+                    .input_devices
+                    .iter()
+                    .position(|d| input_device_same(d, &initial))
+                    .unwrap_or(0);
+            }
+        }
+
+        self.recreate_input_listener()?;
+
+        if self.audio_selector.input_devices.len() > 1 {
             println!(
-                "transcribe: input {} @ {} Hz",
-                device.name,
-                listener.buffer().sample_rate()
+                "transcribe: tap the waveform capture button to mute; hold it to choose input (Default or a device)"
             );
             let _ = io::stdout().flush();
-            self.engine
-                .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
-            self.listener = Some(listener);
-            Ok(())
         }
+        Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
@@ -723,6 +657,8 @@ impl Application for TranscribeApp {
         if self.listener.is_none() {
             return;
         }
+
+        self.audio_selector.tick_hold_opens_menu();
 
         let (channels, sr, ingested) = {
             let l = self.listener.as_ref().expect("checked above");
@@ -735,7 +671,12 @@ impl Application for TranscribeApp {
         };
 
         self.engine.process_snapshot(sr, &channels, ingested);
-        let p = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
+        let p_engine = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
+        // On iOS, optional Whisper/Silero features are usually off: use RMS proxy for live levels.
+        #[cfg(target_os = "ios")]
+        let p = p_engine.max(energy_speech_proxy(&channels));
+        #[cfg(not(target_os = "ios"))]
+        let p = p_engine;
         self.vad_prob_visual_ema = self.vad_prob_visual_ema * 0.82 + p * 0.18;
         self.vad_prob_seg_ema =
             self.vad_prob_seg_ema * (1.0 - VAD_SEGMENT_EMA_ALPHA) + p * VAD_SEGMENT_EMA_ALPHA;
@@ -807,38 +748,22 @@ impl Application for TranscribeApp {
             let _ = self.committed_lines.pop_front();
         }
         let all_lines: Vec<String> = self.committed_lines.iter().cloned().collect();
-        let shape = state.frame.shape();
-        let width = shape[1] as f32;
-        let height = shape[0] as f32;
-        let visible_lines = Self::visible_transcript_lines(height);
-        let max_offset = all_lines.len().saturating_sub(visible_lines);
-        self.transcript_scroll_offset = self.transcript_scroll_offset.min(max_offset);
-        let start = all_lines.len().saturating_sub(visible_lines + self.transcript_scroll_offset);
-        let end = (start + visible_lines).min(all_lines.len());
-        let display_lines = if start < end {
-            all_lines[start..end].to_vec()
-        } else {
-            vec![]
-        };
-        let mut display_lines = display_lines;
+        let mut full_text = all_lines.join("\n");
         if self.in_speech_segment {
             let live = Self::normalize_text(&live_caption);
             if !live.is_empty() {
-                display_lines.push(live);
+                if !full_text.is_empty() {
+                    full_text.push('\n');
+                }
+                full_text.push_str(&live);
             }
         }
-        let scroll_fraction = if all_lines.is_empty() || all_lines.len() <= visible_lines {
-            None
-        } else {
-            let top_frac = if max_offset == 0 {
-                0.0
-            } else {
-                1.0 - (self.transcript_scroll_offset as f32 / max_offset as f32)
-            };
-            let h_frac = visible_lines as f32 / all_lines.len() as f32;
-            Some((top_frac, h_frac))
-        };
 
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let safe = safe_layout_pixels(state);
+        let (sl, st, ssw, ssh) = safe;
         self.vad_label.set_text(format!(
             "RAW {:>3.0}%  EMA {:>3.0}%  THR {:>3.0}%",
             p * 100.0,
@@ -850,28 +775,57 @@ impl Application for TranscribeApp {
             self.engine.buffered_segment_seconds(),
             if active { "ACTIVE" } else { "SILENCE" }
         ));
-        let font_size = (height.min(width) * 0.018).clamp(12.0, 18.0);
+        let font_size = (ssh.min(ssw) * 0.02).clamp(12.0, 20.0);
         self.vad_label.set_font_size(font_size);
         self.vad_label.tick(width, height);
         self.state_label.set_font_size(font_size);
         self.state_label.tick(width, height);
 
-        let l = self.listener.as_ref().expect("checked above");
+        let listener = self.listener.as_ref().expect("checked above");
+        let h = height;
+        let w = width;
+        let wave_top = st + ssh * WAVE_HEADROOM_FRAC;
+        let wave_h = ssh * WAVE_BAND_FRAC;
+        let wave_rect = (
+            sl,
+            wave_top,
+            sl + ssw,
+            wave_top + wave_h,
+        );
+
         self.ui_bounds = self.canvas.tick_draw(
             state,
-            l,
+            listener,
             p,
             self.vad_prob_visual_ema,
             &self.vad_label,
             &self.state_label,
             if active { STATE_ACTIVE } else { STATE_SILENCE },
             th,
-            &display_lines,
-            scroll_fraction,
             &self.text_font,
+            wave_rect,
+            safe,
+            &mut self.audio_selector,
         );
-        self.rebuild_transcript_hitboxes(width, height, &display_lines);
-        self.draw_selection_overlay(state);
+
+        if self.ui_bounds.transcript.is_some() {
+            let panel_h = (ssh * LEVEL_PANEL_H_FRAC).max(36.0);
+            let panel_top = st + ssh - panel_h - ssh * 0.03;
+            let pad = (ssw * 0.03).max(12.0);
+            let transcript_top = wave_top + wave_h + ssh * 0.02;
+            let transcript_bottom = panel_top - ssh * TEXTBOX_BOTTOM_GAP_FRAC;
+            let textbox_x0 = sl + pad;
+            let textbox_x1 = sl + ssw - pad;
+            let clip_x0 = textbox_x0 + 1.0;
+            let clip_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
+            let clip_x1 = (textbox_x1 - 1.0).min(w);
+            let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
+            self.transcript_view
+                .set_font_size(Self::transcript_text_size(ssh));
+            self.transcript_view.set_text(full_text);
+            self.transcript_view
+                .tick(state, (clip_x0, clip_y0, clip_x1, clip_y1));
+        }
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
@@ -889,13 +843,45 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let fw = shape[1] as u32;
+        let fh = shape[0] as u32;
+        if self.audio_selector.show_menu {
+            let layout = safe_layout_pixels(state);
+            match self
+                .audio_selector
+                .on_menu_pointer_down(state.mouse.x, state.mouse.y, layout)
+            {
+                AudioInputMenuDown::Dismiss | AudioInputMenuDown::DismissInColumn => {
+                    self.audio_selector.show_menu = false;
+                }
+                AudioInputMenuDown::Pick { selection_changed } => {
+                    if selection_changed {
+                        if let Err(e) = self.recreate_input_listener() {
+                            eprintln!("transcribe: failed to switch input: {e}");
+                        }
+                    }
+                }
+            }
+            self.transcript_pointer_down = false;
+            self.slider_dragging = false;
+            return;
+        }
+        if self
+            .audio_selector
+            .on_capture_pointer_down(state.mouse.x, state.mouse.y)
+        {
+            self.transcript_pointer_down = false;
+            self.slider_dragging = false;
+            return;
+        }
         if let Some((x0, y0, x1, y1)) = self.ui_bounds.slider {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
                 self.slider_dragging = true;
                 self.update_threshold_from_mouse(state);
-                self.selecting_text = false;
+                self.transcript_pointer_down = false;
                 return;
             }
         }
@@ -903,28 +889,42 @@ impl Application for TranscribeApp {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
-                if let Some(i) = self.hit_test_transcript_index(mx, my) {
-                    self.selection_anchor = Some(i);
-                    self.selection_cursor = Some(i);
-                    self.selecting_text = true;
-                }
+                self.transcript_pointer_down = true;
+                self.transcript_view.on_mouse_down(my);
             }
         }
     }
 
-    fn on_mouse_up(&mut self, _state: &mut EngineState) {
+    fn on_mouse_up(&mut self, state: &mut EngineState) {
+        match self
+            .audio_selector
+            .on_pointer_up(state.mouse.x, state.mouse.y)
+        {
+            AudioInputSelectorUp::None => {}
+            AudioInputSelectorUp::CaptureToggled(enabled) => {
+                if let Some(l) = &self.listener {
+                    if enabled {
+                        let _ = l.record();
+                    } else {
+                        let _ = l.pause();
+                    }
+                }
+            }
+        }
         self.slider_dragging = false;
-        self.selecting_text = false;
+        if self.transcript_pointer_down {
+            self.transcript_view.on_mouse_up();
+            self.transcript_pointer_down = false;
+        }
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
         if self.slider_dragging {
             self.update_threshold_from_mouse(state);
+            return;
         }
-        if self.selecting_text {
-            if let Some(i) = self.hit_test_transcript_index(state.mouse.x, state.mouse.y) {
-                self.selection_cursor = Some(i);
-            }
+        if self.transcript_pointer_down && state.mouse.is_left_clicking {
+            self.transcript_view.on_mouse_move_drag(state.mouse.y);
         }
     }
 
@@ -940,24 +940,6 @@ impl Application for TranscribeApp {
         if delta_y.abs() < 0.01 {
             return;
         }
-        let total = self.committed_lines.len();
-        if total <= 1 {
-            return;
-        }
-        let shape = state.frame.shape();
-        let height = shape[0] as f32;
-        let visible_lines = Self::visible_transcript_lines(height);
-        let max_offset = total.saturating_sub(visible_lines) as i32;
-        let step = (-delta_y.signum()) as i32;
-        let next = (self.transcript_scroll_offset as i32 + step).clamp(0, max_offset);
-        self.transcript_scroll_offset = next as usize;
-    }
-
-    fn on_key_shortcut(&mut self, _state: &mut EngineState, shortcut: ShortcutAction) {
-        if let ShortcutAction::Copy = shortcut {
-            if let Some(t) = self.selected_text() {
-                let _ = clipboard::set_contents(&t);
-            }
-        }
+        self.transcript_view.on_scroll(delta_y);
     }
 }

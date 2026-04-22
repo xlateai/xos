@@ -11,12 +11,17 @@ targets:
     sources:
       - path: xos
       - path: XosModule
+    # Codesign: strip xattrs in Podfile `post_install` (Run Script on the xos target).
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.xlate.xos
       SWIFT_VERSION: "5.9"
       INFOPLIST_FILE: xos/Info.plist
       CODE_SIGN_IDENTITY: "Apple Development"
       CODE_SIGN_STYLE: Automatic
-      OTHER_LDFLAGS: ["$(inherited)", "-framework", "AudioToolbox"]
+      OTHER_LDFLAGS:
+        - "$(inherited)"
+        - "-framework"
+        - "AudioToolbox"
+        - "-Wl,-force_load,$(SRCROOT)/libs/libxos.a"
       # Preserve development team if set (from .xcode-signing-config or environment)
       DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}

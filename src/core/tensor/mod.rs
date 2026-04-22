@@ -11,10 +11,20 @@ pub mod tensor;
 
 pub use burn::tensor::backend::Backend;
 pub use burn::tensor::{ElementConversion, Int, Shape, TensorData};
+
+// Desktop / WASM: full Burn WGPU. iOS: use NdArray (CPU) for the *default* `XosBackend` so
+// `FrameState::new` never calls `WgpuDevice::default()` (wgpu on iOS often aborts on the main
+// thread or panics when building the .app; Swift already renders with Metal on its own).
+#[cfg(target_os = "ios")]
+pub use burn::backend::ndarray::NdArray as Wgpu;
+#[cfg(target_os = "ios")]
+pub type WgpuDevice = <Wgpu as Backend>::Device;
+#[cfg(not(target_os = "ios"))]
 pub use burn_wgpu::{Wgpu, WgpuDevice};
+
 pub use conv::{conv2d, depthwise_conv2d};
 
-/// Default backend and device for xos tensors (GPU via wgpu).
+/// Default backend and device for xos tensor ops (WGPU on desktop; NdArray on iOS).
 pub type XosBackend = Wgpu;
 pub type XosDevice = WgpuDevice;
 

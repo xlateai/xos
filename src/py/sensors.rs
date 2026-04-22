@@ -95,5 +95,6 @@ pub fn make_sensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
 extern "C" {
     fn xos_magnetometer_init() -> i32;
     fn xos_magnetometer_get_latest(x: *mut f64, y: *mut f64, z: *mut f64) -> i32;
+    #[allow(dead_code)]
     fn xos_magnetometer_cleanup();
 }

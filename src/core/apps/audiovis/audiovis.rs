@@ -8,24 +8,18 @@ use crate::apps::audiovis::convolutional_waveform::ConvolutionalWaveform;
 #[cfg(not(target_os = "linux"))]
 use crate::apps::audiovis::media_control_bar::MediaControlBar;
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use rodio::{Decoder, OutputStream, Sink, Source};
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
-use rodio::OutputStreamBuilder;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
 use dialoguer::Select;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "linux")))]
-use crate::engine::audio;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use std::fs::File;
+use crate::engine::audio::{
+    self, decode_path_to_mono_f32, default_output, AudioPlayer,
+};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::path::PathBuf;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::sync::{Arc, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
 use std::collections::VecDeque;
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "linux")))]
-use crate::apps::audiovis::audio_capture::SampleCapturingSource;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32); // Dark gray
 #[cfg(not(target_os = "linux"))]
@@ -61,10 +55,13 @@ impl Application for AudiovisApp {
 
 #[cfg(not(target_os = "linux"))]
 pub struct AudiovisApp {
-    #[cfg(not(target_arch = "wasm32"))]
-    sink: Option<Arc<Mutex<Sink>>>, // Keep the sink alive so audio continues playing
-    #[cfg(not(target_arch = "wasm32"))]
-    _stream: Option<OutputStream>, // Keep the stream alive
+    /// Decoded mono PCM for file playback (desktop only).
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    mono_pcm: Option<Arc<Vec<f32>>>,
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    audio_player: Option<Arc<AudioPlayer>>,
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    feed_cursor: usize,
     visual_type_selector: Selector,
     waveform: Option<WaveformVisualizer>,
     convolutional_waveform: Option<ConvolutionalWaveform>,
@@ -77,8 +74,10 @@ pub struct AudiovisApp {
     sample_rate: u32, // Sample rate for position calculation
     #[cfg(not(target_arch = "wasm32"))]
     audio_duration_seconds: f32, // Total audio duration
+    /// Stored when a file is chosen (desktop); seek uses in-memory PCM on desktop.
     #[cfg(not(target_arch = "wasm32"))]
-    audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
+    #[allow(dead_code)]
+    audio_file_path: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     last_seek_position: f32, // Last position we seeked to (to detect new seeks)
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -89,10 +88,12 @@ pub struct AudiovisApp {
 impl AudiovisApp {
     pub fn new() -> Self {
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            sink: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            _stream: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            mono_pcm: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            audio_player: None,
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+            feed_cursor: 0,
             visual_type_selector: Selector::new(vec![
                 "waveform".to_string(),
                 "convolution".to_string(),
@@ -117,75 +118,81 @@ impl AudiovisApp {
         }
     }
 
-    /// Seek to a specific position in the audio (0.0 to 1.0)
-    /// Note: This implementation skips samples by consuming them, which can be slow for large seeks.
-    /// Rodio's decoder doesn't support native seeking, so this is the best we can do.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Seek to a specific position in the audio (0.0 to 1.0) — desktop file mode (decoded PCM in memory).
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     fn seek_audio(&mut self, position: f32) -> Result<(), String> {
-        let position = position.max(0.0).min(1.0);
-        
-        // Get the file path
-        let file_path = match &self.audio_file_path {
-            Some(path) => path.clone(),
-            None => return Err("No audio file loaded".to_string()),
+        let position = position.clamp(0.0, 1.0);
+        let Some(mono) = &self.mono_pcm else {
+            return Err("No audio file loaded".to_string());
         };
-
-        // Calculate target time in seconds
-        let target_time_seconds = position * self.audio_duration_seconds;
-        let target_samples = (target_time_seconds * self.sample_rate as f32) as usize;
-
-        // Stop and clear the current sink
-        if let Some(sink) = &self.sink {
-            let sink = sink.lock().unwrap();
-            sink.stop();
-            sink.clear();
+        if let Some(player) = &self.audio_player {
+            player.clear();
         }
-
-        // Clear the sample buffer
         if let Some(sample_buffer) = &self.audio_samples {
-            let mut buffer = sample_buffer.lock().unwrap();
-            buffer.clear();
+            sample_buffer.lock().unwrap().clear();
         }
-
-        // Reload the audio file
-        let file = File::open(&file_path)
-            .map_err(|e| format!("Failed to open audio file for seeking: {}", e))?;
-        
-        let mut decoder = Decoder::try_from(file)
-            .map_err(|e| format!("Failed to decode audio file for seeking: {}", e))?;
-
-        // Skip samples to reach the target position
-        // This may be slow for large files, but it's the only way with rodio
-        let channels = decoder.channels() as usize;
-        let samples_to_skip = target_samples * channels;
-        
-        // Skip samples - this will take time for large seeks but at least it works
-        let mut skipped = 0;
-        for _ in 0..samples_to_skip {
-            if decoder.next().is_none() {
-                // Reached end of file, break early
-                break;
-            }
-            skipped += 1;
-        }
-
-        // Update total_samples to reflect the seek position
-        self.total_samples = if skipped > 0 { skipped / channels } else { 0 };
-
-        // Create a new capturing source from the remaining decoder
-        let sample_buffer = self.audio_samples.as_ref().unwrap().clone();
-        let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
-
-        // Append to sink and play
-        if let Some(sink) = &self.sink {
-            let sink = sink.lock().unwrap();
-            sink.append(capturing_source);
+        let n = mono.len();
+        let target = if n > 0 {
+            ((position * n as f32) as usize).min(n.saturating_sub(1))
+        } else {
+            0
+        };
+        self.feed_cursor = target;
+        self.total_samples = target;
+        if let Some(player) = &self.audio_player {
             if !self.media_control_bar.is_paused() {
-                sink.play();
+                let _ = player.start();
             }
         }
-
         Ok(())
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+    fn seek_audio(&mut self, _position: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Push decoded PCM to the output device and visualization buffer (desktop file mode).
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    fn feed_file_playback(&mut self, delta_seconds: f32) {
+        if self.live_listener.is_some() {
+            return;
+        }
+        let Some(mono) = &self.mono_pcm else {
+            return;
+        };
+        let Some(player) = &self.audio_player else {
+            return;
+        };
+        if self.media_control_bar.is_paused() {
+            return;
+        }
+        let sr = self.sample_rate.max(1) as f32;
+        let n = ((delta_seconds * sr) as usize).max(1);
+        let len = mono.len();
+        if self.feed_cursor >= len {
+            return;
+        }
+        let end = (self.feed_cursor + n).min(len);
+        let chunk = &mono[self.feed_cursor..end];
+        if let Some(sb) = &self.audio_samples {
+            let mut b = sb.lock().unwrap();
+            let cap = self.sample_rate.max(8_000) as usize;
+            for &s in chunk {
+                b.push_back(s);
+                while b.len() > cap {
+                    b.pop_front();
+                }
+            }
+        }
+        let mut interleaved = Vec::with_capacity(chunk.len() * 2);
+        for &s in chunk {
+            interleaved.push(s);
+            interleaved.push(s);
+        }
+        let _ = player.play_samples(&interleaved);
+        self.feed_cursor = end;
+        self.total_samples = self.feed_cursor;
     }
 }
 
@@ -218,56 +225,31 @@ impl Application for AudiovisApp {
                 
                 // Store the file path for seeking
                 self.audio_file_path = Some(path.clone());
-                
-                // Get an output stream handle to the default physical sound device
-                let _stream = OutputStreamBuilder::open_default_stream()
-                    .map_err(|e| format!("Failed to get audio output stream: {}", e))?;
 
-                // Create a sink (a queue for audio playback) connected to the mixer
-                let sink = Sink::connect_new(&_stream.mixer());
+                let (sample_rate, duration, mono_vec) = decode_path_to_mono_f32(&path).map_err(|e| {
+                    let extension = path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("unknown");
+                    format!(
+                        "Failed to decode audio file (extension: {extension}). Error: {e}. \
+                        Supported formats include MP3, WAV, FLAC, OGG, AAC/M4A (Symphonia)."
+                    )
+                })?;
 
-                // Load the audio file
-                let file = File::open(&path)
-                    .map_err(|e| format!("Failed to open audio file: {}", e))?;
-                
-                // Try to decode the audio file using the new API (rodio 0.21+)
-                // Decoder::try_from auto-detects the format
-                let decoder = Decoder::try_from(file)
-                    .map_err(|e| {
-                        let extension = path.extension()
-                            .and_then(|ext| ext.to_str())
-                            .unwrap_or("unknown");
-                        format!(
-                            "Failed to decode audio file (extension: {}). Error: {}. \
-                            Supported formats: MP3, WAV, FLAC, OGG. \
-                            If your file is M4A/AAC, try converting it to one of the supported formats.",
-                            extension, e
-                        )
-                    })?;
-
-                // Get sample rate and duration
-                let sample_rate = decoder.sample_rate();
-                let duration = decoder.total_duration()
-                    .map(|d| d.as_secs_f32())
-                    .unwrap_or(0.0);
-                
                 self.sample_rate = sample_rate;
                 self.audio_duration_seconds = duration;
+                self.mono_pcm = Some(Arc::new(mono_vec));
 
-                // Create a buffer to capture live audio samples
-                let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(44100))); // ~1 second at 44.1kHz
-                self.audio_samples = Some(sample_buffer.clone());
+                let cap = sample_rate.max(8_000) as usize;
+                let sample_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(cap)));
+                self.audio_samples = Some(sample_buffer);
 
-                // Wrap the decoder with our capturing source
-                let capturing_source = SampleCapturingSource::new(decoder, sample_buffer, 44100);
-
-                // Play the audio
-                sink.append(capturing_source);
-                sink.play();
-
-                // Store the sink and stream to keep them alive (wrap sink in Arc<Mutex> for sharing)
-                self.sink = Some(Arc::new(Mutex::new(sink)));
-                self._stream = Some(_stream);
+                let out = default_output().ok_or_else(|| "No audio output device found".to_string())?;
+                let player = AudioPlayer::new(&out, sample_rate, 2)
+                    .map_err(|e| format!("Failed to open audio output: {e}"))?;
+                self.audio_player = Some(Arc::new(player));
+                self.feed_cursor = 0;
                 self.last_seek_position = 0.0;
 
                 crate::print(&format!("Playing audio file: {:?}", path));
@@ -369,6 +351,28 @@ impl Application for AudiovisApp {
             self.visual_type_selector.render(state);
         }
 
+        // Drive file playback and CPAL pause state before we sample the ring for the waveform.
+        self.media_control_bar.update(state);
+
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+        {
+            self.feed_file_playback(state.delta_time_seconds);
+            if let Some(player) = &self.audio_player {
+                if self.media_control_bar.is_paused() {
+                    let _ = player.stop();
+                } else {
+                    let _ = player.start();
+                }
+            }
+            if let Some(listener) = &self.live_listener {
+                if self.media_control_bar.is_paused() {
+                    let _ = listener.pause();
+                } else {
+                    let _ = listener.record();
+                }
+            }
+        }
+
         // Get audio samples for visualization
         #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
         let audio_chunk = {
@@ -429,31 +433,7 @@ impl Application for AudiovisApp {
         #[cfg(target_arch = "wasm32")]
         let audio_chunk = Some(vec![0.0; BUFFER_SIZE]);
 
-        // Update media control bar
-        self.media_control_bar.update(state);
-
         // Note: Seeking is handled in on_mouse_up to avoid blocking during drag
-
-        // Control audio playback / capture based on pause state
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(sink) = &self.sink {
-                let sink = sink.lock().unwrap();
-                if self.media_control_bar.is_paused() {
-                    sink.pause();
-                } else {
-                    sink.play();
-                }
-            }
-            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-            if let Some(listener) = &self.live_listener {
-                if self.media_control_bar.is_paused() {
-                    let _ = listener.pause();
-                } else {
-                    let _ = listener.record();
-                }
-            }
-        }
 
         // Update position based on actual audio playback
         #[cfg(not(target_arch = "wasm32"))]
@@ -543,19 +523,16 @@ impl Application for AudiovisApp {
             // Try media control bar first
             if self.media_control_bar.on_mouse_down(state) {
                 // Update pause state if play/pause button was clicked
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
                 {
                     if !self.media_control_bar.is_dragging() {
-                        // User clicked play/pause button - update pause state
-                        if let Some(sink) = &self.sink {
-                            let sink = sink.lock().unwrap();
+                        if let Some(player) = &self.audio_player {
                             if self.media_control_bar.is_paused() {
-                                sink.pause();
+                                let _ = player.stop();
                             } else {
-                                sink.play();
+                                let _ = player.start();
                             }
                         }
-                        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
                         if let Some(listener) = &self.live_listener {
                             if self.media_control_bar.is_paused() {
                                 let _ = listener.pause();

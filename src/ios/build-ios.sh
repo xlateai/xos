@@ -3,9 +3,9 @@ set -e
 
 echo "🦀 Building Rust library for iOS..."
 
-# Get absolute paths
+# Get absolute paths (script lives at src/ios/build-ios.sh → repo root is two levels up)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # Install iOS targets if not already installed
@@ -15,8 +15,8 @@ echo "📦 Installing iOS targets..."
 rustup target add aarch64-apple-ios || true
 
 # Create output directory where the compiled library will be placed
-# This directory is referenced by the iOS Xcode project and CocoaPods
-OUTPUT_DIR="$SCRIPT_DIR/ios/libs"
+# CocoaPods / Xcode expect libs next to the pod (see Xos.podspec vendored_libraries)
+OUTPUT_DIR="$SCRIPT_DIR/libs"
 mkdir -p "$OUTPUT_DIR"
 
 # Set iOS deployment target to match podspec (15.1)
@@ -35,18 +35,20 @@ echo "🔨 Building for iOS device (aarch64-apple-ios)..."
 # Whisper pulls a desktop-only optional crate; iOS lib build uses default features off.
 cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features -- -C link-arg=-miphoneos-version-min=15.1
 
-# Verify the build succeeded by checking for the output file
-# The static library will be named libxos.a (following Rust's naming convention)
-if [ ! -f "target/aarch64-apple-ios/release/libxos.a" ]; then
+# Verify the build succeeded by checking for the output file (use absolute path; cwd must be repo root)
+LIB_XOS_A="$PROJECT_ROOT/target/aarch64-apple-ios/release/libxos.a"
+if [ ! -f "$LIB_XOS_A" ]; then
     echo "❌ Error: libxos.a not found after build"
-    echo "   Found files:"
-    ls -la target/aarch64-apple-ios/release/libxos.* 2>/dev/null || echo "   No libxos.* files found"
+    echo "   Expected: $LIB_XOS_A"
+    echo "   PROJECT_ROOT=$PROJECT_ROOT"
+    echo "   Listing release dir:"
+    ls -la "$PROJECT_ROOT/target/aarch64-apple-ios/release/" 2>/dev/null || echo "   (missing)"
     exit 1
 fi
 
 # Copy the device library to the output directory
 # This makes it available for the iOS Xcode project to link against
-cp target/aarch64-apple-ios/release/libxos.a "$OUTPUT_DIR/libxos-device.a"
+cp "$LIB_XOS_A" "$OUTPUT_DIR/libxos-device.a"
 
 # Verify the architecture of the compiled library
 # This confirms we built for the correct target (arm64 for iOS devices)

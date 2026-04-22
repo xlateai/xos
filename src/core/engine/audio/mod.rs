@@ -36,6 +36,9 @@ pub mod speakers;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "macos"))]
 mod macos_sck;
 
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub mod decode;
+
 // IO-oriented aliases (same modules; prefer these in new code)
 pub use microphone as input;
 pub use speakers as output;
@@ -43,6 +46,9 @@ pub use speakers as output;
 // Re-export key types for convenience
 pub use microphone::{AudioListener, default_input, all_input_devices, print_input_devices};
 pub use speakers::{AudioPlayer, default_output, all_output_devices, print_output_devices};
+
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+pub use decode::decode_path_to_mono_f32;
 
 // ================================================================================================
 // COMMON AUDIO DEVICE TYPE
