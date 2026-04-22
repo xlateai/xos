@@ -38,6 +38,9 @@ const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
 const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 12.0;
 const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 20.0;
 const TRANSCRIPT_LINE_HEIGHT: f32 = 1.35;
+/// Input swap control (top-right)
+const INPUT_SWAP_BTN_H: f32 = 44.0;
+const INPUT_SWAP_NAME_MAX: usize = 26;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -50,10 +53,42 @@ fn clamp_threshold(v: f32) -> f32 {
     v.clamp(THRESHOLD_MIN, THRESHOLD_MAX)
 }
 
+fn ellipsize_visual(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    s.chars()
+        .take(max_chars.saturating_sub(1))
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+#[cfg(not(target_os = "ios"))]
+fn input_device_same(a: &audio::AudioDevice, b: &audio::AudioDevice) -> bool {
+    if a.name != b.name || a.is_input != b.is_input {
+        return false;
+    }
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(target_os = "macos", target_os = "windows")
+    ))]
+    {
+        if a.wasapi_loopback != b.wasapi_loopback
+            || a.macos_sck_system_audio != b.macos_sck_system_audio
+        {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct UiBounds {
     transcript: Option<(f32, f32, f32, f32)>,
     slider: Option<(f32, f32, f32, f32)>,
+    /// Top-right control: click / tap to cycle capture device (mic, loopback, system audio, …).
+    input_swap: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,6 +258,8 @@ impl VisualCanvas {
         transcript_lines: &[String],
         scroll_fraction: Option<(f32, f32)>,
         font: &Font,
+        // `(device_name, 1-based index, total count)` for the input swap control
+        input_swap: Option<(&str, usize, usize)>,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
@@ -253,13 +290,15 @@ impl VisualCanvas {
         let textbox_y1 = transcript_bottom;
 
         let all_samples = listener.get_samples_by_channel();
-        if all_samples.is_empty() {
+        let samples_empty = all_samples.is_empty() || all_samples[0].is_empty();
+        if samples_empty && input_swap.is_none() {
             return UiBounds::default();
         }
-        let samples = &all_samples[0];
-        if samples.is_empty() {
-            return UiBounds::default();
-        }
+        let samples: &[f32] = if samples_empty {
+            &[]
+        } else {
+            &all_samples[0]
+        };
 
         // waveform
         self.draw_line(
@@ -272,23 +311,42 @@ impl VisualCanvas {
             wave_center_y,
             WAVE_BASELINE,
         );
-        let points = self.waveform_points.max(2).min(width as usize).min(samples.len());
-        let start_idx = samples.len().saturating_sub(points);
-        let active = &samples[start_idx..];
+        let points = if samples.is_empty() {
+            self.waveform_points.max(2).min(width as usize)
+        } else {
+            self.waveform_points
+                .max(2)
+                .min(width as usize)
+                .min(samples.len())
+        };
+        let start_idx = if samples.is_empty() {
+            0
+        } else {
+            samples.len().saturating_sub(points)
+        };
+        let active: &[f32] = if samples.is_empty() {
+            &[]
+        } else {
+            &samples[start_idx..]
+        };
         let wave_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
         let x_scale = (width as f32 - 1.0) / (points.saturating_sub(1) as f32).max(1.0);
         let mut smooth = vec![0.0_f32; points];
         let half_w = WAVE_SMOOTH_WINDOW / 2;
-        for i in 0..points {
-            let from = i.saturating_sub(half_w);
-            let to = (i + half_w + 1).min(points);
-            let mut sum = 0.0_f32;
-            let mut n = 0usize;
-            for &s in &active[from..to] {
-                sum += s;
-                n += 1;
+        if active.is_empty() {
+            // No PCM yet (e.g. immediately after switching iOS input)
+        } else {
+            for i in 0..points {
+                let from = i.saturating_sub(half_w);
+                let to = (i + half_w + 1).min(points);
+                let mut sum = 0.0_f32;
+                let mut n = 0usize;
+                for &s in &active[from..to] {
+                    sum += s;
+                    n += 1;
+                }
+                smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
             }
-            smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
         }
         let mut prev_x = 0.0;
         let mut prev_y = wave_center_y;
@@ -398,6 +456,53 @@ impl VisualCanvas {
             1.0,
         );
 
+        let mut input_swap_bounds = None;
+        if let Some((name, idx, total)) = input_swap {
+            let btn_h = INPUT_SWAP_BTN_H.max(h * 0.055);
+            let btn_w = (w * 0.44).clamp(128.0, 240.0);
+            let btn_x1 = w - pad;
+            let btn_x0 = btn_x1 - btn_w;
+            let btn_y0 = wave_top + 6.0;
+            let btn_y1 = btn_y0 + btn_h;
+            self.draw_rect(buffer, width, height, btn_x0, btn_y0, btn_x1, btn_y1, PANEL_BG);
+            self.draw_rect(buffer, width, height, btn_x0, btn_y0, btn_x1, btn_y0 + 1.0, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, btn_x0, btn_y1 - 1.0, btn_x1, btn_y1, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, btn_x0, btn_y0, btn_x0 + 1.0, btn_y1, TEXTBOX_BORDER);
+            self.draw_rect(buffer, width, height, btn_x1 - 1.0, btn_y0, btn_x1, btn_y1, TEXTBOX_BORDER);
+
+            let title = format!("Input {idx}/{total} · click / tap → next");
+            let mut tr_title = TextRasterizer::new(font.clone(), (h * 0.028).clamp(11.0, 14.0));
+            tr_title.set_text(title);
+            tr_title.tick(btn_w - 16.0, btn_h * 0.45);
+            self.blend_text(
+                buffer,
+                width,
+                height,
+                &tr_title,
+                btn_x0 + 8.0,
+                btn_y0 + 4.0,
+                PANEL_FG,
+                1.0,
+            );
+
+            let body = ellipsize_visual(name, INPUT_SWAP_NAME_MAX);
+            let mut tr_body = TextRasterizer::new(font.clone(), (h * 0.032).clamp(12.0, 15.0));
+            tr_body.set_text(body);
+            tr_body.tick(btn_w - 16.0, btn_h * 0.5);
+            self.blend_text(
+                buffer,
+                width,
+                height,
+                &tr_body,
+                btn_x0 + 8.0,
+                btn_y0 + btn_h * 0.42,
+                TEXT_COLOR,
+                0.95,
+            );
+
+            input_swap_bounds = Some((btn_x0, btn_y0, btn_x1, btn_y1));
+        }
+
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
@@ -405,6 +510,7 @@ impl VisualCanvas {
                 None
             },
             slider: Some((slider_x0, slider_y0 - panel_h * 0.1, slider_x1, slider_y1 + panel_h * 0.1)),
+            input_swap: input_swap_bounds,
         }
     }
 }
@@ -433,6 +539,9 @@ pub struct TranscribeApp {
     selection_anchor: Option<usize>,
     selection_cursor: Option<usize>,
     selecting_text: bool,
+    /// Capture devices for the top-right swap control (same list as `audio::all_input_devices()`).
+    input_devices: Vec<audio::AudioDevice>,
+    input_index: usize,
 }
 
 impl TranscribeApp {
@@ -466,6 +575,54 @@ impl TranscribeApp {
             selection_anchor: None,
             selection_cursor: None,
             selecting_text: false,
+            input_devices: Vec::new(),
+            input_index: 0,
+        }
+    }
+
+    fn recreate_input_listener(&mut self) -> Result<(), String> {
+        let Some(device) = self.input_devices.get(self.input_index) else {
+            return Err("No input device selected".to_string());
+        };
+        let device = device.clone();
+        if let Some(old) = self.listener.take() {
+            let _ = old.pause();
+            drop(old);
+        }
+        #[cfg(all(
+            feature = "whisper",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let buffer_duration = 10.0_f32;
+        #[cfg(not(all(
+            feature = "whisper",
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )))]
+        let buffer_duration = 3.0_f32;
+
+        let listener = audio::AudioListener::new(&device, buffer_duration)?;
+        listener.record()?;
+        println!(
+            "transcribe: input {} @ {} Hz",
+            device.name,
+            listener.buffer().sample_rate()
+        );
+        let _ = io::stdout().flush();
+        self.engine
+            .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
+        self.listener = Some(listener);
+        Ok(())
+    }
+
+    fn cycle_input_device(&mut self) {
+        if self.input_devices.len() <= 1 {
+            return;
+        }
+        self.input_index = (self.input_index + 1) % self.input_devices.len();
+        if let Err(e) = self.recreate_input_listener() {
+            eprintln!("transcribe: failed to switch input: {e}");
         }
     }
 
@@ -635,93 +792,66 @@ impl Application for TranscribeApp {
         println!("transcribe: threshold slider 1..100% (default 30%)");
         let _ = io::stdout().flush();
 
-        let all_devices = audio::devices();
-        let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
-
-        if input_devices.is_empty() {
-            return Err("No audio input devices found. On Windows, choose “… (system audio)” for built-in capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS).".to_string());
+        self.input_devices = audio::all_input_devices();
+        if self.input_devices.is_empty() {
+            return Err(
+                "No audio input devices found. On Windows, choose “… (system audio)” for built-in \
+                 capture. Otherwise use a mic or a loopback driver (e.g. BlackHole on macOS)."
+                    .to_string(),
+            );
         }
 
         #[cfg(target_os = "ios")]
         {
-            let device = input_devices.first().ok_or("No input devices available")?;
-            #[cfg(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            let buffer_duration = 10.0_f32;
-            #[cfg(not(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )))]
-            let buffer_duration = 3.0_f32;
-            let listener = audio::AudioListener::new(device, buffer_duration)?;
-            listener.record()?;
-            println!(
-                "transcribe: input {} @ {} Hz",
-                device.name,
-                listener.buffer().sample_rate()
-            );
-            let _ = io::stdout().flush();
-            self.engine
-                .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
-            self.listener = Some(listener);
-            Ok(())
+            self.input_index = audio::default_input()
+                .and_then(|d| {
+                    self.input_devices
+                        .iter()
+                        .position(|x| x.device_id == d.device_id)
+                })
+                .unwrap_or(0);
         }
 
         #[cfg(not(target_os = "ios"))]
         {
-            // Prefer native system-audio capture (ScreenCaptureKit / WASAPI loopback), then any
-            // loopback-style virtual input (e.g. BlackHole). No interactive picker for now.
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let preferred = audio::preferred_system_audio_input_device();
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let preferred: Option<audio::AudioDevice> = None;
 
-            let device = preferred
+            let initial = preferred
                 .or_else(|| {
-                    input_devices.iter().find(|d| {
+                    self.input_devices.iter().find(|d| {
                         matches!(
                             d.input_kind_hint(),
                             Some(audio::InputDeviceKind::LoopbackOrVirtual)
                         )
-                    })
-                    .cloned()
+                    }).cloned()
                 })
+                .or_else(|| self.input_devices.first().cloned())
                 .ok_or_else(|| {
-                    "No system/loopback audio input found. On macOS, grant Screen Recording; on \
-                     Windows pick a driver that exposes “(system audio)”; on Linux use a virtual \
-                     cable (e.g. PulseAudio monitor / PipeWire loopback)."
+                    "No usable audio input. On macOS, grant Screen Recording for system audio; on \
+                     Windows use a “(system audio)” capture device; on Linux use a virtual cable \
+                     (e.g. PulseAudio monitor / PipeWire loopback)."
                         .to_string()
                 })?;
 
-            #[cfg(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            let buffer_duration = 10.0_f32;
-            #[cfg(not(all(
-                feature = "whisper",
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )))]
-            let buffer_duration = 3.0_f32;
-            let listener = audio::AudioListener::new(&device, buffer_duration)?;
-            listener.record()?;
+            self.input_index = self
+                .input_devices
+                .iter()
+                .position(|d| input_device_same(d, &initial))
+                .unwrap_or(0);
+        }
+
+        self.recreate_input_listener()?;
+
+        if self.input_devices.len() > 1 {
             println!(
-                "transcribe: input {} @ {} Hz",
-                device.name,
-                listener.buffer().sample_rate()
+                "transcribe: use Input (top-right) to cycle capture devices (mics, loopback, system audio)"
             );
             let _ = io::stdout().flush();
-            self.engine
-                .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
-            self.listener = Some(listener);
-            Ok(())
         }
+        Ok(())
     }
 
     fn tick(&mut self, state: &mut EngineState) {
@@ -864,6 +994,15 @@ impl Application for TranscribeApp {
         self.state_label.tick(width, height);
 
         let l = self.listener.as_ref().expect("checked above");
+        let input_swap = (self.input_devices.len() > 1).then(|| {
+            let d = &self.input_devices[self.input_index];
+            (
+                d.name.as_str(),
+                self.input_index + 1,
+                self.input_devices.len(),
+            )
+        });
+
         self.ui_bounds = self.canvas.tick_draw(
             state,
             l,
@@ -876,6 +1015,7 @@ impl Application for TranscribeApp {
             &display_lines,
             scroll_fraction,
             &self.text_font,
+            input_swap,
         );
         self.rebuild_transcript_hitboxes(width, height, &display_lines);
         self.draw_selection_overlay(state);
@@ -896,6 +1036,16 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        if let Some((x0, y0, x1, y1)) = self.ui_bounds.input_swap {
+            let mx = state.mouse.x;
+            let my = state.mouse.y;
+            if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.cycle_input_device();
+                self.selecting_text = false;
+                self.slider_dragging = false;
+                return;
+            }
+        }
         if let Some((x0, y0, x1, y1)) = self.ui_bounds.slider {
             let mx = state.mouse.x;
             let my = state.mouse.y;
