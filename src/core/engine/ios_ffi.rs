@@ -65,13 +65,15 @@ pub fn log_to_ios(message: &str) {
     // The Swift console manager handles all logging
 }
 
-/// Custom writer that forwards to Swift's logging system
+/// Custom writer that forwards to Swift's logging system (reserved for future `std` hookup).
 #[cfg(target_os = "ios")]
+#[allow(dead_code)]
 struct IosLogWriter {
     buffer: Vec<u8>,
 }
 
 #[cfg(target_os = "ios")]
+#[allow(dead_code)]
 impl IosLogWriter {
     fn new() -> Self {
         Self { buffer: Vec::new() }

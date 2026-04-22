@@ -74,8 +74,10 @@ pub struct AudiovisApp {
     sample_rate: u32, // Sample rate for position calculation
     #[cfg(not(target_arch = "wasm32"))]
     audio_duration_seconds: f32, // Total audio duration
+    /// Stored when a file is chosen (desktop); seek uses in-memory PCM on desktop.
     #[cfg(not(target_arch = "wasm32"))]
-    audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
+    #[allow(dead_code)]
+    audio_file_path: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     last_seek_position: f32, // Last position we seeked to (to detect new seeks)
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]

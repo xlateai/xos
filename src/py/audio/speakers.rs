@@ -15,7 +15,9 @@ fn get_active_speakers() -> &'static Mutex<HashSet<usize>> {
 #[cfg(target_os = "ios")]
 pub struct AudioPlayer {
     player_id: u32,
+    #[allow(dead_code)]
     sample_rate: u32,
+    #[allow(dead_code)]
     channels: u16,
 }
 

@@ -73,17 +73,22 @@ pub struct AudioEditApp {
     #[cfg(not(target_arch = "wasm32"))]
     track_visualizer: TrackVisualizer,
     #[cfg(not(target_arch = "wasm32"))]
-    audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>, // Live audio samples buffer
+    #[allow(dead_code)]
+    audio_samples: Option<Arc<Mutex<VecDeque<f32>>>>,
     #[cfg(not(target_arch = "wasm32"))]
-    total_samples: usize, // Total samples processed (for position tracking)
+    #[allow(dead_code)]
+    total_samples: usize,
     #[cfg(not(target_arch = "wasm32"))]
-    sample_rate: u32, // Sample rate for position calculation
+    #[allow(dead_code)]
+    sample_rate: u32,
     #[cfg(not(target_arch = "wasm32"))]
-    original_sample_count: usize, // Original number of samples before downsampling (for alignment)
+    #[allow(dead_code)]
+    original_sample_count: usize,
     #[cfg(not(target_arch = "wasm32"))]
     audio_duration_seconds: f32, // Total audio duration
     #[cfg(not(target_arch = "wasm32"))]
-    audio_file_path: Option<PathBuf>, // Path to the audio file (for seeking)
+    #[allow(dead_code)]
+    audio_file_path: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     playback_position: f32, // Current playback position (0.0 to 1.0)
     #[cfg(not(target_arch = "wasm32"))]

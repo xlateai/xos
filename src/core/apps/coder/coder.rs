@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "ios"))]
 use crate::apps::coder::shortcuts::{detect_coder_shortcut, CoderShortcutAction};
 use crate::engine::keyboard::shortcuts::{ShortcutAction, SpecialKeyEvent};
 use crate::engine::{Application, EngineState};
@@ -220,6 +221,7 @@ impl CoderApp {
         self.load_editor_from_active_tab();
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn switch_editor_tab_by(&mut self, delta: i32) {
         let n = self.open_editor_tabs.len();
         if n == 0 {
@@ -230,6 +232,7 @@ impl CoderApp {
         self.switch_editor_tab_to(next);
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn switch_mode_tab_by(&mut self, delta: i32) {
         let order = [Tab::Code, Tab::Viewport, Tab::Terminal];
         let cur_idx = order
@@ -279,6 +282,7 @@ impl CoderApp {
         }
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn reopen_last_closed_editor_file(&mut self) {
         while let Some(fi) = self.closed_editor_history.pop() {
             if fi < self.python_files.len() {
@@ -1128,6 +1132,7 @@ builtins.print = __custom_print__
         }
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn activate_run_button(&mut self, state: &mut EngineState) {
         // Mirror the run-button click behavior.
         let keyboard_is_shown = state.keyboard.onscreen.is_shown();
