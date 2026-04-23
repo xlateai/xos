@@ -101,7 +101,7 @@ impl F3Menu {
     fn ui_scale(short_edge: f32) -> f32 {
         #[cfg(target_os = "ios")]
         {
-            return ((short_edge / REF_SHORT_EDGE) * 1.95).clamp(0.52, 2.0);
+            return ((short_edge / REF_SHORT_EDGE) * 1.755).clamp(0.47, 1.8);
         }
         #[cfg(not(target_os = "ios"))]
         {

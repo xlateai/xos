@@ -1,5 +1,6 @@
 use fontdue::{Font, FontSettings};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontFamily {
@@ -40,26 +41,49 @@ impl From<u8> for FontFamily {
 
 static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::DotGothic16 as u8);
 static DEFAULT_FONT_VERSION: AtomicU64 = AtomicU64::new(1);
+static FONT_CACHE_JETBRAINS_MONO: OnceLock<Font> = OnceLock::new();
+static FONT_CACHE_NOTO_SANS_JP: OnceLock<Font> = OnceLock::new();
+static FONT_CACHE_NOTO_SANS_MEDIUM: OnceLock<Font> = OnceLock::new();
+static FONT_CACHE_DOT_GOTHIC_16: OnceLock<Font> = OnceLock::new();
 
+fn load_font_from_bytes(font_bytes: &'static [u8]) -> Font {
+    Font::from_bytes(font_bytes, FontSettings::default()).unwrap()
+}
 
 pub fn jetbrains_mono() -> Font {
-    let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
-    return Font::from_bytes(font_bytes, FontSettings::default()).unwrap();
+    FONT_CACHE_JETBRAINS_MONO
+        .get_or_init(|| {
+            let font_bytes = include_bytes!("../../assets/JetBrainsMono-Regular.ttf") as &[u8];
+            load_font_from_bytes(font_bytes)
+        })
+        .clone()
 }
 
 pub fn noto_sans_jp() -> Font {
-    let font_bytes = include_bytes!("../../assets/NotoSansJP-Regular.ttf") as &[u8];
-    Font::from_bytes(font_bytes, FontSettings::default()).unwrap()
+    FONT_CACHE_NOTO_SANS_JP
+        .get_or_init(|| {
+            let font_bytes = include_bytes!("../../assets/NotoSansJP-Regular.ttf") as &[u8];
+            load_font_from_bytes(font_bytes)
+        })
+        .clone()
 }
 
 pub fn noto_sans_medium() -> Font {
-    let font_bytes = include_bytes!("../../assets/NotoSans-Medium.ttf") as &[u8];
-    Font::from_bytes(font_bytes, FontSettings::default()).unwrap()
+    FONT_CACHE_NOTO_SANS_MEDIUM
+        .get_or_init(|| {
+            let font_bytes = include_bytes!("../../assets/NotoSans-Medium.ttf") as &[u8];
+            load_font_from_bytes(font_bytes)
+        })
+        .clone()
 }
 
 pub fn dot_gothic_16() -> Font {
-    let font_bytes = include_bytes!("../../assets/DotGothic16-Regular.ttf") as &[u8];
-    Font::from_bytes(font_bytes, FontSettings::default()).unwrap()
+    FONT_CACHE_DOT_GOTHIC_16
+        .get_or_init(|| {
+            let font_bytes = include_bytes!("../../assets/DotGothic16-Regular.ttf") as &[u8];
+            load_font_from_bytes(font_bytes)
+        })
+        .clone()
 }
 
 pub fn default_font_family() -> FontFamily {
