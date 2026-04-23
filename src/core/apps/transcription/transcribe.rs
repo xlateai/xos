@@ -22,6 +22,8 @@ const TEXTBOX_BORDER: (u8, u8, u8) = (52, 58, 70);
 const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
 const THRESHOLD_MAX: f32 = 1.0;
+/// Waveform vertical gain (display only): `0` = quiet / low swing, `1` = full (legacy “maxed” look).
+const WAVE_DISPLAY_INTENSITY_DEFAULT: f32 = 0.10;
 const WAVE_SMOOTH_WINDOW: usize = 7;
 const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
@@ -99,6 +101,8 @@ fn input_device_same(a: &audio::AudioDevice, b: &audio::AudioDevice) -> bool {
 struct UiBounds {
     transcript: Option<(f32, f32, f32, f32)>,
     slider: Option<(f32, f32, f32, f32)>,
+    /// Full-width “wave intensity” (gain) control below the green capture button.
+    intensity: Option<(f32, f32, f32, f32)>,
 }
 
 struct VisualCanvas {
@@ -267,6 +271,7 @@ impl VisualCanvas {
         state_label: &TextRasterizer,
         state_color: (u8, u8, u8),
         threshold: f32,
+        waveform_intensity: f32,
         font: &Font,
         wave_rect: (f32, f32, f32, f32),
         safe_layout: (f32, f32, f32, f32),
@@ -277,11 +282,27 @@ impl VisualCanvas {
         let height = shape[0] as u32;
         let (l, t, sw, sh) = safe_layout;
         let point_cap = (sw as usize).max(2);
+        let full_w = width as f32;
+        let full_h = height as f32;
+
+        let (int_stack_r, capture_btn_r) = crate::ui::AudioInputSelector::layout_intensity_and_capture(
+            wave_rect.0,
+            wave_rect.1,
+            wave_rect.2,
+            wave_rect.3,
+            full_w,
+            full_h,
+            true,
+        );
 
         let wave_top = t + sh * WAVE_HEADROOM_FRAC;
-        let wave_h = sh * WAVE_BAND_FRAC;
-        let wave_center_y = wave_top + wave_h * 0.5;
-        let wave_half_amp = wave_h * 0.45;
+        let wave_h = (wave_rect.3 - wave_rect.1).max(0.0);
+        let line_top = wave_rect.1;
+        let line_bottom = (capture_btn_r.1 - 4.0).max(line_top + 6.0);
+        let line_h = (line_bottom - line_top).max(8.0);
+        let wave_center_y = line_top + line_h * 0.5;
+        let wave_half_amp = line_h * 0.45;
+        let pre_gain = 0.02 + 0.98 * waveform_intensity.clamp(0.0, 1.0);
 
         let panel_h = (sh * LEVEL_PANEL_H_FRAC).max(36.0);
         let panel_top = t + sh - panel_h - sh * 0.03;
@@ -374,7 +395,9 @@ impl VisualCanvas {
                 WAVE_BASELINE,
             );
             for i in 0..points {
-                let amp = self.amplify_nonlinear(draw_amp[i]).clamp(-1.0, 1.0);
+                let amp = self
+                    .amplify_nonlinear(draw_amp[i] * pre_gain)
+                    .clamp(-1.0, 1.0);
                 let x = l + i as f32 * x_scale;
                 let y = wave_center_y - amp * wave_half_amp;
                 if i > 0 {
@@ -385,7 +408,50 @@ impl VisualCanvas {
             }
         }
 
-        audio_selector.draw(state, font, wave_rect, safe_layout);
+        audio_selector.draw(state, font, wave_rect, safe_layout, true);
+
+        {
+            let buffer = state.frame_buffer_mut();
+            if int_stack_r.2 > int_stack_r.0 && int_stack_r.3 > int_stack_r.1 {
+                let track_inset = (int_stack_r.3 - int_stack_r.1) * 0.18;
+                let tr_y0 = int_stack_r.1 + track_inset;
+                let tr_y1 = int_stack_r.3 - track_inset;
+                let t = waveform_intensity.clamp(0.0, 1.0);
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    int_stack_r.0,
+                    tr_y0,
+                    int_stack_r.2,
+                    tr_y1,
+                    (42, 46, 56),
+                );
+                let w = (int_stack_r.2 - int_stack_r.0).max(0.0);
+                let fill_x1 = int_stack_r.0 + w * t;
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    int_stack_r.0,
+                    tr_y0,
+                    fill_x1,
+                    tr_y1,
+                    (70, 160, 100),
+                );
+                let tx = int_stack_r.0 + w * t;
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    tx - 1.0,
+                    int_stack_r.1,
+                    tx + 1.0,
+                    int_stack_r.3,
+                    (255, 255, 255),
+                );
+            }
+        }
 
         let buffer = state.frame_buffer_mut();
 
@@ -449,6 +515,7 @@ impl VisualCanvas {
             1.0,
         );
 
+        let intensity_hit = (int_stack_r.0, int_stack_r.1 - 6.0, int_stack_r.2, int_stack_r.3 + 5.0);
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
@@ -456,6 +523,11 @@ impl VisualCanvas {
                 None
             },
             slider: Some((slider_x0, slider_y0 - panel_h * 0.1, slider_x1, slider_y1 + panel_h * 0.1)),
+            intensity: if int_stack_r.2 > int_stack_r.0 {
+                Some(intensity_hit)
+            } else {
+                None
+            },
         }
     }
 }
@@ -479,6 +551,9 @@ pub struct TranscribeApp {
     in_speech_segment: bool,
     ui_bounds: UiBounds,
     slider_dragging: bool,
+    /// Waveform display gain 0..1 (does not affect transcription, only the drawn line).
+    waveform_intensity: f32,
+    intensity_slider_dragging: bool,
     /// Left button down in transcript; drag scrolls (same as standalone text).
     transcript_pointer_down: bool,
     audio_selector: AudioInputSelector,
@@ -511,6 +586,8 @@ impl TranscribeApp {
             in_speech_segment: false,
             ui_bounds: UiBounds::default(),
             slider_dragging: false,
+            waveform_intensity: WAVE_DISPLAY_INTENSITY_DEFAULT,
+            intensity_slider_dragging: false,
             transcript_pointer_down: false,
             audio_selector: AudioInputSelector::new(),
         }
@@ -561,6 +638,14 @@ impl TranscribeApp {
         };
         let t = ((state.mouse.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0);
         self.threshold = clamp_threshold(t);
+    }
+
+    fn update_waveform_intensity_from_mouse(&mut self, state: &EngineState) {
+        let Some((x0, _y0, x1, _y1)) = self.ui_bounds.intensity else {
+            return;
+        };
+        let t = ((state.mouse.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0);
+        self.waveform_intensity = t;
     }
 
     fn pause_input(&self) {
@@ -820,6 +905,7 @@ impl Application for TranscribeApp {
             &self.state_label,
             if active { STATE_ACTIVE } else { STATE_SILENCE },
             th,
+            self.waveform_intensity,
             &self.text_font,
             wave_rect,
             safe,
@@ -883,7 +969,19 @@ impl Application for TranscribeApp {
             }
             self.transcript_pointer_down = false;
             self.slider_dragging = false;
+            self.intensity_slider_dragging = false;
             return;
+        }
+        if let Some((x0, y0, x1, y1)) = self.ui_bounds.intensity {
+            let mx = state.mouse.x;
+            let my = state.mouse.y;
+            if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.intensity_slider_dragging = true;
+                self.update_waveform_intensity_from_mouse(state);
+                self.transcript_pointer_down = false;
+                self.slider_dragging = false;
+                return;
+            }
         }
         if self
             .audio_selector
@@ -891,6 +989,7 @@ impl Application for TranscribeApp {
         {
             self.transcript_pointer_down = false;
             self.slider_dragging = false;
+            self.intensity_slider_dragging = false;
             return;
         }
         if let Some((x0, y0, x1, y1)) = self.ui_bounds.slider {
@@ -900,6 +999,7 @@ impl Application for TranscribeApp {
                 self.slider_dragging = true;
                 self.update_threshold_from_mouse(state);
                 self.transcript_pointer_down = false;
+                self.intensity_slider_dragging = false;
                 return;
             }
         }
@@ -930,6 +1030,7 @@ impl Application for TranscribeApp {
             }
         }
         self.slider_dragging = false;
+        self.intensity_slider_dragging = false;
         if self.transcript_pointer_down {
             self.transcript_view.on_mouse_up();
             self.transcript_pointer_down = false;
@@ -937,6 +1038,10 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
+        if self.intensity_slider_dragging {
+            self.update_waveform_intensity_from_mouse(state);
+            return;
+        }
         if self.slider_dragging {
             self.update_threshold_from_mouse(state);
             return;

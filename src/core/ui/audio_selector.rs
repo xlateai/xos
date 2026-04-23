@@ -46,6 +46,8 @@ pub struct AudioInputSelector {
     tap_candidate: bool,
     /// Updated whenever [`AudioInputSelector::draw`] runs (for hit-testing).
     pub last_button_rect: (f32, f32, f32, f32),
+    /// Filled when drawing with `with_intensity_strip: true` — full-width track below the capture button.
+    pub last_intensity_rect: (f32, f32, f32, f32),
 }
 
 impl Default for AudioInputSelector {
@@ -65,6 +67,7 @@ impl AudioInputSelector {
             mouse_down_time: None,
             tap_candidate: false,
             last_button_rect: (0.0, 0.0, 0.0, 0.0),
+            last_intensity_rect: (0.0, 0.0, 0.0, 0.0),
         }
     }
 
@@ -73,6 +76,58 @@ impl AudioInputSelector {
             .into_iter()
             .filter(|d| d.is_input)
             .collect();
+    }
+
+    fn capture_button_size(wave_w: f32, wave_h: f32, viewport_w: f32, viewport_h: f32) -> f32 {
+        #[cfg(target_os = "ios")]
+        {
+            let vm = viewport_w.max(viewport_h).max(1.0);
+            (vm * 0.11).clamp(64.0, 200.0)
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            (wave_w.min(wave_h) * 0.20).clamp(28.0, 64.0)
+        }
+    }
+
+    /// Thickness of the optional waveform gain strip at the **bottom** of the wave band (below the green button).
+    pub fn layout_intensity_strip_height(viewport_h: f32) -> f32 {
+        (viewport_h * 0.042)
+            .max(20.0)
+            .min(40.0)
+    }
+
+    const INTENSITY_STRIP_TO_BUTTON_GAP: f32 = 6.0;
+
+    /// `with_intensity_strip`: if true, reserves a row at the bottom of the wave for a slider and moves
+    /// the capture button up. Returns `(intensity_rect, button_rect)`; intensity is `(0,0,0,0)` if false.
+    pub fn layout_intensity_and_capture(
+        wave_x0: f32,
+        wave_y0: f32,
+        wave_x1: f32,
+        wave_y1: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+        with_intensity_strip: bool,
+    ) -> ((f32, f32, f32, f32), (f32, f32, f32, f32)) {
+        let wave_w = (wave_x1 - wave_x0).max(0.0);
+        let wave_h = (wave_y1 - wave_y0).max(0.0);
+        let btn_size = Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h);
+        let cx = (wave_x0 + wave_x1) * 0.5;
+        let btn_x0 = cx - btn_size * 0.5;
+        if !with_intensity_strip {
+            let btn_y1 = wave_y1 - 4.0;
+            let btn_y0 = btn_y1 - btn_size;
+            return ((0.0, 0.0, 0.0, 0.0), (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1));
+        }
+        let sh = Self::layout_intensity_strip_height(viewport_h);
+        let int_y1 = wave_y1;
+        let int_y0 = (int_y1 - sh).max(wave_y0);
+        let int_rect = (wave_x0, int_y0, wave_x1, int_y1);
+        let btn_y1 = int_y0 - Self::INTENSITY_STRIP_TO_BUTTON_GAP;
+        let btn_y0 = (btn_y1 - btn_size).max(wave_y0);
+        let btn_rect = (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1);
+        (int_rect, btn_rect)
     }
 
     /// Place a square capture control at the bottom center of the waveform band.
@@ -85,21 +140,16 @@ impl AudioInputSelector {
         viewport_w: f32,
         viewport_h: f32,
     ) -> (f32, f32, f32, f32) {
-        let wave_w = (wave_x1 - wave_x0).max(0.0);
-        let wave_h = (wave_y1 - wave_y0).max(0.0);
-        // iOS: size from the longer viewport side so the control is easy to hit; desktop: smaller in-band button.
-        #[cfg(target_os = "ios")]
-        let btn_size = {
-            let vm = viewport_w.max(viewport_h).max(1.0);
-            (vm * 0.11).clamp(64.0, 200.0)
-        };
-        #[cfg(not(target_os = "ios"))]
-        let btn_size = (wave_w.min(wave_h) * 0.20).clamp(28.0, 64.0);
-        let cx = (wave_x0 + wave_x1) * 0.5;
-        let btn_x0 = cx - btn_size * 0.5;
-        let btn_y1 = wave_y1 - 4.0;
-        let btn_y0 = btn_y1 - btn_size;
-        (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1)
+        let (_, b) = Self::layout_intensity_and_capture(
+            wave_x0,
+            wave_y0,
+            wave_x1,
+            wave_y1,
+            viewport_w,
+            viewport_h,
+            false,
+        );
+        b
     }
 
     fn point_in_rect(px: f32, py: f32, r: (f32, f32, f32, f32)) -> bool {
@@ -217,20 +267,23 @@ impl AudioInputSelector {
         font: &Font,
         wave_rect: (f32, f32, f32, f32),
         safe_layout: (f32, f32, f32, f32),
+        with_intensity_strip: bool,
     ) {
         let shape = state.frame.shape();
         let full_h = shape[0] as f32;
         let full_w = shape[1] as f32;
         let height = shape[0] as usize;
         let width = shape[1] as usize;
-        let btn = Self::layout_button_rect(
+        let (int_r, btn) = Self::layout_intensity_and_capture(
             wave_rect.0,
             wave_rect.1,
             wave_rect.2,
             wave_rect.3,
             full_w,
             full_h,
+            with_intensity_strip,
         );
+        self.last_intensity_rect = int_r;
         self.last_button_rect = btn;
 
         if self.show_menu {
