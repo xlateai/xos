@@ -38,8 +38,8 @@ const WAVE_BAND_FRAC: f32 = 0.375;
 const WAVE_HEADROOM_FRAC: f32 = 0.0;
 const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
-const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 24.0;
-const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 40.0;
+const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 26.0;
+const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 44.0;
 const TRANSCRIPT_INNER_PAD: f32 = 4.0;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
@@ -611,7 +611,7 @@ impl TranscribeApp {
         vad_label.set_text("VAD: 0.000".to_string());
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);
         state_label.set_text("SILENCE".to_string());
-        let transcript_view = TranscriptTextView::new(font.clone(), 28.0);
+        let transcript_view = TranscriptTextView::new(font.clone(), 30.0);
         let engine = match TranscriptionEngine::new_with_size_backend_language(
             None,
             transcribe_backend_from_env(),
@@ -738,8 +738,9 @@ impl TranscribeApp {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn transcript_text_size(height: f32) -> f32 {
-        (height * 0.036).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
+    fn transcript_text_size(height: f32, f3_ui_scale_mul: f32) -> f32 {
+        let base = (height * 0.039).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
+        (base * f3_ui_scale_mul.clamp(0.25, 5.0)).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX * 2.0)
     }
 }
 
@@ -1011,7 +1012,7 @@ impl Application for TranscribeApp {
             let clip_x1 = (textbox_x1 - 1.0).min(w);
             let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
             self.transcript_view
-                .set_font_size(Self::transcript_text_size(ssh));
+                .set_font_size(Self::transcript_text_size(ssh, state.f3_ui_scale_multiplier()));
             self.transcript_view.set_text(full_text);
             self.transcript_view
                 .tick(state, (clip_x0, clip_y0, clip_x1, clip_y1));
