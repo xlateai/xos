@@ -32,8 +32,9 @@ export IPHONEOS_DEPLOYMENT_TARGET=15.1
 # - --crate-type staticlib: Produce a static library (.a file) that can be linked into Swift code
 # - link-arg: Sets minimum iOS version for the linker
 echo "🔨 Building for iOS device (aarch64-apple-ios)..."
-# Whisper pulls a desktop-only optional crate; iOS lib build uses default features off.
-cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features -- -C link-arg=-miphoneos-version-min=15.1
+# No default features: omit desktop-only stacks (e.g. Silero/ORT, Burn/WGPU). Enable CT2 Whisper
+# so `xos.audio.transcription` and `xos.ai.whisper` (backend=ct2) match desktop cache under ~/.xos.
+cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features --features "whisper,whisper_ct2" -- -C link-arg=-miphoneos-version-min=15.1
 
 # Verify the build succeeded by checking for the output file (use absolute path; cwd must be repo root)
 LIB_XOS_A="$PROJECT_ROOT/target/aarch64-apple-ios/release/libxos.a"

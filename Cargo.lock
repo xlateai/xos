@@ -2006,8 +2006,6 @@ dependencies = [
 [[package]]
 name = "ct2rs"
 version = "0.9.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5693eb65909bc89023b2844268ff8f95b29d99fd64a2b7eb5d2aa1e3aba11f"
 dependencies = [
  "anyhow",
  "cmake",
@@ -8229,8 +8227,6 @@ dependencies = [
 [[package]]
 name = "sentencepiece-sys"
 version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa4f9b54dc005df8ec1c3f9e2347cea6b6657ec5460977a982e7a4e09ef49411"
 dependencies = [
  "cc",
  "cmake",

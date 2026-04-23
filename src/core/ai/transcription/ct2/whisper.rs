@@ -9,11 +9,7 @@
 //! - **`WhisperOptions::beam_size = 1`**: greedy decoding.
 //! - Remaining latency is almost entirely **model time** per `generate` call; UI polls as fast as
 //!   Python sleeps (`transcribe.py`), while the Rust side targets ~100 Hz partial decode scheduling.
-#![cfg(all(
-    feature = "whisper_ct2",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#![cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};

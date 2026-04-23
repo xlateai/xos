@@ -174,7 +174,11 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let model_trim = model.trim();
         let stem = model_trim.strip_suffix("-f16").unwrap_or(model_trim);
         if !stem.is_empty() {
-            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(
+                feature = "whisper_burn",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            ))]
             {
                 crate::ai::transcription::ensure_burn_whisper_artifacts_for_load(stem)
                     .map_err(|e| to_py_err(vm, e))?;
