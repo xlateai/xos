@@ -4,7 +4,10 @@ use crate::engine::audio;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
-use crate::ui::{AudioInputMenuDown, AudioInputSelector, AudioInputSelectorUp};
+use crate::ui::{
+    AudioInputMenuDown, AudioInputSelector, AudioInputSelectorUp, TranscribeLangMenuDown,
+    TranscribeLanguageSelector,
+};
 use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -102,6 +105,8 @@ struct UiBounds {
     slider: Option<(f32, f32, f32, f32)>,
     /// Full-width “wave intensity” (gain) control below the green capture button.
     intensity: Option<(f32, f32, f32, f32)>,
+    /// **lang** button to the right of capture (transcription language; whisper builds only).
+    lang: Option<(f32, f32, f32, f32)>,
 }
 
 struct VisualCanvas {
@@ -275,6 +280,7 @@ impl VisualCanvas {
         wave_rect: (f32, f32, f32, f32),
         safe_layout: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
+        lang_selector: &mut TranscribeLanguageSelector,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
@@ -284,18 +290,28 @@ impl VisualCanvas {
         let full_w = width as f32;
         let full_h = height as f32;
 
-        let (int_stack_r, capture_btn_r) = crate::ui::AudioInputSelector::layout_intensity_and_capture(
-            wave_rect.0,
-            wave_rect.1,
-            wave_rect.2,
-            wave_rect.3,
-            full_w,
-            full_h,
-            true,
-        );
+        let wave_w = (wave_rect.2 - wave_rect.0).max(0.0);
+        let wave_h = (wave_rect.3 - wave_rect.1).max(0.0);
+        let btn_s =
+            AudioInputSelector::capture_button_size_for_layout(wave_w, wave_h, full_w, full_h);
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        let trailing_w = TranscribeLanguageSelector::trailing_width_for_layout(btn_s, full_w);
+        #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
+        let trailing_w = 0.0_f32;
+        let (int_stack_r, capture_btn_r, lang_btn_r) =
+            AudioInputSelector::layout_intensity_capture_trailing(
+                wave_rect.0,
+                wave_rect.1,
+                wave_rect.2,
+                wave_rect.3,
+                full_w,
+                full_h,
+                true,
+                trailing_w,
+                AudioInputSelector::TRAILING_TO_CAPTURE_GAP,
+            );
 
         let wave_top = t + sh * WAVE_HEADROOM_FRAC;
-        let wave_h = (wave_rect.3 - wave_rect.1).max(0.0);
         let line_top = wave_rect.1;
         let line_bottom = (capture_btn_r.1 - 4.0).max(line_top + 6.0);
         let line_h = (line_bottom - line_top).max(8.0);
@@ -407,7 +423,19 @@ impl VisualCanvas {
             }
         }
 
-        audio_selector.draw(state, font, wave_rect, safe_layout, true);
+        audio_selector.draw_with_trailing(state, font, wave_rect, safe_layout, true, trailing_w);
+
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        if lang_btn_r.2 > lang_btn_r.0 && lang_btn_r.3 > lang_btn_r.1 {
+            lang_selector.draw(
+                state,
+                font,
+                lang_btn_r,
+                width as usize,
+                height as usize,
+                safe_layout,
+            );
+        }
 
         {
             let buffer = state.frame_buffer_mut();
@@ -515,6 +543,8 @@ impl VisualCanvas {
         );
 
         let intensity_hit = (int_stack_r.0, int_stack_r.1 - 6.0, int_stack_r.2, int_stack_r.3 + 5.0);
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        let lang_hit = (lang_btn_r.0, lang_btn_r.1 - 4.0, lang_btn_r.2, lang_btn_r.3 + 4.0);
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
@@ -526,6 +556,20 @@ impl VisualCanvas {
                 Some(intensity_hit)
             } else {
                 None
+            },
+            lang: {
+                #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+                {
+                    if lang_btn_r.2 > lang_btn_r.0 {
+                        Some(lang_hit)
+                    } else {
+                        None
+                    }
+                }
+                #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
+                {
+                    None
+                }
             },
         }
     }
@@ -556,6 +600,8 @@ pub struct TranscribeApp {
     /// Left button down in transcript; drag scrolls (same as standalone text).
     transcript_pointer_down: bool,
     audio_selector: AudioInputSelector,
+    /// Transcription language (`en` / `ja`); no-op on builds without the whisper feature.
+    lang_selector: TranscribeLanguageSelector,
 }
 
 impl TranscribeApp {
@@ -566,9 +612,17 @@ impl TranscribeApp {
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);
         state_label.set_text("SILENCE".to_string());
         let transcript_view = TranscriptTextView::new(font.clone(), 28.0);
+        let engine = match TranscriptionEngine::new_with_size_backend_language(
+            None,
+            transcribe_backend_from_env(),
+            Some("en"),
+        ) {
+            Ok(e) => e,
+            Err(_) => TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
+        };
         Self {
             listener: None,
-            engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
+            engine,
             canvas: VisualCanvas::new(),
             vad_label,
             state_label,
@@ -589,6 +643,33 @@ impl TranscribeApp {
             intensity_slider_dragging: false,
             transcript_pointer_down: false,
             audio_selector: AudioInputSelector::new(),
+            lang_selector: TranscribeLanguageSelector::new(),
+        }
+    }
+
+    /// Replace the live Whisper decode thread with the current [`TranscribeLanguageSelector`] code.
+    fn recreate_transcription_engine(&mut self) {
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        {
+            let code = self.lang_selector.current_language_code();
+            let backend = transcribe_backend_from_env();
+            match TranscriptionEngine::new_with_size_backend_language(None, backend, Some(code)) {
+                Ok(e) => {
+                    self.engine = e;
+                    if let Some(l) = &self.listener {
+                        self.engine
+                            .set_device_hint(l.device_name(), l.buffer().sample_rate());
+                    }
+                    self.committed_lines.clear();
+                    self.segment_live_text.clear();
+                    self.in_speech_segment = false;
+                    self.speech_run_frames = 0;
+                    self.silence_run_frames = 0;
+                    self.silence_idle_clip_frames = 0;
+                    self.transcript_view.set_text(String::new());
+                }
+                Err(e) => eprintln!("transcribe: failed to set language: {e}"),
+            }
         }
     }
 
@@ -761,6 +842,7 @@ impl Application for TranscribeApp {
         }
 
         self.audio_selector.tick_hold_opens_menu();
+        self.lang_selector.tick_hold_opens_menu();
 
         let (channels, sr, ingested) = {
             let l = self.listener.as_ref().expect("checked above");
@@ -774,10 +856,14 @@ impl Application for TranscribeApp {
 
         self.engine.process_snapshot(sr, &channels, ingested);
         let p_engine = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
-        // On iOS, optional Whisper/Silero features are usually off: use RMS proxy for live levels.
+        let energy = energy_speech_proxy(&channels);
+        // iOS: ONNX VAD often unavailable, so blend with energy.
         #[cfg(target_os = "ios")]
-        let p = p_engine.max(energy_speech_proxy(&channels));
-        #[cfg(not(target_os = "ios"))]
+        let p = p_engine.max(energy);
+        // macOS: temporarily mirror iOS behavior for UI gating/levels to avoid dead VAD bars.
+        #[cfg(all(not(target_os = "ios"), target_os = "macos"))]
+        let p = energy;
+        #[cfg(all(not(target_os = "ios"), not(target_os = "macos")))]
         let p = p_engine;
         self.vad_prob_visual_ema = self.vad_prob_visual_ema * 0.82 + p * 0.18;
         self.vad_prob_seg_ema =
@@ -909,6 +995,7 @@ impl Application for TranscribeApp {
             wave_rect,
             safe,
             &mut self.audio_selector,
+            &mut self.lang_selector,
         );
 
         if self.ui_bounds.transcript.is_some() {
@@ -950,6 +1037,7 @@ impl Application for TranscribeApp {
         let fw = shape[1] as u32;
         let fh = shape[0] as u32;
         if self.audio_selector.show_menu {
+            self.lang_selector.show_menu = false;
             let layout = safe_layout_pixels(state);
             match self
                 .audio_selector
@@ -971,10 +1059,35 @@ impl Application for TranscribeApp {
             self.intensity_slider_dragging = false;
             return;
         }
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        if self.lang_selector.show_menu {
+            self.audio_selector.show_menu = false;
+            let layout = safe_layout_pixels(state);
+            match self.lang_selector.on_menu_pointer_down(
+                state.mouse.x,
+                state.mouse.y,
+                layout,
+            ) {
+                TranscribeLangMenuDown::Dismiss | TranscribeLangMenuDown::DismissInColumn => {
+                    self.lang_selector.show_menu = false;
+                }
+                TranscribeLangMenuDown::Pick { changed, .. } => {
+                    if changed {
+                        self.recreate_transcription_engine();
+                    }
+                    self.lang_selector.show_menu = false;
+                }
+            }
+            self.transcript_pointer_down = false;
+            self.slider_dragging = false;
+            self.intensity_slider_dragging = false;
+            return;
+        }
         if let Some((x0, y0, x1, y1)) = self.ui_bounds.intensity {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.lang_selector.show_menu = false;
                 self.intensity_slider_dragging = true;
                 self.update_waveform_intensity_from_mouse(state);
                 self.transcript_pointer_down = false;
@@ -982,10 +1095,22 @@ impl Application for TranscribeApp {
                 return;
             }
         }
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        if self
+            .lang_selector
+            .on_button_pointer_down(state.mouse.x, state.mouse.y)
+        {
+            self.audio_selector.show_menu = false;
+            self.transcript_pointer_down = false;
+            self.slider_dragging = false;
+            self.intensity_slider_dragging = false;
+            return;
+        }
         if self
             .audio_selector
             .on_capture_pointer_down(state.mouse.x, state.mouse.y)
         {
+            self.lang_selector.show_menu = false;
             self.transcript_pointer_down = false;
             self.slider_dragging = false;
             self.intensity_slider_dragging = false;
@@ -995,6 +1120,7 @@ impl Application for TranscribeApp {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.lang_selector.show_menu = false;
                 self.slider_dragging = true;
                 self.update_threshold_from_mouse(state);
                 self.transcript_pointer_down = false;
@@ -1006,6 +1132,7 @@ impl Application for TranscribeApp {
             let mx = state.mouse.x;
             let my = state.mouse.y;
             if mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                self.lang_selector.show_menu = false;
                 self.transcript_pointer_down = true;
                 self.transcript_view.on_mouse_down(my);
             }
@@ -1026,6 +1153,15 @@ impl Application for TranscribeApp {
                         let _ = l.pause();
                     }
                 }
+            }
+        }
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+        {
+            if self
+                .lang_selector
+                .on_button_pointer_up(state.mouse.x, state.mouse.y)
+            {
+                self.lang_selector.on_pointer_tap_opens_if_closed();
             }
         }
         self.slider_dragging = false;

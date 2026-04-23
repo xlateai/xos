@@ -288,8 +288,8 @@ impl TranscriptionEngine {
         }
         match raw.as_str() {
             "english" | "en" => Ok(Some("en".to_string())),
-            "japanese" | "ja" => Ok(Some("ja".to_string())),
-            _ => Err("language must be 'english' or 'japanese'".to_string()),
+            "japanese" | "ja" | "jp" => Ok(Some("ja".to_string())),
+            _ => Err("language must be 'english' or 'japanese' (codes en, ja, jp)".to_string()),
         }
     }
 
