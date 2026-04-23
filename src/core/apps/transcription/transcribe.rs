@@ -58,9 +58,10 @@ fn safe_layout_pixels(state: &EngineState) -> (f32, f32, f32, f32) {
     (s.x1 * w, s.y1 * h, (s.x2 - s.x1) * w, (s.y2 - s.y1) * h)
 }
 
-/// iOS `lib` builds have no Silero/Whisper VAD, so `last_vad_speech_prob()` is always 0.
+/// iOS `lib` builds have no `ort` / Silero ONNX, so `last_vad_speech_prob()` is always 0.
 /// Use a cheap RMS on recent mono samples so levels / waveform coloring stay responsive.
-fn energy_speech_proxy(channels: &[Vec<f32>]) -> f32 {
+/// Used by **transcribe** and by [`super::vad::VadApp`].
+pub(crate) fn energy_speech_proxy(channels: &[Vec<f32>]) -> f32 {
     if channels.is_empty() || channels[0].is_empty() {
         return 0.0;
     }
@@ -103,19 +104,22 @@ struct UiBounds {
 struct VisualCanvas {
     waveform_points: usize,
     wave_smooth_half: usize,
+    /// Per-column temporal EMA so the waveform does not stutter when audio chunks arrive in bursts.
+    wave_display_ema: Vec<f32>,
 }
 
 impl VisualCanvas {
     fn new() -> Self {
         Self {
             #[cfg(target_os = "ios")]
-            waveform_points: 240,
+            waveform_points: 420,
             #[cfg(not(target_os = "ios"))]
             waveform_points: DEFAULT_WAVE_POINTS,
             #[cfg(target_os = "ios")]
             wave_smooth_half: WAVE_SMOOTH_WINDOW_IOS / 2,
             #[cfg(not(target_os = "ios"))]
             wave_smooth_half: WAVE_SMOOTH_WINDOW / 2,
+            wave_display_ema: Vec::new(),
         }
     }
 
@@ -341,6 +345,20 @@ impl VisualCanvas {
                 smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
             }
         }
+        // Decouple the drawn line from buffer chunk boundaries (avoids a “stuttery” look on iOS).
+        if self.wave_display_ema.len() != points {
+            self.wave_display_ema = vec![0.0_f32; points];
+            if !active.is_empty() {
+                self.wave_display_ema.copy_from_slice(&smooth);
+            }
+        } else {
+            const WAVE_TEMPORAL_EMA: f32 = 0.42;
+            let a = WAVE_TEMPORAL_EMA;
+            for i in 0..points {
+                self.wave_display_ema[i] = self.wave_display_ema[i] * (1.0 - a) + smooth[i] * a;
+            }
+        }
+        let draw_amp = &self.wave_display_ema;
         let mut prev_x = l;
         let mut prev_y = wave_center_y;
         {
@@ -356,7 +374,7 @@ impl VisualCanvas {
                 WAVE_BASELINE,
             );
             for i in 0..points {
-                let amp = self.amplify_nonlinear(smooth[i]).clamp(-1.0, 1.0);
+                let amp = self.amplify_nonlinear(draw_amp[i]).clamp(-1.0, 1.0);
                 let x = l + i as f32 * x_scale;
                 let y = wave_center_y - amp * wave_half_amp;
                 if i > 0 {

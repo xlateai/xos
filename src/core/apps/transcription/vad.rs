@@ -1,4 +1,8 @@
-//! `xos app vad` — live mic / loopback with Silero VAD probability visualization.
+//! `xos app vad` — live mic / loopback with VAD level visualization.
+//!
+//! **iOS** `lib` builds omit ONNX Runtime / Silero; the level bar uses the same **mic RMS proxy** as
+//! [`super::transcribe::TranscribeApp`]. For full **Silero** probability, use a desktop build
+//! (default features include `silero_vad` + `ort`).
 
 use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use crate::engine::audio;
@@ -57,6 +61,8 @@ fn vad_display_threshold() -> f32 {
 
 struct VadStripCanvas {
     waveform_points: usize,
+    /// Temporal EMA to smooth draws when the capture buffer updates in large chunks (esp. iOS).
+    wave_display_ema: Vec<f32>,
 }
 
 const DEFAULT_WAVE_POINTS: usize = 640;
@@ -68,7 +74,11 @@ const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 impl VadStripCanvas {
     fn new() -> Self {
         Self {
+            #[cfg(target_os = "ios")]
+            waveform_points: 420,
+            #[cfg(not(target_os = "ios"))]
             waveform_points: DEFAULT_WAVE_POINTS,
+            wave_display_ema: Vec::new(),
         }
     }
 
@@ -245,11 +255,21 @@ impl VadStripCanvas {
             }
             smooth[i] = if n > 0 { sum / n as f32 } else { 0.0 };
         }
+        if self.wave_display_ema.len() != points {
+            self.wave_display_ema = vec![0.0_f32; points];
+            self.wave_display_ema.copy_from_slice(&smooth);
+        } else {
+            const WAVE_TEMPORAL_EMA: f32 = 0.42;
+            let a = WAVE_TEMPORAL_EMA;
+            for i in 0..points {
+                self.wave_display_ema[i] = self.wave_display_ema[i] * (1.0 - a) + smooth[i] * a;
+            }
+        }
 
         let mut prev_x = 0.0;
         let mut prev_y = wave_center_y;
         for i in 0..points {
-            let s = smooth[i];
+            let s = self.wave_display_ema[i];
             let amp = self.amplify_nonlinear(s).clamp(-1.0, 1.0);
             let x = i as f32 * x_scale;
             let y = wave_center_y - amp * wave_half_amp;
@@ -343,6 +363,8 @@ impl Application for VadApp {
             vad_display_threshold()
         );
         let _ = io::stdout().flush();
+        #[cfg(target_os = "ios")]
+        eprintln!("vad: iOS: levels = mic RMS (Silero not in this build). Draggable VAD threshold: `xos app transcribe`.");
 
         let all_devices = audio::devices();
         let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
@@ -443,7 +465,18 @@ impl Application for VadApp {
 
         self.engine.process_snapshot(sr, &channels, ingested);
 
-        let p_raw = self.engine.last_vad_speech_prob();
+        // Silero ONNX is not in iOS `lib` builds; blend mic RMS or the bar and labels stay at ~0.
+        let p_raw = {
+            let p = self.engine.last_vad_speech_prob();
+            #[cfg(target_os = "ios")]
+            {
+                p.max(super::transcribe::energy_speech_proxy(&channels))
+            }
+            #[cfg(not(target_os = "ios"))]
+            {
+                p
+            }
+        };
         self.vad_prob_ema = self.vad_prob_ema * (1.0 - VAD_PROB_EMA_ALPHA) + p_raw * VAD_PROB_EMA_ALPHA;
         let p = self.vad_prob_ema.clamp(0.0, 1.0);
         let l = self.listener.as_ref().expect("checked");
