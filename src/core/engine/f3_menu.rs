@@ -99,7 +99,14 @@ impl F3Menu {
 
     #[inline]
     fn ui_scale(short_edge: f32) -> f32 {
-        (short_edge / REF_SHORT_EDGE).clamp(0.28, 1.0)
+        #[cfg(target_os = "ios")]
+        {
+            return ((short_edge / REF_SHORT_EDGE) * 1.95).clamp(0.52, 2.0);
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            (short_edge / REF_SHORT_EDGE).clamp(0.28, 1.0)
+        }
     }
 
     #[inline]
@@ -773,7 +780,7 @@ pub fn tick_f3_menu(state: &mut EngineState) {
             .map(|f| f == selected_family)
             .unwrap_or(false);
         let bg = if is_selected {
-            (52, 86, 142, (220.0 * overlay_alpha) as u8)
+            (46, 138, 72, (220.0 * overlay_alpha) as u8)
         } else {
             (48, 48, 48, (190.0 * overlay_alpha) as u8)
         };

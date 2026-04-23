@@ -606,6 +606,7 @@ pub struct TranscribeApp {
     audio_selector: AudioInputSelector,
     /// Transcription language (`en` / `ja`); no-op on builds without the whisper feature.
     lang_selector: TranscribeLanguageSelector,
+    font_version: u64,
 }
 
 impl TranscribeApp {
@@ -648,7 +649,31 @@ impl TranscribeApp {
             transcript_pointer_down: false,
             audio_selector: AudioInputSelector::new(),
             lang_selector: TranscribeLanguageSelector::new(),
+            font_version: fonts::default_font_version(),
         }
+    }
+
+    fn refresh_fonts_if_needed(&mut self) {
+        let current_version = fonts::default_font_version();
+        if current_version == self.font_version {
+            return;
+        }
+        self.font_version = current_version;
+
+        let new_font = fonts::default_font();
+
+        let vad_size = self.vad_label.font_size;
+        let vad_text = self.vad_label.text.clone();
+        self.vad_label = TextRasterizer::new(new_font.clone(), vad_size);
+        self.vad_label.set_text(vad_text);
+
+        let state_size = self.state_label.font_size;
+        let state_text = self.state_label.text.clone();
+        self.state_label = TextRasterizer::new(new_font.clone(), state_size);
+        self.state_label.set_text(state_text);
+
+        self.text_font = new_font.clone();
+        self.transcript_view.set_font(new_font);
     }
 
     /// Replace the live Whisper decode thread with the current [`TranscribeLanguageSelector`] code.
@@ -856,6 +881,7 @@ impl Application for TranscribeApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        self.refresh_fonts_if_needed();
         fill(&mut state.frame, BG);
 
         if self.listener.is_none() {

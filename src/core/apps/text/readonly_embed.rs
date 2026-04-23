@@ -61,6 +61,13 @@ impl TranscriptTextView {
         self.text_rasterizer.set_font_size(font_size);
     }
 
+    pub fn set_font(&mut self, font: Font) {
+        let font_size = self.text_rasterizer.font_size;
+        let text = self.text_rasterizer.text.clone();
+        self.text_rasterizer = TextRasterizer::new(font, font_size);
+        self.text_rasterizer.set_text(text);
+    }
+
     /// Replace document text. If [`Self::stick_to_tail`] is true and the string changed, we snap to
     /// the bottom after layout (new transcript lines).
     pub fn set_text(&mut self, text: String) {

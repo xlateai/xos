@@ -1,5 +1,5 @@
 use fontdue::{Font, FontSettings};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontFamily {
@@ -39,6 +39,7 @@ impl From<u8> for FontFamily {
 }
 
 static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::DotGothic16 as u8);
+static DEFAULT_FONT_VERSION: AtomicU64 = AtomicU64::new(1);
 
 
 pub fn jetbrains_mono() -> Font {
@@ -70,7 +71,15 @@ pub fn default_font_name() -> &'static str {
 }
 
 pub fn set_default_font_family(family: FontFamily) {
-    DEFAULT_FONT_FAMILY.store(family as u8, Ordering::Relaxed);
+    let prev = default_font_family();
+    if prev != family {
+        DEFAULT_FONT_FAMILY.store(family as u8, Ordering::Relaxed);
+        DEFAULT_FONT_VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub fn default_font_version() -> u64 {
+    DEFAULT_FONT_VERSION.load(Ordering::Relaxed)
 }
 
 pub fn default_font() -> Font {
