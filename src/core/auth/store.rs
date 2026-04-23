@@ -65,12 +65,13 @@ impl std::error::Error for AuthError {}
 /// Standard per-OS directory for xos app data (machine-local).
 ///
 /// **Override:** set `XOS_DATA_DIR` to a directory path (e.g. tests or a custom Swift-provided path).
-/// Otherwise: Windows `%LOCALAPPDATA%\\xos`, macOS/Linux `~/.xos`, iOS
-/// `HOME/Library/Application Support/xos` (see below).
+/// Otherwise: Windows `%LOCALAPPDATA%\\xos`, macOS/Linux `~/.xos`, iOS `HOME/Documents/xos` (see below).
 ///
-/// **iOS:** The `…/Containers/Data/Application/<id>/` segment is the system app sandbox; only this app
-/// can read it (not other apps, unless you use an App Group). We use **Application Support** instead
-/// of `~/.xos` because a dot-directory at the container root can return **EPERM** for `mkdir`.
+/// **iOS:** A **UUID in the full filesystem path** (under `…/Containers/Data/Application/<id>/…`) is the
+/// system-assigned app sandbox; xos does not add it and it cannot be removed. We put data under
+/// **`Documents/xos`** (stable, sandbox-writable) instead of `~/.xos` (often **EPERM**) or some
+/// `tmp` / UUID paths. If a previous run used `Library/Application Support/xos` or `~/.xos`, that
+/// directory is still preferred when it already exists.
 pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
     if let Ok(s) = std::env::var("XOS_DATA_DIR") {
         let t = s.trim();
@@ -99,16 +100,21 @@ pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
         let home_path = home_path.ok_or_else(|| {
             AuthError::Io("could not resolve iOS home (set XOS_DATA_DIR or HOME)".to_string())
         })?;
-        // Legacy: if a previous build created `~/.xos` successfully, keep using it.
-        let legacy = home_path.join(".xos");
-        if legacy.is_dir() {
-            return Ok(legacy);
+        // Prefer existing trees from earlier xos iOS versions / layouts.
+        let legacy_dot = home_path.join(".xos");
+        if legacy_dot.is_dir() {
+            return Ok(legacy_dot);
         }
-        // Stable, user-visible name; not a hidden folder at the container root.
-        Ok(home_path
+        let legacy_app_support = home_path
             .join("Library")
             .join("Application Support")
-            .join("xos"))
+            .join("xos");
+        if legacy_app_support.is_dir() {
+            return Ok(legacy_app_support);
+        }
+        // Default: `Documents` is reliably creatable in the app sandbox; path stays stable
+        // (no xos-invented UUID; only the system container id appears in the absolute path).
+        Ok(home_path.join("Documents").join("xos"))
     }
     #[cfg(all(not(windows), not(target_os = "ios")))]
     {

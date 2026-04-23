@@ -7,7 +7,6 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use uuid::Uuid;
 use zip::ZipArchive;
 
 const MANIFEST: &str = include_str!("whisper_ct2_download_links.json");
@@ -299,8 +298,14 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 /// Uses [`std::fs::rename`] when possible; falls back to copy + remove if rename fails.
 fn place_extracted_dir(staging: &Path, out_dir: &Path) -> Result<(), String> {
     if let Some(p) = out_dir.parent() {
-        fs::create_dir_all(p)
-            .map_err(|e| format!("create_dir_all parent of {}: {e}", out_dir.display()))?;
+        fs::create_dir_all(p).map_err(|e| {
+            let mut s = format!("create_dir_all parent of {}: {e}", out_dir.display());
+            #[cfg(target_os = "ios")]
+            s.push_str(
+                " (the long UUID in …/Application/<id>/… is the system sandbox, not an xos path; set XOS_DATA_DIR from Swift if wrong HOME).",
+            );
+            s
+        })?;
     }
     if out_dir.exists() {
         fs::remove_dir_all(out_dir).map_err(|e| {
@@ -372,7 +377,8 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
             }
         })
         .collect();
-    let staging = std::env::temp_dir().join(format!("xos-ct2-{}-{}", safe_name, Uuid::new_v4()));
+    // Fixed name: one download at a time in practice; we remove it before extract if present.
+    let staging = std::env::temp_dir().join(format!("xos-ct2-{safe_name}"));
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);
     }
