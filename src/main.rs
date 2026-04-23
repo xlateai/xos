@@ -222,10 +222,7 @@ fn print_xos_paths() {
 
     let code = match code_r {
         Ok(p) => p.display().to_string(),
-        Err(e) => {
-            eprintln!("❌ {e}");
-            std::process::exit(1);
-        }
+        Err(_) => "(unavailable — not running from an xos checkout)".to_string(),
     };
 
     let data = match data_r {

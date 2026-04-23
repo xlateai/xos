@@ -1153,7 +1153,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the data submodule
     let data_module = crate::python_api::data::make_data_module(vm);
     module.set_attr("data", data_module, vm).unwrap();
-    
+
+    let path_module = crate::python_api::path::make_path_module(vm);
+    module.set_attr("path", path_module, vm).unwrap();
+
     // Add the ui submodule
     let ui_module = crate::python_api::ui::make_ui_module(vm);
     module.set_attr("ui", ui_module, vm).unwrap();

@@ -63,14 +63,40 @@ impl std::fmt::Display for AuthError {
 impl std::error::Error for AuthError {}
 
 /// Standard per-OS directory for xos app data (machine-local).
+///
+/// **Override:** set `XOS_DATA_DIR` to a directory path (e.g. iOS `Application Support` from Swift, or
+/// tests) — this is the `~/.xos` / `%LOCALAPPDATA%/xos` equivalent for the whole app.
 pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
+    if let Ok(s) = std::env::var("XOS_DATA_DIR") {
+        let t = s.trim();
+        if !t.is_empty() {
+            return Ok(PathBuf::from(t));
+        }
+    }
     #[cfg(windows)]
     {
         dirs::data_local_dir()
             .ok_or_else(|| AuthError::Io("could not resolve LocalAppData".to_string()))
             .map(|p| p.join("xos"))
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), target_os = "ios"))]
+    {
+        if let Ok(h) = std::env::var("HOME") {
+            let t = h.trim();
+            if !t.is_empty() {
+                return Ok(PathBuf::from(t).join(".xos"));
+            }
+        }
+        dirs::home_dir()
+            .ok_or_else(|| {
+                AuthError::Io(
+                    "could not resolve iOS data directory (set XOS_DATA_DIR, or ensure HOME is set)"
+                        .to_string(),
+                )
+            })
+            .map(|p| p.join(".xos"))
+    }
+    #[cfg(all(not(windows), not(target_os = "ios")))]
     {
         dirs::home_dir()
             .ok_or_else(|| AuthError::Io("could not resolve home directory".to_string()))
