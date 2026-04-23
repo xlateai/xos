@@ -48,7 +48,7 @@ impl WhisperBackend {
 
 #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 /// Live caption pipeline: **CT2** (default) or **Burn** (WGPU), matching `xos.ai.whisper.load(..., backend=...)`.
-/// On iOS, only **CT2** is available (models under `xos path --data` / `~/.xos` same as desktop).
+/// On iOS, only **CT2** is available (models under `xos path --data` — iOS: Application Support, macOS: `~/.xos`).
 fn spawn_live_decode_thread(
     preferred_size: Option<&str>,
     backend: WhisperBackend,

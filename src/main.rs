@@ -152,7 +152,7 @@ enum Commands {
         /// Print only the xos project / repository root
         #[arg(long)]
         code: bool,
-        /// Print only the app data directory (`~/.xos` on Unix, `%LocalAppData%\\xos` on Windows)
+        /// Print only the app data directory (`~/.xos` on macOS/Linux, iOS app Library/Application Support/xos, Windows %LocalAppData%\\xos)
         #[arg(long)]
         data: bool,
         /// Print only the path of this `xos` / `xpy` executable

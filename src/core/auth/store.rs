@@ -64,8 +64,13 @@ impl std::error::Error for AuthError {}
 
 /// Standard per-OS directory for xos app data (machine-local).
 ///
-/// **Override:** set `XOS_DATA_DIR` to a directory path (e.g. iOS `Application Support` from Swift, or
-/// tests) — this is the `~/.xos` / `%LOCALAPPDATA%/xos` equivalent for the whole app.
+/// **Override:** set `XOS_DATA_DIR` to a directory path (e.g. tests or a custom Swift-provided path).
+/// Otherwise: Windows `%LOCALAPPDATA%\\xos`, macOS/Linux `~/.xos`, iOS
+/// `HOME/Library/Application Support/xos` (see below).
+///
+/// **iOS:** The `…/Containers/Data/Application/<id>/` segment is the system app sandbox; only this app
+/// can read it (not other apps, unless you use an App Group). We use **Application Support** instead
+/// of `~/.xos` because a dot-directory at the container root can return **EPERM** for `mkdir`.
 pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
     if let Ok(s) = std::env::var("XOS_DATA_DIR") {
         let t = s.trim();
@@ -81,20 +86,29 @@ pub fn auth_data_dir() -> Result<PathBuf, AuthError> {
     }
     #[cfg(all(not(windows), target_os = "ios"))]
     {
-        if let Ok(h) = std::env::var("HOME") {
+        let home_path = if let Ok(h) = std::env::var("HOME") {
             let t = h.trim();
-            if !t.is_empty() {
-                return Ok(PathBuf::from(t).join(".xos"));
+            if t.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(t))
             }
+        } else {
+            dirs::home_dir()
+        };
+        let home_path = home_path.ok_or_else(|| {
+            AuthError::Io("could not resolve iOS home (set XOS_DATA_DIR or HOME)".to_string())
+        })?;
+        // Legacy: if a previous build created `~/.xos` successfully, keep using it.
+        let legacy = home_path.join(".xos");
+        if legacy.is_dir() {
+            return Ok(legacy);
         }
-        dirs::home_dir()
-            .ok_or_else(|| {
-                AuthError::Io(
-                    "could not resolve iOS data directory (set XOS_DATA_DIR, or ensure HOME is set)"
-                        .to_string(),
-                )
-            })
-            .map(|p| p.join(".xos"))
+        // Stable, user-visible name; not a hidden folder at the container root.
+        Ok(home_path
+            .join("Library")
+            .join("Application Support")
+            .join("xos"))
     }
     #[cfg(all(not(windows), not(target_os = "ios")))]
     {
