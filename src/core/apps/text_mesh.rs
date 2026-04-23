@@ -56,11 +56,14 @@ impl TextMeshApp {
         text_app.uses_parent_ui_scale = true;
         text_app.show_debug_visuals = false;
         text_app.show_cursor = true;
-        let status_user_label = Self::current_username().unwrap_or_else(|| "not logged in".to_string());
+        let current_user = Self::current_username();
+        let status_user_label = current_user
+            .clone()
+            .unwrap_or_else(|| "not logged in".to_string());
         Self {
             phase: if is_logged_in() { AppPhase::Editor } else { AppPhase::Login },
             active_field: LoginField::Username,
-            username: status_user_label.clone(),
+            username: current_user.unwrap_or_default(),
             password: String::new(),
             channel: DEFAULT_CHANNEL.to_string(),
             mode: DEFAULT_MODE,
@@ -93,6 +96,7 @@ impl TextMeshApp {
         let shape = state.frame.shape();
         let width = shape[1] as i32;
         let height = shape[0] as i32;
+        raster.tick(width as f32, height as f32);
         let buffer = state.frame_buffer_mut();
         for ch in &raster.characters {
             let px = (x + ch.x) as i32;
@@ -365,16 +369,36 @@ impl TextMeshApp {
         let (x0, y0, x1, y1) = self.username_button_bounds;
         x >= x0 && x <= x1 && y >= y0 && y <= y1
     }
+
+    fn entering_login_mode(&mut self, state: &mut EngineState) {
+        self.mesh_session = None;
+        self.phase = AppPhase::Login;
+        self.password.clear();
+        self.error_message.clear();
+        self.status_user_label = Self::current_username().unwrap_or_else(|| "not logged in".to_string());
+        self.username = Self::current_username().unwrap_or_default();
+        state.keyboard.onscreen.show();
+    }
+
+    fn process_login_keyboard_input(&mut self, state: &mut EngineState) {
+        while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
+            self.on_key_char(state, ch);
+        }
+    }
 }
 
 impl Application for TextMeshApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.text_app.setup(state)?;
         if self.phase == AppPhase::Editor {
+            state.keyboard.onscreen.hide();
             if let Err(e) = self.connect_mesh() {
                 self.error_message = e;
                 self.phase = AppPhase::Login;
+                state.keyboard.onscreen.show();
             }
+        } else {
+            state.keyboard.onscreen.show();
         }
         Ok(())
     }
@@ -382,6 +406,7 @@ impl Application for TextMeshApp {
     fn tick(&mut self, state: &mut EngineState) {
         match self.phase {
             AppPhase::Login | AppPhase::Error => {
+                self.process_login_keyboard_input(state);
                 crate::rasterizer::fill(&mut state.frame, (8, 10, 12, 255));
                 self.draw_status_bar(state);
                 self.draw_login_screen(state);
@@ -405,16 +430,21 @@ impl Application for TextMeshApp {
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         if self.username_button_hit(state.mouse.x, state.mouse.y) {
-            self.mesh_session = None;
-            self.phase = AppPhase::Login;
-            self.password.clear();
-            self.error_message.clear();
-            self.status_user_label = Self::current_username().unwrap_or_else(|| "not logged in".to_string());
-            self.username = self.status_user_label.clone();
+            self.entering_login_mode(state);
             return;
         }
         if self.phase == AppPhase::Editor {
             self.text_app.on_mouse_down(state);
+            return;
+        }
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        if state
+            .keyboard
+            .onscreen
+            .on_mouse_down(state.mouse.x, state.mouse.y, width, height)
+        {
             return;
         }
         let shape = state.frame.shape();
@@ -434,6 +464,8 @@ impl Application for TextMeshApp {
     fn on_mouse_up(&mut self, state: &mut EngineState) {
         if self.phase == AppPhase::Editor {
             self.text_app.on_mouse_up(state);
+        } else {
+            state.keyboard.onscreen.on_mouse_up();
         }
     }
 
@@ -465,16 +497,20 @@ impl Application for TextMeshApp {
             '\r' | '\n' => {
                 self.error_message.clear();
                 match self.connect_mesh() {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        state.keyboard.onscreen.hide();
+                    }
                     Err(e) => {
                         self.error_message = e;
                         self.phase = AppPhase::Error;
+                        state.keyboard.onscreen.show();
                     }
                 }
             }
             '\u{1b}' => {
                 self.error_message.clear();
                 self.phase = AppPhase::Login;
+                state.keyboard.onscreen.show();
             }
             '\u{8}' => match self.active_field {
                 LoginField::Username => {
