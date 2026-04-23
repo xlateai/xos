@@ -139,6 +139,7 @@ public class XosViewportView: UIView {
         
         // Set up Rust logging callback once
         setupRustLogging()
+        setupThreeFingerF3Gesture()
         
         // Listen for Swift crashes to show overlay in isolated frame
         NotificationCenter.default.addObserver(
@@ -187,6 +188,23 @@ public class XosViewportView: UIView {
             // Show Swift crash overlay since this is a Swift-side error
             showCrashOverlay(crashType: "Swift crash", appName: nil)
             stopAnimation()
+        }
+    }
+    
+    /// Same role as **F3** on desktop: toggles FPS / UI scale (`f3_menu`). Three-finger **hold**
+    /// (~0.85s), similar in spirit to Expo’s dev-menu gesture.
+    private func setupThreeFingerF3Gesture() {
+        let gr = UILongPressGestureRecognizer(target: self, action: #selector(handleThreeFingerF3LongPress(_:)))
+        gr.numberOfTouchesRequired = 3
+        gr.minimumPressDuration = 0.85
+        gr.cancelsTouchesInView = true
+        addGestureRecognizer(gr)
+    }
+    
+    @objc private func handleThreeFingerF3LongPress(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        if xos_engine_toggle_f3_menu() != 0 {
+            ConsoleManager.shared.addLog("WARNING: xos_engine_toggle_f3_menu failed (engine not ready?)")
         }
     }
     

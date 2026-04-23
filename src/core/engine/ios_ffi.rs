@@ -393,6 +393,22 @@ pub extern "C" fn xos_engine_mouse_down() -> i32 {
     }
 }
 
+/// Toggle the global F3 overlay (FPS / UI scale), same as the F3 key on desktop.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_engine_toggle_f3_menu() -> i32 {
+    let mut state = match ENGINE_STATE.lock() {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    if let Some(ref mut ios_state) = *state {
+        ios_state.engine_state.f3_menu.toggle_visible();
+        0
+    } else {
+        1
+    }
+}
+
 /// Handle mouse up event
 #[cfg(target_os = "ios")]
 #[no_mangle]
