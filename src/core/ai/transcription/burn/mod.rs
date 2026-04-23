@@ -3,7 +3,7 @@
 //! `src/core/ai/transcription/models/burn/`.
 
 #[cfg(all(
-    feature = "whisper",
+    feature = "whisper_burn",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]

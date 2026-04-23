@@ -1,6 +1,6 @@
 //! Whisper via **Burn** (in-tree `whisper_burn` + WGPU + Burnpack). Runs decode on a background thread.
 #![cfg(all(
-    feature = "whisper",
+    feature = "whisper_burn",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]

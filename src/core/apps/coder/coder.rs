@@ -24,6 +24,11 @@ const EDITOR_TAB_STRIP_SCALE: f32 = 2.0;
 /// File explorer panel, search bar, row heights, and list fonts vs prior baseline.
 const EXPLORER_UI_SCALE: f32 = 1.1;
 const MAX_OPEN_EDITOR_TABS: usize = 3;
+/// Scales down task bar and editor tab strip on iOS (~30% smaller chrome vs desktop).
+#[cfg(target_os = "ios")]
+const IOS_CODER_CHROME_SHRINK: f32 = 0.7;
+#[cfg(not(target_os = "ios"))]
+const IOS_CODER_CHROME_SHRINK: f32 = 1.0;
 
 #[derive(Debug, Clone)]
 struct OpenEditorTab {
@@ -120,7 +125,17 @@ impl CoderApp {
     }
 
     fn editor_tab_bar_height_px(ui_scale: f32) -> f32 {
-        (40.0_f32 * ui_scale * CODER_CHROME_SCALE * EDITOR_TAB_STRIP_SCALE).max(32.0)
+        (40.0_f32 * ui_scale * CODER_CHROME_SCALE * EDITOR_TAB_STRIP_SCALE * IOS_CODER_CHROME_SHRINK)
+            .max(32.0 * IOS_CODER_CHROME_SHRINK)
+    }
+
+    /// Minimum task bar height from the window-height fraction (5%×chrome); smaller on iOS.
+    fn task_bar_min_height_from_window(window_height: f32) -> f32 {
+        window_height * 0.05_f32 * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK
+    }
+
+    fn task_bar_inner_inset_px() -> f32 {
+        8.0_f32 * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK
     }
 
     fn active_file_index(&self) -> Option<usize> {
@@ -333,7 +348,8 @@ impl CoderApp {
         } else {
             inner_w / n as f32
         };
-        let close_reserve = (30.0_f32 * CODER_CHROME_SCALE * ui_scale.max(0.4)).max(22.0);
+        let close_reserve = ((30.0_f32 * CODER_CHROME_SCALE * ui_scale.max(0.4)).max(22.0))
+            * IOS_CODER_CHROME_SHRINK;
         for (i, _) in self.open_editor_tabs.iter().enumerate() {
             let x0 = padding as f32 + i as f32 * tab_w;
             let x1 = padding as f32 + (i + 1) as f32 * tab_w;
@@ -365,8 +381,8 @@ impl CoderApp {
         let (bw, bh) = (280.0_f32, 105.0_f32);
         #[cfg(not(target_os = "ios"))]
         let (bw, bh) = (160.0_f32, 76.0_f32);
-        let w = (((bw * scale).max(44.0)) * CODER_CHROME_SCALE).round() as u32;
-        let h = (((bh * scale).max(36.0)) * CODER_CHROME_SCALE).round() as u32;
+        let w = (((bw * scale).max(44.0)) * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK).round() as u32;
+        let h = (((bh * scale).max(36.0)) * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK).round() as u32;
         (w, h)
     }
 
@@ -383,7 +399,7 @@ impl CoderApp {
     }
 
     fn padding_scaled(scale: f32) -> i32 {
-        ((10.0_f32 * scale).max(4.0) * CODER_CHROME_SCALE).round() as i32
+        ((10.0_f32 * scale).max(4.0) * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK).round() as i32
     }
 
     fn apply_coder_ui_scale(&mut self, scale: f32) {
@@ -401,15 +417,17 @@ impl CoderApp {
         self.console_app.set_font_size(editor_base * scale);
 
         let chrome_font = CODER_CHROME_SCALE;
-        let task_tab_font = chrome_font * TASKBAR_TAB_SCALE;
+        let task_tab_font = chrome_font * TASKBAR_TAB_SCALE * IOS_CODER_CHROME_SHRINK;
         self.code_tab_label.set_font_size(20.0 * scale * task_tab_font);
         self.terminal_tab_label
             .set_font_size(20.0 * scale * task_tab_font);
         self.viewport_tab_label
             .set_font_size(20.0 * scale * task_tab_font);
-        self.clear_button_label.set_font_size(30.0 * scale * chrome_font);
-        self.run_button_label.set_font_size(20.0 * scale * chrome_font);
-        let tab_strip = chrome_font * EDITOR_TAB_STRIP_SCALE;
+        self.clear_button_label
+            .set_font_size(30.0 * scale * chrome_font * IOS_CODER_CHROME_SHRINK);
+        self.run_button_label
+            .set_font_size(20.0 * scale * chrome_font * IOS_CODER_CHROME_SHRINK);
+        let tab_strip = chrome_font * EDITOR_TAB_STRIP_SCALE * IOS_CODER_CHROME_SHRINK;
         for r in &mut self.editor_tab_labels {
             r.set_font_size(16.0 * scale * tab_strip);
         }
@@ -559,31 +577,48 @@ impl CoderApp {
         ).expect("Failed to load font");
         
         // Create text rasterizers for tab labels
-        let mut code_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
+        let mut code_tab_label = TextRasterizer::new(
+            font.clone(),
+            20.0 * CODER_CHROME_SCALE * TASKBAR_TAB_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         code_tab_label.set_text("files".to_string());
 
-        let mut run_button_label = TextRasterizer::new(font.clone(), 20.0);
+        let mut run_button_label = TextRasterizer::new(
+            font.clone(),
+            20.0 * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         run_button_label.set_text(String::new());
         
-        let mut terminal_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
+        let mut terminal_tab_label = TextRasterizer::new(
+            font.clone(),
+            20.0 * CODER_CHROME_SCALE * TASKBAR_TAB_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         terminal_tab_label.set_text("terminal".to_string());
         
-        let mut viewport_tab_label = TextRasterizer::new(font.clone(), 20.0 * TASKBAR_TAB_SCALE);
+        let mut viewport_tab_label = TextRasterizer::new(
+            font.clone(),
+            20.0 * CODER_CHROME_SCALE * TASKBAR_TAB_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         viewport_tab_label.set_text("viewport".to_string());
         
         // Create text rasterizer for clear button "x" label
-        let mut clear_button_label = TextRasterizer::new(font.clone(), 30.0);
+        let mut clear_button_label = TextRasterizer::new(
+            font.clone(),
+            30.0 * CODER_CHROME_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         clear_button_label.set_text("×".to_string()); // Multiplication sign
 
         let mut editor_tab_labels = Vec::new();
         for _ in 0..MAX_OPEN_EDITOR_TABS {
             editor_tab_labels.push(TextRasterizer::new(
                 font.clone(),
-                14.0 * EDITOR_TAB_STRIP_SCALE,
+                16.0 * CODER_CHROME_SCALE * EDITOR_TAB_STRIP_SCALE * IOS_CODER_CHROME_SHRINK,
             ));
         }
-        let mut editor_tab_close_label =
-            TextRasterizer::new(font.clone(), 20.0 * EDITOR_TAB_STRIP_SCALE);
+        let mut editor_tab_close_label = TextRasterizer::new(
+            font.clone(),
+            20.0 * CODER_CHROME_SCALE * EDITOR_TAB_STRIP_SCALE * IOS_CODER_CHROME_SHRINK,
+        );
         editor_tab_close_label.set_text("×".to_string());
         let mut explorer_search_label =
             TextRasterizer::new(font.clone(), 16.0 * EXPLORER_UI_SCALE);
@@ -1618,7 +1653,8 @@ builtins.print = __custom_print__
         let n = self.open_editor_tabs.len().max(1);
         let inner_w = canvas_width as f32 - 2.0 * padding as f32;
         let tab_w = inner_w / n as f32;
-        let close_reserve = (30.0_f32 * CODER_CHROME_SCALE * ui_scale.max(0.4)).max(22.0);
+        let close_reserve = ((30.0_f32 * CODER_CHROME_SCALE * ui_scale.max(0.4)).max(22.0))
+            * IOS_CODER_CHROME_SHRINK;
         for (i, _tab) in self.open_editor_tabs.iter().enumerate() {
             let x0 = (padding as f32 + i as f32 * tab_w) as i32;
             let x1 = (padding as f32 + (i + 1) as f32 * tab_w) as i32;
@@ -1942,7 +1978,7 @@ impl Application for CoderApp {
         let task_bar_height = if hide_task_bar {
             0.0
         } else {
-            (height * 0.05_f32 * CODER_CHROME_SCALE)
+            Self::task_bar_min_height_from_window(height)
                 .max(button_height as f32 + padding as f32)
         };
         self.code_app.bottom_chrome_height_px = task_bar_height;
@@ -1952,7 +1988,7 @@ impl Application for CoderApp {
         let task_bar_bottom = keyboard_top_px;
 
         // One shared height for tabs, run/stop/clear, and console input strip (fills task bar vertically).
-        let chrome_h = (task_bar_height - 8.0_f32 * CODER_CHROME_SCALE)
+        let chrome_h = (task_bar_height - Self::task_bar_inner_inset_px())
             .max(button_height as f32)
             .round() as u32;
         self.run_button.height = chrome_h;
@@ -2479,8 +2515,10 @@ impl Application for CoderApp {
                     let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                     let task_bar_top = keyboard_top_y * height
-                        - (height * 0.05_f32 * CODER_CHROME_SCALE)
-                            .max(Self::button_size_scaled(scale).1 as f32 + Self::padding_scaled(scale) as f32);
+                        - Self::task_bar_min_height_from_window(height).max(
+                            Self::button_size_scaled(scale).1 as f32
+                                + Self::padding_scaled(scale) as f32,
+                        );
                     let bar_h = Self::editor_tab_bar_height_px(scale);
                     let (px, pt, px1, pb) =
                         Self::explorer_panel_bounds(width, height, safe_top_y, bar_h, task_bar_top, scale);
@@ -2595,8 +2633,10 @@ impl Application for CoderApp {
                         let safe_top_y = state.frame.safe_region_boundaries.y1 * height;
                         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                         let task_bar_top = keyboard_top_y * height
-                            - (height * 0.05_f32 * CODER_CHROME_SCALE)
-                                .max(Self::button_size_scaled(scale).1 as f32 + Self::padding_scaled(scale) as f32);
+                            - Self::task_bar_min_height_from_window(height).max(
+                                Self::button_size_scaled(scale).1 as f32
+                                    + Self::padding_scaled(scale) as f32,
+                            );
                         let bar_h = Self::editor_tab_bar_height_px(scale);
                         let (px, pt, px1, pb) =
                             Self::explorer_panel_bounds(width, height, safe_top_y, bar_h, task_bar_top, scale);
@@ -2647,10 +2687,10 @@ impl Application for CoderApp {
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_top_px = keyboard_top_y * height;
         
-        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
+        let task_bar_height = Self::task_bar_min_height_from_window(height)
             .max(button_height as f32 + padding as f32);
         let task_bar_top = keyboard_top_px - task_bar_height;
-        let chrome_h = (task_bar_height - 8.0_f32 * CODER_CHROME_SCALE)
+        let chrome_h = (task_bar_height - Self::task_bar_inner_inset_px())
             .max(button_height as f32)
             .round() as u32;
         let tab_top_y = (task_bar_top + (task_bar_height - chrome_h as f32) * 0.5).round() as i32;
@@ -2863,7 +2903,7 @@ impl Application for CoderApp {
                         let layout_scale = Self::layout_scale_from_state(state);
                         let padding = Self::padding_scaled(layout_scale);
                         let (_, button_height) = Self::button_size_scaled(layout_scale);
-                        let task_bar_height = (height * 0.05_f32 * CODER_CHROME_SCALE)
+                        let task_bar_height = Self::task_bar_min_height_from_window(height)
                             .max(button_height as f32 + padding as f32);
                         let task_bar_top = keyboard_top_px - task_bar_height;
                         let bar_h = Self::editor_tab_bar_height_px(layout_scale);

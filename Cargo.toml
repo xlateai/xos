@@ -100,6 +100,19 @@ cpal = "0.16.0"
 metal = "0.32.0"
 objc = "0.2"
 
+# iOS: same `~/.xos` / `xos path --data` model cache as desktop (`models/whisper/{size}-ct2/`),
+# with first-run download via `ureq` + `zip` + `ct2rs` (CT2 only; Burn/WGPU is desktop-only).
+[target.'cfg(target_os = "ios")'.dependencies]
+ct2rs = { version = "0.9.18", optional = true, default-features = false, features = ["whisper", "ruy"] }
+ureq = { version = "2.12", optional = true }
+zip = { version = "2.2", optional = true, default-features = false, features = ["deflate"] }
+half = { version = "2", optional = true }
+hound = { version = "3.5.1", optional = true }
+strum = { version = "0.28.0", optional = true }
+strum_macros = { version = "0.28.0", optional = true }
+log = { version = "0.4", optional = true }
+mt19937 = { version = "3.3.0", optional = true }
+
 # Remote desktop: capture + synthetic input (desktop macOS only; not iOS)
 [target.'cfg(target_os = "macos")'.dependencies]
 # CGWindowList-based capture (full desktop); grant Screen Recording for the xos binary.
@@ -146,18 +159,20 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = ["whisper", "whisper_ct2", "silero_vad"]
-## Burn (in-tree `transcription/burn/whisper_burn` + WGPU). Bundled: `src/core/ai/transcription/models/burn/`; cache: `xos path --data` → `models/whisper/{tiny,small}-burn/`.
+default = ["whisper", "whisper_burn", "whisper_ct2", "silero_vad"]
+## Shared stack for live CT2 + resampling + (optional) Silero — **no** `tokenizers` / sentencepiece (avoids iOS `sentencepiece-sys`/cmake issues).
+## Burn/WGPU is gated behind `whisper_burn` (pulls `tokenizers` for BPE only on desktop).
 whisper = [
     "dep:ureq",
     "dep:half",
     "dep:hound",
-    "dep:tokenizers",
     "dep:strum",
     "dep:strum_macros",
     "dep:log",
     "dep:mt19937",
 ]
+## In-tree `whisper_burn` + WGPU + HuggingFace `tokenizers` (native sentencepiece). Desktop-class builds only; not used for iOS CT2.
+whisper_burn = ["whisper", "dep:tokenizers"]
 ## CTranslate2 Whisper (`ct2rs`). Cache: `xos path --data` → `models/whisper/{size}-ct2/`; first run downloads a ZIP from `ct2/whisper_ct2_download_links.json` and extracts (needs `ureq` + `zip`). Optional bundled tree: `src/core/ai/transcription/models/ct2/`.
 whisper_ct2 = ["dep:ct2rs", "dep:ureq", "dep:zip"]
 ## Silero VAD ONNX (`models/silero-vad/silero_vad.onnx`). See `transcription/silero/silero_vad_download_links.json`. Implies `whisper`.
@@ -187,6 +202,11 @@ resolver = "2"
 # from two `windows` versions don't unify. Patch pins 0.27.0 to windows 0.58 (see src/core/patches/gpu-allocator/Cargo.toml).
 [patch.crates-io]
 gpu-allocator = { path = "src/core/patches/gpu-allocator" }
+# iOS: Rust `cmake` uses Makefiles/Ninja, not the Xcode generator — upstream calls set_xcode_property
+# for iOS, which is undefined unless CMAKE_GENERATOR is Xcode.
+sentencepiece-sys = { path = "src/core/patches/sentencepiece-sys" }
+# iOS: ruy's cpuinfo tools break CMake configure (MACOSX_BUNDLE + INSTALL); disable tools, keep the library.
+ct2rs = { path = "src/core/patches/ct2rs" }
 
 # Windows MSVC + release: stripping proc-macro rlibs/DLLs breaks rustc's ability to load them
 # (E0463), which then breaks downstream crates (e.g. cubecl-ir / darling).

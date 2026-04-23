@@ -13,6 +13,7 @@ pub mod ops;
 pub mod colors;
 pub mod dtypes;
 pub mod data;
+pub mod path;
 pub mod ui;
 pub mod nn;
 pub mod burn_train;

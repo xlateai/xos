@@ -3,25 +3,17 @@
 //! optional **Silero VAD** (ONNX) to gate Whisper decodes during silence, plus ~100 Hz partial decode
 //! scheduling.
 
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 mod sample;
 
 #[cfg(all(
-    feature = "whisper",
+    feature = "whisper_burn",
     not(target_arch = "wasm32"),
     not(target_os = "ios")
 ))]
 mod burn;
 
-#[cfg(all(
-    feature = "whisper_ct2",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
 mod ct2;
 
 #[cfg(all(
@@ -32,17 +24,9 @@ mod ct2;
 ))]
 mod silero;
 
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 use std::sync::mpsc::{Receiver, SyncSender};
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 use std::time::{Duration, Instant};
 
 /// Which native Whisper stack to use (`xos.ai.whisper.load(..., backend=...)`).
@@ -62,12 +46,9 @@ impl WhisperBackend {
     }
 }
 
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 /// Live caption pipeline: **CT2** (default) or **Burn** (WGPU), matching `xos.ai.whisper.load(..., backend=...)`.
+/// On iOS, only **CT2** is available (models under `xos path --data` — iOS: `Documents/xos`, macOS: `~/.xos`).
 fn spawn_live_decode_thread(
     preferred_size: Option<&str>,
     backend: WhisperBackend,
@@ -88,7 +69,20 @@ fn spawn_live_decode_thread(
                 )
             }
         }
-        WhisperBackend::Burn => burn::whisper::spawn_decode_thread(preferred_size, language),
+        WhisperBackend::Burn => {
+            #[cfg(all(feature = "whisper_burn", not(target_os = "ios")))]
+            {
+                return burn::whisper::spawn_decode_thread(preferred_size, language);
+            }
+            #[cfg(target_os = "ios")]
+            {
+                let _ = (preferred_size, language);
+                Err(
+                    "Whisper Burn (WGPU) backend is unavailable on iOS; use backend='ct2' (default)."
+                        .to_string(),
+                )
+            }
+        }
     }
 }
 
@@ -101,12 +95,16 @@ pub fn transcribe_waveform_once(
 ) -> Result<String, String> {
     match backend {
         WhisperBackend::Burn => {
-            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(
+                feature = "whisper_burn",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            ))]
             {
                 return burn::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
             }
             #[cfg(not(all(
-                feature = "whisper",
+                feature = "whisper_burn",
                 not(target_arch = "wasm32"),
                 not(target_os = "ios")
             )))]
@@ -116,19 +114,11 @@ pub fn transcribe_waveform_once(
             }
         }
         WhisperBackend::Ct2 => {
-            #[cfg(all(
-                feature = "whisper_ct2",
-                not(target_arch = "wasm32"),
-                not(target_os = "ios")
-            ))]
+            #[cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
             {
                 return ct2::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
             }
-            #[cfg(not(all(
-                feature = "whisper_ct2",
-                not(target_arch = "wasm32"),
-                not(target_os = "ios")
-            )))]
+            #[cfg(not(all(feature = "whisper_ct2", not(target_arch = "wasm32"))))]
             {
                 let _ = (size, waveform, sample_rate);
                 Err("Whisper CT2 backend is unavailable on this build/target".to_string())
@@ -170,7 +160,11 @@ pub fn transcribe_waveform_with_intermediates(
             "forward_layer_by_layer is only supported for the Burn (WGPU) backend".to_string(),
         ),
         WhisperBackend::Burn => {
-            #[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+            #[cfg(all(
+                feature = "whisper_burn",
+                not(target_arch = "wasm32"),
+                not(target_os = "ios")
+            ))]
             {
                 return burn::whisper::transcribe_waveform_with_intermediates(
                     size,
@@ -179,7 +173,7 @@ pub fn transcribe_waveform_with_intermediates(
                 );
             }
             #[cfg(not(all(
-                feature = "whisper",
+                feature = "whisper_burn",
                 not(target_arch = "wasm32"),
                 not(target_os = "ios")
             )))]
@@ -193,7 +187,11 @@ pub fn transcribe_waveform_with_intermediates(
 
 /// Populate `models/whisper/{model_key}-burn/` (download + convert) if nothing usable is already cached.
 /// `model_key` is the canonical stem only (`tiny`, `small`) — not `tiny-f16`.
-#[cfg(all(feature = "whisper", not(target_arch = "wasm32"), not(target_os = "ios")))]
+#[cfg(all(
+    feature = "whisper_burn",
+    not(target_arch = "wasm32"),
+    not(target_os = "ios")
+))]
 pub fn ensure_burn_whisper_artifacts_for_load(model_key: &str) -> Result<(), String> {
     let _root = burn::whisper::prepare_whisper_models_root(model_key)?;
     Ok(())
@@ -206,79 +204,31 @@ pub struct TranscriptionEngine {
     device_hint: String,
     pending_stdout: Vec<String>,
     pending_iter_events: Vec<Option<String>>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     decode_job_tx: Option<SyncSender<Vec<f32>>>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     decode_result_rx: Option<Receiver<String>>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     resample_buf: Vec<f32>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     /// Mono PCM (input device rate), grown continuously while capturing (no phrase segmentation).
     segment_pcm: Vec<f32>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     segment_input_rate: u32,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     last_partial_decode: Instant,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     live_transcript: String,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     last_level_rms: f32,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     load_note: Option<String>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     last_ingested_frames: Option<u64>,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     /// Current snapshot’s `ingested_frame_count` (updated at start of [`process_snapshot_live`]).
     ingested_cursor_watermark: u64,
-    #[cfg(all(
-        feature = "whisper",
-        not(target_arch = "wasm32"),
-        not(target_os = "ios")
-    ))]
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     /// Only append mono samples whose global frame index is **≥** this (skip ring audio already seen after a buffer reset).
     pcm_first_frame_inclusive: u64,
     #[cfg(all(
@@ -356,11 +306,7 @@ impl TranscriptionEngine {
         backend: WhisperBackend,
     ) -> Self {
         Self::new_with_size_backend_language(preferred_size, backend, None).unwrap_or_else(|e| {
-            #[cfg(all(
-                feature = "whisper",
-                not(target_arch = "wasm32"),
-                not(target_os = "ios")
-            ))]
+            #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
             {
                 Self {
                     transcript_epoch: 0,
@@ -425,11 +371,7 @@ impl TranscriptionEngine {
                     vad_evaluated_once: false,
                 }
             }
-            #[cfg(not(all(
-                feature = "whisper",
-                not(target_arch = "wasm32"),
-                not(target_os = "ios")
-            )))]
+            #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
             {
                 let _ = e;
                 Self {
@@ -449,11 +391,7 @@ impl TranscriptionEngine {
         language: Option<&str>,
     ) -> Result<Self, String> {
         let language = Self::normalize_decode_language(language)?;
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {
             let (decode_job_tx, decode_result_rx, load_note) =
                 match spawn_live_decode_thread(preferred_size, backend, language.as_deref()) {
@@ -528,11 +466,7 @@ impl TranscriptionEngine {
                 vad_evaluated_once: false,
             });
         }
-        #[cfg(not(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        )))]
+        #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
         {
             let _ = (preferred_size, backend, language);
             Ok(Self {
@@ -547,11 +481,7 @@ impl TranscriptionEngine {
 
     pub fn set_device_hint(&mut self, name: &str, sample_rate: u32) {
         self.device_hint = format!("Input: {name} @ {sample_rate} Hz");
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         if self.decode_job_tx.is_none() {
             if let Some(note) = &self.load_note {
                 self.caption = format!("{}\n\n{}", self.device_hint, note);
@@ -571,11 +501,7 @@ impl TranscriptionEngine {
     }
 
     pub fn caption(&self) -> &str {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         if self.decode_job_tx.is_some() {
             return &self.live_transcript;
         }
@@ -583,19 +509,11 @@ impl TranscriptionEngine {
     }
 
     pub fn last_level_rms(&self) -> f32 {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {
             return self.last_level_rms;
         }
-        #[cfg(not(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        )))]
+        #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
         {
             0.0
         }
@@ -603,20 +521,12 @@ impl TranscriptionEngine {
 
     /// Approximate seconds currently buffered for the active segment decode window.
     pub fn buffered_segment_seconds(&self) -> f32 {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {
             let sr = self.segment_input_rate.max(1) as f32;
             return self.segment_pcm.len() as f32 / sr;
         }
-        #[cfg(not(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        )))]
+        #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
         {
             0.0
         }
@@ -657,11 +567,7 @@ impl TranscriptionEngine {
 
     /// Push the current live line to stdout / iterator queues (e.g. shutdown), without clearing PCM.
     pub fn flush_live_to_stdout_commits(&mut self) {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {
             if self.decode_job_tx.is_none() {
                 return;
@@ -682,11 +588,7 @@ impl TranscriptionEngine {
     /// This advances the segment watermark so subsequent decodes only consider audio captured after
     /// this call, and clears pending partial state/result backlog from the previous segment.
     pub fn clip_consumed_audio_cursor(&mut self) {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {
             self.pcm_first_frame_inclusive = self.ingested_cursor_watermark;
             self.segment_pcm.clear();
@@ -708,17 +610,9 @@ impl TranscriptionEngine {
         channels: &[Vec<f32>],
         ingested_frames: u64,
     ) {
-        #[cfg(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        ))]
+        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         self.process_snapshot_live(sample_rate, channels, ingested_frames);
-        #[cfg(not(all(
-            feature = "whisper",
-            not(target_arch = "wasm32"),
-            not(target_os = "ios")
-        )))]
+        #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
         {
             let _ = (sample_rate, channels, ingested_frames);
         }
@@ -733,11 +627,7 @@ impl TranscriptionEngine {
     }
 }
 
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 fn normalize_transcript_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -764,11 +654,7 @@ const SILERO_VAD_THRESHOLD: f32 = SILERO_VAD_SPEECH_THRESHOLD;
 ))]
 const SILERO_VAD_HANGOVER: Duration = Duration::from_millis(280);
 
-#[cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 impl TranscriptionEngine {
     fn reset_utterance_state(&mut self) {
         self.live_transcript.clear();

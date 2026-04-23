@@ -152,7 +152,7 @@ enum Commands {
         /// Print only the xos project / repository root
         #[arg(long)]
         code: bool,
-        /// Print only the app data directory (`~/.xos` on Unix, `%LocalAppData%\\xos` on Windows)
+        /// Print only the app data directory (`~/.xos` on macOS/Linux, iOS app Documents/xos, Windows %LocalAppData%\\xos)
         #[arg(long)]
         data: bool,
         /// Print only the path of this `xos` / `xpy` executable
@@ -222,10 +222,7 @@ fn print_xos_paths() {
 
     let code = match code_r {
         Ok(p) => p.display().to_string(),
-        Err(e) => {
-            eprintln!("❌ {e}");
-            std::process::exit(1);
-        }
+        Err(_) => "(unavailable — not running from an xos checkout)".to_string(),
     };
 
     let data = match data_r {

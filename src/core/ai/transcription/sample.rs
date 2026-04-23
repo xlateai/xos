@@ -1,9 +1,5 @@
 //! Mono downmix, linear resample, RMS metering, and live decode cadence (16 kHz target for Whisper).
-#![cfg(all(
-    feature = "whisper",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#![cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
 
 pub const WHISPER_HZ: u32 = 16_000;
 

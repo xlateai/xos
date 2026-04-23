@@ -9,11 +9,7 @@
 //! - **`WhisperOptions::beam_size = 1`**: greedy decoding.
 //! - Remaining latency is almost entirely **model time** per `generate` call; UI polls as fast as
 //!   Python sleeps (`transcribe.py`), while the Rust side targets ~100 Hz partial decode scheduling.
-#![cfg(all(
-    feature = "whisper_ct2",
-    not(target_arch = "wasm32"),
-    not(target_os = "ios")
-))]
+#![cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
@@ -80,19 +76,19 @@ fn resolve_model_dir(size: Option<&str>) -> Result<PathBuf, String> {
         return Ok(cache);
     }
 
-    let root = crate::find_xos_project_root().map_err(|e| e.to_string())?;
-    for sub in [manifest_key, "whisper-tiny-ct2"] {
-        let bundled = root.join(MODELS_SUBDIR).join(sub);
-        if super::whisper_ensure::model_ready(&bundled) {
-            return Ok(bundled);
+    if let Ok(root) = crate::find_xos_project_root() {
+        for sub in [manifest_key, "whisper-tiny-ct2"] {
+            let bundled = root.join(MODELS_SUBDIR).join(sub);
+            if super::whisper_ensure::model_ready(&bundled) {
+                return Ok(bundled);
+            }
         }
-    }
-
-    let legacy_bundled = root
-        .join("src/core/engine/audio/transcription/models")
-        .join("whisper-tiny-ct2");
-    if super::whisper_ensure::model_ready(&legacy_bundled) {
-        return Ok(legacy_bundled);
+        let legacy_bundled = root
+            .join("src/core/engine/audio/transcription/models")
+            .join("whisper-tiny-ct2");
+        if super::whisper_ensure::model_ready(&legacy_bundled) {
+            return Ok(legacy_bundled);
+        }
     }
 
     for legacy_name in [
@@ -114,11 +110,26 @@ fn resolve_model_dir(size: Option<&str>) -> Result<PathBuf, String> {
         return Ok(cache);
     }
 
+    let bundled_hint = crate::find_xos_project_root()
+        .map(|r| {
+            r.join(MODELS_SUBDIR)
+                .join(manifest_key)
+                .to_string_lossy()
+                .to_string()
+        })
+        .unwrap_or_else(|_| {
+            format!(
+                "<repo>/{}/{} (no repo on this platform — use first-run download to {})",
+                MODELS_SUBDIR,
+                manifest_key,
+                cache.display()
+            )
+        });
     Err(format!(
         "Whisper CT2 setup failed for '{manifest_key}' under {}. Fix whisper_ct2_download_links.json (zip_url), \
-         or place a converted tree under {}.",
+         or place a converted tree at {}.",
         cache.display(),
-        root.join(MODELS_SUBDIR).join(manifest_key).display(),
+        bundled_hint
     ))
 }
 
