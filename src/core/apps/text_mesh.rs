@@ -48,6 +48,8 @@ pub struct TextMeshApp {
     last_broadcast_at: Instant,
     status_user_label: String,
     username_button_bounds: (f32, f32, f32, f32),
+    login_done_button_bounds: (f32, f32, f32, f32),
+    login_cancel_button_bounds: (f32, f32, f32, f32),
 }
 
 impl TextMeshApp {
@@ -75,6 +77,8 @@ impl TextMeshApp {
             last_broadcast_at: Instant::now(),
             status_user_label,
             username_button_bounds: (0.0, 0.0, 0.0, 0.0),
+            login_done_button_bounds: (0.0, 0.0, 0.0, 0.0),
+            login_cancel_button_bounds: (0.0, 0.0, 0.0, 0.0),
         }
     }
 
@@ -206,7 +210,7 @@ impl TextMeshApp {
         self.username_button_bounds = (bx, by, bx + button_w, by + STATUS_BAR_HEIGHT - 12.0);
     }
 
-    fn draw_login_screen(&self, state: &mut EngineState) {
+    fn draw_login_screen(&mut self, state: &mut EngineState) {
         let shape = state.frame.shape();
         let width = shape[1] as f32;
         let height = shape[0] as f32;
@@ -307,12 +311,43 @@ impl TextMeshApp {
             17.0,
             (160, 170, 180),
         );
+        let button_y = field3_top + INPUT_BOX_HEIGHT + 56.0;
+        let done_w = 130.0;
+        let done_h = 42.0;
+        self.draw_box(
+            state,
+            left as i32,
+            button_y as i32,
+            done_w as i32,
+            done_h as i32,
+            (36, 92, 54, 255),
+        );
+        self.draw_text_line(state, "Done", left + 38.0, button_y + 10.0, 20.0, (240, 250, 240));
+        self.login_done_button_bounds = (left, button_y, left + done_w, button_y + done_h);
+
+        if is_logged_in() {
+            let cancel_x = left + done_w + 14.0;
+            let cancel_w = 130.0;
+            self.draw_box(
+                state,
+                cancel_x as i32,
+                button_y as i32,
+                cancel_w as i32,
+                done_h as i32,
+                (78, 48, 48, 255),
+            );
+            self.draw_text_line(state, "Cancel", cancel_x + 30.0, button_y + 10.0, 20.0, (250, 232, 232));
+            self.login_cancel_button_bounds = (cancel_x, button_y, cancel_x + cancel_w, button_y + done_h);
+        } else {
+            self.login_cancel_button_bounds = (0.0, 0.0, 0.0, 0.0);
+        }
+
         if !self.error_message.is_empty() {
             self.draw_text_line(
                 state,
                 &self.error_message,
                 left,
-                field3_top + INPUT_BOX_HEIGHT + 48.0,
+                button_y + done_h + 14.0,
                 18.0,
                 (240, 90, 90),
             );
@@ -370,6 +405,16 @@ impl TextMeshApp {
         x >= x0 && x <= x1 && y >= y0 && y <= y1
     }
 
+    fn done_button_hit(&self, x: f32, y: f32) -> bool {
+        let (x0, y0, x1, y1) = self.login_done_button_bounds;
+        x >= x0 && x <= x1 && y >= y0 && y <= y1
+    }
+
+    fn cancel_button_hit(&self, x: f32, y: f32) -> bool {
+        let (x0, y0, x1, y1) = self.login_cancel_button_bounds;
+        x >= x0 && x <= x1 && y >= y0 && y <= y1
+    }
+
     fn entering_login_mode(&mut self, state: &mut EngineState) {
         self.mesh_session = None;
         self.phase = AppPhase::Login;
@@ -383,6 +428,18 @@ impl TextMeshApp {
     fn process_login_keyboard_input(&mut self, state: &mut EngineState) {
         while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
             self.on_key_char(state, ch);
+        }
+    }
+
+    fn submit_login(&mut self, state: &mut EngineState) {
+        self.error_message.clear();
+        match self.connect_mesh() {
+            Ok(()) => state.keyboard.onscreen.hide(),
+            Err(e) => {
+                self.error_message = e;
+                self.phase = AppPhase::Error;
+                state.keyboard.onscreen.show();
+            }
         }
     }
 }
@@ -435,6 +492,23 @@ impl Application for TextMeshApp {
         }
         if self.phase == AppPhase::Editor {
             self.text_app.on_mouse_down(state);
+            return;
+        }
+        if self.done_button_hit(state.mouse.x, state.mouse.y) {
+            self.submit_login(state);
+            return;
+        }
+        if is_logged_in() && self.cancel_button_hit(state.mouse.x, state.mouse.y) {
+            self.phase = AppPhase::Editor;
+            self.error_message.clear();
+            state.keyboard.onscreen.hide();
+            if self.mesh_session.is_none() {
+                if let Err(e) = self.connect_mesh() {
+                    self.phase = AppPhase::Error;
+                    self.error_message = e;
+                    state.keyboard.onscreen.show();
+                }
+            }
             return;
         }
         let shape = state.frame.shape();
@@ -495,17 +569,7 @@ impl Application for TextMeshApp {
                 };
             }
             '\r' | '\n' => {
-                self.error_message.clear();
-                match self.connect_mesh() {
-                    Ok(()) => {
-                        state.keyboard.onscreen.hide();
-                    }
-                    Err(e) => {
-                        self.error_message = e;
-                        self.phase = AppPhase::Error;
-                        state.keyboard.onscreen.show();
-                    }
-                }
+                self.submit_login(state);
             }
             '\u{1b}' => {
                 self.error_message.clear();
