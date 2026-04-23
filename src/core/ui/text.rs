@@ -1,22 +1,31 @@
 use crate::rasterizer::fill_rect_buffer;
+use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
-use fontdue::{Font, FontSettings};
+use fontdue::Font;
 use std::sync::{Mutex, OnceLock};
 
 static UI_TEXT_FONT: OnceLock<Mutex<Option<Font>>> = OnceLock::new();
+static UI_TEXT_FONT_FAMILY: OnceLock<Mutex<FontFamily>> = OnceLock::new();
 
 fn shared_font() -> Result<Font, String> {
     let lock = UI_TEXT_FONT.get_or_init(|| Mutex::new(None));
+    let family_lock = UI_TEXT_FONT_FAMILY.get_or_init(|| Mutex::new(fonts::default_font_family()));
     let mut guard = lock
         .lock()
         .map_err(|_| "ui text font mutex poisoned".to_string())?;
+    let mut family_guard = family_lock
+        .lock()
+        .map_err(|_| "ui text font family mutex poisoned".to_string())?;
+    let current_family = fonts::default_font_family();
+    if *family_guard != current_family {
+        *guard = None;
+        *family_guard = current_family;
+    }
     if let Some(font) = guard.as_ref() {
         return Ok(font.clone());
     }
 
-    let font_bytes = include_bytes!("../assets/NotoSans-Medium.ttf");
-    let font = Font::from_bytes(font_bytes as &[u8], FontSettings::default())
-        .map_err(|e| format!("failed to load ui text font: {e}"))?;
+    let font = fonts::default_font();
     *guard = Some(font.clone());
     Ok(font)
 }

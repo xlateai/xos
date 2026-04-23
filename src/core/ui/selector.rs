@@ -29,7 +29,7 @@ impl Selector {
         // Each renderer gets its own font instance (fontdue Font is not Clone)
         let text_renderers: Vec<TextRasterizer> = options.iter()
             .map(|option| {
-                let font = fonts::jetbrains_mono();
+                let font = fonts::default_font();
                 let mut renderer = TextRasterizer::new(font, font_size);
                 renderer.set_text(option.clone());
                 renderer

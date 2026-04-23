@@ -7,6 +7,7 @@ use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::ui::Button;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::fonts;
 use rustpython_vm::{Interpreter, AsObject};
 use include_dir::{include_dir, Dir};
 use std::collections::HashSet;
@@ -570,11 +571,7 @@ impl CoderApp {
         clear_button.hover_color = (100, 100, 100); // Lighter gray on hover
         
         // Load font for tab labels
-        let font_data = include_bytes!("../../assets/JetBrainsMono-Regular.ttf");
-        let font = fontdue::Font::from_bytes(
-            font_data as &[u8],
-            fontdue::FontSettings::default(),
-        ).expect("Failed to load font");
+        let font = fonts::default_font();
         
         // Create text rasterizers for tab labels
         let mut code_tab_label = TextRasterizer::new(

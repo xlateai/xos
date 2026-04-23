@@ -606,8 +606,7 @@ pub struct TranscribeApp {
 
 impl TranscribeApp {
     pub fn new() -> Self {
-        // let font = fonts::noto_sans_jp();
-        let font = fonts::dot_gothic_16();
+        let font = fonts::default_font();
         let mut vad_label = TextRasterizer::new(font.clone(), 24.0);
         vad_label.set_text("VAD: 0.000".to_string());
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);

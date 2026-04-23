@@ -6,6 +6,7 @@ use crate::engine::{
     frame_view_rect_norm, EngineState, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT,
     FRAME_VIEW_ZOOM_MAX, FRAME_VIEW_ZOOM_MIN,
 };
+use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 
 const REF_SHORT_EDGE: f32 = 920.0;
@@ -19,6 +20,8 @@ const SCALE_SMOOTH_RATE: f32 = 22.0;
 const FRAME_ZOOM_WHEEL_RATE: f32 = 0.085;
 /// Interaction fade decay rate for transient F3 visibility (1/s).
 const F3_INTERACTION_FADE_DECAY: f32 = 3.2;
+const FONT_OPTION_BASE_SIZE: f32 = 19.0;
+const FONT_HEADER_BASE_SIZE: f32 = 17.0;
 
 pub struct F3Menu {
     /// When false, FPS is still tracked but the menu is not drawn. Toggle with F3 (desktop) or
@@ -26,6 +29,10 @@ pub struct F3Menu {
     pub visible: bool,
     fps_rasterizer: TextRasterizer,
     scale_rasterizer: TextRasterizer,
+    font_header_rasterizer: TextRasterizer,
+    font_option_rasterizers: Vec<TextRasterizer>,
+    font_option_families: Vec<FontFamily>,
+    active_font_family: FontFamily,
     pub(crate) scale_dragging: bool,
     /// Smooth wheel-zoom target in F3 percent units.
     scale_zoom_target: f32,
@@ -47,17 +54,35 @@ impl std::fmt::Debug for F3Menu {
 
 impl F3Menu {
     pub fn new() -> Self {
-        let font_data = include_bytes!("../assets/JetBrainsMono-Regular.ttf");
-        let font = fontdue::Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default())
-            .expect("Failed to load font for F3 menu");
+        let font = fonts::default_font();
+        let active_font_family = fonts::default_font_family();
+        let font_option_families = FontFamily::ALL.to_vec();
         let mut fps_rasterizer = TextRasterizer::new(font.clone(), BASE_FONT);
         fps_rasterizer.set_text("— FPS".to_string());
-        let mut scale_rasterizer = TextRasterizer::new(font, BASE_FONT);
+        let mut scale_rasterizer = TextRasterizer::new(font.clone(), BASE_FONT);
         scale_rasterizer.set_text("Scale: 100%".to_string());
+        let mut font_header_rasterizer = TextRasterizer::new(font, FONT_HEADER_BASE_SIZE);
+        font_header_rasterizer.set_text("Default font".to_string());
+        let mut font_option_rasterizers = Vec::with_capacity(font_option_families.len());
+        for family in &font_option_families {
+            let option_font = match family {
+                FontFamily::JetBrainsMono => fonts::jetbrains_mono(),
+                FontFamily::NotoSansMedium => fonts::noto_sans_medium(),
+                FontFamily::NotoSansJp => fonts::noto_sans_jp(),
+                FontFamily::DotGothic16 => fonts::dot_gothic_16(),
+            };
+            let mut rasterizer = TextRasterizer::new(option_font, FONT_OPTION_BASE_SIZE);
+            rasterizer.set_text(family.label().to_string());
+            font_option_rasterizers.push(rasterizer);
+        }
         Self {
             visible: false,
             fps_rasterizer,
             scale_rasterizer,
+            font_header_rasterizer,
+            font_option_rasterizers,
+            font_option_families,
+            active_font_family,
             scale_dragging: false,
             scale_zoom_target: 100.0,
             scale_zoom_value: 100.0,
@@ -92,6 +117,12 @@ struct PanelGeom {
     slider_right: f32,
     slider_top: f32,
     slider_bottom: f32,
+    font_header_top: f32,
+    font_header_bottom: f32,
+    font_options_top: f32,
+    font_option_height: f32,
+    font_option_gap: f32,
+    font_option_count: usize,
     button_left: f32,
     button_right: f32,
     button_top: f32,
@@ -105,9 +136,17 @@ struct PanelGeom {
     minimap_top: f32,
     minimap_bottom: f32,
     show_minimap: bool,
+    ui_scale: f32,
 }
 
-fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minimap: bool) -> PanelGeom {
+fn panel_geom(
+    state: &EngineState,
+    content_w: f32,
+    us: f32,
+    pad: f32,
+    show_minimap: bool,
+    font_option_count: usize,
+) -> PanelGeom {
     let shape = state.frame.shape();
     let w = shape[1] as f32;
     let h = shape[0] as f32;
@@ -115,12 +154,25 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
     let line_gap = 6.0 * us;
     let slider_h = 14.0 * us;
     let line_h = 32.0 * us;
+    let font_header_h = (24.0 * us).max(16.0);
+    let font_option_h = (26.0 * us).max(16.0);
+    let font_option_gap = (4.0 * us).max(2.0);
+    let font_options_h = if font_option_count == 0 {
+        0.0
+    } else {
+        font_option_count as f32 * font_option_h + (font_option_count as f32 - 1.0) * font_option_gap
+    };
     let slider_w = (200.0 * us).max(120.0);
     let mini_h = (92.0 * us).max(56.0);
     let inner_w = content_w.max(slider_w);
     let panel_w = inner_w + pad * 2.0;
     let minimap_extra = if show_minimap { line_gap + mini_h } else { 0.0 };
-    let panel_h = pad + line_h + line_gap + line_h + line_gap + slider_h + minimap_extra + pad;
+    let font_extra = if font_option_count > 0 {
+        line_gap + font_header_h + line_gap + font_options_h
+    } else {
+        0.0
+    };
+    let panel_h = pad + line_h + line_gap + line_h + line_gap + slider_h + font_extra + minimap_extra + pad;
     let panel_left = w - panel_w - pad;
     let panel_top = safe_top + pad;
     let button_size = (22.0 * us).max(12.0);
@@ -137,9 +189,16 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
     let slider_right = slider_left + slider_w;
     let slider_top = panel_top + pad + line_h + line_gap + line_h + line_gap;
     let slider_bottom = slider_top + slider_h;
+    let font_header_top = slider_bottom + line_gap;
+    let font_header_bottom = font_header_top + font_header_h;
+    let font_options_top = font_header_bottom + line_gap;
     let minimap_left = slider_left;
     let minimap_right = slider_right;
-    let minimap_top = slider_bottom + line_gap;
+    let minimap_top = if font_option_count > 0 {
+        font_options_top + font_options_h + line_gap
+    } else {
+        slider_bottom + line_gap
+    };
     let minimap_bottom = minimap_top + mini_h;
     PanelGeom {
         panel_left,
@@ -150,6 +209,12 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
         slider_right,
         slider_top,
         slider_bottom,
+        font_header_top,
+        font_header_bottom,
+        font_options_top,
+        font_option_height: font_option_h,
+        font_option_gap,
+        font_option_count,
         button_left,
         button_right,
         button_top,
@@ -163,6 +228,7 @@ fn panel_geom(state: &EngineState, content_w: f32, us: f32, pad: f32, show_minim
         minimap_top,
         minimap_bottom,
         show_minimap,
+        ui_scale: us,
     }
 }
 
@@ -188,6 +254,34 @@ fn percent_from_mouse_x(mx: f32, geom: &PanelGeom, knob_w: f32) -> u16 {
 #[inline]
 fn clamp_scale_percent_f32(v: f32) -> f32 {
     v.clamp(F3_UI_SCALE_MIN_PERCENT as f32, F3_UI_SCALE_MAX_PERCENT as f32)
+}
+
+#[inline]
+fn font_option_rect(geom: &PanelGeom, idx: usize) -> Option<(f32, f32, f32, f32)> {
+    if idx >= geom.font_option_count {
+        return None;
+    }
+    let y0 = geom.font_options_top + idx as f32 * (geom.font_option_height + geom.font_option_gap);
+    let y1 = y0 + geom.font_option_height;
+    Some((geom.slider_left, geom.slider_right, y0, y1))
+}
+
+fn sync_f3_default_font(menu: &mut F3Menu) {
+    let current = fonts::default_font_family();
+    if current == menu.active_font_family {
+        return;
+    }
+    let active_font = fonts::default_font();
+    let mut fps = TextRasterizer::new(active_font.clone(), menu.fps_rasterizer.font_size);
+    fps.set_text(menu.fps_rasterizer.text.clone());
+    menu.fps_rasterizer = fps;
+    let mut scale = TextRasterizer::new(active_font.clone(), menu.scale_rasterizer.font_size);
+    scale.set_text(menu.scale_rasterizer.text.clone());
+    menu.scale_rasterizer = scale;
+    let mut header = TextRasterizer::new(active_font, menu.font_header_rasterizer.font_size);
+    header.set_text(menu.font_header_rasterizer.text.clone());
+    menu.font_header_rasterizer = header;
+    menu.active_font_family = current;
 }
 
 #[inline]
@@ -304,6 +398,7 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
 
     {
         let menu = &mut state.f3_menu;
+        sync_f3_default_font(menu);
         menu.fps_rasterizer.set_font_size(font_px);
         menu
             .fps_rasterizer
@@ -315,6 +410,22 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
             .scale_rasterizer
             .set_text(format!("Scale: {}%", state.ui_scale_percent));
         menu.scale_rasterizer.tick(width, height);
+
+        menu
+            .font_header_rasterizer
+            .set_font_size(FONT_HEADER_BASE_SIZE * ui_scale);
+        menu
+            .font_header_rasterizer
+            .set_text(format!("Default font: {}", fonts::default_font_name()));
+        menu.font_header_rasterizer.tick(width, height);
+
+        for (idx, r) in menu.font_option_rasterizers.iter_mut().enumerate() {
+            r.set_font_size(FONT_OPTION_BASE_SIZE * ui_scale);
+            if let Some(family) = menu.font_option_families.get(idx) {
+                r.set_text(family.label().to_string());
+            }
+            r.tick(width, height);
+        }
     }
 
     let _fps_w: f32 = state
@@ -335,10 +446,17 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
     let button_gap = (6.0 * ui_scale).max(3.0);
     let slider_w = (200.0 * ui_scale).max(120.0);
     // Keep panel width stable so FPS/scale text width changes don't make the slider jitter horizontally.
-    let content_w = slider_w.max(button_size * 2.0 + button_gap + 120.0 * ui_scale);
+    let content_w = slider_w.max(button_size * 2.0 + button_gap + 240.0 * ui_scale);
     let (_, _, vw, vh) = frame_view_rect_norm(state);
     let show_minimap = vw < 0.999 || vh < 0.999;
-    let geom = panel_geom(state, content_w, ui_scale, pad, show_minimap);
+    let geom = panel_geom(
+        state,
+        content_w,
+        ui_scale,
+        pad,
+        show_minimap,
+        state.f3_menu.font_option_rasterizers.len(),
+    );
     let knob_w = (12.0 * ui_scale).max(8.0).round().max(1.0);
     Some((geom, knob_w))
 }
@@ -387,6 +505,21 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
         state.f3_menu.scale_dragging = false;
         state.f3_menu.pointer_captured = true;
         return true;
+    }
+    for idx in 0..geom.font_option_count {
+        let Some((x0, x1, y0, y1)) = font_option_rect(&geom, idx) else {
+            continue;
+        };
+        let on_font_option = mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+        if on_font_option {
+            if let Some(family) = state.f3_menu.font_option_families.get(idx).copied() {
+                f3_menu_boost_interaction_fade(state);
+                fonts::set_default_font_family(family);
+                state.f3_menu.pointer_captured = true;
+                state.f3_menu.scale_dragging = false;
+                return true;
+            }
+        }
     }
     if on_slider {
         f3_menu_boost_interaction_fade(state);
@@ -626,6 +759,36 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         (220, 220, 220, (255.0 * overlay_alpha) as u8),
     );
 
+    // Font picker options.
+    let selected_family = fonts::default_font_family();
+    for idx in 0..geom.font_option_count {
+        let Some((x0, x1, y0, y1)) = font_option_rect(&geom, idx) else {
+            continue;
+        };
+        let is_selected = state
+            .f3_menu
+            .font_option_families
+            .get(idx)
+            .copied()
+            .map(|f| f == selected_family)
+            .unwrap_or(false);
+        let bg = if is_selected {
+            (52, 86, 142, (220.0 * overlay_alpha) as u8)
+        } else {
+            (48, 48, 48, (190.0 * overlay_alpha) as u8)
+        };
+        blend_rect(
+            buffer,
+            fw,
+            fh,
+            x0.floor() as i32,
+            y0.floor() as i32,
+            x1.ceil() as i32,
+            y1.ceil() as i32,
+            bg,
+        );
+    }
+
     if geom.show_minimap {
         let mx0 = geom.minimap_left.floor() as i32;
         let my0 = geom.minimap_top.floor() as i32;
@@ -714,6 +877,38 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         (255, 255, 255),
         overlay_alpha,
     );
+    blend_text(
+        buffer,
+        width,
+        height,
+        &state.f3_menu.font_header_rasterizer,
+        geom.slider_left,
+        geom.font_header_top,
+        (210, 210, 210),
+        overlay_alpha,
+    );
+    for (idx, text_rasterizer) in state.f3_menu.font_option_rasterizers.iter().enumerate() {
+        let Some((x0, _x1, y0, y1)) = font_option_rect(&geom, idx) else {
+            continue;
+        };
+        let text_w: f32 = text_rasterizer
+            .characters
+            .iter()
+            .map(|c| c.metrics.advance_width)
+            .sum();
+        let tx = x0 + ((geom.slider_right - geom.slider_left - text_w) * 0.5).max(8.0 * geom.ui_scale);
+        let ty = y0 + ((y1 - y0 - FONT_OPTION_BASE_SIZE * geom.ui_scale) * 0.35).max(2.0);
+        blend_text(
+            buffer,
+            width,
+            height,
+            text_rasterizer,
+            tx,
+            ty,
+            (245, 245, 245),
+            overlay_alpha,
+        );
+    }
 }
 
 fn blend_text(

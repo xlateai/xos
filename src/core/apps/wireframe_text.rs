@@ -1,8 +1,8 @@
 use crate::engine::{Application, EngineState};
+use crate::rasterizer::text::fonts;
 use crate::tuneable::write_all_to_source;
 use crate::tuneables;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
-use fontdue::{Font, FontSettings};
 
 tuneables! {
     left_edge: f32 = 0.15610886;
@@ -38,8 +38,7 @@ pub struct WireframeText {
 
 impl WireframeText {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../assets/JetBrainsMono-Regular.ttf") as &[u8];
-        let font = Font::from_bytes(font_bytes, FontSettings::default()).unwrap();
+        let font = fonts::default_font();
         let mut text_rasterizer = TextRasterizer::new(font, 24.0);
         text_rasterizer.set_text("start typing...".to_string());
 

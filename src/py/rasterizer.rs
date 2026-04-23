@@ -7,6 +7,7 @@ use rustpython_vm::{
 use std::sync::Mutex;
 use crate::python_api::tensors::{tensor_flat_data_list, tensor_shape_tuple};
 use crate::rasterizer::shapes::lines::draw_line_direct;
+use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 
@@ -22,6 +23,7 @@ pub(crate) static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
 
 // Global font for text rasterization (lazy loaded)
 static GLOBAL_FONT: Mutex<Option<Font>> = Mutex::new(None);
+static GLOBAL_FONT_FAMILY: Mutex<FontFamily> = Mutex::new(FontFamily::JetBrainsMono);
 
 /// Fill a contiguous RGBA8 buffer (`len` must be a multiple of 4). Used by [`crate::rasterizer::fill`]
 /// and [`fill`] (Python `xos.rasterizer.fill`).
@@ -955,13 +957,14 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     
     // Load font if not already loaded
     let mut font_lock = GLOBAL_FONT.lock().unwrap();
+    let mut family_lock = GLOBAL_FONT_FAMILY.lock().unwrap();
+    let current_family = fonts::default_font_family();
+    if *family_lock != current_family {
+        *font_lock = None;
+        *family_lock = current_family;
+    }
     if font_lock.is_none() {
-        // Load default font (NotoSans-Medium)
-        let font_data = include_bytes!("../core/assets/NotoSans-Medium.ttf");
-        match Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()) {
-            Ok(font) => *font_lock = Some(font),
-            Err(e) => return Err(vm.new_runtime_error(format!("Failed to load font: {}", e))),
-        }
+        *font_lock = Some(fonts::default_font());
     }
     let font = font_lock.as_ref().unwrap();
     

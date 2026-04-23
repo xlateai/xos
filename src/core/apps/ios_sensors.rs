@@ -1,8 +1,8 @@
 use crate::engine::{Application, EngineState};
 use crate::engine::sensors::{Magnetometer, MagnetometerReading};
+use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use crate::ui::Selector;
-use fontdue::{Font, FontSettings};
 use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -64,8 +64,6 @@ pub struct IosSensorsApp {
 
 impl IosSensorsApp {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../assets/JetBrainsMono-Regular.ttf") as &[u8];
-        
         // Font sizes - smaller and more reasonable
         let magnitude_font_size = if cfg!(target_os = "ios") {
             64.0
@@ -85,17 +83,11 @@ impl IosSensorsApp {
             20.0 * 1.2 // 20% larger
         };
 
-        // Load font multiple times since Font doesn't implement Clone
-        let magnitude_font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
-        let coordinates_font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
-        let count_font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
-        let rate_font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
-        let button_font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
+        let magnitude_font = fonts::default_font();
+        let coordinates_font = fonts::default_font();
+        let count_font = fonts::default_font();
+        let rate_font = fonts::default_font();
+        let button_font = fonts::default_font();
 
         let magnitude_text = TextRasterizer::new(magnitude_font, magnitude_font_size);
         let coordinates_text = TextRasterizer::new(coordinates_font, coordinates_font_size);
