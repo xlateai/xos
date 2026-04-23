@@ -6,7 +6,8 @@ use rustpython_vm::Interpreter;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::Arc;
 
 pub struct MeshApp;
 
@@ -17,10 +18,7 @@ impl MeshApp {
 }
 
 impl Application for MeshApp {
-    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
-        Ok(())
-    }
-
+    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> { Ok(()) }
     fn tick(&mut self, _state: &mut EngineState) {}
 }
 
