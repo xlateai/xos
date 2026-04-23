@@ -7,6 +7,7 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use uuid::Uuid;
 use zip::ZipArchive;
 
 const MANIFEST: &str = include_str!("whisper_ct2_download_links.json");
@@ -272,6 +273,61 @@ fn lift_single_subdirectory_if_needed(out_dir: &Path) -> Result<(), String> {
     ))
 }
 
+/// Recursive copy of a directory (same-volume rename preferred; this is a fallback e.g. EXDEV on iOS).
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Err(format!("copy_dir_all: not a directory: {}", src.display()));
+    }
+    fs::create_dir_all(dst).map_err(|e| format!("create_dir_all {}: {e}", dst.display()))?;
+    for ent in fs::read_dir(src).map_err(|e| format!("read_dir {}: {e}", src.display()))? {
+        let ent = ent.map_err(|e| e.to_string())?;
+        let s = ent.path();
+        let name = ent.file_name();
+        let t = dst.join(&name);
+        if s.is_dir() {
+            copy_dir_all(&s, &t)?;
+        } else {
+            fs::copy(&s, &t).map_err(|e| {
+                format!("copy {} -> {}: {e}", s.display(), t.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Move extracted tree to `out_dir` (replaces an existing `out_dir` if present).
+/// Uses [`std::fs::rename`] when possible; falls back to copy + remove if rename fails.
+fn place_extracted_dir(staging: &Path, out_dir: &Path) -> Result<(), String> {
+    if let Some(p) = out_dir.parent() {
+        fs::create_dir_all(p)
+            .map_err(|e| format!("create_dir_all parent of {}: {e}", out_dir.display()))?;
+    }
+    if out_dir.exists() {
+        fs::remove_dir_all(out_dir).map_err(|e| {
+            format!("remove existing model dir {}: {e}", out_dir.display())
+        })?;
+    }
+    match fs::rename(staging, out_dir) {
+        Ok(()) => Ok(()),
+        Err(e_rename) => {
+            copy_dir_all(staging, out_dir).map_err(|e| {
+                format!(
+                    "move model tree {} → {}: rename: {e_rename}; copy fallback: {e}",
+                    staging.display(),
+                    out_dir.display()
+                )
+            })?;
+            fs::remove_dir_all(staging).map_err(|e| {
+                format!(
+                    "remove temp staging after copy {}: {e} (fix manually if needed)",
+                    staging.display()
+                )
+            })?;
+            Ok(())
+        }
+    }
+}
+
 /// Download ZIP from manifest, extract into `out_dir` under the xos data dir (`xos path --data`).
 pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> Result<(), String> {
     if model_ready(out_dir) {
@@ -304,14 +360,24 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
         ));
     }
 
-    let parent = out_dir
-        .parent()
-        .ok_or_else(|| format!("no parent directory for {}", out_dir.display()))?;
-    let staging = parent.join(format!(".ct2_extract_{}", cache_folder_name.replace('.', "_")));
+    // Staging in the system temp dir: iOS can return EPERM for dot-prefixed dirs next to the app
+    // data tree (e.g. under `…/whisper/.ct2_extract_*`). `std::env::temp_dir()` is always writable.
+    let safe_name: String = cache_folder_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let staging = std::env::temp_dir().join(format!("xos-ct2-{}-{}", safe_name, Uuid::new_v4()));
     if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|e| format!("clear staging: {e}"))?;
+        let _ = fs::remove_dir_all(&staging);
     }
-    fs::create_dir_all(&staging).map_err(|e| format!("create staging: {e}"))?;
+    fs::create_dir_all(&staging)
+        .map_err(|e| format!("create temp staging {}: {e}", staging.display()))?;
 
     eprintln!(
         "[xos-whisper-ct2] Downloading pre-converted weights for {cache_folder_name}…"
@@ -334,14 +400,9 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
         ));
     }
 
-    if out_dir.exists() {
-        fs::remove_dir_all(out_dir).map_err(|e| format!("replace {}: {e}", out_dir.display()))?;
-    }
-    fs::rename(&staging, out_dir).map_err(|e| {
+    place_extracted_dir(&staging, out_dir).map_err(|e| {
         format!(
-            "move extracted model {} → {}: {e} (staging left at {})",
-            staging.display(),
-            out_dir.display(),
+            "{e} (if this persists, check disk space; temp staging was {})",
             staging.display()
         )
     })?;
