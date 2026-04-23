@@ -193,7 +193,7 @@ fn panel_geom(
     let step_top = button_top;
     let step_bottom = button_bottom;
     let slider_left = panel_left + pad;
-    let slider_right = slider_left + slider_w;
+    let slider_right = panel_left + panel_w - pad;
     let slider_top = panel_top + pad + line_h + line_gap + line_h + line_gap;
     let slider_bottom = slider_top + slider_h;
     let font_header_top = slider_bottom + line_gap;
