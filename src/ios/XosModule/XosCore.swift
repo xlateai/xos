@@ -34,6 +34,9 @@ func xos_engine_resize(_ width: UInt32, _ height: UInt32) -> Int32
 @_silgen_name("xos_engine_cleanup")
 func xos_engine_cleanup()
 
+@_silgen_name("xos_engine_toggle_f3_menu")
+func xos_engine_toggle_f3_menu() -> Int32
+
 @_silgen_name("xos_set_log_callback")
 func xos_set_log_callback(_ callback: @convention(c) (UnsafePointer<CChar>?) -> Void)
 

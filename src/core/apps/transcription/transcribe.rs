@@ -17,7 +17,6 @@ const PANEL_BG: (u8, u8, u8) = (25, 28, 36);
 const PANEL_FG: (u8, u8, u8) = (210, 214, 220);
 const STATE_ACTIVE: (u8, u8, u8) = (92, 230, 142);
 const STATE_SILENCE: (u8, u8, u8) = (168, 172, 182);
-const TEXTBOX_BG: (u8, u8, u8) = (18, 21, 28);
 const TEXTBOX_BORDER: (u8, u8, u8) = (52, 58, 70);
 const THRESHOLD_DEFAULT: f32 = 0.30;
 const THRESHOLD_MIN: f32 = 0.01;
@@ -36,8 +35,8 @@ const WAVE_BAND_FRAC: f32 = 0.375;
 const WAVE_HEADROOM_FRAC: f32 = 0.0;
 const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
-const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 12.0;
-const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 20.0;
+const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 24.0;
+const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 40.0;
 const TRANSCRIPT_INNER_PAD: f32 = 4.0;
 
 fn transcribe_backend_from_env() -> WhisperBackend {
@@ -457,7 +456,7 @@ impl VisualCanvas {
 
         // Transcript area: background + border only; text is drawn by [`TranscriptTextView`] (TextApp-style scroll).
         if transcript_h > 10.0 {
-            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BG);
+            // No fill: transcript sits on the same black as the rest of the frame; outline only.
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y0 + 1.0, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y1 - 1.0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
@@ -566,7 +565,7 @@ impl TranscribeApp {
         vad_label.set_text("VAD: 0.000".to_string());
         let mut state_label = TextRasterizer::new(font.clone(), 24.0);
         state_label.set_text("SILENCE".to_string());
-        let transcript_view = TranscriptTextView::new(font.clone(), 14.0);
+        let transcript_view = TranscriptTextView::new(font.clone(), 28.0);
         Self {
             listener: None,
             engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
@@ -659,7 +658,7 @@ impl TranscribeApp {
     }
 
     fn transcript_text_size(height: f32) -> f32 {
-        (height * 0.018).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
+        (height * 0.036).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX)
     }
 }
 

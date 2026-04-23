@@ -1,4 +1,6 @@
 //! Global F3 menu (top-right): FPS, UI scale slider, opaque backing for readability.
+//! Desktop: toggle with **F3** (or host binding). iOS: **three-finger long-press** on the
+//! main viewport (same idea as Expo’s dev gesture); implemented in `XosViewportView.swift`.
 
 use crate::engine::{
     frame_view_rect_norm, EngineState, F3_UI_SCALE_MAX_PERCENT, F3_UI_SCALE_MIN_PERCENT,
@@ -19,7 +21,8 @@ const FRAME_ZOOM_WHEEL_RATE: f32 = 0.085;
 const F3_INTERACTION_FADE_DECAY: f32 = 3.2;
 
 pub struct F3Menu {
-    /// When false, FPS is still tracked but the menu is not drawn. Toggle with F3 (desktop/web).
+    /// When false, FPS is still tracked but the menu is not drawn. Toggle with F3 (desktop) or
+    /// three-finger long-press on iOS.
     pub visible: bool,
     fps_rasterizer: TextRasterizer,
     scale_rasterizer: TextRasterizer,

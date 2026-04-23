@@ -685,7 +685,8 @@ impl TranscriptionEngine {
         feature = "silero_vad",
         feature = "whisper",
         not(target_arch = "wasm32"),
-        not(target_os = "ios")
+        not(target_os = "ios"),
+        not(target_os = "macos")
     ))]
     /// Returns whether Whisper decode should run this tick (speech or hangover). On load failure, always `true`.
     fn vad_update_and_allow_decode(
@@ -895,11 +896,14 @@ impl TranscriptionEngine {
             }
         }
 
+        // iOS: no Silero in `lib` → always decode. macOS: match that (RMS in transcribe UI; Silero
+        // gating was starving Whisper). Windows/Linux: optional Silero gate.
         #[cfg(all(
             feature = "silero_vad",
             feature = "whisper",
             not(target_arch = "wasm32"),
-            not(target_os = "ios")
+            not(target_os = "ios"),
+            not(target_os = "macos")
         ))]
         let allow_whisper = self.vad_update_and_allow_decode(
             sample_rate,
@@ -912,7 +916,8 @@ impl TranscriptionEngine {
             feature = "silero_vad",
             feature = "whisper",
             not(target_arch = "wasm32"),
-            not(target_os = "ios")
+            not(target_os = "ios"),
+            not(target_os = "macos")
         )))]
         let allow_whisper = true;
 
