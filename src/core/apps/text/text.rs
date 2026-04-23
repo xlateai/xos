@@ -2,10 +2,10 @@ use crate::engine::{Application, EngineState};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use fontdue::Font;
 use std::time::{Instant, Duration};
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
@@ -1488,14 +1488,12 @@ impl TextApp {
     }
     
     fn save_undo_state(&mut self) {
-        // Save current state to undo stack
-        self.undo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
-        // Limit undo stack size
-        if self.undo_stack.len() > 100 {
-            self.undo_stack.remove(0);
-        }
-        // Clear redo stack when new action is performed
-        self.redo_stack.clear();
+        ui_text_edit::save_undo_state(
+            &mut self.undo_stack,
+            &mut self.redo_stack,
+            &self.text_rasterizer.text,
+            self.cursor_position,
+        );
     }
     
     /// Get the cursor position in text coordinates (x, y)
@@ -1589,29 +1587,12 @@ impl TextApp {
     
     /// Delete the current selection and return true if a selection was deleted
     fn delete_selection(&mut self) -> bool {
-        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-            let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
-            let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-            
-            // Build new text without selected range
-            let mut new_text = String::new();
-            for (i, &c) in text_chars.iter().enumerate() {
-                if i < start_idx || i >= end_idx {
-                    new_text.push(c);
-                }
-            }
-            
-            self.text_rasterizer.text = new_text;
-            self.cursor_position = start_idx;
-            
-            // Clear selection
-            self.selection_start = None;
-            self.selection_end = None;
-            
-            true
-        } else {
-            false
-        }
+        ui_text_edit::delete_selection(
+            &mut self.text_rasterizer.text,
+            &mut self.cursor_position,
+            &mut self.selection_start,
+            &mut self.selection_end,
+        )
     }
     
     fn handle_action_key(&mut self, action: KeyType, state: &mut EngineState) {
@@ -1632,103 +1613,54 @@ impl TextApp {
                 self.trackpad_selecting = false;
             }
             KeyType::Copy => {
-                // Copy selected text to clipboard
-                if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-                    let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
-                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                    let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
-                    
-                    // Store in internal clipboard as fallback
+                if let Some(selected_text) = ui_text_edit::copy_selection(
+                    &self.text_rasterizer.text,
+                    self.selection_start,
+                    self.selection_end,
+                ) {
                     self.clipboard_content = selected_text.clone();
-                    
-                    // Copy to system clipboard
                     let _ = clipboard::set_contents(&selected_text);
                 }
             }
             KeyType::Cut => {
-                // Cut selected text (copy + delete)
-                if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                if let Some(selected_text) = ui_text_edit::copy_selection(
+                    &self.text_rasterizer.text,
+                    self.selection_start,
+                    self.selection_end,
+                ) {
                     self.save_undo_state();
-                    
-                    let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
-                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                    let selected_text: String = text_chars[start_idx..end_idx.min(text_chars.len())].iter().collect();
-                    
-                    // Store in internal clipboard as fallback
                     self.clipboard_content = selected_text.clone();
-                    
-                    // Copy to system clipboard
                     let _ = clipboard::set_contents(&selected_text);
-                    
-                    // Delete selected text
-                    let mut new_text = String::new();
-                    for (i, &c) in text_chars.iter().enumerate() {
-                        if i < start_idx || i >= end_idx {
-                            new_text.push(c);
-                        }
-                    }
-                    self.text_rasterizer.text = new_text;
-                    self.cursor_position = start_idx;
-                    self.selection_start = None;
-                    self.selection_end = None;
+                    let _ = ui_text_edit::delete_selection(
+                        &mut self.text_rasterizer.text,
+                        &mut self.cursor_position,
+                        &mut self.selection_start,
+                        &mut self.selection_end,
+                    );
                     self.ensure_cursor_visible(content_height);
                 }
             }
             KeyType::Paste => {
-                // Paste from clipboard
                 self.save_undo_state();
-                
-                // Get from system clipboard, fall back to internal clipboard
-                let clipboard_text = clipboard::get_contents()
-                    .unwrap_or_else(|| self.clipboard_content.clone());
-                
-                if !clipboard_text.is_empty() {
-                    // Delete selection if any
-                    if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-                        let (start_idx, end_idx) = if start <= end { (start, end) } else { (end, start) };
-                        let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                        let mut new_text = String::new();
-                        for (i, &c) in text_chars.iter().enumerate() {
-                            if i < start_idx || i >= end_idx {
-                                new_text.push(c);
-                            }
-                        }
-                        self.text_rasterizer.text = new_text;
-                        self.cursor_position = start_idx;
-                        self.selection_start = None;
-                        self.selection_end = None;
-                    }
-                    
-                    // Insert clipboard text
-                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                    let mut new_text = String::new();
-                    for (i, &c) in text_chars.iter().enumerate() {
-                        if i == self.cursor_position {
-                            new_text.push_str(&clipboard_text);
-                        }
-                        new_text.push(c);
-                    }
-                    if self.cursor_position >= text_chars.len() {
-                        new_text.push_str(&clipboard_text);
-                    }
-                    self.text_rasterizer.text = new_text;
-                    self.cursor_position += clipboard_text.chars().count();
+                if ui_text_edit::paste_at_cursor(
+                    &mut self.text_rasterizer.text,
+                    &mut self.cursor_position,
+                    &mut self.selection_start,
+                    &mut self.selection_end,
+                    &self.clipboard_content,
+                )
+                .is_some()
+                {
                     self.ensure_cursor_visible(content_height);
                 }
             }
             KeyType::SelectAll => {
-                let text_len = self.text_rasterizer.text.chars().count();
-                // Toggle: if everything is selected, deselect; otherwise select all
-                if self.selection_start == Some(0) && self.selection_end == Some(text_len) {
-                    // Deselect all
-                    self.selection_start = None;
-                    self.selection_end = None;
-                } else {
-                    // Select all text
-                    self.selection_start = Some(0);
-                    self.selection_end = Some(text_len);
-                    self.cursor_position = text_len;
-                }
+                ui_text_edit::select_all_toggle(
+                    &self.text_rasterizer.text,
+                    &mut self.cursor_position,
+                    &mut self.selection_start,
+                    &mut self.selection_end,
+                );
             }
             KeyType::Undo => {
                 if let Some((text, cursor)) = self.undo_stack.pop() {

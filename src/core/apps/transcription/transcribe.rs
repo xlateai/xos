@@ -31,6 +31,10 @@ const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
 const SILENCE_CLIP_FRAMES: u32 = 3;
+/// Safety cap for a single live decode segment. Prevents unbounded growth when VAD never reaches
+/// a commit boundary (common on iOS energy-gated paths under constant background noise).
+const SEGMENT_HARD_CLIP_SECONDS_IOS: f32 = 45.0;
+const SEGMENT_HARD_CLIP_SECONDS_DESKTOP: f32 = 120.0;
 const VAD_SEGMENT_EMA_ALPHA: f32 = 0.30;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
@@ -738,6 +742,22 @@ impl TranscribeApp {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    fn push_dedup_committed_line(&mut self, line: &str) {
+        let t = Self::normalize_text(line);
+        if t.is_empty() {
+            return;
+        }
+        if self.committed_lines.back().map(|s| s.as_str()) != Some(t.as_str()) {
+            self.committed_lines.push_back(t);
+        }
+    }
+
+    fn drain_engine_commits_to_transcript(&mut self) {
+        for line in self.engine.drain_stdout_commits() {
+            self.push_dedup_committed_line(&line);
+        }
+    }
+
     fn transcript_text_size(height: f32, f3_ui_scale_mul: f32) -> f32 {
         let base = (height * 0.039).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
         (base * f3_ui_scale_mul.clamp(0.25, 5.0)).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX * 2.0)
@@ -856,6 +876,23 @@ impl Application for TranscribeApp {
         };
 
         self.engine.process_snapshot(sr, &channels, ingested);
+        let buffered_secs = self.engine.buffered_segment_seconds();
+        let hard_clip_seconds = if cfg!(target_os = "ios") {
+            SEGMENT_HARD_CLIP_SECONDS_IOS
+        } else {
+            SEGMENT_HARD_CLIP_SECONDS_DESKTOP
+        };
+        if buffered_secs >= hard_clip_seconds {
+            // Force-commit + clip even if silence gating didn't trigger, so segment PCM cannot grow forever.
+            self.engine.flush_live_to_stdout_commits();
+            self.drain_engine_commits_to_transcript();
+            self.engine.clip_consumed_audio_cursor();
+            self.segment_live_text.clear();
+            self.in_speech_segment = false;
+            self.speech_run_frames = 0;
+            self.silence_run_frames = 0;
+            self.silence_idle_clip_frames = 0;
+        }
         let p_engine = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
         let energy = energy_speech_proxy(&channels);
         // iOS: ONNX VAD often unavailable, so blend with energy.
@@ -912,11 +949,7 @@ impl Application for TranscribeApp {
                 if !live_norm.is_empty() && live_norm.len() > finalized.len() {
                     finalized = live_norm;
                 }
-                if !finalized.is_empty()
-                    && self.committed_lines.back().map(|s| s.as_str()) != Some(finalized.as_str())
-                {
-                    self.committed_lines.push_back(finalized);
-                }
+                self.push_dedup_committed_line(&finalized);
                 self.segment_live_text.clear();
                 self.in_speech_segment = false;
                 // Critical: clip old audio out of the decode segment so we don't reprocess it.
@@ -1034,9 +1067,6 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
-        let shape = state.frame.shape();
-        let fw = shape[1] as u32;
-        let fh = shape[0] as u32;
         if self.audio_selector.show_menu {
             self.lang_selector.show_menu = false;
             let layout = safe_layout_pixels(state);

@@ -177,3 +177,112 @@ impl UiText {
         Ok(state)
     }
 }
+
+#[inline]
+fn normalized_selection(selection_start: Option<usize>, selection_end: Option<usize>) -> Option<(usize, usize)> {
+    let (start, end) = (selection_start?, selection_end?);
+    Some(if start <= end { (start, end) } else { (end, start) })
+}
+
+pub fn save_undo_state(
+    undo_stack: &mut Vec<(String, usize)>,
+    redo_stack: &mut Vec<(String, usize)>,
+    text: &str,
+    cursor_position: usize,
+) {
+    undo_stack.push((text.to_string(), cursor_position));
+    if undo_stack.len() > 100 {
+        undo_stack.remove(0);
+    }
+    redo_stack.clear();
+}
+
+pub fn delete_selection(
+    text: &mut String,
+    cursor_position: &mut usize,
+    selection_start: &mut Option<usize>,
+    selection_end: &mut Option<usize>,
+) -> bool {
+    let Some((start_idx, end_idx)) = normalized_selection(*selection_start, *selection_end) else {
+        return false;
+    };
+    let text_chars: Vec<char> = text.chars().collect();
+    let mut new_text = String::new();
+    for (i, &c) in text_chars.iter().enumerate() {
+        if i < start_idx || i >= end_idx {
+            new_text.push(c);
+        }
+    }
+    *text = new_text;
+    *cursor_position = start_idx;
+    *selection_start = None;
+    *selection_end = None;
+    true
+}
+
+pub fn copy_selection(text: &str, selection_start: Option<usize>, selection_end: Option<usize>) -> Option<String> {
+    let (start_idx, end_idx) = normalized_selection(selection_start, selection_end)?;
+    let text_chars: Vec<char> = text.chars().collect();
+    let end_idx = end_idx.min(text_chars.len());
+    if start_idx >= end_idx {
+        return None;
+    }
+    let selected: String = text_chars[start_idx..end_idx].iter().collect();
+    if selected.is_empty() {
+        None
+    } else {
+        Some(selected)
+    }
+}
+
+pub fn insert_text_at_cursor(text: &mut String, cursor_position: &mut usize, insert: &str) {
+    if insert.is_empty() {
+        return;
+    }
+    let text_chars: Vec<char> = text.chars().collect();
+    let mut new_text = String::new();
+    for (i, &c) in text_chars.iter().enumerate() {
+        if i == *cursor_position {
+            new_text.push_str(insert);
+        }
+        new_text.push(c);
+    }
+    if *cursor_position >= text_chars.len() {
+        new_text.push_str(insert);
+    }
+    *text = new_text;
+    *cursor_position += insert.chars().count();
+}
+
+pub fn paste_at_cursor(
+    text: &mut String,
+    cursor_position: &mut usize,
+    selection_start: &mut Option<usize>,
+    selection_end: &mut Option<usize>,
+    clipboard_fallback: &str,
+) -> Option<String> {
+    let clipboard_text = crate::clipboard::get_contents().unwrap_or_else(|| clipboard_fallback.to_string());
+    if clipboard_text.is_empty() {
+        return None;
+    }
+    let _ = delete_selection(text, cursor_position, selection_start, selection_end);
+    insert_text_at_cursor(text, cursor_position, &clipboard_text);
+    Some(clipboard_text)
+}
+
+pub fn select_all_toggle(
+    text: &str,
+    cursor_position: &mut usize,
+    selection_start: &mut Option<usize>,
+    selection_end: &mut Option<usize>,
+) {
+    let text_len = text.chars().count();
+    if *selection_start == Some(0) && *selection_end == Some(text_len) {
+        *selection_start = None;
+        *selection_end = None;
+        return;
+    }
+    *selection_start = Some(0);
+    *selection_end = Some(text_len);
+    *cursor_position = text_len;
+}
