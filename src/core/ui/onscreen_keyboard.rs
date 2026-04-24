@@ -1,5 +1,6 @@
 use crate::apps::partitions::partition::{Partition, PartitionData};
-use fontdue::{Font, FontSettings};
+use crate::rasterizer::text::fonts;
+use fontdue::Font;
 use std::time::{Instant, Duration};
 
 const KEYBOARD_BG_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black
@@ -93,9 +94,7 @@ impl std::fmt::Debug for OnScreenKeyboard {
 
 impl OnScreenKeyboard {
     pub fn new() -> Self {
-        let font_bytes = include_bytes!("../assets/JetBrainsMono-Regular.ttf") as &[u8];
-        let font = Font::from_bytes(font_bytes, FontSettings::default())
-            .expect("Failed to load font");
+        let font = fonts::default_font();
 
         // Initialize partition - actual position will be set by text app using safe regions
         // Internal coordinates (0-1) work relative to partition bounds

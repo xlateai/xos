@@ -1,5 +1,6 @@
 use crate::engine::{Application, EngineState};
 use crate::engine::audio::{devices, default_input, default_output, AudioListener, AudioPlayer, AudioDevice};
+use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 use std::time::{Instant, Duration};
@@ -42,9 +43,7 @@ pub struct AudioRelay {
 
 impl AudioRelay {
     pub fn new() -> Self {
-        // Load font
-        let font_data = include_bytes!("../assets/NotoSans-Medium.ttf");
-        let font = Font::from_bytes(font_data as &[u8], fontdue::FontSettings::default()).ok();
+        let font = Some(fonts::default_font());
         
         Self {
             listener: None,

@@ -78,6 +78,16 @@ impl AudioInputSelector {
             .collect();
     }
 
+    /// Exposed for transcribe: reserve **lang** to the right of the capture control using the same size rule.
+    pub fn capture_button_size_for_layout(
+        wave_w: f32,
+        wave_h: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+    ) -> f32 {
+        Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h)
+    }
+
     fn capture_button_size(wave_w: f32, wave_h: f32, viewport_w: f32, viewport_h: f32) -> f32 {
         #[cfg(target_os = "ios")]
         {
@@ -99,8 +109,68 @@ impl AudioInputSelector {
 
     const INTENSITY_STRIP_TO_BUTTON_GAP: f32 = 6.0;
 
+    /// Extra width to the right of the capture button, e.g. a **lang** control (`0` = capture centered alone).
+    pub const TRAILING_TO_CAPTURE_GAP: f32 = 8.0;
+
     /// `with_intensity_strip`: if true, reserves a row at the bottom of the wave for a slider and moves
-    /// the capture button up. Returns `(intensity_rect, button_rect)`; intensity is `(0,0,0,0)` if false.
+    /// the capture button up. Returns `(intensity_rect, button_rect, trailing_rect)`.
+    /// `trailing_w > 0` places that width to the right of the green button and centers the **group** in the band.
+    /// Intensity is `(0,0,0,0)` if `with_intensity_strip` is false; trailing is zero if `trailing_w <= 0`.
+    pub fn layout_intensity_capture_trailing(
+        wave_x0: f32,
+        wave_y0: f32,
+        wave_x1: f32,
+        wave_y1: f32,
+        viewport_w: f32,
+        viewport_h: f32,
+        with_intensity_strip: bool,
+        trailing_w: f32,
+        trailing_gap: f32,
+    ) -> ((f32, f32, f32, f32), (f32, f32, f32, f32), (f32, f32, f32, f32)) {
+        let wave_w = (wave_x1 - wave_x0).max(0.0);
+        let wave_h = (wave_y1 - wave_y0).max(0.0);
+        let btn_size = Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h);
+        let tw = trailing_w.max(0.0);
+        let g = if tw > 0.0 { trailing_gap.max(0.0) } else { 0.0 };
+        let group_w = btn_size + g + tw;
+        let cx = (wave_x0 + wave_x1) * 0.5;
+        let max_left = (wave_x1 - group_w).max(wave_x0);
+        let group_left = (cx - group_w * 0.5).clamp(wave_x0, max_left);
+        let empty_t = (0.0, 0.0, 0.0, 0.0);
+        let (btn_x0, trail_rect) = if tw > 0.0 {
+            let cap0 = group_left;
+            let tr = (cap0 + btn_size + g, 0.0, cap0 + group_w, 0.0);
+            (cap0, (tr.0, tr.1, tr.2, tr.3))
+        } else {
+            (cx - btn_size * 0.5, empty_t)
+        };
+        if !with_intensity_strip {
+            let btn_y1 = wave_y1 - 4.0;
+            let btn_y0 = btn_y1 - btn_size;
+            let btn_rect = (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1);
+            let trail = if tw > 0.0 {
+                (trail_rect.0, btn_y0, trail_rect.2, btn_y1)
+            } else {
+                empty_t
+            };
+            return (empty_t, btn_rect, trail);
+        }
+        let sh = Self::layout_intensity_strip_height(viewport_h);
+        let int_y1 = wave_y1;
+        let int_y0 = (int_y1 - sh).max(wave_y0);
+        let int_rect = (wave_x0, int_y0, wave_x1, int_y1);
+        let btn_y1 = int_y0 - Self::INTENSITY_STRIP_TO_BUTTON_GAP;
+        let btn_y0 = (btn_y1 - btn_size).max(wave_y0);
+        let btn_rect = (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1);
+        let trail = if tw > 0.0 {
+            (trail_rect.0, btn_y0, trail_rect.2, btn_y1)
+        } else {
+            empty_t
+        };
+        (int_rect, btn_rect, trail)
+    }
+
+    /// Same as [`Self::layout_intensity_capture_trailing`]`(..., 0, 0)` — capture centered, no trailing slot.
     pub fn layout_intensity_and_capture(
         wave_x0: f32,
         wave_y0: f32,
@@ -110,24 +180,18 @@ impl AudioInputSelector {
         viewport_h: f32,
         with_intensity_strip: bool,
     ) -> ((f32, f32, f32, f32), (f32, f32, f32, f32)) {
-        let wave_w = (wave_x1 - wave_x0).max(0.0);
-        let wave_h = (wave_y1 - wave_y0).max(0.0);
-        let btn_size = Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h);
-        let cx = (wave_x0 + wave_x1) * 0.5;
-        let btn_x0 = cx - btn_size * 0.5;
-        if !with_intensity_strip {
-            let btn_y1 = wave_y1 - 4.0;
-            let btn_y0 = btn_y1 - btn_size;
-            return ((0.0, 0.0, 0.0, 0.0), (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1));
-        }
-        let sh = Self::layout_intensity_strip_height(viewport_h);
-        let int_y1 = wave_y1;
-        let int_y0 = (int_y1 - sh).max(wave_y0);
-        let int_rect = (wave_x0, int_y0, wave_x1, int_y1);
-        let btn_y1 = int_y0 - Self::INTENSITY_STRIP_TO_BUTTON_GAP;
-        let btn_y0 = (btn_y1 - btn_size).max(wave_y0);
-        let btn_rect = (btn_x0, btn_y0, btn_x0 + btn_size, btn_y1);
-        (int_rect, btn_rect)
+        let (a, b, _) = Self::layout_intensity_capture_trailing(
+            wave_x0,
+            wave_y0,
+            wave_x1,
+            wave_y1,
+            viewport_w,
+            viewport_h,
+            with_intensity_strip,
+            0.0,
+            0.0,
+        );
+        (a, b)
     }
 
     /// Place a square capture control at the bottom center of the waveform band.
@@ -269,12 +333,33 @@ impl AudioInputSelector {
         safe_layout: (f32, f32, f32, f32),
         with_intensity_strip: bool,
     ) {
+        self.draw_with_trailing(
+            state,
+            font,
+            wave_rect,
+            safe_layout,
+            with_intensity_strip,
+            0.0,
+        );
+    }
+
+    /// Same as [`Self::draw`], but reserves a right-side slot so external UI (e.g. `lang`) can sit
+    /// beside capture without overlap; capture hit-target follows this layout.
+    pub fn draw_with_trailing(
+        &mut self,
+        state: &mut EngineState,
+        font: &Font,
+        wave_rect: (f32, f32, f32, f32),
+        safe_layout: (f32, f32, f32, f32),
+        with_intensity_strip: bool,
+        trailing_w: f32,
+    ) {
         let shape = state.frame.shape();
         let full_h = shape[0] as f32;
         let full_w = shape[1] as f32;
         let height = shape[0] as usize;
         let width = shape[1] as usize;
-        let (int_r, btn) = Self::layout_intensity_and_capture(
+        let (int_r, btn, _) = Self::layout_intensity_capture_trailing(
             wave_rect.0,
             wave_rect.1,
             wave_rect.2,
@@ -282,6 +367,8 @@ impl AudioInputSelector {
             full_w,
             full_h,
             with_intensity_strip,
+            trailing_w,
+            Self::TRAILING_TO_CAPTURE_GAP,
         );
         self.last_intensity_rect = int_r;
         self.last_button_rect = btn;

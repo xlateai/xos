@@ -322,7 +322,7 @@ pub struct VadApp {
 
 impl VadApp {
     pub fn new() -> Self {
-        let font = fonts::jetbrains_mono();
+        let font = fonts::default_font();
         let mut vad_label = TextRasterizer::new(font, 24.0);
         vad_label.set_text("VAD: 0.000".to_string());
         Self {

@@ -83,6 +83,7 @@ define_apps! {
     Leds => leds::Leds,
     IosSensors => ios_sensors::IosSensorsApp,
     AudioRelay => audio_relay::AudioRelay,
+    TextMesh => text_mesh::TextMeshApp,
     Overlay => overlay::OverlayApp,
     Remote => remote::RemoteApp,
     Mesh => mesh::MeshApp,
