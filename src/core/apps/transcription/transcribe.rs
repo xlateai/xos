@@ -34,7 +34,6 @@ const SILENCE_CLIP_FRAMES: u32 = 3;
 /// Safety cap for a single live decode segment. Prevents unbounded growth when VAD never reaches
 /// a commit boundary (common on iOS energy-gated paths under constant background noise).
 const SEGMENT_HARD_CLIP_SECONDS_IOS: f32 = 45.0;
-const SEGMENT_HARD_CLIP_SECONDS_DESKTOP: f32 = 120.0;
 const VAD_SEGMENT_EMA_ALPHA: f32 = 0.30;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
@@ -710,17 +709,8 @@ impl TranscribeApp {
             let _ = old.pause();
             drop(old);
         }
-        #[cfg(all(
-            feature = "whisper",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        ))]
-        let buffer_duration = 10.0_f32;
-        #[cfg(not(all(
-            feature = "whisper",
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )))]
+        // Keep capture buffering aligned with iOS so live decode cadence/latency characteristics
+        // match across platforms.
         let buffer_duration = 3.0_f32;
 
         let listener = audio::AudioListener::new(&device, buffer_duration)?;
@@ -903,11 +893,8 @@ impl Application for TranscribeApp {
 
         self.engine.process_snapshot(sr, &channels, ingested);
         let buffered_secs = self.engine.buffered_segment_seconds();
-        let hard_clip_seconds = if cfg!(target_os = "ios") {
-            SEGMENT_HARD_CLIP_SECONDS_IOS
-        } else {
-            SEGMENT_HARD_CLIP_SECONDS_DESKTOP
-        };
+        // Use the same anti-growth clip window as iOS for cross-platform parity.
+        let hard_clip_seconds = SEGMENT_HARD_CLIP_SECONDS_IOS;
         if buffered_secs >= hard_clip_seconds {
             // Force-commit + clip even if silence gating didn't trigger, so segment PCM cannot grow forever.
             self.engine.flush_live_to_stdout_commits();
@@ -921,14 +908,9 @@ impl Application for TranscribeApp {
         }
         let p_engine = self.engine.last_vad_speech_prob().clamp(0.0, 1.0);
         let energy = energy_speech_proxy(&channels);
-        // iOS: ONNX VAD often unavailable, so blend with energy.
-        #[cfg(target_os = "ios")]
+        // iOS parity for all targets: combine model VAD with energy proxy so speech gating remains
+        // responsive even when platform VAD confidence is unavailable or conservative.
         let p = p_engine.max(energy);
-        // macOS: temporarily mirror iOS behavior for UI gating/levels to avoid dead VAD bars.
-        #[cfg(all(not(target_os = "ios"), target_os = "macos"))]
-        let p = energy;
-        #[cfg(all(not(target_os = "ios"), not(target_os = "macos")))]
-        let p = p_engine;
         self.vad_prob_visual_ema = self.vad_prob_visual_ema * 0.82 + p * 0.18;
         self.vad_prob_seg_ema =
             self.vad_prob_seg_ema * (1.0 - VAD_SEGMENT_EMA_ALPHA) + p * VAD_SEGMENT_EMA_ALPHA;
