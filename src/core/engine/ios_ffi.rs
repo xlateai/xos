@@ -457,7 +457,7 @@ fn tick_ios_remote_frame_push(state: &mut IosEngineState) {
     });
     if remote
         .session
-        .send_to_json(0, IOS_REMOTE_KIND_FRAME, payload)
+        .broadcast_json(IOS_REMOTE_KIND_FRAME, payload)
         .is_ok()
     {
         remote.last_frame_sent = Some(Instant::now());
