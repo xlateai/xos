@@ -86,6 +86,7 @@ define_apps! {
     TextMesh => text_mesh::TextMeshApp,
     Overlay => overlay::OverlayApp,
     Remote => remote::RemoteApp,
+    IosRemote => ios_remote::IosRemoteApp,
     Mesh => mesh::MeshApp,
     Hang => hang::HangApp,
     Transcribe => transcribe::TranscribeApp,
