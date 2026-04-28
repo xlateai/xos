@@ -11,7 +11,13 @@ use std::ptr;
 #[cfg(target_os = "ios")]
 use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
+use std::sync::mpsc::{
+    sync_channel, Receiver, SyncSender, TrySendError,
+};
+#[cfg(target_os = "ios")]
 use std::sync::Arc;
+#[cfg(target_os = "ios")]
+use std::thread::{self, JoinHandle};
 #[cfg(target_os = "ios")]
 use std::time::{Duration, Instant};
 
@@ -39,10 +45,15 @@ const IOS_REMOTE_MESH_ID: &str = "ios-xos";
 const IOS_REMOTE_KIND_FRAME: &str = "remote_frame";
 #[cfg(target_os = "ios")]
 const IOS_REMOTE_KIND_INPUT: &str = "remote_input";
+/// Cap outbound stream at ~60 fps (sender may drop ticks if encoder lags behind).
 #[cfg(target_os = "ios")]
-const IOS_REMOTE_FRAME_INTERVAL: Duration = Duration::from_nanos(33_333_333);
+const IOS_REMOTE_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 #[cfg(target_os = "ios")]
 const IOS_REMOTE_RECONNECT_BACKOFF: Duration = Duration::from_millis(1400);
+#[cfg(target_os = "ios")]
+const IOS_REMOTE_STREAM_MAX_W: u32 = 720;
+#[cfg(target_os = "ios")]
+const IOS_REMOTE_JPEG_QUALITY: u8 = 50;
 
 // Global engine state for iOS
 // Note: We use unsafe Send impl because Application trait objects are not Send,
@@ -64,7 +75,10 @@ struct IosEngineState {
 #[cfg(target_os = "ios")]
 struct IosRemoteMeshState {
     session: Arc<MeshSession>,
-    last_frame_sent: Option<Instant>,
+    /// Feed raw RGBA to background encoder (`sync_channel` cap 1 drops if encoder is behind).
+    frame_tx: SyncSender<(u32, u32, Vec<u8>)>,
+    _encoder_join: JoinHandle<()>,
+    last_frame_queued_at: Option<Instant>,
     prev_left: bool,
     prev_right: bool,
 }
@@ -249,6 +263,12 @@ pub extern "C" fn xos_engine_tick() -> i32 {
     };
 
     if let Some(ref mut ios_state) = *state {
+        // Finger/touch coordinates from Swift arrive before tick; mesh remote writes the same mouse
+        // for app hit-testing below. Restore local x/y before keyboard/F3 so the on-device pointer
+        // (highlights, F3 taps) stays aligned with physical touch rather than Mac cursor position.
+        let local_px = ios_state.engine_state.mouse.x;
+        let local_py = ios_state.engine_state.mouse.y;
+
         tick_ios_remote_input(ios_state);
         // Run app tick first with panic handling
         // We use AssertUnwindSafe because we know the FFI boundary is safe
@@ -276,6 +296,9 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 
         tick_frame_view_zoom(&mut ios_state.engine_state);
         apply_frame_view_zoom(&mut ios_state.engine_state);
+
+        ios_state.engine_state.mouse.x = local_px;
+        ios_state.engine_state.mouse.y = local_py;
         
         // Check for panic first
         if let Err(_) = result {
@@ -319,6 +342,41 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 }
 
 #[cfg(target_os = "ios")]
+fn ios_remote_encoder_run(session: Arc<MeshSession>, rx: Receiver<(u32, u32, Vec<u8>)>) {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    while let Ok((w, h, rgba)) = rx.recv() {
+        let Some(image_rgba) = image::RgbaImage::from_raw(w, h, rgba) else {
+            continue;
+        };
+        let source = image::DynamicImage::ImageRgba8(image_rgba);
+        let scale = (IOS_REMOTE_STREAM_MAX_W as f32 / w.max(1) as f32).min(1.0);
+        let out_w = ((w as f32) * scale).round().max(1.0) as u32;
+        let out_h = ((h as f32) * scale).round().max(1.0) as u32;
+        let resized = if out_w == w && out_h == h {
+            source
+        } else {
+            source.resize_exact(out_w, out_h, image::imageops::FilterType::Triangle)
+        };
+        let mut jpeg_bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut jpeg_bytes,
+                IOS_REMOTE_JPEG_QUALITY,
+            );
+            if encoder.encode_image(&resized).is_err() {
+                continue;
+            }
+        }
+        let payload = json!({
+            "jpeg": B64.encode(jpeg_bytes),
+            "w": out_w,
+            "h": out_h,
+        });
+        let _ = session.broadcast_json(IOS_REMOTE_KIND_FRAME, payload);
+    }
+}
+
+#[cfg(target_os = "ios")]
 fn try_connect_ios_remote_mesh() -> Result<Arc<MeshSession>, String> {
     let node_identity = load_node_identity().map_err(|e| format!("node identity unavailable: {e}"))?;
     let session = MeshSession::join_with_identity(
@@ -348,12 +406,26 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
     state.ios_remote_last_attempt = Some(now);
     match try_connect_ios_remote_mesh() {
         Ok(session) => {
-            state.ios_remote = Some(IosRemoteMeshState {
-                session,
-                last_frame_sent: None,
-                prev_left: false,
-                prev_right: false,
-            });
+            let (frame_tx, frame_rx) = sync_channel::<(u32, u32, Vec<u8>)>(1);
+            let session_for_enc = Arc::clone(&session);
+            let join_result = thread::Builder::new()
+                .name("ios-remote-jpeg".into())
+                .spawn(move || ios_remote_encoder_run(session_for_enc, frame_rx));
+            match join_result {
+                Ok(_encoder_join) => {
+                    state.ios_remote = Some(IosRemoteMeshState {
+                        session,
+                        frame_tx,
+                        _encoder_join,
+                        last_frame_queued_at: None,
+                        prev_left: false,
+                        prev_right: false,
+                    });
+                }
+                Err(e) => {
+                    log_to_ios(&format!("ios-remote: encoder thread spawn failed: {e}"));
+                }
+            }
         }
         Err(e) => {
             log_to_ios(&format!("ios-remote: mesh connect failed: {e}"));
@@ -377,6 +449,14 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
     if packets.is_empty() {
         return;
     }
+
+    let mut chars_merged = String::new();
+    for p in packets.iter() {
+        if let Some(s) = p.body.get("key_chars").and_then(|v| v.as_str()) {
+            chars_merged.push_str(s);
+        }
+    }
+
     let last = packets.last().map(|p| p.body.clone()).unwrap_or_else(|| json!({}));
     let scroll_sum: f64 = packets
         .iter()
@@ -420,6 +500,11 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
             .app
             .on_scroll(&mut state.engine_state, 0.0, scroll_sum as f32);
     }
+    if !chars_merged.is_empty() {
+        for ch in chars_merged.chars() {
+            state.app.on_key_char(&mut state.engine_state, ch);
+        }
+    }
     remote.prev_right = right;
 }
 
@@ -432,35 +517,24 @@ fn tick_ios_remote_frame_push(state: &mut IosEngineState) {
     if remote.session.current_num_nodes() < 2 {
         return;
     }
-    if let Some(last) = remote.last_frame_sent {
+    if let Some(last) = remote.last_frame_queued_at {
         if last.elapsed() < IOS_REMOTE_FRAME_INTERVAL {
             return;
         }
     }
 
     let rgba = state.engine_state.frame.data().to_vec();
-    let Some(image) = image::RgbaImage::from_raw(state.width, state.height, rgba) else {
-        return;
-    };
-    let mut jpeg_bytes = Vec::new();
+    match remote
+        .frame_tx
+        .try_send((state.width, state.height, rgba))
     {
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 72);
-        if encoder.encode_image(&image).is_err() {
-            return;
+        Ok(()) => {
+            remote.last_frame_queued_at = Some(Instant::now());
         }
-    }
-    use base64::{engine::general_purpose::STANDARD as B64, Engine};
-    let payload = json!({
-        "jpeg": B64.encode(jpeg_bytes),
-        "w": state.width,
-        "h": state.height,
-    });
-    if remote
-        .session
-        .broadcast_json(IOS_REMOTE_KIND_FRAME, payload)
-        .is_ok()
-    {
-        remote.last_frame_sent = Some(Instant::now());
+        Err(TrySendError::Full(_)) => {
+            // Encoder is still busy; we'll try again next tick without advancing the cadence gate.
+        }
+        Err(TrySendError::Disconnected(_)) => {}
     }
 }
 

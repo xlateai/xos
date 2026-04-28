@@ -518,14 +518,19 @@ impl ApplicationHandler for AppState {
                         },
                     );
 
-                    // Check if the event has text (for regular character input)
-                    // In winit 0.30, text input should come through IME, but we can also
-                    // check the text field as a fallback.
-                    if let Some(text) = event.text.as_ref() {
+                    // Printable text: prefer `event.text`; on macOS it is often populated only on the
+                    // first keypress, then omitted while the IME session holds focus — fall back to the
+                    // single character from `logical_key` when `text` is missing or empty so typing
+                    // keeps working (e.g. ios_remote mesh viewer).
+                    if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
                         for ch in text.chars() {
                             if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
                                 let _ = self.app.on_key_char(&mut self.engine_state, ch);
                             }
+                        }
+                    } else if let Some(ch) = character {
+                        if !ch.is_control() || ch == '\n' || ch == '\t' {
+                            let _ = self.app.on_key_char(&mut self.engine_state, ch);
                         }
                     }
                 }
