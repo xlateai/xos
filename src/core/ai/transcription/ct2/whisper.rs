@@ -12,13 +12,43 @@
 #![cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
 
 use std::path::PathBuf;
+use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
 use std::thread;
 
 use ct2rs::sys::WhisperOptions;
 use ct2rs::{Config, Whisper as Ct2Whisper};
 
+use super::super::sample;
+
 const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/ct2";
+
+struct CachedCt2Model {
+    key: String,
+    whisper: Ct2Whisper,
+}
+
+thread_local! {
+    static CT2_MODEL_CACHE: RefCell<Option<CachedCt2Model>> = const { RefCell::new(None) };
+}
+
+fn with_cached_whisper<T>(model_dir: &std::path::Path, f: impl FnOnce(&Ct2Whisper) -> Result<T, String>) -> Result<T, String> {
+    let key = model_dir.display().to_string();
+    CT2_MODEL_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let needs_load = slot.as_ref().map(|m| m.key != key).unwrap_or(true);
+        if needs_load {
+            let mut cfg = Config::default();
+            cfg.num_threads_per_replica = 1;
+            cfg.tensor_parallel = false;
+            let whisper = Ct2Whisper::new(model_dir, cfg)
+                .map_err(|e| format!("Whisper CT2 load {}: {e}", model_dir.display()))?;
+            *slot = Some(CachedCt2Model { key, whisper });
+        }
+        let model = slot.as_ref().expect("CT2 cache populated");
+        f(&model.whisper)
+    })
+}
 fn normalize_language(language: Option<&str>) -> Result<&'static str, String> {
     let Some(raw) = language.map(|s| s.trim().to_ascii_lowercase()) else {
         return Ok("en");
@@ -199,26 +229,31 @@ pub fn spawn_decode_thread(
 pub fn transcribe_waveform_once(
     size: Option<&str>,
     waveform: &[f32],
-    _sample_rate: u32,
+    sample_rate: u32,
     language: Option<&str>,
 ) -> Result<String, String> {
     let dir = resolve_model_dir(size)?;
     let decode_lang = normalize_language(language)?;
-    let mut cfg = Config::default();
-    cfg.num_threads_per_replica = 1;
-    cfg.tensor_parallel = false;
-    let whisper = Ct2Whisper::new(&dir, cfg)
-        .map_err(|e| format!("Whisper CT2 load {}: {e}", dir.display()))?;
-
-    let mut opts = WhisperOptions::default();
-    opts.beam_size = 1;
-    let parts = whisper
-        .generate(
-            waveform,
-            Some(decode_lang),
-            false,
-            &opts,
-        )
-        .map_err(|e| format!("Whisper CT2 generate: {e}"))?;
-    Ok(cleanup_whisper_text(&parts.join(" ")))
+    if waveform.is_empty() {
+        return Ok(String::new());
+    }
+    let pcm_16k = if sample_rate == sample::WHISPER_HZ as u32 {
+        waveform.to_vec()
+    } else {
+        sample::resample_linear(waveform, sample_rate, sample::WHISPER_HZ)
+    };
+    with_cached_whisper(&dir, |whisper| {
+        let mut opts = WhisperOptions::default();
+        // One-shot path prioritizes accuracy over streaming latency.
+        opts.beam_size = 5;
+        let parts = whisper
+            .generate(
+                &pcm_16k,
+                Some(decode_lang),
+                false,
+                &opts,
+            )
+            .map_err(|e| format!("Whisper CT2 generate: {e}"))?;
+        Ok(cleanup_whisper_text(&parts.join(" ")))
+    })
 }

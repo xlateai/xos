@@ -1,4 +1,6 @@
-use crate::ai::transcription::{transcribe_waveform_once, TranscriptionEngine, WhisperBackend};
+use crate::ai::transcription::{
+    transcribe_waveform_once_with_language, TranscriptionEngine, WhisperBackend,
+};
 use crate::apps::text::TranscriptTextView;
 use crate::engine::audio;
 use crate::engine::{Application, EngineState};
@@ -1446,11 +1448,16 @@ impl Application for TranscribeApp {
                 self.ptt_hold_active = false;
                 self.ptt_hold_started_at = None;
                 if !self.ptt_hold_pcm.is_empty() {
-                    match transcribe_waveform_once(
+                    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+                    let hold_lang = Some(self.lang_selector.current_language_code());
+                    #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
+                    let hold_lang: Option<&str> = None;
+                    match transcribe_waveform_once_with_language(
                         None,
                         &self.ptt_hold_pcm,
                         self.ptt_hold_sample_rate,
                         transcribe_backend_from_env(),
+                        hold_lang,
                     ) {
                         Ok(text) => {
                             let t = Self::normalize_text(&text);
