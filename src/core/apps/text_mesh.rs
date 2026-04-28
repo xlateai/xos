@@ -18,6 +18,7 @@ const LOGIN_LINE_GAP: f32 = 14.0;
 const DEFAULT_CHANNEL: &str = "shared-text-demo";
 const DEFAULT_MODE: MeshMode = MeshMode::Lan;
 const DOC_KIND: &str = "shared_doc_v1";
+const HOST_ANTI_ENTROPY_INTERVAL: Duration = Duration::from_millis(1800);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LoginField {
@@ -44,8 +45,14 @@ pub struct TextMeshApp {
     text_app: TextApp,
     mesh_session: Option<Arc<MeshSession>>,
     doc_rev: u64,
+    last_writer_rank: u32,
+    observed_nodes: u32,
     last_sent_text: String,
+    last_sent_cursor: usize,
+    last_sent_selection_start: Option<usize>,
+    last_sent_selection_end: Option<usize>,
     last_broadcast_at: Instant,
+    last_host_anti_entropy_at: Instant,
     status_user_label: String,
     username_button_bounds: (f32, f32, f32, f32),
     login_done_button_bounds: (f32, f32, f32, f32),
@@ -73,8 +80,14 @@ impl TextMeshApp {
             text_app,
             mesh_session: None,
             doc_rev: 0,
+            last_writer_rank: 0,
+            observed_nodes: 1,
             last_sent_text: String::new(),
+            last_sent_cursor: 0,
+            last_sent_selection_start: None,
+            last_sent_selection_end: None,
             last_broadcast_at: Instant::now(),
+            last_host_anti_entropy_at: Instant::now(),
             status_user_label,
             username_button_bounds: (0.0, 0.0, 0.0, 0.0),
             login_done_button_bounds: (0.0, 0.0, 0.0, 0.0),
@@ -168,6 +181,21 @@ impl TextMeshApp {
         self.mesh_session = Some(Arc::new(session));
         self.phase = AppPhase::Editor;
         self.last_sent_text = self.text_app.text_rasterizer.text.clone();
+        let (cursor, sel_start, sel_end) = self.text_app.shared_selection_state();
+        self.last_sent_cursor = cursor;
+        self.last_sent_selection_start = sel_start;
+        self.last_sent_selection_end = sel_end;
+        self.last_writer_rank = self
+            .mesh_session
+            .as_ref()
+            .map(|s| s.rank())
+            .unwrap_or(0);
+        self.observed_nodes = self
+            .mesh_session
+            .as_ref()
+            .map(|s| s.current_num_nodes())
+            .unwrap_or(1);
+        self.last_host_anti_entropy_at = Instant::now();
         Ok(())
     }
 
@@ -363,14 +391,42 @@ impl TextMeshApp {
             for packet in packets {
                 let rev = packet.body.get("rev").and_then(|v| v.as_u64()).unwrap_or(0);
                 let text = packet.body.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                if rev >= self.doc_rev {
+                let incoming_rank = packet
+                    .body
+                    .get("from_rank")
+                    .and_then(|v| v.as_u64())
+                    .map(|r| r as u32)
+                    .unwrap_or(packet.from_rank);
+                let incoming_cursor = packet
+                    .body
+                    .get("cursor")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .unwrap_or(0);
+                let incoming_sel_start = packet
+                    .body
+                    .get("selection_start")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let incoming_sel_end = packet
+                    .body
+                    .get("selection_end")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                if rev > self.doc_rev || (rev == self.doc_rev && incoming_rank >= self.last_writer_rank) {
                     self.doc_rev = rev;
+                    self.last_writer_rank = incoming_rank;
                     self.text_app.text_rasterizer.text = text.to_string();
-                    self.text_app.cursor_position = self
-                        .text_app
-                        .cursor_position
-                        .min(self.text_app.text_rasterizer.text.chars().count());
+                    self.text_app.apply_shared_selection_state(
+                        incoming_cursor,
+                        incoming_sel_start,
+                        incoming_sel_end,
+                    );
                     self.last_sent_text = self.text_app.text_rasterizer.text.clone();
+                    let (cursor, sel_start, sel_end) = self.text_app.shared_selection_state();
+                    self.last_sent_cursor = cursor;
+                    self.last_sent_selection_start = sel_start;
+                    self.last_sent_selection_end = sel_end;
                 }
             }
         }
@@ -385,18 +441,46 @@ impl TextMeshApp {
             return;
         }
         let current = self.text_app.text_rasterizer.text.clone();
-        if current == self.last_sent_text {
+        let (cursor, sel_start, sel_end) = self.text_app.shared_selection_state();
+        let text_changed = current != self.last_sent_text;
+        let selection_changed = cursor != self.last_sent_cursor
+            || sel_start != self.last_sent_selection_start
+            || sel_end != self.last_sent_selection_end;
+
+        let nodes_now = session.current_num_nodes();
+        let node_count_changed = nodes_now != self.observed_nodes;
+        if node_count_changed {
+            self.observed_nodes = nodes_now;
+        }
+        let is_host = session.rank() == 0;
+        let host_anti_entropy_due = is_host
+            && now.duration_since(self.last_host_anti_entropy_at) >= HOST_ANTI_ENTROPY_INTERVAL;
+        let force_sync = (is_host && node_count_changed) || host_anti_entropy_due;
+
+        if !text_changed && !selection_changed && !force_sync {
             return;
         }
-        self.doc_rev = self.doc_rev.saturating_add(1);
+        if text_changed || selection_changed {
+            self.doc_rev = self.doc_rev.saturating_add(1);
+            self.last_writer_rank = session.rank();
+        }
         let payload = serde_json::json!({
             "rev": self.doc_rev,
             "text": current,
+            "cursor": cursor,
+            "selection_start": sel_start,
+            "selection_end": sel_end,
             "from_rank": session.rank(),
         });
         if session.broadcast_json(DOC_KIND, payload).is_ok() {
             self.last_broadcast_at = now;
             self.last_sent_text = self.text_app.text_rasterizer.text.clone();
+            self.last_sent_cursor = cursor;
+            self.last_sent_selection_start = sel_start;
+            self.last_sent_selection_end = sel_end;
+            if is_host {
+                self.last_host_anti_entropy_at = now;
+            }
         }
     }
 

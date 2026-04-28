@@ -1252,6 +1252,24 @@ impl Application for TextApp {
 }
 
 impl TextApp {
+    /// Cursor + selection state used by collaborative wrappers (e.g. text mesh).
+    pub fn shared_selection_state(&self) -> (usize, Option<usize>, Option<usize>) {
+        (self.cursor_position, self.selection_start, self.selection_end)
+    }
+
+    /// Applies externally synchronized cursor/selection with bounds clamping.
+    pub fn apply_shared_selection_state(
+        &mut self,
+        cursor_position: usize,
+        selection_start: Option<usize>,
+        selection_end: Option<usize>,
+    ) {
+        let text_len = self.text_rasterizer.text.chars().count();
+        self.cursor_position = cursor_position.min(text_len);
+        self.selection_start = selection_start.map(|v| v.min(text_len));
+        self.selection_end = selection_end.map(|v| v.min(text_len));
+    }
+
     /// Initialize trackpad laser at current cursor position
     fn initialize_laser_at_cursor(&mut self, content_top: f32) {
         let (cursor_x, cursor_baseline_y) = self.get_cursor_screen_position();

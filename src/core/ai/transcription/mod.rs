@@ -93,6 +93,17 @@ pub fn transcribe_waveform_once(
     sample_rate: u32,
     backend: WhisperBackend,
 ) -> Result<String, String> {
+    transcribe_waveform_once_with_language(size, waveform, sample_rate, backend, None)
+}
+
+/// One-shot whisper transcription with optional explicit language code (`en`/`ja`).
+pub fn transcribe_waveform_once_with_language(
+    size: Option<&str>,
+    waveform: &[f32],
+    sample_rate: u32,
+    backend: WhisperBackend,
+    language: Option<&str>,
+) -> Result<String, String> {
     match backend {
         WhisperBackend::Burn => {
             #[cfg(all(
@@ -101,7 +112,12 @@ pub fn transcribe_waveform_once(
                 not(target_os = "ios")
             ))]
             {
-                return burn::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
+                return burn::whisper::transcribe_waveform_once(
+                    size,
+                    waveform,
+                    sample_rate,
+                    language,
+                );
             }
             #[cfg(not(all(
                 feature = "whisper_burn",
@@ -109,18 +125,23 @@ pub fn transcribe_waveform_once(
                 not(target_os = "ios")
             )))]
             {
-                let _ = (size, waveform, sample_rate);
+                let _ = (size, waveform, sample_rate, language);
                 Err("Whisper Burn backend is unavailable on this build/target".to_string())
             }
         }
         WhisperBackend::Ct2 => {
             #[cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
             {
-                return ct2::whisper::transcribe_waveform_once(size, waveform, sample_rate, None);
+                return ct2::whisper::transcribe_waveform_once(
+                    size,
+                    waveform,
+                    sample_rate,
+                    language,
+                );
             }
             #[cfg(not(all(feature = "whisper_ct2", not(target_arch = "wasm32"))))]
             {
-                let _ = (size, waveform, sample_rate);
+                let _ = (size, waveform, sample_rate, language);
                 Err("Whisper CT2 backend is unavailable on this build/target".to_string())
             }
         }
