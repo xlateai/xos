@@ -1,16 +1,17 @@
-use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
+use crate::ai::transcription::{transcribe_waveform_once, TranscriptionEngine, WhisperBackend};
 use crate::apps::text::TranscriptTextView;
 use crate::engine::audio;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
 use crate::ui::{
-    AudioInputMenuDown, AudioInputSelector, AudioInputSelectorUp, TranscribeLangMenuDown,
+    AudioInputMenuDown, AudioInputSelector, TranscribeLangMenuDown,
     TranscribeLanguageSelector,
 };
 use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 const BG: (u8, u8, u8, u8) = (0, 0, 0, 255);
 const WAVE_BASELINE: (u8, u8, u8) = (120, 124, 132);
@@ -44,6 +45,14 @@ const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
 const TRANSCRIPT_TEXT_SIZE_MIN: f32 = 26.0;
 const TRANSCRIPT_TEXT_SIZE_MAX: f32 = 44.0;
 const TRANSCRIPT_INNER_PAD: f32 = 4.0;
+const HOLD_TO_RECORD_THRESHOLD: Duration = Duration::from_millis(250);
+const HOLD_FINAL_TEXT_COLOR: (u8, u8, u8) = (92, 230, 142);
+
+#[derive(Clone, Debug)]
+struct TranscriptEntry {
+    text: String,
+    color: Option<(u8, u8, u8)>,
+}
 
 fn transcribe_backend_from_env() -> WhisperBackend {
     std::env::var("XOS_TRANSCRIBE_BACKEND")
@@ -110,6 +119,10 @@ struct UiBounds {
     intensity: Option<(f32, f32, f32, f32)>,
     /// **lang** button to the right of capture (transcription language; whisper builds only).
     lang: Option<(f32, f32, f32, f32)>,
+    /// Dedicated **device** button (left of center mic) that opens the input selector menu.
+    device: Option<(f32, f32, f32, f32)>,
+    /// Center mic button (tap: toggle live; hold: record-and-run full-clip inference).
+    mic: Option<(f32, f32, f32, f32)>,
 }
 
 struct VisualCanvas {
@@ -284,6 +297,9 @@ impl VisualCanvas {
         safe_layout: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
         lang_selector: &mut TranscribeLanguageSelector,
+        live_toggle_on: bool,
+        ptt_hold_active: bool,
+        ptt_hold_seconds: f32,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
@@ -298,10 +314,10 @@ impl VisualCanvas {
         let btn_s =
             AudioInputSelector::capture_button_size_for_layout(wave_w, wave_h, full_w, full_h);
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        let trailing_w = TranscribeLanguageSelector::trailing_width_for_layout(btn_s, full_w);
+        let side_w = TranscribeLanguageSelector::trailing_width_for_layout(btn_s, full_w);
         #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
-        let trailing_w = 0.0_f32;
-        let (int_stack_r, capture_btn_r, lang_btn_r) =
+        let side_w = btn_s;
+        let (int_stack_r, capture_btn_r, _unused_trailing) =
             AudioInputSelector::layout_intensity_capture_trailing(
                 wave_rect.0,
                 wave_rect.1,
@@ -310,9 +326,36 @@ impl VisualCanvas {
                 full_w,
                 full_h,
                 true,
-                trailing_w,
+                0.0,
                 AudioInputSelector::TRAILING_TO_CAPTURE_GAP,
             );
+        let side_gap = AudioInputSelector::TRAILING_TO_CAPTURE_GAP;
+        let mut device_btn_r = (
+            capture_btn_r.0 - side_gap - side_w,
+            capture_btn_r.1,
+            capture_btn_r.0 - side_gap,
+            capture_btn_r.3,
+        );
+        let mut lang_btn_r = (
+            capture_btn_r.2 + side_gap,
+            capture_btn_r.1,
+            capture_btn_r.2 + side_gap + side_w,
+            capture_btn_r.3,
+        );
+        if device_btn_r.0 < l {
+            let shift = l - device_btn_r.0;
+            device_btn_r.0 += shift;
+            device_btn_r.2 += shift;
+            lang_btn_r.0 += shift;
+            lang_btn_r.2 += shift;
+        }
+        if lang_btn_r.2 > l + sw {
+            let shift = lang_btn_r.2 - (l + sw);
+            device_btn_r.0 -= shift;
+            device_btn_r.2 -= shift;
+            lang_btn_r.0 -= shift;
+            lang_btn_r.2 -= shift;
+        }
 
         let wave_top = t + sh * WAVE_HEADROOM_FRAC;
         let line_top = wave_rect.1;
@@ -323,6 +366,7 @@ impl VisualCanvas {
         let pre_gain = 0.02 + 0.98 * waveform_intensity.clamp(0.0, 1.0);
 
         let panel_h = (sh * LEVEL_PANEL_H_FRAC).max(36.0);
+        let control_text_size = (panel_h * 0.42).clamp(12.0, 22.0);
         let panel_top = t + sh - panel_h - sh * 0.03;
         let pad = (sw * 0.03).max(12.0);
         let bar_x0 = l + pad;
@@ -426,7 +470,8 @@ impl VisualCanvas {
             }
         }
 
-        audio_selector.draw_with_trailing(state, font, wave_rect, safe_layout, true, trailing_w);
+        audio_selector.draw_with_trailing(state, font, wave_rect, safe_layout, true, 0.0);
+        audio_selector.last_button_rect = device_btn_r;
 
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         if lang_btn_r.2 > lang_btn_r.0 && lang_btn_r.3 > lang_btn_r.1 {
@@ -442,6 +487,96 @@ impl VisualCanvas {
 
         {
             let buffer = state.frame_buffer_mut();
+            if capture_btn_r.2 > capture_btn_r.0 && capture_btn_r.3 > capture_btn_r.1 {
+                let bx0 = capture_btn_r.0;
+                let by0 = capture_btn_r.1;
+                let bx1 = capture_btn_r.2;
+                let by1 = capture_btn_r.3;
+                let border = if ptt_hold_active {
+                    (255, 255, 255)
+                } else if live_toggle_on {
+                    (0, 255, 0)
+                } else {
+                    (100, 100, 100)
+                };
+                let fill_col = if ptt_hold_active {
+                    (255, 255, 255)
+                } else if live_toggle_on {
+                    (0, 255, 0)
+                } else {
+                    (18, 20, 28)
+                };
+                self.draw_rect(buffer, width, height, bx0, by0, bx1, by1, fill_col);
+                self.draw_rect(buffer, width, height, bx0, by0, bx1, by0 + 3.0, border);
+                self.draw_rect(buffer, width, height, bx0, by1 - 3.0, bx1, by1, border);
+                self.draw_rect(buffer, width, height, bx0, by0, bx0 + 3.0, by1, border);
+                self.draw_rect(buffer, width, height, bx1 - 3.0, by0, bx1, by1, border);
+            }
+            if device_btn_r.2 > device_btn_r.0 && device_btn_r.3 > device_btn_r.1 {
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    device_btn_r.0,
+                    device_btn_r.1,
+                    device_btn_r.2,
+                    device_btn_r.3,
+                    (32, 36, 44),
+                );
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    device_btn_r.0,
+                    device_btn_r.1,
+                    device_btn_r.2,
+                    device_btn_r.1 + 3.0,
+                    (180, 186, 196),
+                );
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    device_btn_r.0,
+                    device_btn_r.3 - 3.0,
+                    device_btn_r.2,
+                    device_btn_r.3,
+                    (180, 186, 196),
+                );
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    device_btn_r.0,
+                    device_btn_r.1,
+                    device_btn_r.0 + 3.0,
+                    device_btn_r.3,
+                    (180, 186, 196),
+                );
+                self.draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    device_btn_r.2 - 3.0,
+                    device_btn_r.1,
+                    device_btn_r.2,
+                    device_btn_r.3,
+                    (180, 186, 196),
+                );
+                let mut dev_text = TextRasterizer::new(font.clone(), ((device_btn_r.3 - device_btn_r.1) * 0.28).clamp(10.0, 20.0));
+                dev_text.set_text("device".to_string());
+                dev_text.tick(width as f32, height as f32);
+                self.blend_text(
+                    buffer,
+                    width,
+                    height,
+                    &dev_text,
+                    device_btn_r.0 + (device_btn_r.2 - device_btn_r.0) * 0.14,
+                    device_btn_r.1 + (device_btn_r.3 - device_btn_r.1) * 0.24,
+                    (235, 238, 242),
+                    1.0,
+                );
+            }
             if int_stack_r.2 > int_stack_r.0 && int_stack_r.3 > int_stack_r.1 {
                 let track_inset = (int_stack_r.3 - int_stack_r.1) * 0.18;
                 let tr_y0 = int_stack_r.1 + track_inset;
@@ -493,7 +628,21 @@ impl VisualCanvas {
             self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
             self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
         }
-
+        if ptt_hold_active {
+            let mut hold_timer = TextRasterizer::new(font.clone(), control_text_size);
+            hold_timer.set_text(format!("HOLD {:.1}s", ptt_hold_seconds.max(0.0)));
+            hold_timer.tick(width as f32, height as f32);
+            self.blend_text(
+                buffer,
+                width,
+                height,
+                &hold_timer,
+                capture_btn_r.0,
+                (capture_btn_r.1 - control_text_size * 1.6).max(0.0),
+                (255, 255, 255),
+                1.0,
+            );
+        }
         // VAD panel
         self.draw_rect(buffer, width, height, bar_x0, panel_top, bar_x1, panel_top + panel_h, PANEL_BG);
         self.draw_rect(buffer, width, height, bar_x0, bar_y0, bar_x1, bar_y1, WAVE_BASELINE);
@@ -574,6 +723,16 @@ impl VisualCanvas {
                     None
                 }
             },
+            device: if device_btn_r.2 > device_btn_r.0 {
+                Some(device_btn_r)
+            } else {
+                None
+            },
+            mic: if capture_btn_r.2 > capture_btn_r.0 {
+                Some(capture_btn_r)
+            } else {
+                None
+            },
         }
     }
 }
@@ -589,7 +748,7 @@ pub struct TranscribeApp {
     threshold: f32,
     vad_prob_seg_ema: f32,
     vad_prob_visual_ema: f32,
-    committed_lines: VecDeque<String>,
+    committed_lines: VecDeque<TranscriptEntry>,
     segment_live_text: String,
     speech_run_frames: u32,
     silence_run_frames: u32,
@@ -605,6 +764,14 @@ pub struct TranscribeApp {
     audio_selector: AudioInputSelector,
     /// Transcription language (`en` / `ja`); no-op on builds without the whisper feature.
     lang_selector: TranscribeLanguageSelector,
+    live_transcribe_enabled: bool,
+    mic_pointer_down: bool,
+    mic_pointer_down_at: Option<Instant>,
+    ptt_hold_active: bool,
+    ptt_hold_started_at: Option<Instant>,
+    ptt_hold_pcm: Vec<f32>,
+    ptt_hold_last_ingested: Option<u64>,
+    ptt_hold_sample_rate: u32,
     font_version: u64,
 }
 
@@ -648,6 +815,14 @@ impl TranscribeApp {
             transcript_pointer_down: false,
             audio_selector: AudioInputSelector::new(),
             lang_selector: TranscribeLanguageSelector::new(),
+            live_transcribe_enabled: false,
+            mic_pointer_down: false,
+            mic_pointer_down_at: None,
+            ptt_hold_active: false,
+            ptt_hold_started_at: None,
+            ptt_hold_pcm: Vec::new(),
+            ptt_hold_last_ingested: None,
+            ptt_hold_sample_rate: 16_000,
             font_version: fonts::default_font_version(),
         }
     }
@@ -714,11 +889,7 @@ impl TranscribeApp {
         let buffer_duration = 3.0_f32;
 
         let listener = audio::AudioListener::new(&device, buffer_duration)?;
-        if self.audio_selector.enabled {
-            listener.record()?;
-        } else {
-            listener.pause()?;
-        }
+        listener.record()?;
         println!(
             "transcribe: input {} @ {} Hz",
             device.name,
@@ -757,19 +928,20 @@ impl TranscribeApp {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn push_dedup_committed_line(&mut self, line: &str) {
+    fn push_dedup_committed_line(&mut self, line: &str, color: Option<(u8, u8, u8)>) {
         let t = Self::normalize_text(line);
         if t.is_empty() {
             return;
         }
-        if self.committed_lines.back().map(|s| s.as_str()) != Some(t.as_str()) {
-            self.committed_lines.push_back(t);
+        if self.committed_lines.back().map(|e| e.text.as_str()) != Some(t.as_str()) {
+            self.committed_lines
+                .push_back(TranscriptEntry { text: t, color });
         }
     }
 
     fn drain_engine_commits_to_transcript(&mut self) {
         for line in self.engine.drain_stdout_commits() {
-            self.push_dedup_committed_line(&line);
+            self.push_dedup_committed_line(&line, None);
         }
     }
 
@@ -792,9 +964,7 @@ impl Application for TranscribeApp {
             WhisperBackend::Ct2 => "ct2",
             WhisperBackend::Burn => "burn",
         };
-        println!(
-            "transcribe: backend={backend_label} · visual waveform + rolling transcript + VAD level · Esc to quit"
-        );
+        println!("transcribe: backend={backend_label} · tap mic to toggle live, hold mic for full-clip inference, tap device/lang for menus · Esc to quit");
         let _ = io::stdout().flush();
         println!("transcribe: threshold slider 1..100% (default 30%)");
         let _ = io::stdout().flush();
@@ -863,7 +1033,7 @@ impl Application for TranscribeApp {
 
         if self.audio_selector.input_devices.len() > 1 {
             println!(
-                "transcribe: tap the waveform capture button to mute; hold it to choose input (Default or a device)"
+                "transcribe: tap device to choose input (Default or a device)"
             );
             let _ = io::stdout().flush();
         }
@@ -878,8 +1048,21 @@ impl Application for TranscribeApp {
             return;
         }
 
-        self.audio_selector.tick_hold_opens_menu();
         self.lang_selector.tick_hold_opens_menu();
+        if self.mic_pointer_down
+            && !self.ptt_hold_active
+            && self
+                .mic_pointer_down_at
+                .is_some_and(|t| t.elapsed() >= HOLD_TO_RECORD_THRESHOLD)
+        {
+            self.ptt_hold_active = true;
+            self.ptt_hold_started_at = Some(Instant::now());
+            self.ptt_hold_pcm.clear();
+            self.ptt_hold_last_ingested = None;
+            if let Some(l) = &self.listener {
+                self.ptt_hold_sample_rate = l.buffer().sample_rate();
+            }
+        }
 
         let (channels, sr, ingested) = {
             let l = self.listener.as_ref().expect("checked above");
@@ -891,8 +1074,36 @@ impl Application for TranscribeApp {
             )
         };
 
-        self.engine.process_snapshot(sr, &channels, ingested);
-        let buffered_secs = self.engine.buffered_segment_seconds();
+        if self.live_transcribe_enabled && !self.ptt_hold_active {
+            self.engine.process_snapshot(sr, &channels, ingested);
+        }
+        if self.ptt_hold_active {
+            let mono = if channels.is_empty() {
+                Vec::new()
+            } else {
+                channels[0].clone()
+            };
+            if let Some(prev) = self.ptt_hold_last_ingested {
+                if ingested > prev && !mono.is_empty() {
+                    let delta = (ingested - prev) as usize;
+                    let take = delta.min(mono.len());
+                    if take > 0 {
+                        self.ptt_hold_pcm
+                            .extend_from_slice(&mono[mono.len().saturating_sub(take)..]);
+                    }
+                }
+            } else {
+                // Start from hold-begin watermark so the one-shot pass receives only audio
+                // captured during this press, not pre-existing ring-buffer samples.
+                self.ptt_hold_last_ingested = Some(ingested);
+            }
+            self.ptt_hold_last_ingested = Some(ingested);
+        }
+        let buffered_secs = if self.live_transcribe_enabled {
+            self.engine.buffered_segment_seconds()
+        } else {
+            0.0
+        };
         // Use the same anti-growth clip window as iOS for cross-platform parity.
         let hard_clip_seconds = SEGMENT_HARD_CLIP_SECONDS_IOS;
         if buffered_secs >= hard_clip_seconds {
@@ -919,7 +1130,11 @@ impl Application for TranscribeApp {
         let speech_now = p >= th || self.vad_prob_seg_ema >= seg_end;
         let active = speech_now;
 
-        let live_caption = self.engine.caption().trim().to_string();
+        let live_caption = if self.live_transcribe_enabled {
+            self.engine.caption().trim().to_string()
+        } else {
+            String::new()
+        };
         if speech_now {
             self.speech_run_frames = self.speech_run_frames.saturating_add(1);
             self.silence_run_frames = 0;
@@ -957,7 +1172,7 @@ impl Application for TranscribeApp {
                 if !live_norm.is_empty() && live_norm.len() > finalized.len() {
                     finalized = live_norm;
                 }
-                self.push_dedup_committed_line(&finalized);
+                self.push_dedup_committed_line(&finalized, None);
                 self.segment_live_text.clear();
                 self.in_speech_segment = false;
                 // Critical: clip old audio out of the decode segment so we don't reprocess it.
@@ -977,8 +1192,21 @@ impl Application for TranscribeApp {
         while self.committed_lines.len() > 16 {
             let _ = self.committed_lines.pop_front();
         }
-        let all_lines: Vec<String> = self.committed_lines.iter().cloned().collect();
-        let mut full_text = all_lines.join("\n");
+        let mut full_text = String::new();
+        let mut color_spans: Vec<(usize, usize, (u8, u8, u8))> = Vec::new();
+        let mut char_cursor = 0usize;
+        for (i, entry) in self.committed_lines.iter().enumerate() {
+            if i > 0 {
+                full_text.push('\n');
+                char_cursor += 1;
+            }
+            let start = char_cursor;
+            full_text.push_str(&entry.text);
+            char_cursor += entry.text.chars().count();
+            if let Some(color) = entry.color {
+                color_spans.push((start, char_cursor, color));
+            }
+        }
         if self.in_speech_segment {
             let live = Self::normalize_text(&live_caption);
             if !live.is_empty() {
@@ -1023,6 +1251,10 @@ impl Application for TranscribeApp {
             wave_top + wave_h,
         );
 
+        let hold_seconds = self
+            .ptt_hold_started_at
+            .map(|t| t.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
         self.ui_bounds = self.canvas.tick_draw(
             state,
             listener,
@@ -1038,6 +1270,9 @@ impl Application for TranscribeApp {
             safe,
             &mut self.audio_selector,
             &mut self.lang_selector,
+            self.live_transcribe_enabled,
+            self.ptt_hold_active,
+            hold_seconds,
         );
 
         if self.ui_bounds.transcript.is_some() {
@@ -1054,7 +1289,8 @@ impl Application for TranscribeApp {
             let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
             self.transcript_view
                 .set_font_size(Self::transcript_text_size(ssh, state.f3_ui_scale_multiplier()));
-            self.transcript_view.set_text(full_text);
+            self.transcript_view
+                .set_text_with_color_spans(full_text, color_spans);
             self.transcript_view
                 .tick(state, (clip_x0, clip_y0, clip_x1, clip_y1));
         }
@@ -1146,10 +1382,26 @@ impl Application for TranscribeApp {
             return;
         }
         if self
-            .audio_selector
-            .on_capture_pointer_down(state.mouse.x, state.mouse.y)
+            .ui_bounds
+            .device
+            .is_some_and(|r| state.mouse.x >= r.0 && state.mouse.x <= r.2 && state.mouse.y >= r.1 && state.mouse.y <= r.3)
         {
+            self.audio_selector.show_menu = true;
             self.lang_selector.show_menu = false;
+            self.transcript_pointer_down = false;
+            self.slider_dragging = false;
+            self.intensity_slider_dragging = false;
+            return;
+        }
+        if self
+            .ui_bounds
+            .mic
+            .is_some_and(|r| state.mouse.x >= r.0 && state.mouse.x <= r.2 && state.mouse.y >= r.1 && state.mouse.y <= r.3)
+        {
+            self.mic_pointer_down = true;
+            self.mic_pointer_down_at = Some(Instant::now());
+            self.lang_selector.show_menu = false;
+            self.audio_selector.show_menu = false;
             self.transcript_pointer_down = false;
             self.slider_dragging = false;
             self.intensity_slider_dragging = false;
@@ -1179,20 +1431,48 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
-        match self
-            .audio_selector
-            .on_pointer_up(state.mouse.x, state.mouse.y)
-        {
-            AudioInputSelectorUp::None => {}
-            AudioInputSelectorUp::CaptureToggled(enabled) => {
-                if let Some(l) = &self.listener {
-                    if enabled {
-                        let _ = l.record();
-                    } else {
-                        let _ = l.pause();
+        if self.mic_pointer_down {
+            let hold_elapsed = self
+                .mic_pointer_down_at
+                .map(|t| t.elapsed())
+                .unwrap_or(Duration::ZERO);
+            let over_mic = self.ui_bounds.mic.is_some_and(|r| {
+                state.mouse.x >= r.0
+                    && state.mouse.x <= r.2
+                    && state.mouse.y >= r.1
+                    && state.mouse.y <= r.3
+            });
+            if self.ptt_hold_active {
+                self.ptt_hold_active = false;
+                self.ptt_hold_started_at = None;
+                if !self.ptt_hold_pcm.is_empty() {
+                    match transcribe_waveform_once(
+                        None,
+                        &self.ptt_hold_pcm,
+                        self.ptt_hold_sample_rate,
+                        transcribe_backend_from_env(),
+                    ) {
+                        Ok(text) => {
+                            let t = Self::normalize_text(&text);
+                            if !t.is_empty() {
+                                self.push_dedup_committed_line(
+                                    &t,
+                                    Some(HOLD_FINAL_TEXT_COLOR),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("transcribe: hold full-clip decode failed: {e}");
+                        }
                     }
                 }
+                self.ptt_hold_pcm.clear();
+                self.ptt_hold_last_ingested = None;
+            } else if hold_elapsed < HOLD_TO_RECORD_THRESHOLD && over_mic {
+                self.live_transcribe_enabled = !self.live_transcribe_enabled;
             }
+            self.mic_pointer_down = false;
+            self.mic_pointer_down_at = None;
         }
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         {

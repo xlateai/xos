@@ -24,6 +24,13 @@ const TEXT_R: u8 = 230;
 const TEXT_G: u8 = 236;
 const TEXT_B: u8 = 240;
 
+#[derive(Clone, Debug)]
+struct ColorSpan {
+    start_char: usize,
+    end_char: usize,
+    color: (u8, u8, u8),
+}
+
 /// Read-only view: TextApp-equivalent scroll + draw in a sub-rect.
 pub struct TranscriptTextView {
     text_rasterizer: TextRasterizer,
@@ -38,6 +45,7 @@ pub struct TranscriptTextView {
     /// When the user is scrolled to the bottom, new content can auto-snap there.
     pub stick_to_tail: bool,
     pending_snap_to_tail: bool,
+    color_spans: Vec<ColorSpan>,
 }
 
 impl TranscriptTextView {
@@ -54,6 +62,7 @@ impl TranscriptTextView {
             wheel_accel_smooth: 0.0,
             stick_to_tail: true,
             pending_snap_to_tail: false,
+            color_spans: Vec::new(),
         }
     }
 
@@ -77,6 +86,24 @@ impl TranscriptTextView {
             self.pending_snap_to_tail = true;
         }
         self.text_rasterizer.set_text(text);
+    }
+
+    /// Set text plus optional per-character spans (half-open ranges in char indices).
+    pub fn set_text_with_color_spans(
+        &mut self,
+        text: String,
+        spans: Vec<(usize, usize, (u8, u8, u8))>,
+    ) {
+        self.set_text(text);
+        self.color_spans = spans
+            .into_iter()
+            .filter(|(s, e, _)| s < e)
+            .map(|(start_char, end_char, color)| ColorSpan {
+                start_char,
+                end_char,
+                color,
+            })
+            .collect();
     }
 
     /// Same wheel semantics as [`super::text::TextApp::on_scroll`](crate::apps::text::TextApp::on_scroll).
@@ -299,9 +326,18 @@ impl TranscriptTextView {
                     if idx + 3 < buffer.len() {
                         let alpha = val as f32 / 255.0;
                         let inv = 1.0 - alpha;
-                        buffer[idx] = (TEXT_R as f32 * alpha + buffer[idx] as f32 * inv) as u8;
-                        buffer[idx + 1] = (TEXT_G as f32 * alpha + buffer[idx + 1] as f32 * inv) as u8;
-                        buffer[idx + 2] = (TEXT_B as f32 * alpha + buffer[idx + 2] as f32 * inv) as u8;
+                        let (r, g, b) = self
+                            .color_spans
+                            .iter()
+                            .find(|s| {
+                                character.char_index >= s.start_char
+                                    && character.char_index < s.end_char
+                            })
+                            .map(|s| s.color)
+                            .unwrap_or((TEXT_R, TEXT_G, TEXT_B));
+                        buffer[idx] = (r as f32 * alpha + buffer[idx] as f32 * inv) as u8;
+                        buffer[idx + 1] = (g as f32 * alpha + buffer[idx + 1] as f32 * inv) as u8;
+                        buffer[idx + 2] = (b as f32 * alpha + buffer[idx + 2] as f32 * inv) as u8;
                         buffer[idx + 3] = 0xff;
                     }
                 }
