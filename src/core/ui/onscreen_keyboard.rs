@@ -688,8 +688,9 @@ impl OnScreenKeyboard {
             ]
         };
         let action_count = action_keys.len().max(1) as f32;
+        // Read-only: two compact actions; ~15% larger hit targets than the old 0.10 width × 0.78 row frac.
         let action_key_width = if self.read_only_mode {
-            0.10
+            0.115
         } else {
             (1.0 - key_spacing_ratio * (action_count - 1.0)) / action_count
         };
@@ -700,7 +701,7 @@ impl OnScreenKeyboard {
                 x,
                 y: key_y,
                 width: action_key_width,
-                height: if self.read_only_mode { row_height * 0.78 } else { row_height },
+                height: if self.read_only_mode { row_height * 0.897 } else { row_height },
                 pressed: false,
             });
             x += action_key_width + key_spacing_ratio;

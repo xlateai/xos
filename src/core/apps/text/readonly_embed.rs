@@ -68,6 +68,8 @@ pub struct TranscriptTextView {
     trackpad_last_tap_time: Option<Instant>,
     trackpad_last_tap_x: f32,
     trackpad_last_tap_y: f32,
+    smooth_cursor_x: f32,
+    selection_anim_phase: f32,
 }
 
 impl TranscriptTextView {
@@ -101,6 +103,8 @@ impl TranscriptTextView {
             trackpad_last_tap_time: None,
             trackpad_last_tap_x: 0.0,
             trackpad_last_tap_y: 0.0,
+            smooth_cursor_x: 0.0,
+            selection_anim_phase: 0.0,
         }
     }
 
@@ -173,17 +177,21 @@ impl TranscriptTextView {
         self.last_drag_sample_time = None;
     }
 
-    pub fn on_mouse_move_drag(&mut self, x: f32, y: f32, keyboard_shown: bool) {
+    pub fn on_mouse_move_drag(&mut self, x: f32, y: f32, _keyboard_shown: bool) {
         if !self.dragging && !self.selecting {
             return;
         }
         if self.dragging {
-            let dx = (x - self.last_pointer_x).abs();
-            let dy = (y - self.last_mouse_y).abs();
-            if dx > 5.0 || dy > 5.0 {
+            let dx = x - self.last_pointer_x;
+            let dy = y - self.last_mouse_y;
+            let abs_dx = dx.abs();
+            let abs_dy = dy.abs();
+            if abs_dx > 5.0 || abs_dy > 5.0 {
                 #[cfg(not(target_os = "ios"))]
                 {
-                    let should_select = if keyboard_shown { dx >= dy } else { dx > dy };
+                    // Vertical drag → scroll (like a touchpad/page); horizontal → text selection.
+                    // Ignore `keyboard_shown` so OSK open does not eat vertical scrolling.
+                    let should_select = abs_dx > abs_dy;
                     if should_select {
                         self.dragging = false;
                         self.selecting = true;
@@ -317,7 +325,9 @@ impl TranscriptTextView {
     }
 
     pub fn on_trackpad_pointer_up(&mut self) {
-        if !self.trackpad_moved && !self.trackpad_selecting {
+        let was_trackpad_session = self.trackpad_active;
+        // Only apply trackpad tap-to-clear when this up ends a laser session (see transcribe mouse_up).
+        if was_trackpad_session && !self.trackpad_moved && !self.trackpad_selecting {
             self.selection_start = None;
             self.selection_end = None;
         }
@@ -342,6 +352,7 @@ impl TranscriptTextView {
         let ox = rx0 + H_PAD;
 
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
+        self.selection_anim_phase += dt;
 
         self.wheel_accel_target *= WHEEL_ACCEL_IDLE_DECAY.powf(dt / SCROLL_REF_DT);
         self.wheel_accel_target = self.wheel_accel_target.clamp(0.0, 1.0);
@@ -494,6 +505,8 @@ impl TranscriptTextView {
 
         if let (Some(sel_start), Some(sel_end)) = (self.selection_start, self.selection_end) {
             let (start_idx, end_idx) = if sel_start <= sel_end { (sel_start, sel_end) } else { (sel_end, sel_start) };
+            let pulse_alpha =
+                SELECTION_COLOR.3 as f32 / 255.0 * ((self.selection_anim_phase * 2.4).sin() * 0.12 + 0.88);
             let mut per_line: std::collections::HashMap<usize, (f32, f32, f32)> = std::collections::HashMap::new();
             for c in &self.text_rasterizer.characters {
                 if c.char_index >= start_idx && c.char_index < end_idx {
@@ -523,7 +536,7 @@ impl TranscriptTextView {
                         }
                         let idx = ((y as u32 * shape[1] as u32 + x as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
-                            let a = SELECTION_COLOR.3 as f32 / 255.0;
+                            let a = pulse_alpha;
                             let inv = 1.0 - a;
                             buffer[idx] = (buffer[idx] as f32 * inv + SELECTION_COLOR.0 as f32 * a) as u8;
                             buffer[idx + 1] = (buffer[idx + 1] as f32 * inv + SELECTION_COLOR.1 as f32 * a) as u8;
@@ -588,20 +601,28 @@ impl TranscriptTextView {
             }
         }
 
-        let (cx, baseline_y) = self.get_cursor_screen_position();
-        let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
-        let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round() as i32;
-        let cx = (ox + cx).round() as i32;
-        for y in cursor_top.max(0)..cursor_bottom.min(h_i) {
-            if cx < 0 || cx >= w_i {
-                continue;
-            }
-            let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
-            if idx + 3 < buffer.len() {
-                buffer[idx] = CURSOR_COLOR.0;
-                buffer[idx + 1] = CURSOR_COLOR.1;
-                buffer[idx + 2] = CURSOR_COLOR.2;
-                buffer[idx + 3] = 255;
+        let (mut target_cursor_x, baseline_y) = self.get_cursor_screen_position();
+        target_cursor_x = target_cursor_x.clamp(0.0, content_w);
+        self.smooth_cursor_x += (target_cursor_x - self.smooth_cursor_x) * 0.2_f32;
+
+        let has_expand_selection =
+            matches!((self.selection_start, self.selection_end), (Some(a), Some(b)) if a != b);
+        if !has_expand_selection {
+            let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
+            let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round()
+                as i32;
+            let cx = (ox + self.smooth_cursor_x).round() as i32;
+            for y in cursor_top.max(0)..cursor_bottom.min(h_i) {
+                if cx < 0 || cx >= w_i {
+                    continue;
+                }
+                let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
+                if idx + 3 < buffer.len() {
+                    buffer[idx] = CURSOR_COLOR.0;
+                    buffer[idx + 1] = CURSOR_COLOR.1;
+                    buffer[idx + 2] = CURSOR_COLOR.2;
+                    buffer[idx + 3] = 255;
+                }
             }
         }
 

@@ -4,6 +4,7 @@ use crate::ai::transcription::{
 use crate::apps::text::TranscriptTextView;
 use crate::clipboard;
 use crate::engine::audio;
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
@@ -1001,7 +1002,12 @@ impl TranscribeApp {
 
     fn handle_transcript_action_key(&mut self, action: KeyType) {
         if let Some(copied) = self.transcript_view.on_action_key(action) {
-            let _ = clipboard::set_contents(&copied);
+            if let Err(e) = clipboard::set_contents(&copied) {
+                #[cfg(not(target_arch = "wasm32"))]
+                eprintln!(
+                    "transcript: failed to write clipboard ({e}). On Linux install wl-clipboard or xclip."
+                );
+            }
         }
     }
 }
@@ -1382,6 +1388,15 @@ impl Application for TranscribeApp {
         }
     }
 
+    fn on_key_shortcut(&mut self, _state: &mut EngineState, shortcut: ShortcutAction) {
+        match shortcut {
+            ShortcutAction::Copy => self.handle_transcript_action_key(KeyType::Copy),
+            ShortcutAction::SelectAll => self.handle_transcript_action_key(KeyType::SelectAll),
+            ShortcutAction::Cut | ShortcutAction::Paste | ShortcutAction::Undo | ShortcutAction::Redo => {
+            }
+        }
+    }
+
     fn prepare_shutdown(&mut self, _state: &mut EngineState) {
         if let Some(listener) = self.listener.take() {
             let _ = listener.pause();
@@ -1669,7 +1684,7 @@ impl Application for TranscribeApp {
         if mx < x0 || mx > x1 || my < y0 || my > y1 {
             return;
         }
-        if delta_y.abs() < 0.01 {
+        if !delta_y.is_finite() || !(delta_y != 0.0) {
             return;
         }
         self.transcript_tap_scrolled = true;
