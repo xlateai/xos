@@ -40,7 +40,7 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: 🔨 Install bins
-        run: cargo install --path . --locked --root /usr/local --bin xos --bin xpy --bin xrs
+        run: cargo install --path . --locked --force --root /usr/local --bin xos --bin xpy --bin xrs
 
       - name: 📦 Compile wasm
         run: xos compile --wasm
