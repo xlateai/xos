@@ -74,6 +74,14 @@ fn spawn_live_decode_thread(
             {
                 return burn::whisper::spawn_decode_thread(preferred_size, language);
             }
+            #[cfg(all(not(feature = "whisper_burn"), not(target_os = "ios")))]
+            {
+                let _ = (preferred_size, language);
+                Err(
+                    "Whisper Burn backend is unavailable in this build (enable whisper_burn)."
+                        .to_string(),
+                )
+            }
             #[cfg(target_os = "ios")]
             {
                 let _ = (preferred_size, language);
