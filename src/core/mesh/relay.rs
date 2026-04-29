@@ -23,8 +23,6 @@ use super::lan_crypto::{
 use crate::auth::{is_logged_in, load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
 #[cfg(not(target_arch = "wasm32"))]
 use sha2::{Digest, Sha256};
-#[cfg(not(target_arch = "wasm32"))]
-use uuid::Uuid;
 
 const WIRE_VERSION: u32 = 2;
 
@@ -1272,7 +1270,6 @@ impl MeshSession {
         max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
         require_authorized_non_local_mesh(mode)?;
-        let port = port_for_mesh_id(mesh_id);
         let account_aid = {
             let auth = load_identity().map_err(|e| e.to_string())?;
             node_id_from_public_pem(auth.public_pem.as_str()).map_err(|e| e.to_string())?
@@ -1368,7 +1365,7 @@ impl MeshSession {
             from_id: self.node_id.clone(),
             kind: kind.to_string(),
             to,
-            payload,
+            payload: payload.clone(),
         };
 
         match &self.role {
