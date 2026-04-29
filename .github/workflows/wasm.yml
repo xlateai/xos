@@ -18,6 +18,7 @@ jobs:
       CARGO_TERM_COLOR: always
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_CACHE_SIZE: 2G
+      WASM_PACK_VERSION: "0.13.1"
 
     steps:
       - name: Checkout
@@ -66,17 +67,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
           restore-keys: |
             wasm-pack-${{ runner.os }}-
 
       - name: Install wasm-pack
         if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
-        run: cargo install wasm-pack
+        run: cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked
 
       - name: Ensure wasm-pack installed
         run: |
-          command -v wasm-pack >/dev/null 2>&1 || cargo install wasm-pack
+          command -v wasm-pack >/dev/null 2>&1 || cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked
 
       - name: Verify wasm-pack installation
         run: wasm-pack --version
