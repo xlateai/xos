@@ -26,7 +26,7 @@ COPY src/core/patches/gpu-allocator src/core/patches/gpu-allocator
 COPY src/core/patches/sentencepiece-sys src/core/patches/sentencepiece-sys
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --locked --bin xos --bin xpy --bin xrs
+RUN cargo install --path . --locked --root /usr/local --bin xos --bin xpy --bin xrs
 
 FROM rust:1.94-bookworm AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install wasm-pack --version 0.13.1 --locked
 WORKDIR /app
-COPY --from=builder /app/target/release/xos /usr/local/bin/xos
-COPY --from=builder /app/target/release/xpy /usr/local/bin/xpy
-COPY --from=builder /app/target/release/xrs /usr/local/bin/xrs
+COPY --from=builder /usr/local/bin/xos /usr/local/bin/xos
+COPY --from=builder /usr/local/bin/xpy /usr/local/bin/xpy
+COPY --from=builder /usr/local/bin/xrs /usr/local/bin/xrs
 ENTRYPOINT ["xos"]

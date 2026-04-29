@@ -69,11 +69,11 @@ jobs:
       - name: 📊 Reset stats
         run: sccache --zero-stats || true
 
-      - name: 🔨 Build xos
-        run: cargo build --release -p xos
+      - name: 🔨 Install bins
+        run: cargo install --path . --locked --root /usr/local --bin xos --bin xpy --bin xrs
 
       - name: 📦 Compile wasm
-        run: cargo run --release --bin xos -- compile --wasm
+        run: xos compile --wasm
 
       - name: 📊 sccache stats
         run: sccache --show-stats || true
