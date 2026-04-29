@@ -39,10 +39,10 @@ jobs:
       - name: 🎯 Wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: 🧰 Install native deps (bindgen/libclang)
+      - name: 🧰 Install native deps (bindgen/cmake)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends clang libclang-dev
+          apt-get install -y --no-install-recommends build-essential clang cmake libclang-dev
 
       - name: 🔨 Install bins
         run: cargo install --path . --locked --force --root /usr/local --bin xos --bin xpy --bin xrs

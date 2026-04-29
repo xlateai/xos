@@ -30,8 +30,12 @@ RUN cargo install --path . --locked --root /usr/local --bin xos --bin xpy --bin 
 
 FROM rust:1.94-bookworm AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     ca-certificates \
+    clang \
+    cmake \
     git \
+    libclang-dev \
     pkg-config \
     libasound2-dev \
     libasound2 \
