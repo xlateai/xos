@@ -101,12 +101,65 @@ pub fn get_contents() -> Option<String> {
         }
     }
     
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        // For other platforms, return None
-        // TODO: Add Linux/Windows clipboard support
+        clipboard_linux_get()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
+    {
         None
     }
+}
+
+#[cfg(target_os = "linux")]
+fn clipboard_linux_get() -> Option<String> {
+    use std::process::Command;
+
+    fn out(args: &[&str]) -> Option<String> {
+        let output = Command::new(args[0]).args(&args[1..]).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8(output.stdout).ok()?.trim_end_matches('\n').to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+
+    out(&["wl-paste"])
+        .or_else(|| out(&["wl-paste", "-t", "text"]))
+        .or_else(|| out(&["xclip", "-selection", "clipboard", "-o"]))
+        .map(|t| t.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+#[cfg(target_os = "linux")]
+fn clipboard_linux_set(text: &str) -> Result<(), std::io::Error> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn run(argv: &[&str], stdin_text: &str) -> Result<(), std::io::Error> {
+        let mut child = Command::new(argv[0])
+            .args(&argv[1..])
+            .stdin(Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(stdin_text.as_bytes())?;
+        }
+        let ok = child.wait()?.success();
+        if ok {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "clipboard subprocess failed",
+            ))
+        }
+    }
+
+    run(&["wl-copy"], text).or_else(|_| run(&["xclip", "-selection", "clipboard"], text))
 }
 
 /// Set the clipboard contents
@@ -206,12 +259,18 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
         }
     }
     
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        // For other platforms, do nothing
-        // TODO: Add Linux clipboard support
+        clipboard_linux_set(text)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
+    {
         let _ = text;
-        Ok(())
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "clipboard not implemented on this target",
+        ))
     }
 }
 

@@ -30,7 +30,7 @@ use super::engine::{
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 use crate::engine::keyboard::shortcuts::{
-    NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
+    detect_shortcut, NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
 };
 use crate::rasterizer::RasterCache;
 
@@ -496,7 +496,7 @@ impl ApplicationHandler for AppState {
                         _ => None,
                     };
 
-                    let character = if let Key::Character(ref s) = event.logical_key {
+                    let logical_char = if let Key::Character(ref s) = event.logical_key {
                         let mut chars = s.chars();
                         match (chars.next(), chars.next()) {
                             (Some(ch), None) => Some(ch),
@@ -505,6 +505,25 @@ impl ApplicationHandler for AppState {
                     } else {
                         None
                     };
+                    // Cmd/Ctrl+letter combos often omit `Key::Character` on macOS; map from physical layout.
+                    let character = logical_char.or_else(|| {
+                        if !self.command_held {
+                            return None;
+                        }
+                        match event.physical_key {
+                            PhysicalKey::Code(KeyCode::KeyA) => Some('a'),
+                            PhysicalKey::Code(KeyCode::KeyC) => Some('c'),
+                            PhysicalKey::Code(KeyCode::KeyV) => Some('v'),
+                            PhysicalKey::Code(KeyCode::KeyX) => Some('x'),
+                            PhysicalKey::Code(KeyCode::KeyZ) => Some('z'),
+                            PhysicalKey::Code(KeyCode::KeyY) => Some('y'),
+                            _ => None,
+                        }
+                    });
+
+                    let suppress_printable_after_shortcut = character.is_some_and(|ch| {
+                        self.command_held && detect_shortcut(ch, true, self.shift_held).is_some()
+                    });
 
                     self.app.on_special_key(
                         &mut self.engine_state,
@@ -522,15 +541,17 @@ impl ApplicationHandler for AppState {
                     // first keypress, then omitted while the IME session holds focus — fall back to the
                     // single character from `logical_key` when `text` is missing or empty so typing
                     // keeps working (e.g. ios_remote mesh viewer).
-                    if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
-                        for ch in text.chars() {
-                            if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
+                    if !suppress_printable_after_shortcut {
+                        if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
+                            for ch in text.chars() {
+                                if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
+                                    let _ = self.app.on_key_char(&mut self.engine_state, ch);
+                                }
+                            }
+                        } else if let Some(ch) = character {
+                            if !ch.is_control() || ch == '\n' || ch == '\t' {
                                 let _ = self.app.on_key_char(&mut self.engine_state, ch);
                             }
-                        }
-                    } else if let Some(ch) = character {
-                        if !ch.is_control() || ch == '\n' || ch == '\t' {
-                            let _ = self.app.on_key_char(&mut self.engine_state, ch);
                         }
                     }
                 }
