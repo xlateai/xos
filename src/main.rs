@@ -385,7 +385,9 @@ struct RelayState {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const RELAY_STALE_TIMEOUT: Duration = Duration::from_secs(45);
+/// Drop relay slots when the client hasn't polled lately (force-quit leaves no disconnect).
+/// Online clients poll frequently; shorter timeout trims ghost sessions sooner.
+const RELAY_STALE_TIMEOUT: Duration = Duration::from_secs(25);
 
 #[cfg(not(target_arch = "wasm32"))]
 fn prune_stale_mesh_nodes(mesh: &mut RelayMesh, now: Instant) {
@@ -437,6 +439,12 @@ fn run_relay_server(bind: &str, port: u16) {
                     let mut g = state.lock().unwrap();
                     let mesh = g.meshes.entry(mesh_hash).or_default();
                     prune_stale_mesh_nodes(mesh, now);
+                    // Same device reconnecting (same `node_hash_key`): drop the old slot so counts
+                    // cannot climb on iOS kill/reopen.
+                    mesh.nodes.retain(|n| n.node_hash_key != node_hash);
+                    for (idx, n) in mesh.nodes.iter_mut().enumerate() {
+                        n.rank = idx as u32;
+                    }
                     let session_id = Uuid::new_v4().to_string();
                     let rank = mesh.nodes.len() as u32;
                     mesh.nodes.push(RelayNode {
