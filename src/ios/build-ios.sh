@@ -8,6 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# When Rust is invoked via `compile_ios_rust()`, `CARGO_TARGET_DIR` may be `.../target/ios`.
+# Builds still produce `aarch64-apple-ios/release/libxos.a` under that root (not `$PROJECT_ROOT/target`).
+TARGET_ROOT="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+
 # Install iOS targets if not already installed
 # This adds the aarch64-apple-ios target to rustup, which is required for
 # cross-compiling Rust code to run on iOS devices (iPhone/iPad)
@@ -37,13 +41,14 @@ echo "🔨 Building for iOS device (aarch64-apple-ios)..."
 cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features --features "whisper,whisper_ct2" -- -C link-arg=-miphoneos-version-min=15.1
 
 # Verify the build succeeded by checking for the output file (use absolute path; cwd must be repo root)
-LIB_XOS_A="$PROJECT_ROOT/target/aarch64-apple-ios/release/libxos.a"
+LIB_XOS_A="$TARGET_ROOT/aarch64-apple-ios/release/libxos.a"
 if [ ! -f "$LIB_XOS_A" ]; then
     echo "❌ Error: libxos.a not found after build"
     echo "   Expected: $LIB_XOS_A"
     echo "   PROJECT_ROOT=$PROJECT_ROOT"
+    echo "   TARGET_ROOT=$TARGET_ROOT"
     echo "   Listing release dir:"
-    ls -la "$PROJECT_ROOT/target/aarch64-apple-ios/release/" 2>/dev/null || echo "   (missing)"
+    ls -la "$TARGET_ROOT/aarch64-apple-ios/release/" 2>/dev/null || echo "   (missing)"
     exit 1
 fi
 

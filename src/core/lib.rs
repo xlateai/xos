@@ -56,21 +56,32 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     path.join("src").join("core").join("apps").join("ball.rs").exists()
 }
 
-/// If `exe` is `.../target/release/xos(.exe)` or `.../target/debug/xos(.exe)`, returns the repo
-/// root that contains that `target/` directory—the tree this binary was built from.
+/// If `exe` is `.../target/{release|debug}/xos(.exe)`, or
+/// `.../target/{standard|ios|wasm}/{release|debug}/xos(.exe)`, returns the repo root.
 fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
     let file_name = exe.file_name()?.to_str()?;
     if file_name != "xos" && file_name != "xos.exe" {
         return None;
     }
-    let profile = exe.parent()?.file_name()?.to_str()?;
+    let profile_dir = exe.parent()?;
+    let profile = profile_dir.file_name()?.to_str()?;
     if profile != "release" && profile != "debug" {
         return None;
     }
-    let target_dir = exe.parent()?.parent()?;
-    if target_dir.file_name()?.to_str()? != "target" {
-        return None;
-    }
+    let after_profile = profile_dir.parent()?;
+    let target_dir = match after_profile.file_name()?.to_str()? {
+        // New layout: .../target/<lane>/release/xos
+        "standard" | "ios" | "wasm" => {
+            let td = after_profile.parent()?;
+            if td.file_name()?.to_str()? != "target" {
+                return None;
+            }
+            td
+        }
+        // Legacy: .../target/release/xos
+        "target" => after_profile,
+        _ => return None,
+    };
     let root = target_dir.parent()?.to_path_buf();
     if !is_xos_project_root(&root) {
         return None;
@@ -81,7 +92,7 @@ fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Locate the xos repo: the repo containing a `target/release|debug` `xos` binary (when that is
+/// Locate the xos repo: the repo containing a `target/.../release|debug` `xos` binary (when that is
 /// what is running), else walk parents of the executable, then compile-time
 /// [`CARGO_MANIFEST_DIR`] (for `cargo install` copies), then walk up from [`std::env::current_dir`].
 pub fn find_xos_project_root() -> Result<PathBuf, String> {
