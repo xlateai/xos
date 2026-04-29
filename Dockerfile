@@ -8,7 +8,10 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+# bindgen (`v4l2-sys-mit`, etc.) needs libclang at compile time
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    libclang-dev \
     pkg-config \
     libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
