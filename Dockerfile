@@ -1,4 +1,5 @@
-FROM rust:1.88-bookworm AS chef
+# Needs >= rustc 1.92 (Burn/CubeCL `cubek-*`); align with repo dev toolchain (~1.94)
+FROM rust:1.94-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
@@ -21,7 +22,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --locked --bin xos --bin xpy --bin xrs
 
-FROM rust:1.88-bookworm AS runtime
+FROM rust:1.94-bookworm AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     pkg-config \
