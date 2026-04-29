@@ -44,7 +44,7 @@ const MESH_READ_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(not(target_arch = "wasm32"))]
 const RELAY_ENV: &str = "XOS_RELAY_LINK";
 #[cfg(not(target_arch = "wasm32"))]
-const RELAY_DEFAULT: &str = "https://xos.xlate.ai";
+const RELAY_DEFAULT: &str = "http://xos.xlate.ai:47333";
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
     WireEnvelope {

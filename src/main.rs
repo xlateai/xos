@@ -421,7 +421,6 @@ fn run_relay_server(bind: &str, port: u16) {
                 } else {
                     let mut g = state.lock().unwrap();
                     let mesh = g.meshes.entry(mesh_hash).or_default();
-                    mesh.nodes.retain(|n| n.node_hash_key != node_hash);
                     let session_id = Uuid::new_v4().to_string();
                     let rank = mesh.nodes.len() as u32;
                     mesh.nodes.push(RelayNode {
