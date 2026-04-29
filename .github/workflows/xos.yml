@@ -47,7 +47,7 @@ jobs:
             changed=true
           fi
 
-          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${release_exists}" != "true" ]; then
+          if [ "${release_exists}" != "true" ]; then
             bumped=true
           fi
 
