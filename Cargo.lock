@@ -12085,6 +12085,7 @@ dependencies = [
  "enigo",
  "fontdue",
  "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "half 2.7.1",
  "hkdf",
  "hound",

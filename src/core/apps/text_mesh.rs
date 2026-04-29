@@ -16,7 +16,8 @@ const INPUT_LEFT_PAD: f32 = 14.0;
 const LOGIN_TOP_GAP: f32 = 22.0;
 const LOGIN_LINE_GAP: f32 = 14.0;
 const DEFAULT_CHANNEL: &str = "shared-text-demo";
-const DEFAULT_MODE: MeshMode = MeshMode::Lan;
+// const DEFAULT_MODE: MeshMode = MeshMode::Lan;
+const DEFAULT_MODE: MeshMode = MeshMode::Online;
 const DOC_KIND: &str = "shared_doc_v1";
 const HOST_ANTI_ENTROPY_INTERVAL: Duration = Duration::from_millis(1800);
 
