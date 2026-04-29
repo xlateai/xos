@@ -43,6 +43,10 @@ const VAD_SEGMENT_EMA_ALPHA: f32 = 0.30;
 const DEFAULT_WAVE_POINTS: usize = 640;
 const AMPLIFICATION_FACTOR: f32 = 50.0;
 const WAVE_BAND_FRAC: f32 = 0.375;
+/// When OSK is open: waveform vertical band shrinks (~22% shorter) so transcript + pointer have more room.
+const WAVE_BAND_OSK_SCALE: f32 = 0.78;
+/// Small gap between transcript bottom and OSK top (px).
+const OSK_CONTENT_GAP_PX: f32 = 3.0;
 const WAVE_HEADROOM_FRAC: f32 = 0.0;
 const LEVEL_PANEL_H_FRAC: f32 = 0.17;
 const TEXTBOX_BOTTOM_GAP_FRAC: f32 = 0.015;
@@ -307,14 +311,18 @@ impl VisualCanvas {
         ptt_hold_active: bool,
         ptt_hold_seconds: f32,
         show_vad_panel: bool,
+        keyboard_top_normalized: Option<f32>,
     ) -> UiBounds {
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;
-        let (l, t, sw, sh) = safe_layout;
-        let point_cap = (sw as usize).max(2);
         let full_w = width as f32;
         let full_h = height as f32;
+        let (l, t, sw, sh) = safe_layout;
+        let use_full_width_fill = keyboard_top_normalized.is_some();
+        let wl = if use_full_width_fill { 0.0 } else { l };
+        let ww = if use_full_width_fill { full_w } else { sw };
+        let point_cap = (ww as usize).max(2);
 
         let wave_w = (wave_rect.2 - wave_rect.0).max(0.0);
         let wave_h = (wave_rect.3 - wave_rect.1).max(0.0);
@@ -349,22 +357,23 @@ impl VisualCanvas {
             capture_btn_r.2 + side_gap + side_w,
             capture_btn_r.3,
         );
-        if device_btn_r.0 < l {
-            let shift = l - device_btn_r.0;
+        let safe_right = l + sw;
+        if device_btn_r.0 < wl {
+            let shift = wl - device_btn_r.0;
             device_btn_r.0 += shift;
             device_btn_r.2 += shift;
             lang_btn_r.0 += shift;
             lang_btn_r.2 += shift;
         }
-        if lang_btn_r.2 > l + sw {
-            let shift = lang_btn_r.2 - (l + sw);
+        let layout_right_edge = if use_full_width_fill { full_w } else { safe_right };
+        if lang_btn_r.2 > layout_right_edge {
+            let shift = lang_btn_r.2 - layout_right_edge;
             device_btn_r.0 -= shift;
             device_btn_r.2 -= shift;
             lang_btn_r.0 -= shift;
             lang_btn_r.2 -= shift;
         }
 
-        let wave_top = t + sh * WAVE_HEADROOM_FRAC;
         let line_top = wave_rect.1;
         let line_bottom = (capture_btn_r.1 - 4.0).max(line_top + 6.0);
         let line_h = (line_bottom - line_top).max(8.0);
@@ -385,17 +394,30 @@ impl VisualCanvas {
         let bar_y0 = panel_top + panel_h * 0.52;
         let bar_y1 = bar_y0 + panel_h * 0.24;
 
-        let transcript_top = wave_top + wave_h + sh * 0.02;
-        let transcript_bottom = if show_vad_panel {
-            panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC
+        let transcript_gap_compact = sh * 0.012;
+        let transcript_gap_normal = sh * 0.02;
+        let (textbox_y0, textbox_y1, textbox_x0, textbox_x1) = if let Some(kty) =
+            keyboard_top_normalized
+        {
+            let transcript_bottom_abs = kty * full_h - OSK_CONTENT_GAP_PX;
+            let tt = wave_rect.3 + transcript_gap_compact;
+            let tb = transcript_bottom_abs.max(tt + 36.0);
+            (tt, tb, 0.0, full_w)
         } else {
-            t + sh - sh * 0.01
+            let transcript_top = wave_rect.3 + transcript_gap_normal;
+            let transcript_bottom = if show_vad_panel {
+                panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC
+            } else {
+                t + sh - sh * 0.01
+            };
+            (
+                transcript_top,
+                transcript_bottom,
+                l + pad,
+                l + sw - pad,
+            )
         };
-        let transcript_h = (transcript_bottom - transcript_top).max(0.0);
-        let textbox_x0 = l + pad;
-        let textbox_x1 = l + sw - pad;
-        let textbox_y0 = transcript_top;
-        let textbox_y1 = transcript_bottom;
+        let transcript_h = (textbox_y1 - textbox_y0).max(0.0);
 
         let all_samples = listener.get_samples_by_channel();
         let samples_empty = all_samples.is_empty() || all_samples[0].is_empty();
@@ -425,7 +447,7 @@ impl VisualCanvas {
             &samples[start_idx..]
         };
         let wave_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
-        let x_scale = (sw - 1.0).max(1.0) / (points.saturating_sub(1) as f32).max(1.0);
+        let x_scale = (ww - 1.0).max(1.0) / (points.saturating_sub(1) as f32).max(1.0);
         let mut smooth = vec![0.0_f32; points];
         let half_w = self.wave_smooth_half;
         if active.is_empty() {
@@ -457,7 +479,7 @@ impl VisualCanvas {
             }
         }
         let draw_amp = &self.wave_display_ema;
-        let mut prev_x = l;
+        let mut prev_x = wl;
         let mut prev_y = wave_center_y;
         {
             let buffer = state.frame_buffer_mut();
@@ -465,9 +487,9 @@ impl VisualCanvas {
                 buffer,
                 width,
                 height,
-                l,
+                wl,
                 wave_center_y,
-                l + sw - 1.0,
+                wl + ww - 1.0,
                 wave_center_y,
                 WAVE_BASELINE,
             );
@@ -475,7 +497,7 @@ impl VisualCanvas {
                 let amp = self
                     .amplify_nonlinear(draw_amp[i] * pre_gain)
                     .clamp(-1.0, 1.0);
-                let x = l + i as f32 * x_scale;
+                let x = wl + i as f32 * x_scale;
                 let y = wave_center_y - amp * wave_half_amp;
                 if i > 0 {
                     self.draw_line_thick(buffer, width, height, prev_x, prev_y, x, y, wave_color);
@@ -1279,14 +1301,19 @@ impl Application for TranscribeApp {
         let listener = self.listener.as_ref().expect("checked above");
         let h = height;
         let w = width;
+        let (_, keyboard_top_norm, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let osk_shown = state.keyboard.onscreen.is_shown();
         let wave_top = st + ssh * WAVE_HEADROOM_FRAC;
-        let wave_h = ssh * WAVE_BAND_FRAC;
-        let wave_rect = (
-            sl,
-            wave_top,
-            sl + ssw,
-            wave_top + wave_h,
-        );
+        let wave_h = if osk_shown {
+            ssh * WAVE_BAND_FRAC * WAVE_BAND_OSK_SCALE
+        } else {
+            ssh * WAVE_BAND_FRAC
+        };
+        let wave_rect = if osk_shown {
+            (0.0, wave_top, w, wave_top + wave_h)
+        } else {
+            (sl, wave_top, sl + ssw, wave_top + wave_h)
+        };
 
         let hold_seconds = self
             .ptt_hold_started_at
@@ -1311,20 +1338,29 @@ impl Application for TranscribeApp {
             self.ptt_hold_active,
             hold_seconds,
             !state.keyboard.onscreen.is_shown(),
+            if osk_shown {
+                Some(keyboard_top_norm)
+            } else {
+                None
+            },
         );
 
         if self.ui_bounds.transcript.is_some() {
             let pad = (ssw * 0.03).max(12.0);
-            let transcript_top = wave_top + wave_h + ssh * 0.02;
-            let transcript_bottom = if state.keyboard.onscreen.is_shown() {
-                st + ssh - ssh * 0.01
+            let (transcript_top, transcript_bottom, textbox_x0, textbox_x1) = if osk_shown {
+                let tt_osk = wave_rect.3 + ssh * 0.012;
+                let tb =
+                    (keyboard_top_norm * h - OSK_CONTENT_GAP_PX).max(tt_osk + 36.0);
+                (tt_osk, tb, 0.0, w)
             } else {
-                let panel_h = (ssh * LEVEL_PANEL_H_FRAC).max(36.0);
-                let panel_top = st + ssh - panel_h - ssh * 0.03;
-                panel_top - ssh * TEXTBOX_BOTTOM_GAP_FRAC
+                let transcript_top = wave_top + wave_h + ssh * 0.02;
+                let transcript_bottom = {
+                    let panel_h = (ssh * LEVEL_PANEL_H_FRAC).max(36.0);
+                    let panel_top = st + ssh - panel_h - ssh * 0.03;
+                    panel_top - ssh * TEXTBOX_BOTTOM_GAP_FRAC
+                };
+                (transcript_top, transcript_bottom, sl + pad, sl + ssw - pad)
             };
-            let textbox_x0 = sl + pad;
-            let textbox_x1 = sl + ssw - pad;
             let clip_x0 = textbox_x0 + 1.0;
             let clip_y0 = transcript_top + TRANSCRIPT_INNER_PAD;
             let clip_x1 = (textbox_x1 - 1.0).min(w);
