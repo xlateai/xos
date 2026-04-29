@@ -1,7 +1,12 @@
 use crate::apps::text::text::TextApp;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::auth::{
     is_logged_in, load_identity, load_node_identity, login_offline, reset_offline_identity,
 };
+#[cfg(target_arch = "wasm32")]
+fn is_logged_in() -> bool {
+    true
+}
 use crate::engine::{Application, EngineState};
 use crate::mesh::{MeshMode, MeshSession};
 use crate::rasterizer::fill_rect_buffer;
@@ -97,7 +102,14 @@ impl TextMeshApp {
     }
 
     fn current_username() -> Option<String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         load_identity().ok().map(|u| u.username).filter(|u| !u.trim().is_empty())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some("web".to_string())
+        }
     }
 
     fn draw_text_line(
@@ -149,6 +161,13 @@ impl TextMeshApp {
     }
 
     fn ensure_login_identity(&self) -> Result<(), String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = self;
+            return Ok(());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let user = self.username.trim();
         let pass = self.password.trim();
         if !is_logged_in() {
@@ -167,18 +186,24 @@ impl TextMeshApp {
         }
         reset_offline_identity(user, pass, user).map_err(|e| format!("login reset failed: {e}"))?;
         Ok(())
+        }
     }
 
     fn connect_mesh(&mut self) -> Result<(), String> {
         self.ensure_login_identity()?;
         self.status_user_label = Self::current_username().unwrap_or_else(|| "not logged in".to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        let session = {
         let node_identity = load_node_identity().map_err(|e| format!("node identity unavailable: {e}"))?;
-        let session = MeshSession::join_with_identity(
+        MeshSession::join_with_identity(
             self.channel.trim(),
             self.mode,
             Arc::new(node_identity),
             None,
-        )?;
+        )?
+        };
+        #[cfg(target_arch = "wasm32")]
+        let session = MeshSession::join(self.channel.trim(), self.mode)?;
         self.mesh_session = Some(Arc::new(session));
         self.phase = AppPhase::Editor;
         self.last_sent_text = self.text_app.text_rasterizer.text.clone();
