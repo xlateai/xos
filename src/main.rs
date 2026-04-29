@@ -10,6 +10,8 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Method, Response, Server};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
@@ -362,12 +364,12 @@ fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
 struct RelayNode {
     session_id: String,
     node_hash_key: String,
     rank: u32,
     queue: Vec<serde_json::Value>,
+    last_seen: Instant,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -380,6 +382,18 @@ struct RelayMesh {
 #[derive(Default)]
 struct RelayState {
     meshes: HashMap<String, RelayMesh>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_STALE_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_stale_mesh_nodes(mesh: &mut RelayMesh, now: Instant) {
+    mesh.nodes
+        .retain(|n| now.duration_since(n.last_seen) <= RELAY_STALE_TIMEOUT);
+    for (idx, n) in mesh.nodes.iter_mut().enumerate() {
+        n.rank = idx as u32;
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -404,6 +418,7 @@ fn run_relay_server(bind: &str, port: u16) {
         let mut reader = req.as_reader();
         let _ = std::io::Read::read_to_string(&mut reader, &mut body);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({}));
+        let now = Instant::now();
         let resp = match path.as_str() {
             "/mesh/connect" => {
                 let mesh_hash = v
@@ -421,6 +436,7 @@ fn run_relay_server(bind: &str, port: u16) {
                 } else {
                     let mut g = state.lock().unwrap();
                     let mesh = g.meshes.entry(mesh_hash).or_default();
+                    prune_stale_mesh_nodes(mesh, now);
                     let session_id = Uuid::new_v4().to_string();
                     let rank = mesh.nodes.len() as u32;
                     mesh.nodes.push(RelayNode {
@@ -428,6 +444,7 @@ fn run_relay_server(bind: &str, port: u16) {
                         node_hash_key: node_hash,
                         rank,
                         queue: Vec::new(),
+                        last_seen: now,
                     });
                     json!({"ok": true, "session_id": session_id, "rank": rank, "num_nodes": mesh.nodes.len()})
                 }
@@ -442,6 +459,7 @@ fn run_relay_server(bind: &str, port: u16) {
                 let mut g = state.lock().unwrap();
                 let mut done = false;
                 for mesh in g.meshes.values_mut() {
+                    prune_stale_mesh_nodes(mesh, now);
                     let sender_exists = mesh.nodes.iter().any(|n| n.session_id == sid);
                     if !sender_exists {
                         continue;
@@ -473,7 +491,9 @@ fn run_relay_server(bind: &str, port: u16) {
                 let mut g = state.lock().unwrap();
                 let mut out = json!({"ok": false, "error": "unknown session"});
                 for mesh in g.meshes.values_mut() {
+                    prune_stale_mesh_nodes(mesh, now);
                     if let Some(node) = mesh.nodes.iter_mut().find(|n| n.session_id == sid) {
+                        node.last_seen = now;
                         let messages = std::mem::take(&mut node.queue);
                         out = json!({
                             "ok": true,
