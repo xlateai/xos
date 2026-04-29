@@ -549,7 +549,7 @@ impl TextMeshApp {
         let current = self.text_app.text_rasterizer.text.clone();
         let (cursor, sel_start, sel_end) = self.text_app.shared_selection_state();
         let text_changed = current != self.last_sent_text;
-        let selection_changed = cursor != self.last_sent_cursor
+        let mut selection_changed = cursor != self.last_sent_cursor
             || sel_start != self.last_sent_selection_start
             || sel_end != self.last_sent_selection_end;
 
@@ -559,9 +559,15 @@ impl TextMeshApp {
             self.observed_nodes = nodes_now;
         }
         let is_host = session.rank() == 0;
+        let multi_peer = nodes_now > 1;
+        if !multi_peer {
+            // Local cursor/selection churn while solo should not burn rev numbers.
+            selection_changed = false;
+        }
         let host_anti_entropy_due = is_host
+            && multi_peer
             && now.duration_since(self.last_host_anti_entropy_at) >= HOST_ANTI_ENTROPY_INTERVAL;
-        let force_sync = (is_host && node_count_changed) || host_anti_entropy_due;
+        let force_sync = multi_peer && ((is_host && node_count_changed) || host_anti_entropy_due);
 
         if !text_changed && !selection_changed && !force_sync {
             return;

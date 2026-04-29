@@ -596,12 +596,6 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
                     let mut g = state.lock().unwrap();
                     prune_all_relay_state(&mut g, now);
                     let mesh = g.meshes.entry(mesh_hash).or_default();
-                    // Same device reconnecting (same `node_hash_key`): drop the old slot so counts
-                    // cannot climb on iOS kill/reopen.
-                    mesh.nodes.retain(|n| n.node_hash_key != node_hash);
-                    for (idx, n) in mesh.nodes.iter_mut().enumerate() {
-                        n.rank = idx as u32;
-                    }
                     let session_id = Uuid::new_v4().to_string();
                     let rank = mesh.nodes.len() as u32;
                     mesh.nodes.push(RelayNode {
