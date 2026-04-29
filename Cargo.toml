@@ -10,7 +10,6 @@ default-run = "xos"
 
 [dependencies]
 burn         = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "wgpu", "autotune", "ndarray", "autodiff"] }
-burn-store   = { version = "=0.21.0-pre.3", features = ["burnpack", "pytorch"] }
 burn-cubecl  = { version = "=0.21.0-pre.3" }
 burn-fusion  = { version = "=0.21.0-pre.3" }
 burn-ir      = { version = "=0.21.0-pre.3" }
@@ -50,10 +49,14 @@ libc = "0.2"
 # Non-WASM native dependencies
 # -------------------------------------------------------------------
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+burn-store   = { version = "=0.21.0-pre.3", features = ["burnpack", "pytorch"] }
 rand = "0.9.2"
 rand_chacha = "0.3"
 rand_core = "0.6"
 getrandom = "0.3.4"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+webrtc = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # Offline identity + LAN mesh crypto (RSA handshake, AES-GCM wire)
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 argon2 = "0.5"
@@ -126,6 +129,8 @@ screencapturekit = { version = "1.5.4", features = ["macos_13_0"] }
 # -------------------------------------------------------------------
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
+# Force-enable wasm support for transitive getrandom 0.4 users (Burn/CubeCL stack).
+getrandom_04 = { package = "getrandom", version = "0.4.2", features = ["wasm_js"] }
 uuid = { version = "1", features = ["v4", "js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -159,7 +164,7 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [features]
-default = ["whisper", "whisper_burn", "whisper_ct2", "silero_vad"]
+default = ["whisper", "whisper_ct2"]
 ## Shared stack for live CT2 + resampling + (optional) Silero — **no** `tokenizers` / sentencepiece (avoids iOS `sentencepiece-sys`/cmake issues).
 ## Burn/WGPU is gated behind `whisper_burn` (pulls `tokenizers` for BPE only on desktop).
 whisper = [

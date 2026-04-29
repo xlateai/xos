@@ -32,7 +32,7 @@ pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let m = vm.new_module("xos.path", vm.ctx.new_dict(), None);
     let _ = m.set_attr(
         "data",
-        vm.new_function("data", |vm: &VirtualMachine| {
+        vm.new_function("data", |vm: &VirtualMachine| -> PyResult<String> {
             Err(vm.new_runtime_error(
                 "xos.path.data: not available on wasm (pass explicit model paths)".to_string(),
             ))

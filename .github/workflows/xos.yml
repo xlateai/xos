@@ -1,20 +1,28 @@
-name: xos pipeline
+name: 🔁 xos CI
 
 permissions:
   contents: write
 
 on:
   push:
-    branches: [main]
+    branches:
+      - "**"
     paths:
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
       - ".github/workflows/xos.yml"
       - ".github/workflows/wasm.yml"
   workflow_dispatch:
 
+# One release pipeline at a time (extra pushes queue instead of overlapping publishes).
+# concurrency:
+#   group: release-${{ github.repository }}
+#   cancel-in-progress: false
+
 jobs:
   detect-version-bump:
-    name: Detect release need
+    name: 🔍 Release gate
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.check.outputs.changed }}
@@ -23,9 +31,15 @@ jobs:
       crate_name: ${{ steps.check.outputs.crate_name }}
       tag: ${{ steps.check.outputs.tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
+      docker_tag_exists: ${{ steps.check.outputs.docker_tag_exists }}
+      wasm_artifact_exists: ${{ steps.check.outputs.wasm_artifact_exists }}
+      wasm_artifact_id: ${{ steps.check.outputs.wasm_artifact_id }}
+      wasm_source: ${{ steps.check.outputs.wasm_source }}
     steps:
-      - uses: actions/checkout@v4
-      - id: check
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      - name: 🏷️ Version check
+        id: check
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,87 +52,192 @@ jobs:
           changed=false
           bumped=false
           release_exists=false
+          docker_tag_exists=false
+          wasm_artifact_exists=false
+          wasm_artifact_id=""
+          wasm_source="none"
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             release_exists=true
+            if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[]? | select(.name=="xos-wasm.zip") | .name' | grep -q '^xos-wasm.zip$'; then
+              wasm_artifact_exists=true
+              wasm_source="release"
+            fi
           else
             changed=true
           fi
 
-          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${release_exists}" != "true" ]; then
+          if [ "${release_exists}" != "true" ]; then
             bumped=true
+          fi
+
+          docker_tag="xlateai/xos:v${current_version}"
+          if docker manifest inspect "${docker_tag}" >/dev/null 2>&1; then
+            docker_tag_exists=true
+          fi
+
+          if [ "${wasm_artifact_exists}" != "true" ]; then
+            wasm_artifact_name="xos-wasm-zip-v${current_version}"
+            wasm_artifact_id="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --paginate \
+                --jq ".artifacts[] | select(.expired == false) | select(.name == \"${wasm_artifact_name}\" or .name == \"xos-wasm-zip\") | .id" \
+                | head -n1 || true
+            )"
+            if [ -n "${wasm_artifact_id}" ]; then
+              wasm_artifact_exists=true
+              wasm_source="artifact"
+            fi
           fi
 
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${release_exists}" >> "$GITHUB_OUTPUT"
+          echo "docker_tag_exists=${docker_tag_exists}" >> "$GITHUB_OUTPUT"
+          echo "wasm_artifact_exists=${wasm_artifact_exists}" >> "$GITHUB_OUTPUT"
+          echo "wasm_artifact_id=${wasm_artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "wasm_source=${wasm_source}" >> "$GITHUB_OUTPUT"
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
-  wasm-build:
-    name: Build wasm package
+  publish-docker-image:
+    name: 🐳 Push image
+    runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
+    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.docker_tag_exists != 'true'
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔐 Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 🏷️ Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: xlateai/xos
+          tags: |
+            type=raw,value=v${{ needs.detect-version-bump.outputs.current_version }}
+            type=raw,value=latest
+
+      - name: 📤 Build push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  wasm-build:
+    name: 📦 Wasm job
+    needs: [detect-version-bump, publish-docker-image]
+    if: |
+      always() &&
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.wasm_artifact_exists != 'true' &&
+      (needs.publish-docker-image.result == 'success' || needs.publish-docker-image.result == 'skipped')
     uses: ./.github/workflows/wasm.yml
+    with:
+      docker_image: xlateai/xos:v${{ needs.detect-version-bump.outputs.current_version }}
+      artifact_name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
     secrets: inherit
 
-  publish-rust:
-    name: Publish Rust crate
+  wasm-reuse:
+    name: ♻️ Reuse wasm artifact
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
-    outputs:
-      published: ${{ steps.set-output.outputs.published }}
+    needs: [detect-version-bump]
+    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.wasm_artifact_exists == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - id: version-check
+      - name: ⬇️ Download prior wasm artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          crate_name="${{ needs.detect-version-bump.outputs.crate_name }}"
-          version="${{ needs.detect-version-bump.outputs.current_version }}"
-          echo "Checking if ${crate_name}@${version} exists on crates.io..."
-          if cargo search "$crate_name" --limit 100 | grep -E "^$crate_name = \"$version\""; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          rm -rf prior-wasm
+          mkdir -p prior-wasm
+          if [ "${{ needs.detect-version-bump.outputs.wasm_source }}" = "release" ]; then
+            tag="v${{ needs.detect-version-bump.outputs.current_version }}"
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern xos-wasm.zip --dir prior-wasm --clobber
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            artifact_id="${{ needs.detect-version-bump.outputs.wasm_artifact_id }}"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > prior-wasm.zip
+            unzip -o prior-wasm.zip -d prior-wasm
           fi
-      - name: Publish
-        if: steps.version-check.outputs.exists != 'true'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --no-verify
-      - id: set-output
-        if: steps.version-check.outputs.exists != 'true'
-        run: echo "published=true" >> "$GITHUB_OUTPUT"
+          test -s prior-wasm/xos-wasm.zip
 
-  publish-github-release:
-    name: Tag commit and publish GitHub release
+      - name: 📤 Re-upload for this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
+          path: prior-wasm/xos-wasm.zip
+          if-no-files-found: error
+
+  publish-rust:
+    name: 📦 crates.io
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build, publish-rust]
+    needs: [detect-version-bump]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      - name: 📚 Apt deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: 🦀 Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: 📤 cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo publish --no-verify 2>&1 | tee /tmp/cargo-publish.log; then
+            exit 0
+          fi
+          if grep -qi "already exists" /tmp/cargo-publish.log; then
+            echo "crate already published; continuing"
+            exit 0
+          fi
+          exit 1
+
+  publish-github-release:
+    name: 🚀 GH release
+    runs-on: ubuntu-latest
+    needs: [detect-version-bump, wasm-build, wasm-reuse, publish-rust]
+    if: |
+      always() &&
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      (needs.publish-rust.result == 'success' || needs.publish-rust.result == 'skipped') &&
+      (needs.wasm-build.result == 'success' || needs.wasm-build.result == 'skipped') &&
+      (needs.wasm-reuse.result == 'success' || needs.wasm-reuse.result == 'skipped')
+    steps:
+      - name: 📥 Checkout deep
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download wasm zip artifact
+      - name: ⬇️ Fetch wasm
         uses: actions/download-artifact@v4
         with:
-          name: xos-wasm-zip
+          name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
           path: wasm-artifact
 
-      - name: Assert downloaded wasm zip
+      - name: ✅ Verify zip
         shell: bash
         run: |
           set -euo pipefail
           test -s wasm-artifact/xos-wasm.zip
           ls -lh wasm-artifact/xos-wasm.zip
 
-      - name: Create and push tag
+      - name: 🏷️ Push tag
         id: tag
         shell: bash
         run: |
@@ -139,7 +258,7 @@ jobs:
             git push origin "${tag}"
           fi
 
-      - name: Create GitHub release
+      - name: 🎉 Ensure release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -155,7 +274,7 @@ jobs:
               --generate-notes
           fi
 
-      - name: Upload wasm zip asset
+      - name: 📎 Upload asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

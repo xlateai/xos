@@ -103,14 +103,12 @@ class _MeshNode:
 
 def connect(id="default", mode="local"):
     """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
-    ``local``, ``lan``, or ``online`` (``online`` raises until implemented). For ``lan``, run
+    ``local``, ``lan``, or ``online``. For ``lan``/``online``, run
     ``xos login --offline`` first so ``authentication.json`` and ``node_identity.json`` exist;
-    LAN uses the per-machine node keypair from ``node_identity.json`` (no password prompt).
+    both use the per-machine node keypair from ``node_identity.json`` (no password prompt).
     """
     mode = (mode or "local").lower()
-    if mode == "online":
-        raise NotImplementedError("xos.mesh mode 'online' is not implemented yet")
-    if mode not in ("local", "lan"):
+    if mode not in ("local", "lan", "online"):
         raise ValueError("xos.mesh.connect: mode must be 'local', 'lan', or 'online'")
     _mesh_connect(id, mode)
     return Mesh(id, mode)

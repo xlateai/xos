@@ -1,4 +1,4 @@
-name: wasm ci test
+name: 📦 Wasm build
 
 permissions:
   contents: read
@@ -8,92 +8,54 @@ on:
   #   branches:
   #     - "**"
   workflow_call:
+    inputs:
+      docker_image:
+        description: Docker image used as build container
+        required: false
+        type: string
+        default: xlateai/xos:latest
+      artifact_name:
+        description: Artifact name to upload
+        required: false
+        type: string
+        default: xos-wasm-zip
   workflow_dispatch:
 
 jobs:
   wasm-build-test:
-    name: Build and verify wasm zip
+    name: 📦 Wasm Docker
     runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker_image || 'xlateai/xos:latest' }}
     env:
       CARGO_TERM_COLOR: always
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: 2G
+      WASM_PACK_VERSION: "0.13.1"
 
     steps:
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux build deps
+      - name: 🦀 Show versions
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev zip
+          rustc --version
+          cargo --version
+          wasm-pack --version
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Ensure wasm target installed
+      - name: 🎯 Wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Setup compiler cache (sccache)
-        uses: mozilla-actions/sccache-action@v0.0.5
-
-      - name: Enable sccache if available
-        shell: bash
+      - name: 🧰 Install native deps (bindgen/cmake)
         run: |
-          set +e
-          if sccache --start-server && sccache --show-stats >/dev/null 2>&1; then
-            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-            echo "Using sccache for this run."
-          else
-            echo "Sccache backend unavailable; falling back to plain rustc."
-            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-          fi
-          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential clang cmake libclang-dev
 
-      - name: Cache Rust dependencies and build outputs
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          cache-all-crates: true
-          shared-key: xos-rust-global-cache
-          add-job-id-key: false
+      - name: 🔨 Install bins
+        run: cargo install --path . --locked --force --root /usr/local --bin xos --bin xpy --bin xrs
 
-      - name: Cache wasm-pack binary
-        id: cache-wasm-pack
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            wasm-pack-${{ runner.os }}-
+      - name: 📦 Compile wasm
+        run: xos compile --wasm
 
-      - name: Install wasm-pack
-        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
-        run: cargo install wasm-pack
-
-      - name: Ensure wasm-pack installed
-        run: |
-          command -v wasm-pack >/dev/null 2>&1 || cargo install wasm-pack
-
-      - name: Verify wasm-pack installation
-        run: wasm-pack --version
-
-      - name: Reset sccache stats
-        run: sccache --zero-stats || true
-
-      - name: Build xos release
-        run: cargo build --release -p xos
-
-      - name: Build wasm output zip
-        run: cargo run --release --bin xos -- compile --wasm
-
-      - name: Show sccache stats
-        run: sccache --show-stats || true
-
-      - name: Print wasm zip size
+      - name: 📏 Zip metrics
         run: |
           zip_path="wasm-compiled-xos-output/xos-wasm.zip"
           test -s "$zip_path"
@@ -103,14 +65,14 @@ jobs:
           echo "Zip size (bytes): $bytes"
           echo "- wasm zip size: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Assert wasm zip exists
+      - name: ✅ Assert zip
         run: |
           test -s wasm-compiled-xos-output/xos-wasm.zip
           echo "Found wasm-compiled-xos-output/xos-wasm.zip"
 
-      - name: Upload wasm zip artifact
+      - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xos-wasm-zip
+          name: ${{ inputs.artifact_name || 'xos-wasm-zip' }}
           path: wasm-compiled-xos-output/xos-wasm.zip
           if-no-files-found: error

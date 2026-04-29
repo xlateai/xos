@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 use burn::tensor::DType;
+#[cfg(not(target_arch = "wasm32"))]
 use burn_store::{BurnpackStore, ModuleStore};
 use rustpython_vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
 
@@ -151,6 +153,7 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
     ))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args;
     let model = parse_string_arg(av.first(), "tiny", vm)?;
@@ -292,6 +295,14 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .set_item("parameters", params.as_object().to_owned(), vm)
         .ok();
     Ok(payload.into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn whisper_load_payload(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(to_py_err(
+        vm,
+        "Burn weight payload inspection is unavailable on wasm builds",
+    ))
 }
 
 fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {

@@ -21,6 +21,8 @@ use super::lan_crypto::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::auth::{is_logged_in, load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
+#[cfg(not(target_arch = "wasm32"))]
+use sha2::{Digest, Sha256};
 
 const WIRE_VERSION: u32 = 2;
 
@@ -39,6 +41,10 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 
 /// TCP read timeout per mesh leg. Must stay **greater** than [`HEARTBEAT_INTERVAL`] so idle links stay up.
 const MESH_READ_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_ENV: &str = "XOS_RELAY_LINK";
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_DEFAULT: &str = "http://xos.xlate.ai:47333";
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
     WireEnvelope {
@@ -176,6 +182,14 @@ struct WireEnvelope {
     payload: serde_json::Value,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct OnlineRelayClient {
+    base: String,
+    session_id: String,
+    http: reqwest::blocking::Client,
+}
+
 /// Transport scope for [`MeshSession::join`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshMode {
@@ -183,6 +197,8 @@ pub enum MeshMode {
     Local,
     /// Coordinator binds `0.0.0.0` on TCP; LAN peers locate it via UDP broadcast on a derived port.
     Lan,
+    /// Online/global transport. Phase 1 currently reuses encrypted LAN handshake + TCP mesh path.
+    Online,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +220,16 @@ fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {
         Some(t) => t == my_rank && from != my_rank,
         None => from != my_rank,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn online_lookup_key(account_aid: &str, channel_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(account_aid.as_bytes());
+    hasher.update(b":");
+    hasher.update(channel_id.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Rank 0 + one live TCP per connected peer. Call when a peer disconnects so sends skip stale sockets.
@@ -548,6 +574,10 @@ enum MeshRole {
     Client {
         stream: Arc<Mutex<TcpStream>>,
     },
+    #[cfg(not(target_arch = "wasm32"))]
+    OnlineClient {
+        relay: OnlineRelayClient,
+    },
 }
 
 fn attach_mesh_heartbeat(session: &MeshSession) {
@@ -620,7 +650,49 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                 });
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        MeshRole::OnlineClient { .. } => {}
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_base_url() -> String {
+    let raw = std::env::var(RELAY_ENV).unwrap_or_else(|_| RELAY_DEFAULT.to_string());
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        RELAY_DEFAULT.to_string()
+    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_post_json(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let res = http
+        .post(url)
+        .json(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!("relay http {}", res.status()));
+    }
+    let v = res.json::<serde_json::Value>().map_err(|e| e.to_string())?;
+    if let Some(false) = v.get("ok").and_then(|x| x.as_bool()) {
+        let msg = v
+            .get("error")
+            .and_then(|x| x.as_str())
+            .unwrap_or("relay request failed");
+        return Err(format!("relay {path}: {msg}"));
+    }
+    Ok(v)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -980,6 +1052,130 @@ fn mesh_session_from_client_addr(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn mesh_session_from_online_relay(
+    mesh_id: &str,
+    identity: Arc<UnlockedNodeIdentity>,
+    account_aid: &str,
+) -> Result<MeshSession, String> {
+    let relay_base = relay_base_url();
+    let http = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mesh_hash_key = online_lookup_key(account_aid, mesh_id);
+    let node_hash_key = identity.node_id();
+    let connect = relay_post_json(
+        &http,
+        &relay_base,
+        "/mesh/connect",
+        &json!({
+            "mesh_hash_key": mesh_hash_key,
+            "node_hash_key": node_hash_key,
+            "node_name": identity.node_name,
+        }),
+    )?;
+    let session_id = connect
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "relay connect missing session_id".to_string())?
+        .to_string();
+    let rank = connect
+        .get("rank")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let num_nodes = connect
+        .get("num_nodes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+
+    let inbox = Arc::new(Inbox::new());
+    let num_nodes_a = Arc::new(AtomicU32::new(num_nodes.max(1)));
+    let connected = Arc::new(AtomicU32::new(1));
+    let shutdown = Arc::new(AtomicU32::new(0));
+    let rank_a = Arc::new(AtomicU32::new(rank));
+    let relay = OnlineRelayClient {
+        base: relay_base,
+        session_id,
+        http: http.clone(),
+    };
+
+    let session = MeshSession {
+        rank_atomic: Arc::clone(&rank_a),
+        node_id: node_hash_key,
+        node_name: identity.node_name.clone(),
+        num_nodes: Arc::clone(&num_nodes_a),
+        connected: Arc::clone(&connected),
+        inbox: Arc::clone(&inbox),
+        role: MeshRole::OnlineClient {
+            relay: relay.clone(),
+        },
+        shutdown: Arc::clone(&shutdown),
+        lan_host: None,
+        lan_client: None,
+    };
+
+    let inbox_r = Arc::clone(&inbox);
+    thread::spawn(move || {
+        loop {
+            if shutdown.load(Ordering::SeqCst) != 0 {
+                break;
+            }
+            let polled = relay_post_json(
+                &http,
+                &relay.base,
+                "/mesh/poll",
+                &json!({"session_id": relay.session_id}),
+            );
+            match polled {
+                Ok(v) => {
+                    if let Some(r) = v.get("rank").and_then(|x| x.as_u64()) {
+                        rank_a.store(r as u32, Ordering::SeqCst);
+                    }
+                    if let Some(n) = v.get("num_nodes").and_then(|x| x.as_u64()) {
+                        num_nodes_a.store((n as u32).max(1), Ordering::SeqCst);
+                    }
+                    if let Some(msgs) = v.get("messages").and_then(|x| x.as_array()) {
+                        for m in msgs {
+                            let kind = m
+                                .get("kind")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if kind.is_empty()
+                                || kind == MESH_HEARTBEAT_KIND
+                                || kind == MESH_TOPOLOGY_KIND
+                            {
+                                continue;
+                            }
+                            inbox_r.push(Packet {
+                                from_rank: m
+                                    .get("from_rank")
+                                    .and_then(|x| x.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                from_id: m
+                                    .get("from_id")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                kind,
+                                body: m.get("payload").cloned().unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                }
+                Err(_) => {
+                    connected.store(0, Ordering::SeqCst);
+                }
+            }
+            thread::sleep(Duration::from_millis(120));
+        }
+    });
+
+    Ok(session)
+}
+
 impl MeshSession {
     #[inline]
     pub fn rank(&self) -> u32 {
@@ -1044,6 +1240,10 @@ impl MeshSession {
                         )),
                     }
                 }
+                MeshMode::Online => Err(
+                    "online mesh requires identity-backed join; use MeshSession::join_with_identity(..., MeshMode::Online, ...)."
+                        .to_string(),
+                ),
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1062,6 +1262,10 @@ impl MeshSession {
                     "LAN mesh requires a local login identity. Run `xos login` first."
                         .into(),
                 ),
+                MeshMode::Online => Err(
+                    "Online mesh requires a local login identity. Run `xos login` first."
+                        .into(),
+                ),
             }
         }
     }
@@ -1074,31 +1278,37 @@ impl MeshSession {
         max_total_nodes: Option<u32>,
     ) -> Result<Self, String> {
         require_authorized_non_local_mesh(mode)?;
-        let port = port_for_mesh_id(mesh_id);
         let account_aid = {
             let auth = load_identity().map_err(|e| e.to_string())?;
             node_id_from_public_pem(auth.public_pem.as_str()).map_err(|e| e.to_string())?
         };
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
+            MeshMode::Online => mesh_session_from_online_relay(mesh_id, identity, account_aid.as_str()),
             MeshMode::Lan => {
                 check_join_interrupt()?;
+                let scoped_mesh_id = mesh_id.to_string();
+                let scoped_port = port_for_mesh_id(scoped_mesh_id.as_str());
                 // 1) Loopback first — fast when the coordinator is on this machine (discovery-first was
                 //    ~1s slower because UDP had to time out before every local join / first host bind).
                 // 2) UDP discovery for remote peers (e.g. Mac on the LAN).
                 // 3) Otherwise bind 0.0.0.0 and become coordinator.
-                let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                let loopback = SocketAddr::from(([127, 0, 0, 1], scoped_port));
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
                 }
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))? {
+                if let Some(remote) = lan_discover_coordinator(
+                    scoped_mesh_id.as_str(),
+                    scoped_port,
+                    Some(account_aid.as_str()),
+                )? {
                     return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
-                let any = SocketAddr::from(([0, 0, 0, 0], port));
+                let any = SocketAddr::from(([0, 0, 0, 0], scoped_port));
                 match TcpListener::bind(any) {
                     Ok(listener) => mesh_session_from_host_listener(
                         listener,
-                        Some(mesh_id),
+                        Some(scoped_mesh_id.as_str()),
                         Some(identity),
                         max_total_nodes,
                     ),
@@ -1106,8 +1316,11 @@ impl MeshSession {
                         thread::sleep(Duration::from_millis(80));
                         if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                             Ok(s)
-                        } else if let Some(remote) =
-                            lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))?
+                        } else if let Some(remote) = lan_discover_coordinator(
+                            scoped_mesh_id.as_str(),
+                            scoped_port,
+                            Some(account_aid.as_str()),
+                        )?
                         {
                             mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
@@ -1115,7 +1328,7 @@ impl MeshSession {
                         }
                     }
                     Err(e) => Err(format!(
-                        "lan mesh: could not bind 0.0.0.0:{port} (is another app using it?): {e}"
+                        "mesh (lan/online): could not bind 0.0.0.0:{scoped_port} (is another app using it?): {e}"
                     )),
                 }
             }
@@ -1160,7 +1373,7 @@ impl MeshSession {
             from_id: self.node_id.clone(),
             kind: kind.to_string(),
             to,
-            payload,
+            payload: payload.clone(),
         };
 
         match &self.role {
@@ -1271,6 +1484,18 @@ impl MeshSession {
                     e.to_string()
                 })
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            MeshRole::OnlineClient { relay } => {
+                let body = json!({
+                    "session_id": relay.session_id,
+                    "to_rank": to,
+                    "kind": kind,
+                    "payload": payload,
+                    "from_rank": self.rank_atomic.load(Ordering::SeqCst),
+                    "from_id": self.node_id,
+                });
+                relay_post_json(&relay.http, &relay.base, "/mesh/send", &body).map(|_| ())
+            }
         }
     }
 }
@@ -1278,6 +1503,15 @@ impl MeshSession {
 impl Drop for MeshSession {
     fn drop(&mut self) {
         self.shutdown.fetch_add(1, Ordering::SeqCst);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let MeshRole::OnlineClient { relay } = &self.role {
+            let _ = relay_post_json(
+                &relay.http,
+                &relay.base,
+                "/mesh/disconnect",
+                &json!({"session_id": relay.session_id}),
+            );
+        }
     }
 }
 
