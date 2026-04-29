@@ -32,6 +32,8 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
       docker_tag_exists: ${{ steps.check.outputs.docker_tag_exists }}
+      wasm_artifact_exists: ${{ steps.check.outputs.wasm_artifact_exists }}
+      wasm_artifact_id: ${{ steps.check.outputs.wasm_artifact_id }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -50,6 +52,8 @@ jobs:
           bumped=false
           release_exists=false
           docker_tag_exists=false
+          wasm_artifact_exists=false
+          wasm_artifact_id=""
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             release_exists=true
@@ -66,11 +70,23 @@ jobs:
             docker_tag_exists=true
           fi
 
+          wasm_artifact_name="xos-wasm-zip-v${current_version}"
+          wasm_artifact_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --paginate \
+              --jq ".artifacts[] | select(.expired == false) | select(.name == \"${wasm_artifact_name}\") | .id" \
+              | head -n1 || true
+          )"
+          if [ -n "${wasm_artifact_id}" ]; then
+            wasm_artifact_exists=true
+          fi
+
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${release_exists}" >> "$GITHUB_OUTPUT"
           echo "docker_tag_exists=${docker_tag_exists}" >> "$GITHUB_OUTPUT"
+          echo "wasm_artifact_exists=${wasm_artifact_exists}" >> "$GITHUB_OUTPUT"
+          echo "wasm_artifact_id=${wasm_artifact_id}" >> "$GITHUB_OUTPUT"
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
@@ -116,16 +132,44 @@ jobs:
     if: |
       always() &&
       needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.wasm_artifact_exists != 'true' &&
       (needs.publish-docker-image.result == 'success' || needs.publish-docker-image.result == 'skipped')
     uses: ./.github/workflows/wasm.yml
     with:
       docker_image: xlateai/xos:v${{ needs.detect-version-bump.outputs.current_version }}
+      artifact_name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
     secrets: inherit
+
+  wasm-reuse:
+    name: ♻️ Reuse wasm artifact
+    runs-on: ubuntu-latest
+    needs: [detect-version-bump]
+    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.wasm_artifact_exists == 'true'
+    steps:
+      - name: ⬇️ Download prior wasm artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_id="${{ needs.detect-version-bump.outputs.wasm_artifact_id }}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > prior-wasm.zip
+          rm -rf prior-wasm
+          mkdir -p prior-wasm
+          unzip -o prior-wasm.zip -d prior-wasm
+          test -s prior-wasm/xos-wasm.zip
+
+      - name: 📤 Re-upload for this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
+          path: prior-wasm/xos-wasm.zip
+          if-no-files-found: error
 
   publish-rust:
     name: 📦 crates.io
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build]
+    needs: [detect-version-bump]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -162,8 +206,13 @@ jobs:
   publish-github-release:
     name: 🚀 GH release
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build, publish-rust]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
+    needs: [detect-version-bump, wasm-build, wasm-reuse, publish-rust]
+    if: |
+      always() &&
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      (needs.publish-rust.result == 'success' || needs.publish-rust.result == 'skipped') &&
+      (needs.wasm-build.result == 'success' || needs.wasm-build.result == 'skipped') &&
+      (needs.wasm-reuse.result == 'success' || needs.wasm-reuse.result == 'skipped')
     steps:
       - name: 📥 Checkout deep
         uses: actions/checkout@v4
@@ -173,7 +222,7 @@ jobs:
       - name: ⬇️ Fetch wasm
         uses: actions/download-artifact@v4
         with:
-          name: xos-wasm-zip
+          name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
           path: wasm-artifact
 
       - name: ✅ Verify zip
