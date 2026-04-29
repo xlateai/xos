@@ -1644,8 +1644,15 @@ impl Application for TranscribeApp {
     }
 
     fn on_mouse_move(&mut self, state: &mut EngineState) {
+        // Only ignore moves while the contact point is still over the OSK (finger may continue into the transcript).
         if self.transcript_touch_started_on_keyboard {
-            return;
+            let shape = state.frame.shape();
+            let height = shape[0] as f32;
+            let (_, ky, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+            let keyboard_top_px = ky * height;
+            if state.mouse.y >= keyboard_top_px - 1.0 {
+                return;
+            }
         }
         if self.ui_bounds.transcript.is_some() && state.keyboard.onscreen.is_trackpad_mode() {
             if let Some(r) = self.ui_bounds.transcript {
@@ -1679,9 +1686,26 @@ impl Application for TranscribeApp {
         let Some((x0, y0, x1, y1)) = self.ui_bounds.transcript else {
             return;
         };
+        let shape = state.frame.shape();
+        let fh = shape[0] as f32;
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        if mx < x0 || mx > x1 || my < y0 || my > y1 {
+        let strictly_in_transcript_box =
+            mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+        // With OSK open, wheel/touch may report the pointer over waveform chrome or lateral margins;
+        // treat the whole safe strip above the keyboard as scrollable transcript.
+        let (_, kty_norm, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let keyboard_top_px = kty_norm * fh;
+        let (_sl, st, _ssw, _ssh) = safe_layout_pixels(state);
+        let osk_open = state.keyboard.onscreen.is_shown();
+        let fw = shape[1] as f32;
+        let relaxed_content_strip = osk_open
+            && my >= st
+            && my <= keyboard_top_px - OSK_CONTENT_GAP_PX
+            && mx >= 0.0
+            && mx <= fw;
+
+        if !strictly_in_transcript_box && !relaxed_content_strip {
             return;
         }
         if !delta_y.is_finite() || !(delta_y != 0.0) {

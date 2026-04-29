@@ -342,6 +342,37 @@ impl TranscriptTextView {
         self.dragging
     }
 
+    /// Autoscroll when the trackpad laser rests near the top/bottom clip of the transcript.
+    fn apply_laser_edge_autoscroll(&mut self, ly: Option<f32>, rect: (f32, f32, f32, f32)) {
+        let Some(ly) = ly else { return };
+        let (_, ry0, _, ry1) = rect;
+        let visible_height = (ry1 - ry0).max(1.0);
+        // Older 1%-of-height thresholds were unusably thin; ~8%+ with sane minimum matches finger/laser UX.
+        let edge_threshold = (visible_height * 0.085).clamp(24.0, visible_height * 0.42);
+        let dist_from_top = ly - ry0;
+        let dist_from_bottom = ry1 - ly;
+        let base_scroll_speed = 26.0_f32;
+        if dist_from_top >= 0.0 && dist_from_top <= edge_threshold {
+            let progress = 1.0 - (dist_from_top / edge_threshold.max(1.0));
+            let scroll_speed = base_scroll_speed * progress;
+            self.scroll_target = (self.scroll_target - scroll_speed).max(0.0);
+            self.scroll_y = self.scroll_target;
+            self.drag_scroll_momentum = 0.0;
+            self.wheel_accel_target = 0.0;
+            self.wheel_accel_smooth = 0.0;
+            self.stick_to_tail = false;
+        } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
+            let progress = 1.0 - (dist_from_bottom / edge_threshold.max(1.0));
+            let scroll_speed = base_scroll_speed * progress;
+            self.scroll_target += scroll_speed;
+            self.scroll_y = self.scroll_target;
+            self.drag_scroll_momentum = 0.0;
+            self.wheel_accel_target = 0.0;
+            self.wheel_accel_smooth = 0.0;
+            self.stick_to_tail = false;
+        }
+    }
+
     /// `rect` is `(x0, y0, x1, y1)` in frame pixels. Clips drawing to that rectangle.
     pub fn tick(&mut self, state: &mut EngineState, rect: (f32, f32, f32, f32)) {
         self.last_rect = rect;
@@ -477,28 +508,12 @@ impl TranscriptTextView {
         let vis_bottom = self.scroll_y + visible_height;
 
         if show_trackpad_laser && self.trackpad_active {
-            if let Some(ly) = self.trackpad_laser_y {
-                let edge_threshold = visible_height * 0.01;
-                let dist_from_top = ly - ry0;
-                let dist_from_bottom = ry1 - ly;
-                let base_scroll_speed = 15.0;
-                if dist_from_top >= 0.0 && dist_from_top <= edge_threshold {
-                    let progress = 1.0 - (dist_from_top / edge_threshold.max(1.0));
-                    let scroll_speed = base_scroll_speed * progress;
-                    self.scroll_target = (self.scroll_target - scroll_speed).max(0.0);
-                    self.scroll_y = self.scroll_target;
-                } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
-                    let progress = 1.0 - (dist_from_bottom / edge_threshold.max(1.0));
-                    let scroll_speed = base_scroll_speed * progress;
-                    self.scroll_target += scroll_speed;
-                    self.scroll_y = self.scroll_target;
-                }
-                if let (Some(lx), Some(ly)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
-                    let idx = self.find_nearest_char_index(lx, ly, rect);
-                    self.cursor_position = idx;
-                    if self.trackpad_selecting {
-                        self.selection_end = Some(idx);
-                    }
+            self.apply_laser_edge_autoscroll(self.trackpad_laser_y, rect);
+            if let (Some(lx), Some(ly)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                let idx = self.find_nearest_char_index(lx, ly, rect);
+                self.cursor_position = idx;
+                if self.trackpad_selecting {
+                    self.selection_end = Some(idx);
                 }
             }
         }
@@ -608,20 +623,28 @@ impl TranscriptTextView {
         let has_expand_selection =
             matches!((self.selection_start, self.selection_end), (Some(a), Some(b)) if a != b);
         if !has_expand_selection {
-            let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
-            let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round()
-                as i32;
-            let cx = (ox + self.smooth_cursor_x).round() as i32;
-            for y in cursor_top.max(0)..cursor_bottom.min(h_i) {
-                if cx < 0 || cx >= w_i {
-                    continue;
-                }
-                let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
-                if idx + 3 < buffer.len() {
-                    buffer[idx] = CURSOR_COLOR.0;
-                    buffer[idx + 1] = CURSOR_COLOR.1;
-                    buffer[idx + 2] = CURSOR_COLOR.2;
-                    buffer[idx + 3] = 255;
+            let cx_f = ox + self.smooth_cursor_x;
+            if cx_f >= rx0 && cx_f <= rx1 {
+                let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
+                let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round()
+                    as i32;
+                let cx = cx_f.round() as i32;
+                let y0 = cursor_top.max(ry0.floor() as i32).max(0);
+                let y1 = cursor_bottom.min(ry1.ceil() as i32).min(h_i);
+                if y0 < y1 && cx >= 0 && cx < w_i {
+                    for y in y0..y1 {
+                        let sy = y as f32;
+                        if sy < ry0 || sy > ry1 {
+                            continue;
+                        }
+                        let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx] = CURSOR_COLOR.0;
+                            buffer[idx + 1] = CURSOR_COLOR.1;
+                            buffer[idx + 2] = CURSOR_COLOR.2;
+                            buffer[idx + 3] = 255;
+                        }
+                    }
                 }
             }
         }
