@@ -5,9 +5,11 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [main, mesh-online]
     paths:
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "Dockerfile"
       - ".github/workflows/xos.yml"
       - ".github/workflows/wasm.yml"
   workflow_dispatch:
@@ -56,17 +58,56 @@ jobs:
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
-  wasm-build:
-    name: Build wasm package
+  publish-docker-image:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
     needs: [detect-version-bump]
     if: needs.detect-version-bump.outputs.bumped == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Docker tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: xlateai/xos
+          tags: |
+            type=raw,value=v${{ needs.detect-version-bump.outputs.current_version }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  wasm-build:
+    name: Build wasm package
+    needs: [detect-version-bump, publish-docker-image]
+    if: needs.detect-version-bump.outputs.bumped == 'true'
     uses: ./.github/workflows/wasm.yml
+    with:
+      docker_image: xlateai/xos:v${{ needs.detect-version-bump.outputs.current_version }}
     secrets: inherit
 
   publish-rust:
     name: Publish Rust crate
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build]
+    needs: [detect-version-bump, publish-docker-image, wasm-build]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -106,7 +147,7 @@ jobs:
   publish-github-release:
     name: Tag commit and publish GitHub release
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, wasm-build, publish-rust]
+    needs: [detect-version-bump, publish-docker-image, wasm-build, publish-rust]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -171,3 +212,4 @@ jobs:
           set -euo pipefail
           tag="${{ steps.tag.outputs.tag }}"
           gh release upload "${tag}" wasm-artifact/xos-wasm.zip --clobber
+

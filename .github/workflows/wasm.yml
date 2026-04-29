@@ -8,12 +8,20 @@ on:
   #   branches:
   #     - "**"
   workflow_call:
+    inputs:
+      docker_image:
+        description: Docker image used as build container
+        required: false
+        type: string
+        default: xlateai/xos:latest
   workflow_dispatch:
 
 jobs:
   wasm-build-test:
     name: Build and verify wasm zip
     runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker_image || 'xlateai/xos:latest' }}
     env:
       CARGO_TERM_COLOR: always
       SCCACHE_GHA_ENABLED: "true"
@@ -24,18 +32,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Linux build deps
+      - name: Show toolchain versions
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev zip
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Ensure wasm target installed
-        run: rustup target add wasm32-unknown-unknown
+          rustc --version
+          cargo --version
+          wasm-pack --version
 
       - name: Setup compiler cache (sccache)
         uses: mozilla-actions/sccache-action@v0.0.5
@@ -62,25 +63,8 @@ jobs:
           shared-key: xos-rust-global-cache
           add-job-id-key: false
 
-      - name: Cache wasm-pack binary
-        id: cache-wasm-pack
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/wasm-pack
-          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
-          restore-keys: |
-            wasm-pack-${{ runner.os }}-
-
-      - name: Install wasm-pack
-        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
-        run: cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked
-
-      - name: Ensure wasm-pack installed
-        run: |
-          command -v wasm-pack >/dev/null 2>&1 || cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked
-
-      - name: Verify wasm-pack installation
-        run: wasm-pack --version
+      - name: Ensure wasm target installed
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Reset sccache stats
         run: sccache --zero-stats || true
