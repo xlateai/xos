@@ -8,9 +8,12 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-# bindgen (`v4l2-sys-mit`, etc.) needs libclang at compile time
+# bindgen (`v4l2-sys-mit`, etc.), `sentencepiece-sys` CMake build
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
     clang \
+    git \
     libclang-dev \
     pkg-config \
     libasound2-dev \
@@ -28,6 +31,7 @@ RUN cargo build --release --locked --bin xos --bin xpy --bin xrs
 FROM rust:1.94-bookworm AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    git \
     pkg-config \
     libasound2-dev \
     libasound2 \
