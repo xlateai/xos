@@ -14,6 +14,11 @@ on:
       - ".github/workflows/wasm.yml"
   workflow_dispatch:
 
+# One release pipeline at a time (extra pushes queue instead of overlapping publishes).
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   detect-version-bump:
     name: 🔍 Release gate
@@ -87,6 +92,10 @@ jobs:
             type=raw,value=v${{ needs.detect-version-bump.outputs.current_version }}
             type=raw,value=latest
 
+      - name: ⬇️ Pull latest image
+        shell: bash
+        run: docker pull xlateai/xos:latest || true
+
       - name: 📤 Build push
         uses: docker/build-push-action@v6
         with:
@@ -95,8 +104,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   wasm-build:
     name: 📦 Wasm job
@@ -121,14 +128,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: 🦀 Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: 💾 Cargo cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          cache-all-crates: true
-          shared-key: xos-rust-global-cache
-          add-job-id-key: false
       - name: 🔍 Registry check
         id: version-check
         shell: bash

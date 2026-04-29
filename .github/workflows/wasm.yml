@@ -24,8 +24,6 @@ jobs:
       image: ${{ inputs.docker_image || 'xlateai/xos:latest' }}
     env:
       CARGO_TERM_COLOR: always
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: 2G
       WASM_PACK_VERSION: "0.13.1"
 
     steps:
@@ -38,45 +36,14 @@ jobs:
           cargo --version
           wasm-pack --version
 
-      - name: ⚡ Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.5
-
-      - name: ⚡ Enable cache
-        shell: bash
-        run: |
-          set +e
-          if sccache --start-server && sccache --show-stats >/dev/null 2>&1; then
-            echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-            echo "Using sccache for this run."
-          else
-            echo "Sccache backend unavailable; falling back to plain rustc."
-            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-          fi
-          set -e
-
-      - name: 💾 Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          cache-all-crates: true
-          shared-key: xos-rust-global-cache
-          add-job-id-key: false
-
       - name: 🎯 Wasm target
         run: rustup target add wasm32-unknown-unknown
-
-      - name: 📊 Reset stats
-        run: sccache --zero-stats || true
 
       - name: 🔨 Install bins
         run: cargo install --path . --locked --root /usr/local --bin xos --bin xpy --bin xrs
 
       - name: 📦 Compile wasm
         run: xos compile --wasm
-
-      - name: 📊 sccache stats
-        run: sccache --show-stats || true
 
       - name: 📏 Zip metrics
         run: |
