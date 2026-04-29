@@ -1,4 +1,4 @@
-name: xos pipeline
+name: 🔁 xos CI
 
 permissions:
   contents: write
@@ -16,7 +16,7 @@ on:
 
 jobs:
   detect-version-bump:
-    name: Detect release need
+    name: 🔍 Release gate
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.check.outputs.changed }}
@@ -26,8 +26,10 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
     steps:
-      - uses: actions/checkout@v4
-      - id: check
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      - name: 🏷️ Version check
+        id: check
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -59,23 +61,24 @@ jobs:
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
   publish-docker-image:
-    name: Build and push Docker image
+    name: 🐳 Push image
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: 🔧 Setup Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: 🔐 Hub login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Generate Docker tags and labels
+      - name: 🏷️ Image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -84,7 +87,7 @@ jobs:
             type=raw,value=v${{ needs.detect-version-bump.outputs.current_version }}
             type=raw,value=latest
 
-      - name: Build and push Docker image
+      - name: 📤 Build push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -96,7 +99,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   wasm-build:
-    name: Build wasm package
+    name: 📦 Wasm job
     needs: [detect-version-bump, publish-docker-image]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     uses: ./.github/workflows/wasm.yml
@@ -105,17 +108,20 @@ jobs:
     secrets: inherit
 
   publish-rust:
-    name: Publish Rust crate
+    name: 📦 crates.io
     runs-on: ubuntu-latest
     needs: [detect-version-bump, publish-docker-image, wasm-build]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust dependencies and build outputs
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      - name: 📚 Apt deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: 🦀 Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: 💾 Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -123,7 +129,8 @@ jobs:
           cache-all-crates: true
           shared-key: xos-rust-global-cache
           add-job-id-key: false
-      - id: version-check
+      - name: 🔍 Registry check
+        id: version-check
         shell: bash
         run: |
           set -euo pipefail
@@ -135,39 +142,41 @@ jobs:
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish
+      - name: 📤 cargo publish
         if: steps.version-check.outputs.exists != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --no-verify
-      - id: set-output
+      - name: ✅ Mark published
+        id: set-output
         if: steps.version-check.outputs.exists != 'true'
         run: echo "published=true" >> "$GITHUB_OUTPUT"
 
   publish-github-release:
-    name: Tag commit and publish GitHub release
+    name: 🚀 GH release
     runs-on: ubuntu-latest
     needs: [detect-version-bump, publish-docker-image, wasm-build, publish-rust]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout deep
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download wasm zip artifact
+      - name: ⬇️ Fetch wasm
         uses: actions/download-artifact@v4
         with:
           name: xos-wasm-zip
           path: wasm-artifact
 
-      - name: Assert downloaded wasm zip
+      - name: ✅ Verify zip
         shell: bash
         run: |
           set -euo pipefail
           test -s wasm-artifact/xos-wasm.zip
           ls -lh wasm-artifact/xos-wasm.zip
 
-      - name: Create and push tag
+      - name: 🏷️ Push tag
         id: tag
         shell: bash
         run: |
@@ -188,7 +197,7 @@ jobs:
             git push origin "${tag}"
           fi
 
-      - name: Create GitHub release
+      - name: 🎉 Ensure release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -204,7 +213,7 @@ jobs:
               --generate-notes
           fi
 
-      - name: Upload wasm zip asset
+      - name: 📎 Upload asset
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

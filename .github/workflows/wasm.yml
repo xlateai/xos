@@ -1,4 +1,4 @@
-name: wasm ci test
+name: 📦 Wasm build
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ on:
 
 jobs:
   wasm-build-test:
-    name: Build and verify wasm zip
+    name: 📦 Wasm Docker
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.docker_image || 'xlateai/xos:latest' }}
@@ -29,19 +29,19 @@ jobs:
       WASM_PACK_VERSION: "0.13.1"
 
     steps:
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain versions
+      - name: 🦀 Show versions
         run: |
           rustc --version
           cargo --version
           wasm-pack --version
 
-      - name: Setup compiler cache (sccache)
+      - name: ⚡ Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.5
 
-      - name: Enable sccache if available
+      - name: ⚡ Enable cache
         shell: bash
         run: |
           set +e
@@ -54,7 +54,7 @@ jobs:
           fi
           set -e
 
-      - name: Cache Rust dependencies and build outputs
+      - name: 💾 Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -63,22 +63,22 @@ jobs:
           shared-key: xos-rust-global-cache
           add-job-id-key: false
 
-      - name: Ensure wasm target installed
+      - name: 🎯 Wasm target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Reset sccache stats
+      - name: 📊 Reset stats
         run: sccache --zero-stats || true
 
-      - name: Build xos release
+      - name: 🔨 Build xos
         run: cargo build --release -p xos
 
-      - name: Build wasm output zip
+      - name: 📦 Compile wasm
         run: cargo run --release --bin xos -- compile --wasm
 
-      - name: Show sccache stats
+      - name: 📊 sccache stats
         run: sccache --show-stats || true
 
-      - name: Print wasm zip size
+      - name: 📏 Zip metrics
         run: |
           zip_path="wasm-compiled-xos-output/xos-wasm.zip"
           test -s "$zip_path"
@@ -88,12 +88,12 @@ jobs:
           echo "Zip size (bytes): $bytes"
           echo "- wasm zip size: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Assert wasm zip exists
+      - name: ✅ Assert zip
         run: |
           test -s wasm-compiled-xos-output/xos-wasm.zip
           echo "Found wasm-compiled-xos-output/xos-wasm.zip"
 
-      - name: Upload wasm zip artifact
+      - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: xos-wasm-zip
