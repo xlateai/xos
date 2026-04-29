@@ -13,6 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
+# Path crates from [patch]: must exist before chef cook (chef stage has no full tree yet)
+COPY src/core/patches/ct2rs src/core/patches/ct2rs
+COPY src/core/patches/gpu-allocator src/core/patches/gpu-allocator
+COPY src/core/patches/sentencepiece-sys src/core/patches/sentencepiece-sys
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --locked --bin xos --bin xpy --bin xrs
