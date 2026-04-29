@@ -30,6 +30,7 @@ jobs:
       crate_name: ${{ steps.check.outputs.crate_name }}
       tag: ${{ steps.check.outputs.tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
+      docker_tag_exists: ${{ steps.check.outputs.docker_tag_exists }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -47,6 +48,7 @@ jobs:
           changed=false
           bumped=false
           release_exists=false
+          docker_tag_exists=false
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             release_exists=true
@@ -58,10 +60,16 @@ jobs:
             bumped=true
           fi
 
+          docker_tag="xlateai/xos:v${current_version}"
+          if docker manifest inspect "${docker_tag}" >/dev/null 2>&1; then
+            docker_tag_exists=true
+          fi
+
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${release_exists}" >> "$GITHUB_OUTPUT"
+          echo "docker_tag_exists=${docker_tag_exists}" >> "$GITHUB_OUTPUT"
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
@@ -69,7 +77,7 @@ jobs:
     name: 🐳 Push image
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
+    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.docker_tag_exists != 'true'
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -92,10 +100,6 @@ jobs:
             type=raw,value=v${{ needs.detect-version-bump.outputs.current_version }}
             type=raw,value=latest
 
-      - name: ⬇️ Pull latest image
-        shell: bash
-        run: docker pull xlateai/xos:latest || true
-
       - name: 📤 Build push
         uses: docker/build-push-action@v6
         with:
@@ -108,7 +112,10 @@ jobs:
   wasm-build:
     name: 📦 Wasm job
     needs: [detect-version-bump, publish-docker-image]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
+    if: |
+      always() &&
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      (needs.publish-docker-image.result == 'success' || needs.publish-docker-image.result == 'skipped')
     uses: ./.github/workflows/wasm.yml
     with:
       docker_image: xlateai/xos:v${{ needs.detect-version-bump.outputs.current_version }}
@@ -117,7 +124,7 @@ jobs:
   publish-rust:
     name: 📦 crates.io
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, publish-docker-image, wasm-build]
+    needs: [detect-version-bump, wasm-build]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     outputs:
       published: ${{ steps.set-output.outputs.published }}
@@ -154,7 +161,7 @@ jobs:
   publish-github-release:
     name: 🚀 GH release
     runs-on: ubuntu-latest
-    needs: [detect-version-bump, publish-docker-image, wasm-build, publish-rust]
+    needs: [detect-version-bump, wasm-build, publish-rust]
     if: needs.detect-version-bump.outputs.bumped == 'true'
     steps:
       - name: 📥 Checkout deep
