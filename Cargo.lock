@@ -12106,6 +12106,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rand_pcg",
  "rayon",
+ "reqwest",
  "rfd",
  "ringbuf",
  "rsa",

@@ -23,6 +23,8 @@ use super::lan_crypto::{
 use crate::auth::{is_logged_in, load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
 #[cfg(not(target_arch = "wasm32"))]
 use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
+use uuid::Uuid;
 
 const WIRE_VERSION: u32 = 2;
 
@@ -41,6 +43,10 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 
 /// TCP read timeout per mesh leg. Must stay **greater** than [`HEARTBEAT_INTERVAL`] so idle links stay up.
 const MESH_READ_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_ENV: &str = "XOS_RELAY_LINK";
+#[cfg(not(target_arch = "wasm32"))]
+const RELAY_DEFAULT: &str = "https://xos.xlate.ai";
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
     WireEnvelope {
@@ -176,6 +182,14 @@ struct WireEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     to: Option<u32>,
     payload: serde_json::Value,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
+struct OnlineRelayClient {
+    base: String,
+    session_id: String,
+    http: reqwest::blocking::Client,
 }
 
 /// Transport scope for [`MeshSession::join`].
@@ -562,6 +576,10 @@ enum MeshRole {
     Client {
         stream: Arc<Mutex<TcpStream>>,
     },
+    #[cfg(not(target_arch = "wasm32"))]
+    OnlineClient {
+        relay: OnlineRelayClient,
+    },
 }
 
 fn attach_mesh_heartbeat(session: &MeshSession) {
@@ -634,7 +652,41 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
                 });
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        MeshRole::OnlineClient { .. } => {}
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_base_url() -> String {
+    let raw = std::env::var(RELAY_ENV).unwrap_or_else(|_| RELAY_DEFAULT.to_string());
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        RELAY_DEFAULT.to_string()
+    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_post_json(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let res = http
+        .post(url)
+        .json(body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!("relay http {}", res.status()));
+    }
+    res.json::<serde_json::Value>().map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -994,6 +1046,130 @@ fn mesh_session_from_client_addr(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn mesh_session_from_online_relay(
+    mesh_id: &str,
+    identity: Arc<UnlockedNodeIdentity>,
+    account_aid: &str,
+) -> Result<MeshSession, String> {
+    let relay_base = relay_base_url();
+    let http = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mesh_hash_key = online_lookup_key(account_aid, mesh_id);
+    let node_hash_key = identity.node_id();
+    let connect = relay_post_json(
+        &http,
+        &relay_base,
+        "/mesh/connect",
+        &json!({
+            "mesh_hash_key": mesh_hash_key,
+            "node_hash_key": node_hash_key,
+            "node_name": identity.node_name,
+        }),
+    )?;
+    let session_id = connect
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "relay connect missing session_id".to_string())?
+        .to_string();
+    let rank = connect
+        .get("rank")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let num_nodes = connect
+        .get("num_nodes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+
+    let inbox = Arc::new(Inbox::new());
+    let num_nodes_a = Arc::new(AtomicU32::new(num_nodes.max(1)));
+    let connected = Arc::new(AtomicU32::new(1));
+    let shutdown = Arc::new(AtomicU32::new(0));
+    let rank_a = Arc::new(AtomicU32::new(rank));
+    let relay = OnlineRelayClient {
+        base: relay_base,
+        session_id,
+        http: http.clone(),
+    };
+
+    let session = MeshSession {
+        rank_atomic: Arc::clone(&rank_a),
+        node_id: node_hash_key,
+        node_name: identity.node_name.clone(),
+        num_nodes: Arc::clone(&num_nodes_a),
+        connected: Arc::clone(&connected),
+        inbox: Arc::clone(&inbox),
+        role: MeshRole::OnlineClient {
+            relay: relay.clone(),
+        },
+        shutdown: Arc::clone(&shutdown),
+        lan_host: None,
+        lan_client: None,
+    };
+
+    let inbox_r = Arc::clone(&inbox);
+    thread::spawn(move || {
+        loop {
+            if shutdown.load(Ordering::SeqCst) != 0 {
+                break;
+            }
+            let polled = relay_post_json(
+                &http,
+                &relay.base,
+                "/mesh/poll",
+                &json!({"session_id": relay.session_id}),
+            );
+            match polled {
+                Ok(v) => {
+                    if let Some(r) = v.get("rank").and_then(|x| x.as_u64()) {
+                        rank_a.store(r as u32, Ordering::SeqCst);
+                    }
+                    if let Some(n) = v.get("num_nodes").and_then(|x| x.as_u64()) {
+                        num_nodes_a.store((n as u32).max(1), Ordering::SeqCst);
+                    }
+                    if let Some(msgs) = v.get("messages").and_then(|x| x.as_array()) {
+                        for m in msgs {
+                            let kind = m
+                                .get("kind")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if kind.is_empty()
+                                || kind == MESH_HEARTBEAT_KIND
+                                || kind == MESH_TOPOLOGY_KIND
+                            {
+                                continue;
+                            }
+                            inbox_r.push(Packet {
+                                from_rank: m
+                                    .get("from_rank")
+                                    .and_then(|x| x.as_u64())
+                                    .unwrap_or(0)
+                                    as u32,
+                                from_id: m
+                                    .get("from_id")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                kind,
+                                body: m.get("payload").cloned().unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                }
+                Err(_) => {
+                    connected.store(0, Ordering::SeqCst);
+                }
+            }
+            thread::sleep(Duration::from_millis(120));
+        }
+    });
+
+    Ok(session)
+}
+
 impl MeshSession {
     #[inline]
     pub fn rank(&self) -> u32 {
@@ -1103,13 +1279,10 @@ impl MeshSession {
         };
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
-            MeshMode::Lan | MeshMode::Online => {
+            MeshMode::Online => mesh_session_from_online_relay(mesh_id, identity, account_aid.as_str()),
+            MeshMode::Lan => {
                 check_join_interrupt()?;
-                let scoped_mesh_id = if mode == MeshMode::Online {
-                    online_lookup_key(account_aid.as_str(), mesh_id)
-                } else {
-                    mesh_id.to_string()
-                };
+                let scoped_mesh_id = mesh_id.to_string();
                 let scoped_port = port_for_mesh_id(scoped_mesh_id.as_str());
                 // 1) Loopback first — fast when the coordinator is on this machine (discovery-first was
                 //    ~1s slower because UDP had to time out before every local join / first host bind).
@@ -1154,7 +1327,6 @@ impl MeshSession {
                     )),
                 }
             }
-                MeshMode::Online => Err("online mesh is not available on wasm targets.".to_string()),
         }
     }
 
@@ -1307,6 +1479,18 @@ impl MeshSession {
                     e.to_string()
                 })
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            MeshRole::OnlineClient { relay } => {
+                let body = json!({
+                    "session_id": relay.session_id,
+                    "to_rank": to,
+                    "kind": kind,
+                    "payload": payload,
+                    "from_rank": self.rank_atomic.load(Ordering::SeqCst),
+                    "from_id": self.node_id,
+                });
+                relay_post_json(&relay.http, &relay.base, "/mesh/send", &body).map(|_| ())
+            }
         }
     }
 }
@@ -1314,6 +1498,15 @@ impl MeshSession {
 impl Drop for MeshSession {
     fn drop(&mut self) {
         self.shutdown.fetch_add(1, Ordering::SeqCst);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let MeshRole::OnlineClient { relay } = &self.role {
+            let _ = relay_post_json(
+                &relay.http,
+                &relay.base,
+                "/mesh/disconnect",
+                &json!({"session_id": relay.session_id}),
+            );
+        }
     }
 }
 

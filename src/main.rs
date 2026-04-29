@@ -5,6 +5,16 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use tiny_http::{Method, Response, Server};
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::json;
+#[cfg(not(target_arch = "wasm32"))]
+use uuid::Uuid;
 use xos::apps::{AppCommands, run_app_command};
 use xos::python_api::{parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive};
 
@@ -185,6 +195,16 @@ enum Commands {
     Off,
     #[command(name = "daemon-internal", hide = true)]
     DaemonInternal,
+    /// Run public online relay server for mode="online".
+    #[command(name = "relay")]
+    Relay {
+        /// Bind host (default: 0.0.0.0)
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        /// Bind port (default: 47333)
+        #[arg(long, default_value_t = 47333)]
+        port: u16,
+    },
 }
 
 /// ANSI orange (256-color) for `(uncommitted changes)` when stdout is a TTY.
@@ -341,6 +361,152 @@ fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct RelayNode {
+    session_id: String,
+    node_hash_key: String,
+    rank: u32,
+    queue: Vec<serde_json::Value>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct RelayMesh {
+    nodes: Vec<RelayNode>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct RelayState {
+    meshes: HashMap<String, RelayMesh>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_relay_server(bind: &str, port: u16) {
+    let addr = format!("{bind}:{port}");
+    let server = match Server::http(addr.as_str()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("❌ relay bind failed on {addr}: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("xos relay listening on http://{addr}");
+    let state = Arc::new(Mutex::new(RelayState::default()));
+    for mut req in server.incoming_requests() {
+        if req.method() != &Method::Post {
+            let _ = req.respond(Response::from_string("method not allowed").with_status_code(405));
+            continue;
+        }
+        let path = req.url().to_string();
+        let mut body = String::new();
+        let mut reader = req.as_reader();
+        let _ = std::io::Read::read_to_string(&mut reader, &mut body);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({}));
+        let resp = match path.as_str() {
+            "/mesh/connect" => {
+                let mesh_hash = v
+                    .get("mesh_hash_key")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let node_hash = v
+                    .get("node_hash_key")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if mesh_hash.is_empty() || node_hash.is_empty() {
+                    json!({"ok": false, "error": "mesh_hash_key and node_hash_key required"})
+                } else {
+                    let mut g = state.lock().unwrap();
+                    let mesh = g.meshes.entry(mesh_hash).or_default();
+                    mesh.nodes.retain(|n| n.node_hash_key != node_hash);
+                    let session_id = Uuid::new_v4().to_string();
+                    let rank = mesh.nodes.len() as u32;
+                    mesh.nodes.push(RelayNode {
+                        session_id: session_id.clone(),
+                        node_hash_key: node_hash,
+                        rank,
+                        queue: Vec::new(),
+                    });
+                    json!({"ok": true, "session_id": session_id, "rank": rank, "num_nodes": mesh.nodes.len()})
+                }
+            }
+            "/mesh/send" => {
+                let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
+                let to_rank = v.get("to_rank").and_then(|x| x.as_u64()).map(|x| x as u32);
+                let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let payload = v.get("payload").cloned().unwrap_or_else(|| json!({}));
+                let from_rank = v.get("from_rank").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+                let from_id = v.get("from_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let mut g = state.lock().unwrap();
+                let mut done = false;
+                for mesh in g.meshes.values_mut() {
+                    let sender_exists = mesh.nodes.iter().any(|n| n.session_id == sid);
+                    if !sender_exists {
+                        continue;
+                    }
+                    let msg = json!({
+                        "from_rank": from_rank,
+                        "from_id": from_id,
+                        "kind": kind,
+                        "payload": payload,
+                    });
+                    for n in &mut mesh.nodes {
+                        if n.session_id == sid {
+                            continue;
+                        }
+                        if let Some(t) = to_rank {
+                            if n.rank != t {
+                                continue;
+                            }
+                        }
+                        n.queue.push(msg.clone());
+                    }
+                    done = true;
+                    break;
+                }
+                if done { json!({"ok": true}) } else { json!({"ok": false, "error": "unknown session"}) }
+            }
+            "/mesh/poll" => {
+                let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
+                let mut g = state.lock().unwrap();
+                let mut out = json!({"ok": false, "error": "unknown session"});
+                for mesh in g.meshes.values_mut() {
+                    if let Some(node) = mesh.nodes.iter_mut().find(|n| n.session_id == sid) {
+                        let messages = std::mem::take(&mut node.queue);
+                        out = json!({
+                            "ok": true,
+                            "rank": node.rank,
+                            "num_nodes": mesh.nodes.len(),
+                            "messages": messages
+                        });
+                        break;
+                    }
+                }
+                out
+            }
+            "/mesh/disconnect" => {
+                let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
+                let mut g = state.lock().unwrap();
+                for mesh in g.meshes.values_mut() {
+                    if mesh.nodes.iter().any(|n| n.session_id == sid) {
+                        mesh.nodes.retain(|n| n.session_id != sid);
+                        for (idx, n) in mesh.nodes.iter_mut().enumerate() {
+                            n.rank = idx as u32;
+                        }
+                        break;
+                    }
+                }
+                json!({"ok": true})
+            }
+            _ => json!({"ok": false, "error": "unknown route"}),
+        };
+        let _ = req.respond(Response::from_string(resp.to_string()));
+    }
+}
+
 fn main() {
     let mut original_args: Vec<String> = std::env::args().collect();
 
@@ -379,6 +545,7 @@ fn main() {
                     | "status"
                     | "on"
                     | "off"
+                    | "relay"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -413,6 +580,7 @@ fn main() {
                     | "status"
                     | "on"
                     | "off"
+                    | "relay"
                     | "daemon-internal"
                     | "-h"
                     | "--help"
@@ -657,6 +825,17 @@ fn main() {
         Some(Commands::DaemonInternal) => {
             if let Err(e) = daemon::run_daemon_forever() {
                 eprintln!("❌ daemon error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Relay { bind, port }) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                run_relay_server(bind.as_str(), port);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                eprintln!("❌ relay is not available on wasm targets");
                 std::process::exit(1);
             }
         }
