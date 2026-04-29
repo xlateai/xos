@@ -242,13 +242,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mode = match mode_str.as_str() {
         "local" => MeshMode::Local,
         "lan" => MeshMode::Lan,
-        "online" => {
-            return Err(vm.new_exception_msg(
-                vm.ctx.exceptions.not_implemented_error.to_owned(),
-                "xos.mesh mode 'online' is not implemented yet (and will require login identity)."
-                    .to_owned(),
-            ));
-        }
+        "online" => MeshMode::Online,
         _ => {
             return Err(vm.new_value_error(format!(
                 "xos.mesh.connect: unknown mode {mode_str:?} (use 'local', 'lan', or 'online')"
@@ -256,10 +250,10 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     };
 
-    let session = if mode == MeshMode::Lan {
+    let session = if mode == MeshMode::Lan || mode == MeshMode::Online {
         if !has_identity() {
             return Err(vm.new_runtime_error(
-                "xos.mesh.connect(mode='lan') requires a local login identity. Run `xos login` first."
+                "xos.mesh.connect(mode='lan'|'online') requires a local login identity. Run `xos login` first."
                     .to_string(),
             ));
         }

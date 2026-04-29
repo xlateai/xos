@@ -215,6 +215,7 @@ impl TextMeshApp {
         let mode = match self.mode {
             MeshMode::Local => "LOCAL",
             MeshMode::Lan => "LAN",
+            MeshMode::Online => "ONLINE",
         };
         let left = format!(
             "● {} | mode {} | clients {} | rev {}",

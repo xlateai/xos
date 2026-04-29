@@ -21,6 +21,8 @@ use super::lan_crypto::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::auth::{is_logged_in, load_identity, node_id_from_public_pem, UnlockedNodeIdentity};
+#[cfg(not(target_arch = "wasm32"))]
+use sha2::{Digest, Sha256};
 
 const WIRE_VERSION: u32 = 2;
 
@@ -183,6 +185,8 @@ pub enum MeshMode {
     Local,
     /// Coordinator binds `0.0.0.0` on TCP; LAN peers locate it via UDP broadcast on a derived port.
     Lan,
+    /// Online/global transport. Phase 1 currently reuses encrypted LAN handshake + TCP mesh path.
+    Online,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +208,16 @@ fn should_deliver_locally(my_rank: u32, from: u32, to: Option<u32>) -> bool {
         Some(t) => t == my_rank && from != my_rank,
         None => from != my_rank,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn online_lookup_key(account_aid: &str, channel_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(account_aid.as_bytes());
+    hasher.update(b":");
+    hasher.update(channel_id.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Rank 0 + one live TCP per connected peer. Call when a peer disconnects so sends skip stale sockets.
@@ -1044,6 +1058,10 @@ impl MeshSession {
                         )),
                     }
                 }
+                MeshMode::Online => Err(
+                    "online mesh requires identity-backed join; use MeshSession::join_with_identity(..., MeshMode::Online, ...)."
+                        .to_string(),
+                ),
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1060,6 +1078,10 @@ impl MeshSession {
                 }
                 MeshMode::Lan => Err(
                     "LAN mesh requires a local login identity. Run `xos login` first."
+                        .into(),
+                ),
+                MeshMode::Online => Err(
+                    "Online mesh requires a local login identity. Run `xos login` first."
                         .into(),
                 ),
             }
@@ -1081,24 +1103,34 @@ impl MeshSession {
         };
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
-            MeshMode::Lan => {
+            MeshMode::Lan | MeshMode::Online => {
                 check_join_interrupt()?;
+                let scoped_mesh_id = if mode == MeshMode::Online {
+                    online_lookup_key(account_aid.as_str(), mesh_id)
+                } else {
+                    mesh_id.to_string()
+                };
+                let scoped_port = port_for_mesh_id(scoped_mesh_id.as_str());
                 // 1) Loopback first — fast when the coordinator is on this machine (discovery-first was
                 //    ~1s slower because UDP had to time out before every local join / first host bind).
                 // 2) UDP discovery for remote peers (e.g. Mac on the LAN).
                 // 3) Otherwise bind 0.0.0.0 and become coordinator.
-                let loopback = SocketAddr::from(([127, 0, 0, 1], port));
+                let loopback = SocketAddr::from(([127, 0, 0, 1], scoped_port));
                 if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                     return Ok(s);
                 }
-                if let Some(remote) = lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))? {
+                if let Some(remote) = lan_discover_coordinator(
+                    scoped_mesh_id.as_str(),
+                    scoped_port,
+                    Some(account_aid.as_str()),
+                )? {
                     return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
                 }
-                let any = SocketAddr::from(([0, 0, 0, 0], port));
+                let any = SocketAddr::from(([0, 0, 0, 0], scoped_port));
                 match TcpListener::bind(any) {
                     Ok(listener) => mesh_session_from_host_listener(
                         listener,
-                        Some(mesh_id),
+                        Some(scoped_mesh_id.as_str()),
                         Some(identity),
                         max_total_nodes,
                     ),
@@ -1106,8 +1138,11 @@ impl MeshSession {
                         thread::sleep(Duration::from_millis(80));
                         if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
                             Ok(s)
-                        } else if let Some(remote) =
-                            lan_discover_coordinator(mesh_id, port, Some(account_aid.as_str()))?
+                        } else if let Some(remote) = lan_discover_coordinator(
+                            scoped_mesh_id.as_str(),
+                            scoped_port,
+                            Some(account_aid.as_str()),
+                        )?
                         {
                             mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
                         } else {
@@ -1115,10 +1150,11 @@ impl MeshSession {
                         }
                     }
                     Err(e) => Err(format!(
-                        "lan mesh: could not bind 0.0.0.0:{port} (is another app using it?): {e}"
+                        "mesh (lan/online): could not bind 0.0.0.0:{scoped_port} (is another app using it?): {e}"
                     )),
                 }
             }
+                MeshMode::Online => Err("online mesh is not available on wasm targets.".to_string()),
         }
     }
 
