@@ -684,7 +684,15 @@ fn relay_post_json(
     if !res.status().is_success() {
         return Err(format!("relay http {}", res.status()));
     }
-    res.json::<serde_json::Value>().map_err(|e| e.to_string())
+    let v = res.json::<serde_json::Value>().map_err(|e| e.to_string())?;
+    if let Some(false) = v.get("ok").and_then(|x| x.as_bool()) {
+        let msg = v
+            .get("error")
+            .and_then(|x| x.as_str())
+            .unwrap_or("relay request failed");
+        return Err(format!("relay {path}: {msg}"));
+    }
+    Ok(v)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
