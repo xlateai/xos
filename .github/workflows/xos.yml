@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
 
 # One release pipeline at a time (extra pushes queue instead of overlapping publishes).
-concurrency:
-  group: release-${{ github.repository }}
-  cancel-in-progress: false
+# concurrency:
+#   group: release-${{ github.repository }}
+#   cancel-in-progress: false
 
 jobs:
   detect-version-bump:
@@ -34,6 +34,7 @@ jobs:
       docker_tag_exists: ${{ steps.check.outputs.docker_tag_exists }}
       wasm_artifact_exists: ${{ steps.check.outputs.wasm_artifact_exists }}
       wasm_artifact_id: ${{ steps.check.outputs.wasm_artifact_id }}
+      wasm_source: ${{ steps.check.outputs.wasm_source }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -54,9 +55,14 @@ jobs:
           docker_tag_exists=false
           wasm_artifact_exists=false
           wasm_artifact_id=""
+          wasm_source="none"
 
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             release_exists=true
+            if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[]? | select(.name=="xos-wasm.zip") | .name' | grep -q '^xos-wasm.zip$'; then
+              wasm_artifact_exists=true
+              wasm_source="release"
+            fi
           else
             changed=true
           fi
@@ -70,14 +76,17 @@ jobs:
             docker_tag_exists=true
           fi
 
-          wasm_artifact_name="xos-wasm-zip-v${current_version}"
-          wasm_artifact_id="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --paginate \
-              --jq ".artifacts[] | select(.expired == false) | select(.name == \"${wasm_artifact_name}\") | .id" \
-              | head -n1 || true
-          )"
-          if [ -n "${wasm_artifact_id}" ]; then
-            wasm_artifact_exists=true
+          if [ "${wasm_artifact_exists}" != "true" ]; then
+            wasm_artifact_name="xos-wasm-zip-v${current_version}"
+            wasm_artifact_id="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" --paginate \
+                --jq ".artifacts[] | select(.expired == false) | select(.name == \"${wasm_artifact_name}\" or .name == \"xos-wasm-zip\") | .id" \
+                | head -n1 || true
+            )"
+            if [ -n "${wasm_artifact_id}" ]; then
+              wasm_artifact_exists=true
+              wasm_source="artifact"
+            fi
           fi
 
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
@@ -87,6 +96,7 @@ jobs:
           echo "docker_tag_exists=${docker_tag_exists}" >> "$GITHUB_OUTPUT"
           echo "wasm_artifact_exists=${wasm_artifact_exists}" >> "$GITHUB_OUTPUT"
           echo "wasm_artifact_id=${wasm_artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "wasm_source=${wasm_source}" >> "$GITHUB_OUTPUT"
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "bumped=${bumped}" >> "$GITHUB_OUTPUT"
 
@@ -152,11 +162,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          artifact_id="${{ needs.detect-version-bump.outputs.wasm_artifact_id }}"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > prior-wasm.zip
           rm -rf prior-wasm
           mkdir -p prior-wasm
-          unzip -o prior-wasm.zip -d prior-wasm
+          if [ "${{ needs.detect-version-bump.outputs.wasm_source }}" = "release" ]; then
+            tag="v${{ needs.detect-version-bump.outputs.current_version }}"
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern xos-wasm.zip --dir prior-wasm --clobber
+          else
+            artifact_id="${{ needs.detect-version-bump.outputs.wasm_artifact_id }}"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > prior-wasm.zip
+            unzip -o prior-wasm.zip -d prior-wasm
+          fi
           test -s prior-wasm/xos-wasm.zip
 
       - name: 📤 Re-upload for this run
@@ -171,8 +186,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
     if: needs.detect-version-bump.outputs.bumped == 'true'
-    outputs:
-      published: ${{ steps.set-output.outputs.published }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -180,28 +193,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: 🦀 Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: 🔍 Registry check
-        id: version-check
+      - name: 📤 cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          crate_name="${{ needs.detect-version-bump.outputs.crate_name }}"
-          version="${{ needs.detect-version-bump.outputs.current_version }}"
-          echo "Checking if ${crate_name}@${version} exists on crates.io..."
-          if cargo search "$crate_name" --limit 100 | grep -E "^$crate_name = \"$version\""; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          if cargo publish --no-verify 2>&1 | tee /tmp/cargo-publish.log; then
+            exit 0
           fi
-      - name: 📤 cargo publish
-        if: steps.version-check.outputs.exists != 'true'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --no-verify
-      - name: ✅ Mark published
-        id: set-output
-        if: steps.version-check.outputs.exists != 'true'
-        run: echo "published=true" >> "$GITHUB_OUTPUT"
+          if grep -qi "already exists" /tmp/cargo-publish.log; then
+            echo "crate already published; continuing"
+            exit 0
+          fi
+          exit 1
 
   publish-github-release:
     name: 🚀 GH release
