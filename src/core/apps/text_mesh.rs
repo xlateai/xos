@@ -36,8 +36,8 @@ enum LoginField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppPhase {
     Login,
+    Connecting,
     Editor,
-    Error,
 }
 
 pub struct TextMeshApp {
@@ -63,6 +63,8 @@ pub struct TextMeshApp {
     username_button_bounds: (f32, f32, f32, f32),
     login_done_button_bounds: (f32, f32, f32, f32),
     login_cancel_button_bounds: (f32, f32, f32, f32),
+    pending_connect: bool,
+    connect_error: Option<String>,
 }
 
 impl TextMeshApp {
@@ -76,7 +78,11 @@ impl TextMeshApp {
             .clone()
             .unwrap_or_else(|| "not logged in".to_string());
         Self {
-            phase: if is_logged_in() { AppPhase::Editor } else { AppPhase::Login },
+            phase: if is_logged_in() {
+                AppPhase::Connecting
+            } else {
+                AppPhase::Login
+            },
             active_field: LoginField::Username,
             username: current_user.unwrap_or_default(),
             password: String::new(),
@@ -98,6 +104,8 @@ impl TextMeshApp {
             username_button_bounds: (0.0, 0.0, 0.0, 0.0),
             login_done_button_bounds: (0.0, 0.0, 0.0, 0.0),
             login_cancel_button_bounds: (0.0, 0.0, 0.0, 0.0),
+            pending_connect: is_logged_in(),
+            connect_error: None,
         }
     }
 
@@ -263,6 +271,77 @@ impl TextMeshApp {
         );
         self.draw_text_line(state, &user_label, bx + 10.0, by + 7.0, 18.0, (220, 235, 245));
         self.username_button_bounds = (bx, by, bx + button_w, by + STATUS_BAR_HEIGHT - 12.0);
+    }
+
+    fn draw_connecting_overlay(&self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let box_w = (width - 48.0).min(620.0).max(260.0);
+        let box_h = 150.0;
+        let x = ((width - box_w) * 0.5).max(12.0);
+        let y = ((height - box_h) * 0.5).max(18.0);
+        self.draw_box(state, x as i32, y as i32, box_w as i32, box_h as i32, (22, 28, 34, 245));
+        let title = if self.pending_connect {
+            "Connecting to mesh relay..."
+        } else {
+            "Connection failed"
+        };
+        self.draw_text_line(state, title, x + 16.0, y + 18.0, 24.0, (235, 240, 246));
+        let detail = self
+            .connect_error
+            .as_deref()
+            .unwrap_or("Starting secure session with xos relay");
+        self.draw_text_line(state, detail, x + 16.0, y + 58.0, 18.0, (170, 184, 196));
+        if !self.pending_connect {
+            self.draw_text_line(
+                state,
+                "Press ENTER to retry, or tap @username to change login.",
+                x + 16.0,
+                y + 102.0,
+                17.0,
+                (146, 166, 182),
+            );
+        }
+    }
+
+    fn draw_connection_badge(&self, state: &mut EngineState) {
+        let (label, color) = if let Some(session) = self.mesh_session.as_ref() {
+            let nodes = session.current_num_nodes();
+            if !session.is_connected() {
+                ("offline", (210, 178, 66, 255))
+            } else if nodes <= 1 {
+                ("solo", (128, 138, 150, 255))
+            } else {
+                ("connected", (56, 188, 92, 255))
+            }
+        } else {
+            ("offline", (210, 178, 66, 255))
+        };
+        let shape = state.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        let badge_w = 168.0;
+        let badge_h = 34.0;
+        let x = ((width - badge_w) * 0.5).max(8.0);
+        let y = (height - badge_h - 14.0).max(8.0);
+        self.draw_box(state, x as i32, y as i32, badge_w as i32, badge_h as i32, (18, 24, 30, 220));
+        self.draw_box(
+            state,
+            (x + 10.0) as i32,
+            (y + 10.0) as i32,
+            14,
+            14,
+            color,
+        );
+        self.draw_text_line(
+            state,
+            &format!("mesh {}", label),
+            x + 34.0,
+            y + 8.0,
+            18.0,
+            (220, 230, 238),
+        );
     }
 
     fn draw_login_screen(&mut self, state: &mut EngineState) {
@@ -531,6 +610,8 @@ impl TextMeshApp {
         self.phase = AppPhase::Login;
         self.password.clear();
         self.error_message.clear();
+        self.connect_error = None;
+        self.pending_connect = false;
         self.status_user_label = Self::current_username().unwrap_or_else(|| "not logged in".to_string());
         self.username = Self::current_username().unwrap_or_default();
         state.keyboard.onscreen.show();
@@ -544,27 +625,19 @@ impl TextMeshApp {
 
     fn submit_login(&mut self, state: &mut EngineState) {
         self.error_message.clear();
-        match self.connect_mesh() {
-            Ok(()) => state.keyboard.onscreen.hide(),
-            Err(e) => {
-                self.error_message = e;
-                self.phase = AppPhase::Error;
-                state.keyboard.onscreen.show();
-            }
-        }
+        self.connect_error = None;
+        self.phase = AppPhase::Connecting;
+        self.pending_connect = true;
+        state.keyboard.onscreen.hide();
     }
 }
 
 impl Application for TextMeshApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         self.text_app.setup(state)?;
-        if self.phase == AppPhase::Editor {
+        if self.phase == AppPhase::Connecting {
             state.keyboard.onscreen.hide();
-            if let Err(e) = self.connect_mesh() {
-                self.error_message = e;
-                self.phase = AppPhase::Login;
-                state.keyboard.onscreen.show();
-            }
+            self.pending_connect = true;
         } else {
             state.keyboard.onscreen.show();
         }
@@ -573,11 +646,27 @@ impl Application for TextMeshApp {
 
     fn tick(&mut self, state: &mut EngineState) {
         match self.phase {
-            AppPhase::Login | AppPhase::Error => {
+            AppPhase::Login => {
                 self.process_login_keyboard_input(state);
                 crate::rasterizer::fill(&mut state.frame, (8, 10, 12, 255));
                 self.draw_status_bar(state);
                 self.draw_login_screen(state);
+            }
+            AppPhase::Connecting => {
+                crate::rasterizer::fill(&mut state.frame, (8, 10, 12, 255));
+                self.draw_status_bar(state);
+                self.draw_connecting_overlay(state);
+                if self.pending_connect {
+                    self.pending_connect = false;
+                    match self.connect_mesh() {
+                        Ok(()) => {
+                            self.connect_error = None;
+                        }
+                        Err(e) => {
+                            self.connect_error = Some(e);
+                        }
+                    }
+                }
             }
             AppPhase::Editor => {
                 let shape = state.frame.shape();
@@ -592,6 +681,7 @@ impl Application for TextMeshApp {
                 self.text_app.tick(state);
                 self.draw_status_bar(state);
                 self.maybe_broadcast_doc();
+                self.draw_connection_badge(state);
             }
         }
     }
@@ -605,6 +695,9 @@ impl Application for TextMeshApp {
             self.text_app.on_mouse_down(state);
             return;
         }
+        if self.phase == AppPhase::Connecting {
+            return;
+        }
         if self.done_button_hit(state.mouse.x, state.mouse.y) {
             self.submit_login(state);
             return;
@@ -615,9 +708,11 @@ impl Application for TextMeshApp {
             state.keyboard.onscreen.hide();
             if self.mesh_session.is_none() {
                 if let Err(e) = self.connect_mesh() {
-                    self.phase = AppPhase::Error;
+                    self.phase = AppPhase::Connecting;
                     self.error_message = e;
-                    state.keyboard.onscreen.show();
+                    self.connect_error = Some(self.error_message.clone());
+                    self.pending_connect = false;
+                    state.keyboard.onscreen.hide();
                 }
             }
             return;
@@ -669,6 +764,16 @@ impl Application for TextMeshApp {
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
         if self.phase == AppPhase::Editor {
             self.text_app.on_key_char(state, ch);
+            return;
+        }
+        if self.phase == AppPhase::Connecting {
+            if matches!(ch, '\r' | '\n') {
+                self.connect_error = None;
+                self.pending_connect = true;
+            }
+            if ch == '\u{1b}' {
+                self.entering_login_mode(state);
+            }
             return;
         }
         match ch {
