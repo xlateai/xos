@@ -80,6 +80,8 @@ pub struct OnScreenKeyboard {
     trackpad_mode: bool,
     // Temporary trackpad mode (activated by holding Shift/SymbolToggle and dragging)
     temp_trackpad_mode: bool,
+    // Read-only mode: trackpad/selection utility surface without text entry keys.
+    read_only_mode: bool,
 }
 
 impl std::fmt::Debug for OnScreenKeyboard {
@@ -115,6 +117,7 @@ impl OnScreenKeyboard {
             pending_chars: Vec::new(),
             trackpad_mode: false,
             temp_trackpad_mode: false,
+            read_only_mode: false,
         };
 
         keyboard.layout_keys();
@@ -125,7 +128,7 @@ impl OnScreenKeyboard {
     /// Call this from the engine before drawing
     pub fn tick(&mut self, buffer: &mut [u8], width: u32, height: u32, mouse_x: f32, mouse_y: f32, safe_region: &crate::engine::SafeRegionBoundingRectangle) {
         // Position keyboard partition just above bottom safe region
-        let keyboard_height = 0.33; // 33% of screen height (10% increase from 30%)
+        let keyboard_height = if self.read_only_mode { 0.264 } else { 0.33 }; // read-only: 20% smaller
         let keyboard_bottom_safe = safe_region.y2; // Bottom of safe region
         let keyboard_top = (keyboard_bottom_safe - keyboard_height).max(safe_region.y1);
         
@@ -305,6 +308,17 @@ impl OnScreenKeyboard {
     pub fn is_trackpad_mode(&self) -> bool {
         // Trackpad mode is only active when keyboard is shown
         (self.trackpad_mode || self.temp_trackpad_mode) && !self.minimized
+    }
+
+    pub fn set_read_only_mode(&mut self, enabled: bool) {
+        self.read_only_mode = enabled;
+        if enabled {
+            self.trackpad_mode = true;
+            self.temp_trackpad_mode = false;
+            self.shift_pressed = false;
+            self.symbol_mode = SymbolMode::Standard;
+        }
+        self.layout_keys();
     }
 
     pub fn check_key_type_at_position(&self, mx: f32, my: f32, w: f32, h: f32) -> Option<KeyType> {
@@ -659,9 +673,26 @@ impl OnScreenKeyboard {
         let mut key_y = top_line_height;
         let row_height = (1.0 - top_line_height) / (num_key_rows + 1.0); // +1 for spacebar
         
-        // Action row (top): Mouse, Copy, Cut, Paste, Select All, Undo, Redo (7 buttons)
-        let action_key_width = (1.0 - key_spacing_ratio * 6.0) / 7.0;
-        let action_keys = [KeyType::Mouse, KeyType::Copy, KeyType::Cut, KeyType::Paste, KeyType::SelectAll, KeyType::Undo, KeyType::Redo];
+        // Action row (top): full editor controls or compact read-only controls.
+        let action_keys: Vec<KeyType> = if self.read_only_mode {
+            vec![KeyType::Copy, KeyType::SelectAll]
+        } else {
+            vec![
+                KeyType::Mouse,
+                KeyType::Copy,
+                KeyType::Cut,
+                KeyType::Paste,
+                KeyType::SelectAll,
+                KeyType::Undo,
+                KeyType::Redo,
+            ]
+        };
+        let action_count = action_keys.len().max(1) as f32;
+        let action_key_width = if self.read_only_mode {
+            0.10
+        } else {
+            (1.0 - key_spacing_ratio * (action_count - 1.0)) / action_count
+        };
         let mut x = 0.0;
         for &key_type in &action_keys {
             self.keys.push(Key {
@@ -669,7 +700,7 @@ impl OnScreenKeyboard {
                 x,
                 y: key_y,
                 width: action_key_width,
-                height: row_height,
+                height: if self.read_only_mode { row_height * 0.78 } else { row_height },
                 pressed: false,
             });
             x += action_key_width + key_spacing_ratio;
@@ -679,7 +710,7 @@ impl OnScreenKeyboard {
         key_y += row_height + key_spacing_ratio;
         
         // If in trackpad mode, skip drawing the rest of the keys
-        if self.trackpad_mode {
+        if self.trackpad_mode || self.read_only_mode {
             return;
         }
         
@@ -1245,7 +1276,15 @@ impl Partition for OnScreenKeyboard {
                     SymbolMode::Symbols2 => "123".to_string(),
                 },
                 // Action keys
-                KeyType::Mouse => if self.trackpad_mode { "keys" } else { "mouse" }.to_string(),
+                KeyType::Mouse => {
+                    if self.read_only_mode {
+                        "pointer".to_string()
+                    } else if self.trackpad_mode {
+                        "keys".to_string()
+                    } else {
+                        "mouse".to_string()
+                    }
+                }
                 KeyType::Copy => "copy".to_string(),
                 KeyType::Cut => "cut".to_string(),
                 KeyType::Paste => "paste".to_string(),

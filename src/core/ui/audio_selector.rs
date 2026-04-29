@@ -88,7 +88,7 @@ impl AudioInputSelector {
         Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h)
     }
 
-    fn capture_button_size(wave_w: f32, wave_h: f32, viewport_w: f32, viewport_h: f32) -> f32 {
+    fn capture_button_size(_wave_w: f32, _wave_h: f32, viewport_w: f32, viewport_h: f32) -> f32 {
         #[cfg(target_os = "ios")]
         {
             let vm = viewport_w.max(viewport_h).max(1.0);
@@ -96,7 +96,7 @@ impl AudioInputSelector {
         }
         #[cfg(not(target_os = "ios"))]
         {
-            (wave_w.min(wave_h) * 0.20).clamp(28.0, 64.0)
+            (_wave_w.min(_wave_h) * 0.20).clamp(28.0, 64.0)
         }
     }
 
