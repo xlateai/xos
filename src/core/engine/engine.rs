@@ -353,6 +353,8 @@ pub struct EngineState {
     /// When set, the F3 overlay shows this value as “FPS” instead of `1 / delta_time_seconds`
     /// (e.g. remote viewer reports actual stream frame rate).
     pub f3_fps_label_override: Option<f32>,
+    /// When true, composites a bright red dot at [`MouseState::x`]/[`MouseState::y`] after overlays (F3/OSK).
+    pub overlay_red_pointer_enabled: bool,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).

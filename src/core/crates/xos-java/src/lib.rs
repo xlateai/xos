@@ -14,6 +14,7 @@ use xos::apps::coder::CoderApp;
 use xos::engine::{
     apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
+    tick_overlay_red_pointer,
     tick_frame_delta, tick_frame_view_zoom, Application, CursorStyleSetter, EngineState, F3Menu,
     FrameState, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
@@ -136,6 +137,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             frame_view_center_x: 0.5,
             frame_view_center_y: 0.5,
             f3_fps_label_override: None,
+            overlay_red_pointer_enabled: true,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -215,6 +217,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
         }
 
         tick_f3_menu(&mut host.engine);
+        tick_overlay_red_pointer(&mut host.engine);
 
         let shape = host.engine.frame.shape();
         let w = shape[1];

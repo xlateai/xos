@@ -9,7 +9,7 @@ use super::{
     f3_menu_boost_interaction_fade,
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
-    f3_menu_handle_zoom_scroll, tick_f3_menu,
+    f3_menu_handle_zoom_scroll, tick_f3_menu, tick_overlay_red_pointer,
     frame_view_pan_by_pixels,
     tick_frame_view_zoom,
     F3Menu,
@@ -87,6 +87,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             frame_view_center_x: 0.5,
             frame_view_center_y: 0.5,
             f3_fps_label_override: None,
+            overlay_red_pointer_enabled: true,
         },
         app,
         command_held: false,
@@ -554,6 +555,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 }
 
                 tick_f3_menu(&mut state.engine_state);
+                tick_overlay_red_pointer(&mut state.engine_state);
                 
                 // Render to canvas
                 let buffer = state.engine_state.frame_buffer_mut();

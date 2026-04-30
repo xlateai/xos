@@ -23,7 +23,22 @@ const F3_INTERACTION_FADE_DECAY: f32 = 3.2;
 const FONT_OPTION_BASE_SIZE: f32 = 19.0;
 const FONT_HEADER_BASE_SIZE: f32 = 17.0;
 #[cfg(target_os = "ios")]
-const IOS_MESH_TOGGLE_LABEL_BASE_SIZE: f32 = 16.0;
+const IOS_MESH_HEADING_BASE_SIZE: f32 = 15.0;
+#[cfg(target_os = "ios")]
+const IOS_MESH_SEG_LABEL_BASE_SIZE: f32 = 16.0;
+/// Play/step hit targets scale vs prior layout (~10% larger for touch).
+const F3_CONTROL_BUTTON_SCALE: f32 = 1.1;
+
+#[cfg(target_os = "ios")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IosRemoteMeshTransport {
+    /// Do not join the ios-remote mesh (`ios-xos`).
+    Off,
+    /// LAN / UDP-discovery transport (matches desktop `ios-remote` default).
+    Lan,
+    /// Cloud relay mesh (requires login; desktop viewer: `XOS_IOS_REMOTE_MESH=online`).
+    Online,
+}
 
 pub struct F3Menu {
     /// When false, FPS is still tracked but the menu is not drawn. Toggle with F3 (desktop) or
@@ -36,9 +51,11 @@ pub struct F3Menu {
     font_option_families: Vec<FontFamily>,
     active_font_family: FontFamily,
     #[cfg(target_os = "ios")]
-    ios_mesh_toggle_rasterizer: TextRasterizer,
+    ios_mesh_heading_rasterizer: TextRasterizer,
     #[cfg(target_os = "ios")]
-    pub ios_mesh_enabled: bool,
+    ios_mesh_seg_rasterizers: [TextRasterizer; 3],
+    #[cfg(target_os = "ios")]
+    pub ios_mesh_transport: IosRemoteMeshTransport,
     pub(crate) scale_dragging: bool,
     /// Smooth wheel-zoom target in F3 percent units.
     scale_zoom_target: f32,
@@ -82,10 +99,18 @@ impl F3Menu {
             font_option_rasterizers.push(rasterizer);
         }
         #[cfg(target_os = "ios")]
-        let mut ios_mesh_toggle_rasterizer =
-            TextRasterizer::new(fonts::default_font(), IOS_MESH_TOGGLE_LABEL_BASE_SIZE);
+        let mut ios_mesh_heading_rasterizer =
+            TextRasterizer::new(fonts::default_font(), IOS_MESH_HEADING_BASE_SIZE);
         #[cfg(target_os = "ios")]
-        ios_mesh_toggle_rasterizer.set_text("iOS Mesh (ios-xos)".to_string());
+        ios_mesh_heading_rasterizer.set_text("iOS mesh (ios-xos)".to_string());
+        #[cfg(target_os = "ios")]
+        let seg_font = fonts::default_font();
+        #[cfg(target_os = "ios")]
+        let ios_mesh_seg_rasterizers = ["Off", "LAN", "Online"].map(|label| {
+            let mut r = TextRasterizer::new(seg_font.clone(), IOS_MESH_SEG_LABEL_BASE_SIZE);
+            r.set_text(label.to_string());
+            r
+        });
         Self {
             visible: false,
             fps_rasterizer,
@@ -95,9 +120,11 @@ impl F3Menu {
             font_option_families,
             active_font_family,
             #[cfg(target_os = "ios")]
-            ios_mesh_toggle_rasterizer,
+            ios_mesh_heading_rasterizer,
             #[cfg(target_os = "ios")]
-            ios_mesh_enabled: false,
+            ios_mesh_seg_rasterizers,
+            #[cfg(target_os = "ios")]
+            ios_mesh_transport: IosRemoteMeshTransport::Lan,
             scale_dragging: false,
             scale_zoom_target: 100.0,
             scale_zoom_value: 100.0,
@@ -148,6 +175,12 @@ struct PanelGeom {
     toggle_right: f32,
     toggle_top: f32,
     toggle_bottom: f32,
+    ios_mesh_heading_top: f32,
+    ios_mesh_heading_bottom: f32,
+    ios_mesh_seg_top: f32,
+    ios_mesh_seg_bottom: f32,
+    ios_mesh_seg_left: f32,
+    ios_mesh_seg_right: f32,
     font_option_count: usize,
     button_left: f32,
     button_right: f32,
@@ -184,9 +217,13 @@ fn panel_geom(
     let font_option_h = (26.0 * us).max(16.0);
     let font_option_gap = (4.0 * us).max(2.0);
     #[cfg(target_os = "ios")]
-    let toggle_h = (28.0 * us).max(18.0);
+    let mesh_heading_h = (17.0 * us).max(14.0);
+    #[cfg(target_os = "ios")]
+    let mesh_seg_h = (30.0 * us).max(22.0);
     #[cfg(not(target_os = "ios"))]
-    let toggle_h = 0.0_f32;
+    let mesh_heading_h = 0.0_f32;
+    #[cfg(not(target_os = "ios"))]
+    let mesh_seg_h = 0.0_f32;
     let font_options_h = if font_option_count == 0 {
         0.0
     } else {
@@ -203,14 +240,14 @@ fn panel_geom(
         0.0
     };
     #[cfg(target_os = "ios")]
-    let toggle_extra = line_gap + toggle_h;
+    let toggle_extra = line_gap + mesh_heading_h + line_gap + mesh_seg_h;
     #[cfg(not(target_os = "ios"))]
     let toggle_extra = 0.0_f32;
     let panel_h =
         pad + line_h + line_gap + line_h + line_gap + slider_h + font_extra + minimap_extra + toggle_extra + pad;
     let panel_left = w - panel_w - pad;
     let panel_top = safe_top + pad;
-    let button_size = (22.0 * us).max(12.0);
+    let button_size = ((22.0 * us).max(12.0)) * F3_CONTROL_BUTTON_SCALE;
     let button_gap = (6.0 * us).max(3.0);
     let step_right = panel_left + panel_w - pad;
     let step_left = step_right - button_size;
@@ -242,7 +279,31 @@ fn panel_geom(
     } else {
         slider_bottom + line_gap
     };
-    let toggle_bottom = toggle_top + toggle_h;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_heading_top = toggle_top;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_heading_bottom = toggle_top + mesh_heading_h;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_seg_top = ios_mesh_heading_bottom + line_gap;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_seg_bottom = ios_mesh_seg_top + mesh_seg_h;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_seg_left = slider_left;
+    #[cfg(target_os = "ios")]
+    let ios_mesh_seg_right = slider_right;
+    #[cfg(target_os = "ios")]
+    let toggle_bottom = ios_mesh_seg_bottom;
+    #[cfg(not(target_os = "ios"))]
+    let (
+        ios_mesh_heading_top,
+        ios_mesh_heading_bottom,
+        ios_mesh_seg_top,
+        ios_mesh_seg_bottom,
+        ios_mesh_seg_left,
+        ios_mesh_seg_right,
+    ) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+    #[cfg(not(target_os = "ios"))]
+    let toggle_bottom = toggle_top;
     PanelGeom {
         panel_left,
         panel_top,
@@ -261,6 +322,12 @@ fn panel_geom(
         toggle_right: slider_right,
         toggle_top,
         toggle_bottom,
+        ios_mesh_heading_top,
+        ios_mesh_heading_bottom,
+        ios_mesh_seg_top,
+        ios_mesh_seg_bottom,
+        ios_mesh_seg_left,
+        ios_mesh_seg_right,
         font_option_count,
         button_left,
         button_right,
@@ -325,10 +392,24 @@ fn sync_f3_default_font(menu: &mut F3Menu) {
     let mut scale = TextRasterizer::new(active_font.clone(), menu.scale_rasterizer.font_size);
     scale.set_text(menu.scale_rasterizer.text.clone());
     menu.scale_rasterizer = scale;
-    let mut header = TextRasterizer::new(active_font, menu.font_header_rasterizer.font_size);
+    let mut header = TextRasterizer::new(active_font.clone(), menu.font_header_rasterizer.font_size);
     header.set_text(menu.font_header_rasterizer.text.clone());
     menu.font_header_rasterizer = header;
     menu.active_font_family = current;
+    #[cfg(target_os = "ios")]
+    {
+        let mut h = TextRasterizer::new(active_font.clone(), menu.ios_mesh_heading_rasterizer.font_size);
+        h.set_text(menu.ios_mesh_heading_rasterizer.text.clone());
+        menu.ios_mesh_heading_rasterizer = h;
+        let labels = ["Off", "LAN", "Online"];
+        for (i, r) in menu.ios_mesh_seg_rasterizers.iter_mut().enumerate() {
+            if let Some(label) = labels.get(i) {
+                let mut nr = TextRasterizer::new(active_font.clone(), r.font_size);
+                nr.set_text((*label).to_string());
+                *r = nr;
+            }
+        }
+    }
 }
 
 #[inline]
@@ -475,11 +556,16 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         }
         #[cfg(target_os = "ios")]
         {
-            menu.ios_mesh_toggle_rasterizer
-                .set_font_size(IOS_MESH_TOGGLE_LABEL_BASE_SIZE * ui_scale);
-            menu.ios_mesh_toggle_rasterizer
-                .set_text("iOS Mesh (ios-xos)".to_string());
-            menu.ios_mesh_toggle_rasterizer.tick(width, height);
+            menu.ios_mesh_heading_rasterizer
+                .set_font_size(IOS_MESH_HEADING_BASE_SIZE * ui_scale);
+            menu
+                .ios_mesh_heading_rasterizer
+                .set_text("iOS mesh (ios-xos)".to_string());
+            menu.ios_mesh_heading_rasterizer.tick(width, height);
+            for r in menu.ios_mesh_seg_rasterizers.iter_mut() {
+                r.set_font_size(IOS_MESH_SEG_LABEL_BASE_SIZE * ui_scale);
+                r.tick(width, height);
+            }
         }
     }
 
@@ -497,7 +583,7 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         .iter()
         .map(|c| c.metrics.advance_width)
         .sum();
-    let button_size = (22.0 * ui_scale).max(12.0);
+    let button_size = ((22.0 * ui_scale).max(12.0)) * F3_CONTROL_BUTTON_SCALE;
     let button_gap = (6.0 * ui_scale).max(3.0);
     let slider_w = (200.0 * ui_scale).max(120.0);
     // Keep panel width stable so FPS/scale text width changes don't make the slider jitter horizontally.
@@ -563,13 +649,22 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
     }
     #[cfg(target_os = "ios")]
     {
-        let on_toggle = mx >= geom.toggle_left
-            && mx <= geom.toggle_right
-            && my >= geom.toggle_top
-            && my <= geom.toggle_bottom;
-        if on_toggle {
+        let on_mesh_seg = mx >= geom.ios_mesh_seg_left
+            && mx <= geom.ios_mesh_seg_right
+            && my >= geom.ios_mesh_seg_top
+            && my <= geom.ios_mesh_seg_bottom;
+        if on_mesh_seg {
             f3_menu_boost_interaction_fade(state);
-            state.f3_menu.ios_mesh_enabled = !state.f3_menu.ios_mesh_enabled;
+            let strip_w = (geom.ios_mesh_seg_right - geom.ios_mesh_seg_left).max(1.0);
+            let seg_w = strip_w / 3.0;
+            let rel = (mx - geom.ios_mesh_seg_left).clamp(0.0, strip_w - 1e-4);
+            let idx = (rel / seg_w).floor() as i32;
+            let idx = idx.clamp(0, 2) as usize;
+            state.f3_menu.ios_mesh_transport = match idx {
+                0 => IosRemoteMeshTransport::Off,
+                1 => IosRemoteMeshTransport::Lan,
+                _ => IosRemoteMeshTransport::Online,
+            };
             state.f3_menu.scale_dragging = false;
             state.f3_menu.pointer_captured = true;
             return true;
@@ -918,71 +1013,73 @@ pub fn tick_f3_menu(state: &mut EngineState) {
 
     #[cfg(target_os = "ios")]
     {
-        let tx0 = geom.toggle_left.floor() as i32;
-        let ty0 = geom.toggle_top.floor() as i32;
-        let tx1 = geom.toggle_right.ceil() as i32;
-        let ty1 = geom.toggle_bottom.ceil() as i32;
-        blend_rect(
-            buffer,
-            fw,
-            fh,
-            tx0,
-            ty0,
-            tx1,
-            ty1,
-            (46, 46, 52, (220.0 * overlay_alpha) as u8),
-        );
-
-        let toggle_w = (tx1 - tx0).max(8) as f32;
-        let toggle_h = (ty1 - ty0).max(8) as f32;
-        let switch_w = (toggle_w * 0.20).clamp(22.0, 40.0);
-        let switch_h = (toggle_h * 0.55).clamp(14.0, 24.0);
-        let switch_x1 = tx1 as f32 - (8.0 * geom.ui_scale);
-        let switch_x0 = switch_x1 - switch_w;
-        let switch_y0 = ty0 as f32 + (toggle_h - switch_h) * 0.5;
-        let switch_y1 = switch_y0 + switch_h;
-        let is_on = state.f3_menu.ios_mesh_enabled;
-        let track_col = if is_on {
-            (60, 150, 88, (230.0 * overlay_alpha) as u8)
-        } else {
-            (88, 88, 96, (220.0 * overlay_alpha) as u8)
-        };
-        blend_rect(
-            buffer,
-            fw,
-            fh,
-            switch_x0.floor() as i32,
-            switch_y0.floor() as i32,
-            switch_x1.ceil() as i32,
-            switch_y1.ceil() as i32,
-            track_col,
-        );
-        let knob_d = (switch_h - 4.0).max(8.0);
-        let knob_x = if is_on {
-            switch_x1 - knob_d - 2.0
-        } else {
-            switch_x0 + 2.0
-        };
-        blend_rect(
-            buffer,
-            fw,
-            fh,
-            knob_x.floor() as i32,
-            (switch_y0 + 2.0).floor() as i32,
-            (knob_x + knob_d).ceil() as i32,
-            (switch_y1 - 2.0).ceil() as i32,
-            (238, 238, 242, (255.0 * overlay_alpha) as u8),
-        );
         blend_text(
             buffer,
             width,
             height,
-            &state.f3_menu.ios_mesh_toggle_rasterizer,
-            geom.toggle_left + (8.0 * geom.ui_scale),
-            geom.toggle_top + ((geom.toggle_bottom - geom.toggle_top) * 0.23),
-            (245, 245, 245),
+            &state.f3_menu.ios_mesh_heading_rasterizer,
+            geom.ios_mesh_seg_left + (4.0 * geom.ui_scale),
+            geom.ios_mesh_heading_top + (2.0 * geom.ui_scale),
+            (220, 220, 226),
             overlay_alpha,
         );
+
+        let sx = geom.ios_mesh_seg_left;
+        let sy = geom.ios_mesh_seg_top;
+        let ex = geom.ios_mesh_seg_right;
+        let ey = geom.ios_mesh_seg_bottom;
+        let seg_row_y0 = sy.floor() as i32;
+        let seg_row_y1 = ey.ceil() as i32;
+
+        let strip_w = (ex - sx).max(1.0);
+        let seg_w = strip_w / 3.0;
+        let trans = state.f3_menu.ios_mesh_transport;
+
+        #[inline]
+        fn seg_selected(i: usize, t: IosRemoteMeshTransport) -> bool {
+            matches!(
+                (i, t),
+                (0, IosRemoteMeshTransport::Off)
+                    | (1, IosRemoteMeshTransport::Lan)
+                    | (2, IosRemoteMeshTransport::Online)
+            )
+        }
+
+        for i in 0..3 {
+            let sx0 = sx + i as f32 * seg_w;
+            let sx1 = sx0 + seg_w;
+            let ix0 = sx0.floor() as i32;
+            let ix1 = sx1.ceil() as i32;
+            let selected = seg_selected(i, trans);
+            let fill = if selected {
+                (52, 128, 78, (220.0 * overlay_alpha) as u8)
+            } else {
+                (48, 48, 54, (188.0 * overlay_alpha) as u8)
+            };
+            blend_rect(buffer, fw, fh, ix0, seg_row_y0, ix1, seg_row_y1, fill);
+        }
+
+        for (i, text_rasterizer) in state.f3_menu.ios_mesh_seg_rasterizers.iter().enumerate() {
+            let sx0 = sx + i as f32 * seg_w;
+            let text_w: f32 = text_rasterizer
+                .characters
+                .iter()
+                .map(|c| c.metrics.advance_width)
+                .sum();
+            let cell_w = seg_w.max(1.0);
+            let tx = sx0 + ((cell_w - text_w) * 0.5).max(3.0 * geom.ui_scale);
+            let ty = sy + ((ey - sy) - IOS_MESH_SEG_LABEL_BASE_SIZE * geom.ui_scale) * 0.32;
+            blend_text(
+                buffer,
+                width,
+                height,
+                text_rasterizer,
+                tx,
+                ty.max(sy + 2.0),
+                (246, 246, 250),
+                overlay_alpha,
+            );
+        }
     }
 
     let ui_scale = F3Menu::ui_scale(width.max(height));
@@ -1046,6 +1143,52 @@ pub fn tick_f3_menu(state: &mut EngineState) {
             (245, 245, 245),
             overlay_alpha,
         );
+    }
+}
+
+/// Solid red laser dot at the logical pointer (runs after keyboard + [`tick_f3_menu`]). Matches the
+/// OSK/trackpad cue used in [`crate::apps::text::TextApp`] but applies to **all** hosts.
+pub fn tick_overlay_red_pointer(state: &mut EngineState) {
+    if !state.overlay_red_pointer_enabled {
+        return;
+    }
+    let shape = state.frame.shape();
+    let fh = shape[0];
+    let fw = shape[1];
+    if fh == 0 || fw == 0 {
+        return;
+    }
+    let width_px = fw as f32;
+    let height_px = fh as f32;
+    let mx = state.mouse.x.round().clamp(0.0, width_px.max(1.0) - 1.0);
+    let my = state.mouse.y.round().clamp(0.0, height_px.max(1.0) - 1.0);
+    let buffer = state.frame.buffer_mut();
+    const DOT_RADIUS: f32 = 6.0;
+    let cx = mx as i32;
+    let cy = my as i32;
+    let rb = DOT_RADIUS.ceil() as i32;
+    for dy in -rb..=rb {
+        for dx in -rb..=rb {
+            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+            if dist > DOT_RADIUS {
+                continue;
+            }
+            let px = cx + dx;
+            let py = cy + dy;
+            if px < 0 || py < 0 {
+                continue;
+            }
+            let px = px as usize;
+            let py = py as usize;
+            if px >= fw || py >= fh {
+                continue;
+            }
+            let idx = (py * fw + px) * 4;
+            buffer[idx] = 255;
+            buffer[idx + 1] = 0;
+            buffer[idx + 2] = 0;
+            buffer[idx + 3] = 0xff;
+        }
     }
 }
 

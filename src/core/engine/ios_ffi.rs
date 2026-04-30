@@ -28,6 +28,7 @@ use crate::engine::{
     apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
     tick_frame_delta, tick_frame_view_zoom, Application, EngineState, F3Menu, FrameState,
+    IosRemoteMeshTransport,
     KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 #[cfg(target_os = "ios")]
@@ -69,6 +70,7 @@ struct IosEngineState {
     height: u32,
     last_tick_instant: Option<std::time::Instant>,
     ios_remote: Option<IosRemoteMeshState>,
+    ios_remote_linked_mode: Option<MeshMode>,
     ios_remote_last_attempt: Option<Instant>,
 }
 
@@ -81,6 +83,8 @@ struct IosRemoteMeshState {
     last_frame_queued_at: Option<Instant>,
     prev_left: bool,
     prev_right: bool,
+    /// Desktop viewer piggybacks this on mesh input packets; disables JPEG broadcast when false.
+    viewer_wants_frames: bool,
 }
 
 // Unsafe Send implementation - safe because iOS FFI is called from main thread only
@@ -215,6 +219,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         frame_view_center_x: 0.5,
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
+        overlay_red_pointer_enabled: true,
     };
 
     // Call setup
@@ -229,6 +234,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         height,
         last_tick_instant: None,
         ios_remote: None,
+        ios_remote_linked_mode: None,
         ios_remote_last_attempt: None,
     };
 
@@ -323,6 +329,7 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 
         tick_f3_menu(&mut ios_state.engine_state);
         tick_ios_remote_frame_push(ios_state);
+        crate::engine::tick_overlay_red_pointer(&mut ios_state.engine_state);
         
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
         let frame_buffer = ios_state.engine_state.frame_buffer_mut();
@@ -377,11 +384,11 @@ fn ios_remote_encoder_run(session: Arc<MeshSession>, rx: Receiver<(u32, u32, Vec
 }
 
 #[cfg(target_os = "ios")]
-fn try_connect_ios_remote_mesh() -> Result<Arc<MeshSession>, String> {
+fn try_connect_ios_remote_mesh(mode: MeshMode) -> Result<Arc<MeshSession>, String> {
     let node_identity = load_node_identity().map_err(|e| format!("node identity unavailable: {e}"))?;
     let session = MeshSession::join_with_identity(
         IOS_REMOTE_MESH_ID,
-        MeshMode::Lan,
+        mode,
         Arc::new(node_identity),
         None,
     )?;
@@ -390,13 +397,29 @@ fn try_connect_ios_remote_mesh() -> Result<Arc<MeshSession>, String> {
 
 #[cfg(target_os = "ios")]
 fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
-    if !state.engine_state.f3_menu.ios_mesh_enabled {
+    let wanted_mode = match state.engine_state.f3_menu.ios_mesh_transport {
+        IosRemoteMeshTransport::Off => None,
+        IosRemoteMeshTransport::Lan => Some(MeshMode::Lan),
+        IosRemoteMeshTransport::Online => Some(MeshMode::Online),
+    };
+
+    if wanted_mode.is_none() {
         state.ios_remote = None;
+        state.ios_remote_linked_mode = None;
+        state.ios_remote_last_attempt = None;
+        return;
+    }
+    let wanted_mode = wanted_mode.expect("wanted_mode checked");
+
+    if state.ios_remote_linked_mode == Some(wanted_mode) && state.ios_remote.is_some() {
         return;
     }
     if state.ios_remote.is_some() {
-        return;
+        state.ios_remote = None;
+        state.ios_remote_linked_mode = None;
+        state.ios_remote_last_attempt = None;
     }
+
     let now = Instant::now();
     if let Some(last) = state.ios_remote_last_attempt {
         if now.duration_since(last) < IOS_REMOTE_RECONNECT_BACKOFF {
@@ -404,7 +427,7 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
         }
     }
     state.ios_remote_last_attempt = Some(now);
-    match try_connect_ios_remote_mesh() {
+    match try_connect_ios_remote_mesh(wanted_mode) {
         Ok(session) => {
             let (frame_tx, frame_rx) = sync_channel::<(u32, u32, Vec<u8>)>(1);
             let session_for_enc = Arc::clone(&session);
@@ -413,6 +436,7 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
                 .spawn(move || ios_remote_encoder_run(session_for_enc, frame_rx));
             match join_result {
                 Ok(_encoder_join) => {
+                    state.ios_remote_linked_mode = Some(wanted_mode);
                     state.ios_remote = Some(IosRemoteMeshState {
                         session,
                         frame_tx,
@@ -420,15 +444,18 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
                         last_frame_queued_at: None,
                         prev_left: false,
                         prev_right: false,
+                        viewer_wants_frames: true,
                     });
                 }
                 Err(e) => {
                     log_to_ios(&format!("ios-remote: encoder thread spawn failed: {e}"));
+                    state.ios_remote_linked_mode = None;
                 }
             }
         }
         Err(e) => {
             log_to_ios(&format!("ios-remote: mesh connect failed: {e}"));
+            state.ios_remote_linked_mode = None;
         }
     }
 }
@@ -458,6 +485,11 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
     }
 
     let last = packets.last().map(|p| p.body.clone()).unwrap_or_else(|| json!({}));
+
+    if let Some(wf) = last.get("want_remote_frames").and_then(|v| v.as_bool()) {
+        remote.viewer_wants_frames = wf;
+    }
+
     let scroll_sum: f64 = packets
         .iter()
         .map(|p| p.body.get("scroll").and_then(|v| v.as_f64()).unwrap_or(0.0))
@@ -514,6 +546,9 @@ fn tick_ios_remote_frame_push(state: &mut IosEngineState) {
     let Some(remote) = state.ios_remote.as_mut() else {
         return;
     };
+    if !remote.viewer_wants_frames {
+        return;
+    }
     if remote.session.current_num_nodes() < 2 {
         return;
     }
