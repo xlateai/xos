@@ -8,6 +8,12 @@ use crate::engine::{Application, EngineState};
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
 use crate::engine::keyboard::shortcuts::{NamedSpecialKey, SpecialKeyEvent};
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
 use crate::rasterizer::fill;
 
 #[cfg(all(
@@ -67,6 +73,12 @@ pub struct IosRemoteApp {
         any(target_os = "windows", target_os = "macos", target_os = "linux")
     ))]
     session: Option<IosRemoteSession>,
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "ios"),
+        any(target_os = "windows", target_os = "macos", target_os = "linux")
+    ))]
+    node_identity: Option<Arc<crate::auth::UnlockedNodeIdentity>>,
 }
 
 #[cfg(all(
@@ -89,6 +101,9 @@ struct IosRemoteSession {
     suppress_remote_mouse_buttons: bool,
     last_remote_nx: f32,
     last_remote_ny: f32,
+    disconnected_since: Option<Instant>,
+    last_rejoin_attempt_at: Option<Instant>,
+    status_text: TextRasterizer,
 }
 
 impl IosRemoteApp {
@@ -100,6 +115,12 @@ impl IosRemoteApp {
                 any(target_os = "windows", target_os = "macos", target_os = "linux")
             ))]
             session: None,
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(target_os = "ios"),
+                any(target_os = "windows", target_os = "macos", target_os = "linux")
+            ))]
+            node_identity: None,
         }
     }
 }
@@ -111,6 +132,18 @@ impl IosRemoteApp {
 ))]
 /// Top status bar height in window pixels (toolbar + stream toggle).
 const TOOLBAR_H: f32 = 42.0;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+const REMOTE_FRAME_STALL_TIMEOUT: Duration = Duration::from_millis(1400);
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
+const MESH_REJOIN_GAP: Duration = Duration::from_millis(1200);
 
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -256,6 +289,83 @@ fn outline_aspect_fit_abs(
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
+fn draw_status_center_message(
+    buffer: &mut [u8],
+    fw: usize,
+    fh: usize,
+    toolbar_h_px: usize,
+    rasterizer: &mut TextRasterizer,
+    text: &str,
+) {
+    if fw == 0 || fh == 0 || toolbar_h_px >= fh {
+        return;
+    }
+    let content_h = fh.saturating_sub(toolbar_h_px);
+    let us = ((fw.min(content_h) as f32) / 920.0).clamp(0.6, 1.7);
+    let font_size = (24.0 * us).clamp(16.0, 34.0);
+    rasterizer.set_font_size(font_size);
+    rasterizer.set_text(text.to_string());
+    rasterizer.tick(fw as f32, fh as f32);
+    let text_w: f32 = rasterizer
+        .characters
+        .iter()
+        .map(|c| c.metrics.advance_width)
+        .sum();
+    let text_h = font_size.max(1.0);
+    let cx = fw as f32 * 0.5;
+    let cy = toolbar_h_px as f32 + content_h as f32 * 0.5;
+    let tx = cx - text_w * 0.5;
+    let ty = cy - text_h * 0.5;
+    let pad_x = (18.0 * us) as usize;
+    let pad_y = (10.0 * us) as usize;
+    let x0 = tx.floor().max(0.0) as usize;
+    let y0 = ty.floor().max(toolbar_h_px as f32) as usize;
+    let x1 = (tx + text_w).ceil().min(fw as f32) as usize;
+    let y1 = (ty + text_h).ceil().min(fh as f32) as usize;
+    blit_solid_rect(
+        buffer,
+        fw,
+        fh,
+        x0.saturating_sub(pad_x),
+        y0.saturating_sub(pad_y),
+        (x1 + pad_x).min(fw),
+        (y1 + pad_y).min(fh),
+        (26, 31, 39),
+    );
+    for character in &rasterizer.characters {
+        let char_x = tx + character.x;
+        let char_y = ty + character.y;
+        let cw = character.width as usize;
+        if cw == 0 {
+            continue;
+        }
+        for (bitmap_y, row) in character.bitmap.chunks(cw).enumerate() {
+            for (bitmap_x, &alpha) in row.iter().enumerate() {
+                if alpha == 0 {
+                    continue;
+                }
+                let px = (char_x + bitmap_x as f32) as i32;
+                let py = (char_y + bitmap_y as f32) as i32;
+                if px < 0 || py < toolbar_h_px as i32 || px >= fw as i32 || py >= fh as i32 {
+                    continue;
+                }
+                let idx = ((py as usize * fw + px as usize) * 4) as usize;
+                let a = alpha as f32 / 255.0;
+                let ia = 1.0 - a;
+                buffer[idx] = (240.0 * a + buffer[idx] as f32 * ia) as u8;
+                buffer[idx + 1] = (242.0 * a + buffer[idx + 1] as f32 * ia) as u8;
+                buffer[idx + 2] = (248.0 * a + buffer[idx + 2] as f32 * ia) as u8;
+                buffer[idx + 3] = 0xff;
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos", target_os = "linux")
+))]
 fn queue_and_send_input(
     s: &mut IosRemoteSession,
     mouse_x: f32,
@@ -311,6 +421,7 @@ fn queue_and_send_input(
 impl Application for IosRemoteApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let id = Arc::new(load_node_identity().map_err(|e| format!("{e}"))?);
+        self.node_identity = Some(Arc::clone(&id));
         let mesh = join_ios_remote_mesh_with_retries(&id)?;
         self.session = Some(IosRemoteSession {
             mesh,
@@ -325,6 +436,9 @@ impl Application for IosRemoteApp {
             suppress_remote_mouse_buttons: false,
             last_remote_nx: 0.5,
             last_remote_ny: 0.5,
+            disconnected_since: None,
+            last_rejoin_attempt_at: None,
+            status_text: TextRasterizer::new(fonts::default_font(), 24.0),
         });
         Ok(())
     }
@@ -346,13 +460,39 @@ impl Application for IosRemoteApp {
         let tb_i = (TOOLBAR_H.round() as usize).min(dst_h);
         let content_h = dst_h.saturating_sub(tb_i).max(1);
 
-        let nodes_ok = s.mesh.current_num_nodes() >= 2;
+        let now = Instant::now();
+        let mut nodes_ok = s.mesh.current_num_nodes() >= 2;
+        if !nodes_ok {
+            let can_retry = s
+                .last_rejoin_attempt_at
+                .map(|t| now.duration_since(t) >= MESH_REJOIN_GAP)
+                .unwrap_or(true);
+            if can_retry {
+                s.last_rejoin_attempt_at = Some(now);
+                if let Some(id) = self.node_identity.as_ref() {
+                    if let Ok(mesh) = join_ios_remote_mesh_with_retries(id) {
+                        s.mesh = mesh;
+                        s.last_rejoin_attempt_at = None;
+                        nodes_ok = s.mesh.current_num_nodes() >= 2;
+                    }
+                }
+            }
+        }
         let mut decoded = false;
 
         if !nodes_ok {
             s.has_frame = false;
+            s.disconnected_since.get_or_insert(now);
             state.f3_fps_label_override = None;
             fill(&mut state.frame, (18, 22, 28, 255));
+            draw_status_center_message(
+                state.frame_buffer_mut(),
+                dst_w,
+                dst_h,
+                tb_i,
+                &mut s.status_text,
+                "Connection lost - waiting for iOS app",
+            );
             draw_ios_remote_toolbar(state.frame_buffer_mut(), dst_w, dst_h, dst_w_f, s.receiver_wants_frames);
             queue_and_send_input(
                 s,
@@ -366,6 +506,7 @@ impl Application for IosRemoteApp {
             );
             return;
         }
+        s.disconnected_since = None;
 
         if s.receiver_wants_frames {
             if let Ok(Some(packets)) = s.mesh.inbox().receive(KIND_FRAME, false, true) {
@@ -450,6 +591,24 @@ impl Application for IosRemoteApp {
 
         if s.receiver_wants_frames && !decoded && !s.has_frame && content_h > 0 {
             blit_solid_rect(state.frame_buffer_mut(), dst_w, dst_h, 0, tb_i, dst_w, dst_h, (18, 22, 28));
+        }
+        if s.receiver_wants_frames && s.has_frame {
+            if let Some(last_frame_at) = s.last_remote_frame_at {
+                if now.duration_since(last_frame_at) > REMOTE_FRAME_STALL_TIMEOUT {
+                    state.f3_fps_label_override = None;
+                    blit_solid_rect(state.frame_buffer_mut(), dst_w, dst_h, 0, tb_i, dst_w, dst_h, (18, 22, 28));
+                    draw_status_center_message(
+                        state.frame_buffer_mut(),
+                        dst_w,
+                        dst_h,
+                        tb_i,
+                        &mut s.status_text,
+                        "Connection lost - waiting for iOS app",
+                    );
+                    s.has_frame = false;
+                    s.disconnected_since.get_or_insert(now);
+                }
+            }
         }
 
         draw_ios_remote_toolbar(state.frame_buffer_mut(), dst_w, dst_h, dst_w_f, s.receiver_wants_frames);
