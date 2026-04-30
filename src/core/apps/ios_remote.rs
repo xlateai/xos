@@ -462,7 +462,13 @@ impl Application for IosRemoteApp {
 
         let now = Instant::now();
         let mut nodes_ok = s.mesh.current_num_nodes() >= 2;
-        if !nodes_ok {
+        let stream_stalled = s.receiver_wants_frames
+            && s.has_frame
+            && s
+                .last_remote_frame_at
+                .map(|t| now.duration_since(t) > REMOTE_FRAME_STALL_TIMEOUT)
+                .unwrap_or(false);
+        if !nodes_ok || stream_stalled {
             let can_retry = s
                 .last_rejoin_attempt_at
                 .map(|t| now.duration_since(t) >= MESH_REJOIN_GAP)
@@ -474,6 +480,11 @@ impl Application for IosRemoteApp {
                         s.mesh = mesh;
                         s.last_rejoin_attempt_at = None;
                         nodes_ok = s.mesh.current_num_nodes() >= 2;
+                        if nodes_ok {
+                            s.has_frame = false;
+                            s.last_remote_frame_at = None;
+                            state.f3_fps_label_override = None;
+                        }
                     }
                 }
             }

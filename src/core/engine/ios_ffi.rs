@@ -538,8 +538,19 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
         .iter()
         .map(|p| p.body.get("scroll").and_then(|v| v.as_f64()).unwrap_or(0.0))
         .sum();
-    let nx = last.get("nx").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
-    let ny = last.get("ny").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let fallback_nx = (state.engine_state.mouse.x / (state.width.max(1) as f32)).clamp(0.0, 1.0) as f64;
+    let fallback_ny = (state.engine_state.mouse.y / (state.height.max(1) as f32)).clamp(0.0, 1.0) as f64;
+    // Keep prior pointer position when malformed packets omit nx/ny; avoids jumps to (0,0).
+    let nx = last
+        .get("nx")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(fallback_nx)
+        .clamp(0.0, 1.0);
+    let ny = last
+        .get("ny")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(fallback_ny)
+        .clamp(0.0, 1.0);
     let left = last.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
     let right = last.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
     remote.current_left = left;
