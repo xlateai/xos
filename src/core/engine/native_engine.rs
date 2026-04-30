@@ -20,7 +20,7 @@ use super::{
     f3_menu_boost_interaction_fade,
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
-    f3_menu_handle_zoom_scroll, tick_f3_menu, tick_overlay_red_pointer,
+    f3_menu_handle_zoom_scroll, tick_f3_menu,
     frame_view_pan_by_pixels,
     tick_frame_view_zoom,
     F3Menu,
@@ -236,7 +236,6 @@ impl AppState {
         }
 
         tick_f3_menu(&mut self.engine_state);
-        tick_overlay_red_pointer(&mut self.engine_state);
 
         if mirror_ok {
             self.engine_state.frame.clear_pixels_mirror_buffer();
@@ -677,7 +676,8 @@ impl ApplicationHandler for AppStateWrapper {
                 frame_view_center_x: 0.5,
                 frame_view_center_y: 0.5,
                 f3_fps_label_override: None,
-                overlay_red_pointer_enabled: true,
+                overlay_red_pointer_enabled: false,
+                overlay_red_pointer_radius: 0.0,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -812,7 +812,8 @@ pub fn start_headless_native(
         frame_view_center_x: 0.5,
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
-        overlay_red_pointer_enabled: true,
+        overlay_red_pointer_enabled: false,
+        overlay_red_pointer_radius: 0.0,
     };
 
     if let Err(e) = app.setup(&mut engine_state) {
@@ -835,7 +836,6 @@ pub fn start_headless_native(
             app.tick(&mut engine_state);
         }
         tick_f3_menu(&mut engine_state);
-        tick_overlay_red_pointer(&mut engine_state);
     }
     SHOULD_EXIT.store(false, Ordering::Relaxed);
     Ok(())

@@ -36,6 +36,7 @@ pub use f3_menu::{
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
     f3_menu_handle_zoom_scroll, tick_f3_menu, tick_overlay_red_pointer,
+    tick_overlay_red_pointer_xy,
     F3Menu,
 };
 #[cfg(target_os = "ios")]

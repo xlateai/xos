@@ -1146,31 +1146,19 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     }
 }
 
-/// Solid red laser dot at the logical pointer (runs after keyboard + [`tick_f3_menu`]). Matches the
-/// OSK/trackpad cue used in [`crate::apps::text::TextApp`] but applies to **all** hosts.
-pub fn tick_overlay_red_pointer(state: &mut EngineState) {
-    if !state.overlay_red_pointer_enabled {
-        return;
-    }
-    let shape = state.frame.shape();
-    let fh = shape[0];
-    let fw = shape[1];
-    if fh == 0 || fw == 0 {
-        return;
-    }
+#[inline]
+fn blend_red_dot_in_buffer(buffer: &mut [u8], fw: usize, fh: usize, mx: f32, my: f32, dot_radius: f32) {
     let width_px = fw as f32;
     let height_px = fh as f32;
-    let mx = state.mouse.x.round().clamp(0.0, width_px.max(1.0) - 1.0);
-    let my = state.mouse.y.round().clamp(0.0, height_px.max(1.0) - 1.0);
-    let buffer = state.frame.buffer_mut();
-    const DOT_RADIUS: f32 = 6.0;
+    let mx = mx.round().clamp(0.0, width_px.max(1.0) - 1.0);
+    let my = my.round().clamp(0.0, height_px.max(1.0) - 1.0);
     let cx = mx as i32;
     let cy = my as i32;
-    let rb = DOT_RADIUS.ceil() as i32;
+    let rb = dot_radius.ceil() as i32;
     for dy in -rb..=rb {
         for dx in -rb..=rb {
             let dist = ((dx * dx + dy * dy) as f32).sqrt();
-            if dist > DOT_RADIUS {
+            if dist > dot_radius {
                 continue;
             }
             let px = cx + dx;
@@ -1190,6 +1178,34 @@ pub fn tick_overlay_red_pointer(state: &mut EngineState) {
             buffer[idx + 3] = 0xff;
         }
     }
+}
+
+/// Small red stream cursor for the iOS **publisher** at explicit pixel coords (observer pointer from mesh),
+/// drawn after overlays and before JPEG capture so `ios-remote` sees it baked into pixels.
+#[inline]
+pub fn tick_overlay_red_pointer_xy(state: &mut EngineState, px: f32, py: f32) {
+    if !state.overlay_red_pointer_enabled {
+        return;
+    }
+    let shape = state.frame.shape();
+    let fh = shape[0];
+    let fw = shape[1];
+    if fh == 0 || fw == 0 {
+        return;
+    }
+    let buffer = state.frame.buffer_mut();
+    let dot_radius = state.overlay_red_pointer_radius.clamp(2.0, 10.0);
+    blend_red_dot_in_buffer(buffer, fw, fh, px, py, dot_radius);
+}
+
+/// Same as [`tick_overlay_red_pointer_xy`] using [`EngineState::mouse`] (caller handles mesh vs local).
+pub fn tick_overlay_red_pointer(state: &mut EngineState) {
+    if !state.overlay_red_pointer_enabled {
+        return;
+    }
+    let mx = state.mouse.x;
+    let my = state.mouse.y;
+    tick_overlay_red_pointer_xy(state, mx, my);
 }
 
 fn blend_text(

@@ -164,7 +164,8 @@ impl StandalonePreviewApp {
                     frame_view_center_x: 0.5,
                     frame_view_center_y: 0.5,
                     f3_fps_label_override: None,
-                    overlay_red_pointer_enabled: true,
+                    overlay_red_pointer_enabled: false,
+                    overlay_red_pointer_radius: 0.0,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);
@@ -275,7 +276,6 @@ impl StandalonePreviewApp {
                     crate::engine::tick_frame_view_zoom(es);
                     crate::engine::apply_frame_view_zoom(es);
                     crate::engine::tick_f3_menu(es);
-                    crate::engine::tick_overlay_red_pointer(es);
                     frame_data.rgba.copy_from_slice(es.frame.buffer_mut());
                 }
             }

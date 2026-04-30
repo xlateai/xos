@@ -220,6 +220,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
         overlay_red_pointer_enabled: true,
+        overlay_red_pointer_radius: 3.5,
     };
 
     // Call setup
@@ -303,6 +304,10 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         tick_frame_view_zoom(&mut ios_state.engine_state);
         apply_frame_view_zoom(&mut ios_state.engine_state);
 
+        // Observer (mesh) cursor for the streamed frame — before we restore finger coords for keyboard/F3.
+        let stream_cursor_x = ios_state.engine_state.mouse.x;
+        let stream_cursor_y = ios_state.engine_state.mouse.y;
+
         ios_state.engine_state.mouse.x = local_px;
         ios_state.engine_state.mouse.y = local_py;
         
@@ -328,8 +333,12 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         }
 
         tick_f3_menu(&mut ios_state.engine_state);
+        crate::engine::tick_overlay_red_pointer_xy(
+            &mut ios_state.engine_state,
+            stream_cursor_x,
+            stream_cursor_y,
+        );
         tick_ios_remote_frame_push(ios_state);
-        crate::engine::tick_overlay_red_pointer(&mut ios_state.engine_state);
         
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
         let frame_buffer = ios_state.engine_state.frame_buffer_mut();

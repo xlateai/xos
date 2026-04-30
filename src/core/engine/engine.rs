@@ -353,8 +353,11 @@ pub struct EngineState {
     /// When set, the F3 overlay shows this value as “FPS” instead of `1 / delta_time_seconds`
     /// (e.g. remote viewer reports actual stream frame rate).
     pub f3_fps_label_override: Option<f32>,
-    /// When true, composites a bright red dot at [`MouseState::x`]/[`MouseState::y`] after overlays (F3/OSK).
+    /// When true (iOS **publisher** build only), composites a small red dot at [`MouseState::x`]/[`MouseState::y`]
+    /// after overlays so the mesh stream shows where the observer’s pointer lands.
     pub overlay_red_pointer_enabled: bool,
+    /// Pixel radius used when [`Self::overlay_red_pointer_enabled`] is true (typically ~3–4 on iOS streams).
+    pub overlay_red_pointer_radius: f32,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).
