@@ -52,6 +52,10 @@ const IOS_REMOTE_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 #[cfg(target_os = "ios")]
 const IOS_REMOTE_RECONNECT_BACKOFF: Duration = Duration::from_millis(1400);
 #[cfg(target_os = "ios")]
+const IOS_REMOTE_CURSOR_HOLD: Duration = Duration::from_millis(160);
+#[cfg(target_os = "ios")]
+const IOS_LOCAL_INPUT_PRIORITY_HOLD: Duration = Duration::from_millis(220);
+#[cfg(target_os = "ios")]
 const IOS_REMOTE_STREAM_MAX_W: u32 = 720;
 #[cfg(target_os = "ios")]
 const IOS_REMOTE_JPEG_QUALITY: u8 = 50;
@@ -72,6 +76,10 @@ struct IosEngineState {
     ios_remote: Option<IosRemoteMeshState>,
     ios_remote_linked_mode: Option<MeshMode>,
     ios_remote_last_attempt: Option<Instant>,
+    /// Local iOS touch-down state (separate from remote observer packets).
+    local_touch_left_down: bool,
+    /// Short grace window where local touch/move remains authoritative over mesh input.
+    local_input_priority_until: Option<Instant>,
 }
 
 #[cfg(target_os = "ios")]
@@ -83,8 +91,14 @@ struct IosRemoteMeshState {
     last_frame_queued_at: Option<Instant>,
     prev_left: bool,
     prev_right: bool,
+    /// Most recent remote left-button state from mesh packets.
+    current_left: bool,
     /// Desktop viewer piggybacks this on mesh input packets; disables JPEG broadcast when false.
     viewer_wants_frames: bool,
+    /// Last observer pointer (from ios-remote mesh input), used for in-frame red-dot overlay.
+    stream_cursor_px: Option<(f32, f32)>,
+    /// Timestamp of the last observer pointer update.
+    stream_cursor_seen_at: Option<Instant>,
 }
 
 // Unsafe Send implementation - safe because iOS FFI is called from main thread only
@@ -220,7 +234,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
         overlay_red_pointer_enabled: true,
-        overlay_red_pointer_radius: 3.5,
+        overlay_red_pointer_radius: 3.5 * 1.05,
     };
 
     // Call setup
@@ -237,6 +251,8 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         ios_remote: None,
         ios_remote_linked_mode: None,
         ios_remote_last_attempt: None,
+        local_touch_left_down: false,
+        local_input_priority_until: None,
     };
 
     let mut state = ENGINE_STATE.lock().unwrap();
@@ -304,9 +320,15 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         tick_frame_view_zoom(&mut ios_state.engine_state);
         apply_frame_view_zoom(&mut ios_state.engine_state);
 
-        // Observer (mesh) cursor for the streamed frame — before we restore finger coords for keyboard/F3.
-        let stream_cursor_x = ios_state.engine_state.mouse.x;
-        let stream_cursor_y = ios_state.engine_state.mouse.y;
+        // Observer cursor comes only from ios-remote mesh packets (never from local finger touch).
+        let stream_cursor = ios_state.ios_remote.as_ref().and_then(|remote| {
+            let seen = remote.stream_cursor_seen_at?;
+            if seen.elapsed() <= IOS_REMOTE_CURSOR_HOLD {
+                remote.stream_cursor_px
+            } else {
+                None
+            }
+        });
 
         ios_state.engine_state.mouse.x = local_px;
         ios_state.engine_state.mouse.y = local_py;
@@ -333,11 +355,13 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         }
 
         tick_f3_menu(&mut ios_state.engine_state);
-        crate::engine::tick_overlay_red_pointer_xy(
-            &mut ios_state.engine_state,
-            stream_cursor_x,
-            stream_cursor_y,
-        );
+        if let Some((stream_cursor_x, stream_cursor_y)) = stream_cursor {
+            crate::engine::tick_overlay_red_pointer_xy(
+                &mut ios_state.engine_state,
+                stream_cursor_x,
+                stream_cursor_y,
+            );
+        }
         tick_ios_remote_frame_push(ios_state);
         
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
@@ -416,6 +440,10 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
         state.ios_remote = None;
         state.ios_remote_linked_mode = None;
         state.ios_remote_last_attempt = None;
+        state.engine_state.mouse.is_right_clicking = false;
+        if !state.local_touch_left_down {
+            state.engine_state.mouse.is_left_clicking = false;
+        }
         return;
     }
     let wanted_mode = wanted_mode.expect("wanted_mode checked");
@@ -427,6 +455,10 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
         state.ios_remote = None;
         state.ios_remote_linked_mode = None;
         state.ios_remote_last_attempt = None;
+        state.engine_state.mouse.is_right_clicking = false;
+        if !state.local_touch_left_down {
+            state.engine_state.mouse.is_left_clicking = false;
+        }
     }
 
     let now = Instant::now();
@@ -453,7 +485,10 @@ fn ensure_ios_remote_mesh_connected(state: &mut IosEngineState) {
                         last_frame_queued_at: None,
                         prev_left: false,
                         prev_right: false,
+                        current_left: false,
                         viewer_wants_frames: true,
+                        stream_cursor_px: None,
+                        stream_cursor_seen_at: None,
                     });
                 }
                 Err(e) => {
@@ -507,9 +542,34 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
     let ny = last.get("ny").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
     let left = last.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
     let right = last.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
+    remote.current_left = left;
 
     let mx = (nx as f32) * state.width as f32;
     let my = (ny as f32) * state.height as f32;
+    // Always track remote observer cursor for in-frame red-dot overlay,
+    // even when local touch is currently controlling app interaction.
+    remote.stream_cursor_px = Some((mx, my));
+    remote.stream_cursor_seen_at = Some(Instant::now());
+
+    // While local touch is active (or just happened), keep local drag/scroll authoritative.
+    // We still consume/remember remote button state so transitions don't backlog.
+    let local_input_priority = state.local_touch_left_down
+        || state
+            .local_input_priority_until
+            .map(|until| Instant::now() <= until)
+            .unwrap_or(false);
+    if local_input_priority {
+        remote.prev_left = left;
+        remote.prev_right = right;
+        remote.current_left = left;
+        if !chars_merged.is_empty() {
+            for ch in chars_merged.chars() {
+                state.app.on_key_char(&mut state.engine_state, ch);
+            }
+        }
+        return;
+    }
+
     let prev_x = state.engine_state.mouse.x;
     let prev_y = state.engine_state.mouse.y;
     state.engine_state.mouse.x = mx;
@@ -523,7 +583,7 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
     }
 
     if left != remote.prev_left {
-        state.engine_state.mouse.is_left_clicking = left;
+        state.engine_state.mouse.is_left_clicking = state.local_touch_left_down || left;
         if left {
             if !f3_menu_handle_mouse_down(&mut state.engine_state) {
                 state.app.on_mouse_down(&mut state.engine_state);
@@ -532,9 +592,8 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
             state.app.on_mouse_up(&mut state.engine_state);
         }
         remote.prev_left = left;
-    } else {
-        state.engine_state.mouse.is_left_clicking = left;
     }
+    state.engine_state.mouse.is_left_clicking = state.local_touch_left_down || left;
 
     if scroll_sum.abs() > f64::EPSILON {
         state
@@ -662,6 +721,7 @@ pub extern "C" fn xos_engine_update_mouse(x: f32, y: f32) -> i32 {
         ios_state.engine_state.mouse.y = y;
         ios_state.engine_state.mouse.dx = x - prev_x;
         ios_state.engine_state.mouse.dy = y - prev_y;
+        ios_state.local_input_priority_until = Some(Instant::now() + IOS_LOCAL_INPUT_PRIORITY_HOLD);
         
         if !f3_menu_handle_mouse_move(&mut ios_state.engine_state) {
             ios_state.app.on_mouse_move(&mut ios_state.engine_state);
@@ -682,6 +742,8 @@ pub extern "C" fn xos_engine_mouse_down() -> i32 {
     };
 
     if let Some(ref mut ios_state) = *state {
+        ios_state.local_touch_left_down = true;
+        ios_state.local_input_priority_until = Some(Instant::now() + IOS_LOCAL_INPUT_PRIORITY_HOLD);
         ios_state.engine_state.mouse.is_left_clicking = true;
         if !f3_menu_handle_mouse_down(&mut ios_state.engine_state) {
             ios_state.app.on_mouse_down(&mut ios_state.engine_state);
@@ -718,7 +780,14 @@ pub extern "C" fn xos_engine_mouse_up() -> i32 {
     };
 
     if let Some(ref mut ios_state) = *state {
-        ios_state.engine_state.mouse.is_left_clicking = false;
+        ios_state.local_touch_left_down = false;
+        ios_state.local_input_priority_until = Some(Instant::now() + IOS_LOCAL_INPUT_PRIORITY_HOLD);
+        let remote_left = ios_state
+            .ios_remote
+            .as_ref()
+            .map(|r| r.current_left)
+            .unwrap_or(false);
+        ios_state.engine_state.mouse.is_left_clicking = remote_left;
         if !f3_menu_handle_mouse_up(&mut ios_state.engine_state) {
             ios_state.app.on_mouse_up(&mut ios_state.engine_state);
         }
@@ -726,6 +795,75 @@ pub extern "C" fn xos_engine_mouse_up() -> i32 {
     } else {
         1
     }
+}
+
+/// Swap the active app without tearing down the engine.
+/// Returns 0 on success, non-zero on error.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_engine_set_app(app_name: *const c_char) -> i32 {
+    let app_name_str = unsafe {
+        if app_name.is_null() {
+            return 2;
+        }
+        match std::ffi::CStr::from_ptr(app_name).to_str() {
+            Ok(s) => s,
+            Err(_) => return 3,
+        }
+    };
+
+    let mut state = match ENGINE_STATE.lock() {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let Some(ios_state) = state.as_mut() else {
+        return 1;
+    };
+
+    let Some(mut next_app) = apps::get_app(app_name_str) else {
+        return 4;
+    };
+
+    ios_state.app.prepare_shutdown(&mut ios_state.engine_state);
+    ios_state.local_touch_left_down = false;
+    ios_state.local_input_priority_until = Some(Instant::now() + IOS_LOCAL_INPUT_PRIORITY_HOLD);
+    ios_state.engine_state.mouse.is_left_clicking = false;
+    ios_state.engine_state.mouse.is_right_clicking = false;
+    ios_state.engine_state.mouse.dx = 0.0;
+    ios_state.engine_state.mouse.dy = 0.0;
+    ios_state.last_tick_instant = None;
+
+    if let Err(e) = next_app.setup(&mut ios_state.engine_state) {
+        log_to_ios(&format!("xos_engine_set_app: setup failed for '{app_name_str}': {e}"));
+        return 5;
+    }
+
+    ios_state.app = next_app;
+    0
+}
+
+/// Configure iOS remote mesh transport directly.
+/// mode: 0=Off, 1=Lan, 2=Online.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_engine_set_ios_remote_mesh_mode(mode: i32) -> i32 {
+    let mut state = match ENGINE_STATE.lock() {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let Some(ios_state) = state.as_mut() else {
+        return 1;
+    };
+
+    let next_mode = match mode {
+        0 => IosRemoteMeshTransport::Off,
+        1 => IosRemoteMeshTransport::Lan,
+        2 => IosRemoteMeshTransport::Online,
+        _ => return 2,
+    };
+    ios_state.engine_state.f3_menu.ios_mesh_transport = next_mode;
+    ensure_ios_remote_mesh_connected(ios_state);
+    0
 }
 
 /// Resize the frame buffer
