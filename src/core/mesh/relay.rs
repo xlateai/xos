@@ -45,6 +45,10 @@ const MESH_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const RELAY_ENV: &str = "XOS_RELAY_LINK";
 #[cfg(not(target_arch = "wasm32"))]
 const RELAY_DEFAULT: &str = "http://xos.xlate.ai:47333";
+#[cfg(not(target_arch = "wasm32"))]
+const ONLINE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+#[cfg(not(target_arch = "wasm32"))]
+const ONLINE_POLL_FAIL_GRACE: u32 = 5;
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
     WireEnvelope {
@@ -1117,6 +1121,7 @@ fn mesh_session_from_online_relay(
 
     let inbox_r = Arc::clone(&inbox);
     thread::spawn(move || {
+        let mut consecutive_failures: u32 = 0;
         loop {
             if shutdown.load(Ordering::SeqCst) != 0 {
                 break;
@@ -1129,6 +1134,8 @@ fn mesh_session_from_online_relay(
             );
             match polled {
                 Ok(v) => {
+                    consecutive_failures = 0;
+                    connected.store(1, Ordering::SeqCst);
                     if let Some(r) = v.get("rank").and_then(|x| x.as_u64()) {
                         rank_a.store(r as u32, Ordering::SeqCst);
                     }
@@ -1166,10 +1173,13 @@ fn mesh_session_from_online_relay(
                     }
                 }
                 Err(_) => {
-                    connected.store(0, Ordering::SeqCst);
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    if consecutive_failures >= ONLINE_POLL_FAIL_GRACE {
+                        connected.store(0, Ordering::SeqCst);
+                    }
                 }
             }
-            thread::sleep(Duration::from_millis(120));
+            thread::sleep(ONLINE_POLL_INTERVAL);
         }
     });
 

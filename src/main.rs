@@ -8,7 +8,11 @@ use std::process::Command;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Method, Response, Server};
 #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +208,12 @@ enum Commands {
         /// Bind port (default: 47333)
         #[arg(long, default_value_t = 47333)]
         port: u16,
+        /// Disable live ANSI relay metrics (4 lines: meshes, clients, packets, MB). On by default when stderr is a TTY.
+        #[arg(long)]
+        no_metrics: bool,
+        /// Metrics refresh interval (ms) when using TTY metrics (also updates on each relay event).
+        #[arg(long, default_value_t = 250)]
+        metrics_interval_ms: u64,
     },
 }
 
@@ -362,12 +372,12 @@ fn resolve_python_file_path(file: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
 struct RelayNode {
     session_id: String,
     node_hash_key: String,
     rank: u32,
     queue: Vec<serde_json::Value>,
+    last_seen: Instant,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -382,8 +392,142 @@ struct RelayState {
     meshes: HashMap<String, RelayMesh>,
 }
 
+/// Aggregate counts since server start (`bytes_*` measured from decoded bodies + serialized JSON replies).
 #[cfg(not(target_arch = "wasm32"))]
-fn run_relay_server(bind: &str, port: u16) {
+struct RelayTelemetry {
+    bytes_in: AtomicU64,
+    bytes_out: AtomicU64,
+    /// Routing units: +1 connect / poll / disconnect; `/mesh/send` counts +one per outbound queue delivery,
+    /// or +1 when nothing was delivered so failed sends still tally.
+    packet_units: AtomicU64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RelayMetricsSnapshot {
+    meshes: usize,
+    clients: usize,
+    packets: u64,
+    raw_bytes_total: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_metrics_snapshot(state: &RelayState, telemetry: &RelayTelemetry) -> RelayMetricsSnapshot {
+    let meshes = state.meshes.len();
+    let clients: usize = state.meshes.values().map(|m| m.nodes.len()).sum();
+    let packets = telemetry.packet_units.load(Ordering::Relaxed);
+    let raw_bytes_total = telemetry.bytes_in.load(Ordering::Relaxed)
+        + telemetry.bytes_out.load(Ordering::Relaxed);
+    RelayMetricsSnapshot {
+        meshes,
+        clients,
+        packets,
+        raw_bytes_total,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for RelayTelemetry {
+    fn default() -> Self {
+        Self {
+            bytes_in: AtomicU64::new(0),
+            bytes_out: AtomicU64::new(0),
+            packet_units: AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_tty_write_metrics_stderr(last: Option<RelayMetricsSnapshot>, cur: RelayMetricsSnapshot) -> bool {
+    use std::io::Write as _;
+
+    fn write_four_lines(w: &mut impl std::io::Write, s: RelayMetricsSnapshot) {
+        let mb = s.raw_bytes_total as f64 / (1024.0 * 1024.0);
+        writeln!(w, "meshes:   {}", s.meshes).ok();
+        writeln!(w, "clients:  {}", s.clients).ok();
+        writeln!(w, "packets:  {}", s.packets).ok();
+        writeln!(w, "data:     {:.3} MB", mb).ok();
+    }
+
+    match last {
+        None => {
+            let mut stderr = io::stderr().lock();
+            write_four_lines(&mut stderr, cur);
+        }
+        Some(p) if p != cur => {
+            let mut stderr = io::stderr().lock();
+            stderr.write_all(b"\x1b[4A").ok(); // cursor up 4 lines
+            write_four_lines(&mut stderr, cur);
+            stderr.flush().ok();
+        }
+        Some(_) => return false,
+    }
+    true
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Drop relay slots when the client hasn't polled lately (force-quit leaves no disconnect).
+/// Online mesh polls every ~250ms; a short TTL makes peer counts converge quickly on other devices.
+/// True "instant" is impossible over stateless HTTP — this bounds visible lag to roughly this interval.
+const RELAY_STALE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_stale_mesh_nodes(mesh: &mut RelayMesh, now: Instant) {
+    mesh.nodes
+        .retain(|n| now.duration_since(n.last_seen) <= RELAY_STALE_TIMEOUT);
+    for (idx, n) in mesh.nodes.iter_mut().enumerate() {
+        n.rank = idx as u32;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prune_all_relay_state(st: &mut RelayState, now: Instant) {
+    st.meshes.retain(|_, mesh| {
+        prune_stale_mesh_nodes(mesh, now);
+        !mesh.nodes.is_empty()
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_record_response_json(
+    telemetry: &RelayTelemetry,
+    body_len: usize,
+    resp: &serde_json::Value,
+    packet_units: u64,
+) -> String {
+    let out = serde_json::to_string(resp).unwrap_or_else(|_| "{}".to_string());
+    telemetry.bytes_in.fetch_add(body_len as u64, Ordering::Relaxed);
+    telemetry
+        .bytes_out
+        .fetch_add(out.len() as u64, Ordering::Relaxed);
+    telemetry
+        .packet_units
+        .fetch_add(packet_units, Ordering::Relaxed);
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn relay_emit_metrics_if_tty(
+    show_metrics: bool,
+    state: &Arc<Mutex<RelayState>>,
+    telemetry: &Arc<RelayTelemetry>,
+    last_snap: &Arc<Mutex<Option<RelayMetricsSnapshot>>>,
+) {
+    if !show_metrics {
+        return;
+    }
+    let cur = {
+        let g = state.lock().unwrap();
+        relay_metrics_snapshot(&g, telemetry)
+    };
+    let mut last = last_snap.lock().unwrap();
+    if relay_tty_write_metrics_stderr(*last, cur) {
+        *last = Some(cur);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms: u64) {
     let addr = format!("{bind}:{port}");
     let server = match Server::http(addr.as_str()) {
         Ok(s) => s,
@@ -393,7 +537,35 @@ fn run_relay_server(bind: &str, port: u16) {
         }
     };
     println!("xos relay listening on http://{addr}");
+    let show_metrics = !no_metrics && io::stderr().is_terminal();
+    let telemetry = Arc::new(RelayTelemetry::default());
+    let last_snap: Arc<Mutex<Option<RelayMetricsSnapshot>>> = Arc::new(Mutex::new(None));
     let state = Arc::new(Mutex::new(RelayState::default()));
+    {
+        let state_bg = Arc::clone(&state);
+        let tel_bg = Arc::clone(&telemetry);
+        let snap_bg = Arc::clone(&last_snap);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let now = Instant::now();
+            let mut g = state_bg.lock().unwrap();
+            prune_all_relay_state(&mut g, now);
+            drop(g);
+            relay_emit_metrics_if_tty(show_metrics, &state_bg, &tel_bg, &snap_bg);
+        });
+    }
+    if show_metrics {
+        let tick = metrics_interval_ms.max(50);
+        let state_m = Arc::clone(&state);
+        let tel_m = Arc::clone(&telemetry);
+        let snap_m = Arc::clone(&last_snap);
+        relay_emit_metrics_if_tty(show_metrics, &state_m, &tel_m, &snap_m);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(tick));
+            relay_emit_metrics_if_tty(show_metrics, &state_m, &tel_m, &snap_m);
+        });
+    }
+
     for mut req in server.incoming_requests() {
         if req.method() != &Method::Post {
             let _ = req.respond(Response::from_string("method not allowed").with_status_code(405));
@@ -403,8 +575,10 @@ fn run_relay_server(bind: &str, port: u16) {
         let mut body = String::new();
         let mut reader = req.as_reader();
         let _ = std::io::Read::read_to_string(&mut reader, &mut body);
+        let body_len = body.len();
         let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({}));
-        let resp = match path.as_str() {
+        let now = Instant::now();
+        let (resp, packet_units) = match path.as_str() {
             "/mesh/connect" => {
                 let mesh_hash = v
                     .get("mesh_hash_key")
@@ -417,9 +591,10 @@ fn run_relay_server(bind: &str, port: u16) {
                     .unwrap_or("")
                     .to_string();
                 if mesh_hash.is_empty() || node_hash.is_empty() {
-                    json!({"ok": false, "error": "mesh_hash_key and node_hash_key required"})
+                    (json!({"ok": false, "error": "mesh_hash_key and node_hash_key required"}), 1u64)
                 } else {
                     let mut g = state.lock().unwrap();
+                    prune_all_relay_state(&mut g, now);
                     let mesh = g.meshes.entry(mesh_hash).or_default();
                     let session_id = Uuid::new_v4().to_string();
                     let rank = mesh.nodes.len() as u32;
@@ -428,8 +603,12 @@ fn run_relay_server(bind: &str, port: u16) {
                         node_hash_key: node_hash,
                         rank,
                         queue: Vec::new(),
+                        last_seen: now,
                     });
-                    json!({"ok": true, "session_id": session_id, "rank": rank, "num_nodes": mesh.nodes.len()})
+                    (
+                        json!({"ok": true, "session_id": session_id, "rank": rank, "num_nodes": mesh.nodes.len()}),
+                        1u64,
+                    )
                 }
             }
             "/mesh/send" => {
@@ -440,12 +619,15 @@ fn run_relay_server(bind: &str, port: u16) {
                 let from_rank = v.get("from_rank").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
                 let from_id = v.get("from_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let mut g = state.lock().unwrap();
-                let mut done = false;
+                prune_all_relay_state(&mut g, now);
+                let mut forwarded: u64 = 0;
+                let mut found_mesh = false;
                 for mesh in g.meshes.values_mut() {
                     let sender_exists = mesh.nodes.iter().any(|n| n.session_id == sid);
                     if !sender_exists {
                         continue;
                     }
+                    found_mesh = true;
                     let msg = json!({
                         "from_rank": from_rank,
                         "from_id": from_id,
@@ -462,18 +644,30 @@ fn run_relay_server(bind: &str, port: u16) {
                             }
                         }
                         n.queue.push(msg.clone());
+                        forwarded = forwarded.saturating_add(1);
                     }
-                    done = true;
                     break;
                 }
-                if done { json!({"ok": true}) } else { json!({"ok": false, "error": "unknown session"}) }
+                let resp = if found_mesh {
+                    json!({"ok": true})
+                } else {
+                    json!({"ok": false, "error": "unknown session"})
+                };
+                let packet_units = if found_mesh {
+                    forwarded.max(1)
+                } else {
+                    1
+                };
+                (resp, packet_units)
             }
             "/mesh/poll" => {
                 let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
                 let mut g = state.lock().unwrap();
+                prune_all_relay_state(&mut g, now);
                 let mut out = json!({"ok": false, "error": "unknown session"});
                 for mesh in g.meshes.values_mut() {
                     if let Some(node) = mesh.nodes.iter_mut().find(|n| n.session_id == sid) {
+                        node.last_seen = now;
                         let messages = std::mem::take(&mut node.queue);
                         out = json!({
                             "ok": true,
@@ -484,11 +678,12 @@ fn run_relay_server(bind: &str, port: u16) {
                         break;
                     }
                 }
-                out
+                (out, 1u64)
             }
             "/mesh/disconnect" => {
                 let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
                 let mut g = state.lock().unwrap();
+                prune_all_relay_state(&mut g, now);
                 for mesh in g.meshes.values_mut() {
                     if mesh.nodes.iter().any(|n| n.session_id == sid) {
                         mesh.nodes.retain(|n| n.session_id != sid);
@@ -498,11 +693,13 @@ fn run_relay_server(bind: &str, port: u16) {
                         break;
                     }
                 }
-                json!({"ok": true})
+                (json!({"ok": true}), 1u64)
             }
-            _ => json!({"ok": false, "error": "unknown route"}),
+            _ => (json!({"ok": false, "error": "unknown route"}), 1u64),
         };
-        let _ = req.respond(Response::from_string(resp.to_string()));
+        let body_out = relay_record_response_json(&telemetry, body_len, &resp, packet_units);
+        let _ = req.respond(Response::from_string(body_out));
+        relay_emit_metrics_if_tty(show_metrics, &state, &telemetry, &last_snap);
     }
 }
 
@@ -827,10 +1024,20 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Relay { bind, port }) => {
+        Some(Commands::Relay {
+            bind,
+            port,
+            no_metrics,
+            metrics_interval_ms,
+        }) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                run_relay_server(bind.as_str(), port);
+                run_relay_server(
+                    bind.as_str(),
+                    port,
+                    no_metrics,
+                    metrics_interval_ms,
+                );
             }
             #[cfg(target_arch = "wasm32")]
             {

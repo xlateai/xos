@@ -10,13 +10,20 @@ use std::time::Duration;
 const WASM_OUTPUT_DIR_NAME: &str = "wasm-compiled-xos-output";
 const WASM_ZIP_NAME: &str = "xos-wasm.zip";
 
-/// Release artifact for the `xos` binary (`target/release/xos` or `xos.exe`).
+/// Cargo `target` directory for native host builds (isolates caches from `--ios` / `--wasm` lanes).
+pub fn standard_target_root(project_root: &Path) -> PathBuf {
+    project_root.join("target").join("standard")
+}
+
+/// Release artifact for the `xos` binary (`target/standard/release/xos` or `.../xos.exe`).
 pub fn release_xos_executable(project_root: &Path) -> PathBuf {
-    project_root.join("target").join("release").join(if cfg!(windows) {
-        "xos.exe"
-    } else {
-        "xos"
-    })
+    standard_target_root(project_root)
+        .join("release")
+        .join(if cfg!(windows) {
+            "xos.exe"
+        } else {
+            "xos"
+        })
 }
 
 /// Default Cargo `bin` directory (`xos`, `xpy` on PATH).
@@ -100,9 +107,9 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy freshly compiled `target/release/{xos,xpy}` into the Cargo `bin` directory.
+/// Copy freshly compiled `target/standard/release/{xos,xpy}` into the Cargo `bin` directory.
 fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::Result<()> {
-    let release = project_root.join("target").join("release");
+    let release = standard_target_root(project_root).join("release");
     fs::create_dir_all(dest_dir)?;
     for stem in ["xos", "xpy"] {
         let name = if cfg!(windows) {
@@ -125,7 +132,7 @@ fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
     eprintln!("⚠️  Release compile succeeded, but could not overwrite PATH binaries: {err}");
     eprintln!(
         "   Fresh binaries: {}",
-        project_root.join("target/release").display()
+        standard_target_root(project_root).join("release").display()
     );
     eprintln!("   Fix: close every running `xos` / `xpy` (and shells that started them), then run:");
     eprintln!("   xos compile");
@@ -135,6 +142,10 @@ fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
 fn run_cargo_release_verbose(project_root: &Path) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(project_root);
+    cmd.env(
+        "CARGO_TARGET_DIR",
+        standard_target_root(project_root).as_os_str(),
+    );
     cmd.args(["build", "--release", "-p", "xos", "--bins"]);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
@@ -146,6 +157,10 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
     let path_str = project_root.display().to_string();
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
+    cargo_cmd.env(
+        "CARGO_TARGET_DIR",
+        standard_target_root(project_root).as_os_str(),
+    );
     cargo_cmd.args(["build", "--release", "-p", "xos", "--bins"]);
     cargo_cmd.stdout(Stdio::null());
     cargo_cmd.stderr(Stdio::piped());
@@ -218,7 +233,7 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
     }
 }
 
-/// Compile release, then sync `target/release` → Cargo `bin` (what `xos compile` does).
+/// Compile release, then sync `target/standard/release` → Cargo `bin` (what `xos compile` does).
 ///
 /// - `quiet == false`: show `cargo` and copy status on stdout (verbose CLI).
 /// - `quiet == true`: spinner only during compile; no copy banner; PATH warnings only if copy fails.
@@ -268,24 +283,41 @@ pub fn find_project_root() -> PathBuf {
     }
 }
 
-/// Run `cargo clean` in the xos project root (full target wipe for a fresh rebuild).
+/// Run `cargo clean` for each isolated target dir (`target/standard`, `target/ios`, `target/wasm`).
 pub fn run_cargo_clean(project_root: &Path) -> bool {
-    println!("🧹 cargo clean in {}...", project_root.display());
-    match Command::new("cargo")
-        .args(["clean"])
-        .current_dir(project_root)
-        .status()
-    {
-        Ok(s) if s.success() => {
+    println!("🧹 cargo clean (parallel target dirs) in {}...", project_root.display());
+
+    let rel_dirs = ["target/standard", "target/ios", "target/wasm"];
+
+    fn clean_target_dir(project_root: &Path, rel_dir: &str) -> Result<(), String> {
+        let td = project_root.join(rel_dir);
+        if !td.exists() {
+            return Ok(());
+        }
+        let status = Command::new("cargo")
+            .args(["clean", "--target-dir"])
+            .arg(rel_dir)
+            .current_dir(project_root)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("cargo clean --target-dir {rel_dir} failed ({status})."));
+        }
+        Ok(())
+    }
+
+    match (|| -> Result<(), String> {
+        for rel in rel_dirs {
+            clean_target_dir(project_root, rel)?;
+        }
+        Ok(())
+    })() {
+        Ok(()) => {
             println!("✅ cargo clean finished.");
             true
         }
-        Ok(s) => {
-            eprintln!("❌ cargo clean failed ({s}).");
-            false
-        }
         Err(e) => {
-            eprintln!("❌ failed to run cargo clean: {e}");
+            eprintln!("❌ {e}");
             false
         }
     }
@@ -403,6 +435,7 @@ fn zip_wasm_output(output_dir: &Path) -> bool {
 /// Build WebAssembly output into `wasm-compiled-xos-output/` at the repo root and package it.
 pub fn compile_wasm(clean: bool) -> bool {
     let project_root = find_project_root();
+    let wasm_target_dir = project_root.join("target").join("wasm");
     if clean && !run_cargo_clean(&project_root) {
         return false;
     }
@@ -445,6 +478,9 @@ pub fn compile_wasm(clean: bool) -> bool {
     let status = Command::new("wasm-pack")
         .current_dir(&project_root)
         .env("GAME_SELECTION", "ball")
+        // Keep wasm artifacts isolated so `xos compile --wasm` can run concurrently
+        // with iOS/CLI builds without contending on Cargo's target-dir lock.
+        .env("CARGO_TARGET_DIR", wasm_target_dir)
         .args([
             "build",
             "--target",
@@ -528,6 +564,7 @@ pub fn compile_ios_rust(clean: bool) -> bool {
     println!("🦀 Compiling Rust library for iOS...");
 
     let project_root = find_project_root();
+    let ios_target_dir = project_root.join("target").join("ios");
     if clean && !run_cargo_clean(&project_root) {
         return false;
     }
@@ -542,6 +579,9 @@ pub fn compile_ios_rust(clean: bool) -> bool {
     let mut compile_cmd = Command::new("bash");
     compile_cmd.arg(&script_path);
     compile_cmd.current_dir(&project_root);
+    // Keep iOS artifacts isolated so `xos compile --ios` can run concurrently
+    // with non-iOS builds without contending on Cargo's target-dir lock.
+    compile_cmd.env("CARGO_TARGET_DIR", ios_target_dir);
     compile_cmd.stdout(Stdio::inherit());
     compile_cmd.stderr(Stdio::inherit());
 
