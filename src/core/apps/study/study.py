@@ -178,8 +178,11 @@ CLR_CAPTION = (255, 235, 90, 255)
 CLR_KANJI = (255, 118, 255, 255)
 CLR_HINT_BAND = (200, 95, 255, 255)
 
-# Viewport text sizes (also multiplied by Application.xos_scale inside xos.ui Text/RichText.render).
+# Viewport text sizes: bases below are multiplied inside Text/RichText.render by `xos.Application.xos_scale`
+# (same value as `_study_viewport_ui_coef()` drives for composer geometry below).
 FS = 1.2
+# Kanji cue line — extra clarity for handwriting along in a notebook (~20 % larger than previous study hero).
+HERO_FONT_BASE = 48.0 * FS * 1.2
 
 
 class StudyApp(xos.Application):
@@ -212,7 +215,7 @@ class StudyApp(xos.Application):
             color=CLR_KANJI[:3],
             hitboxes=False,
             baselines=False,
-            font_size=48.0 * FS,
+            font_size=HERO_FONT_BASE,
         )
         self.caption = xos.ui.text(
             "Japanese · romaji reply",
@@ -285,36 +288,45 @@ class StudyApp(xos.Application):
         i = int(xos.random.randint(0, self.n - 1))
         self.current = xos.csv.row(self.table, i)
 
-    def _hero_norm_x(self, word, frame_w_px):
-        """Place the hero in a trimmed horizontal band (~centered Kanji/vocab glyph run)."""
-        sc = float(getattr(self, "xos_scale", 1.0))
+    def _study_viewport_ui_coef(self):
+        """Single UI zoom coefficient for Study: mirrors F3/Application.xos_scale (percent / 100)."""
+        return float(getattr(self, "xos_scale", 1.0))
+
+    def _hero_norm_x(self, word, frame_w_px, band_x1, band_x2):
+        """Trimmed glyph band for the vocab, horizontally centered inside the chat column `[band_x1, band_x2]`."""
+        sc = self._study_viewport_ui_coef()
         fs = float(self.hero.font_size) * sc
         n = max(1, len(word))
         tw = fs * max(1.25, float(n) * 0.9)
-        tw = min(tw, frame_w_px * 0.94)
-        cx = frame_w_px * 0.5
-        x1 = (cx - tw * 0.5) / frame_w_px
-        x2 = (cx + tw * 0.5) / frame_w_px
-        return max(0.01, x1), min(0.99, x2)
+        bw = max(1e-6, (band_x2 - band_x1) * frame_w_px)
+        tw = min(tw, bw * 0.98)
+        cx = (band_x1 + band_x2) * 0.5
+        hw_norm = tw / (2.0 * frame_w_px)
+        eps = 1e-4
+        x1 = max(band_x1 + eps, cx - hw_norm)
+        x2 = min(band_x2 - eps, cx + hw_norm)
+        return x1, x2
 
     def _composer_layout(self):
         w, h = self.get_width(), self.get_height()
-        scale = float(getattr(self, "xos_scale", 1.0))
+        coef = self._study_viewport_ui_coef()
         ktop = float(getattr(self, "keyboard_top_y", 1.0))
-        margin_px = max(10, int(12 * scale))
-        gap_px = max(4, int(6 * scale))
-        comp_h = max(44, int(50 * min(scale, 1.12)))
-        bottom_px = min(h, int(ktop * h) - gap_px)
+        # Float geometry so margins scale smoothly with coef (fonts already scale via the same coef).
+        margin_px = max(10.0, 12.0 * coef)
+        gap_px = max(4.0, 6.0 * coef)
+        comp_h = max(44.0, 50.0 * coef)
+        bottom_px = min(float(h), ktop * float(h) - gap_px)
         top_px = bottom_px - comp_h
-        min_top = int(0.22 * h)
+        min_top = 0.22 * float(h)
         top_px = max(top_px, min_top)
         ml = margin_px
-        mr = w - margin_px
-        x1n = ml / w
-        x2n = mr / w
-        y1n = top_px / h
-        y2n = bottom_px / h
-        pad_x = max(8, int(10 * scale)) / w
+        mr = float(w) - margin_px
+        x1n = ml / float(w)
+        x2n = mr / float(w)
+        y1n = top_px / float(h)
+        y2n = bottom_px / float(h)
+        pad_px = max(8.0, 10.0 * coef)
+        pad_x = pad_px / float(w)
         inner_x1 = x1n + pad_x
         inner_x2 = x2n - pad_x
         inner_y1 = y1n + 0.12 * (y2n - y1n)
@@ -422,37 +434,46 @@ class StudyApp(xos.Application):
     def tick(self):
         self.frame.clear(CLR_BG[:3])
         w, h = self.get_width(), self.get_height()
-        # Hero card spans the full viewport width; Kanji is centered via `_hero_norm_x`.
-        card = (0.0, 0.032, 1.0, 0.158)
-        cx1, cy1, cx2, cy2 = card
+        # Same knob as rasterized text (`_viewport_scaled_font` uses Application.xos_scale).
+        self.viewport_ui_coefficient = self._study_viewport_ui_coef()
+        lay = self._composer_layout()
+        ox1, oy1, ox2, oy2 = lay["outer"]
+        ix1, iy1, ix2, iy2 = lay["inner"]
+
+        # Hero panel + caption/thread/feedback share the composer’s horizontal band exactly (`ox1`…`ox2`).
+        cy1 = 0.032
+        cy2 = 0.158
         xos.rasterizer.rects_filled(
             self.frame,
-            int(cx1 * w),
+            int(ox1 * w),
             int(cy1 * h),
-            int(cx2 * w),
+            int(ox2 * w),
             int(cy2 * h),
             CLR_CARD,
         )
         # rectangles() expects flat [x1,y1,x2,y2] normalized, not nested lists.
         xos.rasterizer.rectangles(
             self.frame,
-            [cx1, cy1, cx2, cy2],
+            [ox1, cy1, ox2, cy2],
             CLR_CARD_EDGE[:3],
             1.75,
         )
 
+        self.caption.x1 = ox1
+        self.caption.x2 = ox2
+        self.thread_status.x1 = ox1
+        self.thread_status.x2 = ox2
+        self.feedback_ui.x1 = ox1
+        self.feedback_ui.x2 = ox2
+
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
-        hx1, hx2 = self._hero_norm_x(word, w)
+        hx1, hx2 = self._hero_norm_x(word, w, ox1, ox2)
         self.hero.x1 = hx1
         self.hero.x2 = hx2
         self.hero.render(self.frame)
 
         self.caption.render(self.frame)
-
-        lay = self._composer_layout()
-        ox1, oy1, ox2, oy2 = lay["outer"]
-        ix1, iy1, ix2, iy2 = lay["inner"]
 
         ft_y2 = oy1 - 0.015
         self.feedback_ui.y2 = max(0.24, min(0.92, ft_y2))
