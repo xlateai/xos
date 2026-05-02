@@ -27,6 +27,8 @@ pub mod rasterizer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod data;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runtime_config;
 
 /// True if `path` looks like the root of the xos repository (not just any Rust project).
@@ -195,6 +197,10 @@ pub mod py_engine {
 pub fn start(game: &str) -> Result<(), Box<dyn std::error::Error>> {
     if game == "mesh" {
         apps::mesh::run_mesh_app();
+        return Ok(());
+    }
+    if game == "study" {
+        apps::study::run_study_app();
         return Ok(());
     }
     if let Some(app) = apps::get_app(game) {

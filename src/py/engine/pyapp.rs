@@ -623,6 +623,10 @@ class Application:
     def on_screen_size_change(self, width, height):
         """Called when screen size changes. Override this method (optional)."""
         pass
+
+    def on_key_char(self, ch):
+        """Keyboard / OSK character input. Enter is ``\\n``, Backspace ``\\b``, Esc ``\\u001b``. Override (optional)."""
+        pass
     
     def run(self):
         """Run the application with the xos engine."""
@@ -869,6 +873,17 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
+            });
+        }
+    }
+
+    fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
+        if let Some(ref app_instance) = self.app_instance {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            self.interpreter.enter(|vm| {
+                let py_s = vm.ctx.new_str(s);
+                let _ = vm.call_method(app_instance, "on_key_char", (py_s,));
             });
         }
     }

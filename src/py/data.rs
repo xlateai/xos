@@ -149,6 +149,40 @@ fn read_lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn user_data_path(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let p = crate::auth::auth_data_dir().map_err(|e| vm.new_runtime_error(e.to_string()))?;
+    Ok(vm.ctx.new_str(p.to_string_lossy().as_ref()).into())
+}
+
+/// `{xos.path.data()}/data` — persisted downloads (study CSV, etc.).
+#[cfg(not(target_arch = "wasm32"))]
+fn bundle_data_root(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let p = crate::data::bundled_data_root().map_err(|e| vm.new_runtime_error(e))?;
+    Ok(vm.ctx.new_str(p.to_string_lossy().as_ref()).into())
+}
+
+/// Resolved path under [`bundle_data_root()`]. `relative` must not contain `..`.
+#[cfg(not(target_arch = "wasm32"))]
+fn bundle_data_join(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let rel: String = args.bind(vm)?;
+    let p = crate::data::bundled_data_file(rel.trim()).map_err(|e| vm.new_runtime_error(e))?;
+    Ok(vm.ctx.new_str(p.to_string_lossy().as_ref()).into())
+}
+
+/// HTTPS GET → path from [`bundle_data_join`](`relative_under_data`) (atomic replace).
+#[cfg(not(target_arch = "wasm32"))]
+fn download_into_data(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let (url, rel): (String, String) = args.bind(vm)?;
+    let url = url.trim();
+    let dest = crate::data::bundled_data_file(rel.trim()).map_err(|e| vm.new_runtime_error(e))?;
+    crate::data::download_file_url(url, &dest).map_err(|e| vm.new_runtime_error(e))?;
+    Ok(vm
+        .ctx
+        .new_str(dest.to_string_lossy().as_ref())
+        .into())
+}
+
 /// Create the data submodule
 pub fn make_data_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.data", vm.ctx.new_dict(), None);
@@ -158,6 +192,26 @@ pub fn make_data_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let _ = module.set_attr("read", vm.new_function("read", read), vm);
     let _ = module.set_attr("read_line", vm.new_function("read_line", read_line), vm);
     let _ = module.set_attr("read_lines", vm.new_function("read_lines", read_lines), vm);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = module.set_attr("user_path", vm.new_function("user_path", user_data_path), vm);
+        let _ = module.set_attr(
+            "bundle_data_root",
+            vm.new_function("bundle_data_root", bundle_data_root),
+            vm,
+        );
+        let _ = module.set_attr(
+            "bundle_data_join",
+            vm.new_function("bundle_data_join", bundle_data_join),
+            vm,
+        );
+        let _ = module.set_attr(
+            "download_into_bundle",
+            vm.new_function("download_into_bundle", download_into_data),
+            vm,
+        );
+    }
     
     module
 }

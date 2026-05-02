@@ -13,6 +13,7 @@ pub mod ops;
 pub mod colors;
 pub mod dtypes;
 pub mod data;
+pub mod csv;
 pub mod path;
 pub mod ui;
 pub mod nn;
