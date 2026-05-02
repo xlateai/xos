@@ -174,11 +174,12 @@ CLR_COMPOSER_EDGE = (90, 90, 96, 255)
 CLR_MUTED = (130, 130, 138, 255)
 CLR_THREAD = (205, 205, 212, 255)
 CLR_CAPTION = (178, 178, 184, 255)
-CLR_KANJI = (248, 248, 252, 255)
+# Hero cue — same hue as Minecraft ``&a`` used for vocab/readings in review rich text.
+CLR_KANJI = (85, 255, 85, 255)
 CLR_HINT_BAND = (52, 52, 56, 255)
 
 # Scale for the review block (feedback rich text + thread line + composer summary in feedback mode).
-REVIEW_TEXT_SCALE = 1.3
+REVIEW_TEXT_SCALE = 1.3 * 0.8
 
 # Global Study UI vs earlier revision (~+50% type, chrome, composer, vertical bands).
 STUDY_UI_SCALE = 1.5
@@ -188,6 +189,39 @@ STUDY_UI_SCALE = 1.5
 FS = 1.2 * STUDY_UI_SCALE
 # Kanji cue line — extra clarity for handwriting along in a notebook (~20 % larger than previous study hero).
 HERO_FONT_BASE = 48.0 * FS * 1.2
+
+
+def _sentence_with_lime_vocab(s, vword):
+    """Minecraft markup: lime (``&a``) vocab hits; intervening prose bold white."""
+    if not vword:
+        return f"&f&l{s}&r"
+    s = str(s)
+    parts = s.split(str(vword))
+    if len(parts) == 1:
+        return f"&f&l{s}&r"
+    chunks = []
+    for i, p in enumerate(parts):
+        if p:
+            chunks.append(f"&f&l{p}&r")
+        if i < len(parts) - 1:
+            chunks.append(f"&a&l{vword}&r")
+    return "".join(chunks)
+
+
+def _kana_line_with_lime_reading(kana_line, vk):
+    """Sentence kana row: occurrences of vocab reading ``vk`` in lime, rest muted ``&7``."""
+    ks = str(kana_line)
+    vk = str(vk) if vk is not None else ""
+    if not vk or vk not in ks:
+        return f"&7{ks}&r"
+    parts = ks.split(vk)
+    chunks = []
+    for i, p in enumerate(parts):
+        if p:
+            chunks.append(f"&7{p}&r")
+        if i < len(parts) - 1:
+            chunks.append(f"&a&l{vk}&r")
+    return "".join(chunks)
 
 
 class StudyApp(xos.Application):
@@ -412,18 +446,18 @@ class StudyApp(xos.Application):
         vword = w.get(VOCAB_COL, "")
         mean = w.get(MEANING_COL, "")
         ok = self.last_correct
-        # Only &0–&f, &l/&r ; keep contrast on blacks/grays (&f white, &7–&8 grays).
+        # &a = Minecraft bright lime/green over black; lime matches ``CLR_KANJI`` accent.
         head = "&f&lCorrect!&r&r\n" if ok else "&8&lIncorrect&r&r\n"
         line1 = (
             f"{head}"
-            f"&f「{vk}」&rは&7&l{vword}&r。\n"
+            f"&f「&a&l{vk}&r&f」は&a&l{vword}&r。\n"
             f"&8({mean})&r"
         )
         parts = [
             line1,
             "",
-            f"&f&l{ja}&r",
-            f"&7{kana}&r",
+            _sentence_with_lime_vocab(ja, vword),
+            _kana_line_with_lime_reading(kana, vk),
             f"&f&l{en}&r",
             "",
             "&7&lDrag to select&r · &r&8Enter continues&r\n"
