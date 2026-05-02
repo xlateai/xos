@@ -4,10 +4,24 @@ use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 use std::sync::{Mutex, OnceLock};
 
+/// Optional interaction hints for viewport text blocks (`UiText`, `RichText` in Python).
+/// The rasterizer consumes only geometry and strings; hosts use these flags for selection,
+/// `on_key_char` routing, and mobile software keyboard wiring.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UiTextInteraction {
+    pub selectable: bool,
+    pub editable: bool,
+    pub use_software_keyboard: bool,
+}
+
 static UI_TEXT_FONT: OnceLock<Mutex<Option<Font>>> = OnceLock::new();
 static UI_TEXT_FONT_FAMILY: OnceLock<Mutex<FontFamily>> = OnceLock::new();
 
-fn shared_font() -> Result<Font, String> {
+pub(crate) fn shared_ui_text_font() -> Result<Font, String> {
+    shared_font_inner()
+}
+
+fn shared_font_inner() -> Result<Font, String> {
     let lock = UI_TEXT_FONT.get_or_init(|| Mutex::new(None));
     let family_lock = UI_TEXT_FONT_FAMILY.get_or_init(|| Mutex::new(fonts::default_font_family()));
     let mut guard = lock
@@ -74,7 +88,7 @@ impl UiText {
         let box_width = (x2 - x1) as f32;
         let box_height = (y2 - y1) as f32;
 
-        let font = shared_font()?;
+        let font = shared_font_inner()?;
         let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
         rasterizer.tick(box_width, box_height);

@@ -126,8 +126,6 @@ HIRAGANA_MAP = {
     "fo": "ふぉ",
 }
 
-ROMAJI_MAP = {v: k for k, v in HIRAGANA_MAP.items()}
-
 
 def katakana_to_hiragana(s):
     out = []
@@ -169,19 +167,6 @@ def romaji_to_hiragana(romaji):
     return hiragana
 
 
-def strip_html_b(s):
-    return s.replace("<b>", "").replace("</b>", "")
-
-
-def box_text(correct, n=8):
-    sq = "■ "
-    line = (sq * n).strip()
-    grid = "\n".join([line] * n)
-    if correct:
-        return "&a" + grid + "&r"
-    return "&c" + grid + "&r"
-
-
 class StudyApp(xos.Application):
     def __init__(self):
         super().__init__()
@@ -196,43 +181,48 @@ class StudyApp(xos.Application):
         self.current = None
         self.feedback_text = ""
         self.last_correct = False
+        self.fb_dragging = False
+        self.fb_anchor = None
+        self.fb_sel = None
         self._pick_word()
 
         self.title = xos.ui.text(
             "",
             0.05,
-            0.12,
+            0.10,
             0.95,
-            0.42,
+            0.38,
             color=xos.color.WHITE,
             font_size=56.0,
         )
         self.hint = xos.ui.text(
             "Type romaji, Enter to submit. Backspace edits. Esc clears.",
             0.05,
-            0.44,
+            0.41,
             0.95,
-            0.52,
+            0.49,
             color=(180, 180, 200),
-            font_size=22.0,
+            font_size=20.0,
         )
         self.input_label = xos.ui.text(
             "",
             0.05,
-            0.54,
+            0.51,
             0.95,
-            0.62,
+            0.59,
             color=(120, 220, 255),
             font_size=28.0,
         )
-        self.feedback = xos.ui.text(
+        self.feedback_ui = xos.ui.rich_text(
             "",
             0.05,
-            0.60,
+            0.52,
             0.95,
-            0.92,
+            0.93,
             color=xos.color.WHITE,
-            font_size=24.0,
+            font_size=22.0,
+            minecraft=True,
+            selectable=True,
         )
 
     def _pick_word(self):
@@ -242,17 +232,55 @@ class StudyApp(xos.Application):
 
     def _build_feedback(self):
         w = self.current
-        ja = strip_html_b(w.get(JAPANESE_SENTENCE_COL, ""))
+        ja = w.get(JAPANESE_SENTENCE_COL, "")
         kana = w.get(JAPANESE_KANA_SENTENCE_COL, "")
         en = w.get(ENGLISH_SENTENCE_COL, "")
         vk = katakana_to_hiragana(w.get(KANA_COL, ""))
         vword = w.get(VOCAB_COL, "")
         mean = w.get(MEANING_COL, "")
         ok = self.last_correct
-        head = "&aCorrect!&r" if ok else "&cIncorrect.&r"
-        line1 = f"{head}\n「{vk}」は「{vword}」。（{mean}）"
-        parts = [line1, "", ja, kana, en, "", box_text(ok), "", "&6Press Enter to continue (or type exit then Enter)&r"]
+        head = "&aCorrect!&r\n" if ok else "&cIncorrect.&r\n"
+        line1 = f"{head}「{vk}」は「{vword}」。（{mean}）"
+        parts = [
+            line1,
+            "",
+            ja,
+            kana,
+            en,
+            "",
+            "&eDrag to highlight • Enter continues&r",
+        ]
         return "\n".join(parts)
+
+    def _clear_feedback_selection(self):
+        self.fb_dragging = False
+        self.fb_anchor = None
+        self.fb_sel = None
+
+    def on_mouse_down(self, x, y):
+        if self.state != "feedback":
+            return
+        ix = self.feedback_ui.pick(x, y)
+        if ix < 0:
+            self._clear_feedback_selection()
+            return
+        self.fb_anchor = ix
+        self.fb_sel = (ix, ix + 1)
+        self.fb_dragging = True
+
+    def on_mouse_move(self, x, y):
+        if self.state != "feedback" or not self.fb_dragging or self.fb_anchor is None:
+            return
+        ix = self.feedback_ui.pick(x, y)
+        if ix < 0:
+            return
+        a = self.fb_anchor
+        lo = ix if ix < a else a
+        hi = (a if ix < a else ix) + 1
+        self.fb_sel = (lo, hi)
+
+    def on_mouse_up(self, _x, _y):
+        self.fb_dragging = False
 
     def on_key_char(self, ch):
         if self.state == "feedback":
@@ -260,6 +288,7 @@ class StudyApp(xos.Application):
                 self.state = "prompt"
                 self.guess_buf = ""
                 self.feedback_text = ""
+                self._clear_feedback_selection()
                 self._pick_word()
             return
 
@@ -289,6 +318,7 @@ class StudyApp(xos.Application):
         self.last_correct = guess_hi == kana_tgt
         self.state = "feedback"
         self.feedback_text = self._build_feedback()
+        self._clear_feedback_selection()
 
     def tick(self):
         self.frame.clear(xos.color.BLACK)
@@ -296,20 +326,29 @@ class StudyApp(xos.Application):
             w = self.current
             word = w.get(VOCAB_COL, "") if w else ""
             self.title.text = f"Kanji: {word}"
+            self.hint.text = "Type romaji, Enter submits. Esc clears • Backspace edits."
             self.input_label.text = f"Your guess (romaji): {self.guess_buf}_"
-            self.feedback.text = ""
+            self.feedback_ui.text = ""
         else:
             w = self.current
             word = w.get(VOCAB_COL, "") if w else ""
             self.title.text = f"Kanji: {word}"
+            self.hint.text = "Drag anywhere on the passage to highlight. Enter → next word."
             self.input_label.text = ""
-            self.feedback.text = self.feedback_text
+            self.feedback_ui.text = self.feedback_text
 
         self.title.render(self.frame)
         if self.state == "prompt":
             self.hint.render(self.frame)
             self.input_label.render(self.frame)
-        self.feedback.render(self.frame)
+        else:
+            self.hint.render(self.frame)
+            lo, hi = (-1, -1)
+            if self.fb_sel is not None:
+                lo, hi = self.fb_sel
+            self.feedback_ui.render(
+                self.frame, selection_start=lo, selection_end=hi
+            )
 
 
 if __name__ == "__main__":

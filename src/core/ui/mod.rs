@@ -4,6 +4,7 @@ pub mod onscreen_keyboard;
 pub mod text;
 pub mod audio_selector;
 pub mod transcribe_lang;
+pub mod rich_text;
 
 pub use selector::Selector;
 pub use button::Button;
