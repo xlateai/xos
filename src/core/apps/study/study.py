@@ -180,9 +180,12 @@ CLR_HINT_BAND = (52, 52, 56, 255)
 # Scale for the review block (feedback rich text + thread line + composer summary in feedback mode).
 REVIEW_TEXT_SCALE = 1.3
 
+# Global Study UI vs earlier revision (~+50% type, chrome, composer, vertical bands).
+STUDY_UI_SCALE = 1.5
+
 # Viewport text sizes: bases below are multiplied inside Text/RichText.render by `xos.Application.xos_scale`
 # (same value as `_study_viewport_ui_coef()` drives for composer geometry below).
-FS = 1.2
+FS = 1.2 * STUDY_UI_SCALE
 # Kanji cue line — extra clarity for handwriting along in a notebook (~20 % larger than previous study hero).
 HERO_FONT_BASE = 48.0 * FS * 1.2
 
@@ -313,6 +316,39 @@ class StudyApp(xos.Application):
         span = max(0.0, sy2 - sy1)
         return sy1 + float(y) * span
 
+    def _study_vertical_bands_mapped(self):
+        """Legacy-space Y bands scaled vertically so larger fonts still fit."""
+        k = STUDY_UI_SCALE
+        gap = 0.006 * k
+        hm = (0.048 + 0.126) / 2.0
+        hh = (0.126 - 0.048) * k
+        hy1l = hm - hh / 2.0
+        hy2l = hm + hh / 2.0
+        cy1l = hy1l - (0.048 - 0.032) * k
+        cy2l = hy2l + (0.158 - 0.126) * k
+        cm = (0.129 + 0.168) / 2.0
+        ch = (0.168 - 0.129) * k
+        cap_y1l = max(cm - ch / 2.0, cy2l + gap)
+        cap_y2l = cap_y1l + ch
+        tm = (0.176 + 0.222) / 2.0
+        th = (0.222 - 0.176) * k
+        thr_y1l = max(tm - th / 2.0, cap_y2l + gap)
+        thr_y2l = thr_y1l + th
+        fb_y1l = max(0.230, thr_y2l + gap)
+        map_y = self._map_layout_y_norm
+        return {
+            "cy1": map_y(cy1l),
+            "cy2": map_y(cy2l),
+            "hero_y1": map_y(hy1l),
+            "hero_y2": map_y(hy2l),
+            "caption_y1": map_y(cap_y1l),
+            "caption_y2": map_y(cap_y2l),
+            "thread_y1": map_y(thr_y1l),
+            "thread_y2": map_y(thr_y2l),
+            "feedback_y1": map_y(fb_y1l),
+            "feedback_y2_min": map_y(0.24 * k),
+        }
+
     def _hero_norm_x(self, word, frame_w_px, band_x1, band_x2):
         """Kanji cue: width from a generous CJK estimate, centered in the composer column."""
         eps = 4e-4
@@ -339,10 +375,11 @@ class StudyApp(xos.Application):
         safe_right_px = sx2 * float(w)
         safe_top_px = sy1 * float(h)
         safe_bottom_px = sy2 * float(h)
-        margin_px = max(10.0, 12.0 * coef)
-        gap_px = max(4.0, 6.0 * coef)
+        s = STUDY_UI_SCALE
+        margin_px = max(10.0, 12.0 * coef) * s
+        gap_px = max(4.0, 6.0 * coef) * s
         # ~30% taller composer bar (hit target + romaji line).
-        comp_h = 1.3 * max(44.0, 50.0 * coef)
+        comp_h = 1.3 * max(44.0, 50.0 * coef) * s
         bottom_px = min(safe_bottom_px, ktop * float(h) - gap_px)
         top_px = bottom_px - comp_h
         sh = max(1.0, safe_bottom_px - safe_top_px)
@@ -354,7 +391,7 @@ class StudyApp(xos.Application):
         x2n = mr / float(w)
         y1n = top_px / float(h)
         y2n = bottom_px / float(h)
-        pad_px = max(8.0, 10.0 * coef)
+        pad_px = max(8.0, 10.0 * coef) * s
         pad_x = pad_px / float(w)
         inner_x1 = x1n + pad_x
         inner_x2 = x2n - pad_x
@@ -535,10 +572,12 @@ class StudyApp(xos.Application):
         ox1, oy1, ox2, oy2 = lay["outer"]
         ix1, iy1, ix2, iy2 = lay["inner"]
         _sx1, _sy1, _sx2, sy2 = self._safe_bounds()
+        vb = self._study_vertical_bands_mapped()
+        strk_outer = 1.75 * STUDY_UI_SCALE
+        strk_comp = 1.25 * STUDY_UI_SCALE
 
         # Hero panel + caption/thread/feedback share the composer’s horizontal band exactly (`ox1`…`ox2`).
-        cy1 = self._map_layout_y_norm(0.032)
-        cy2 = self._map_layout_y_norm(0.158)
+        cy1, cy2 = vb["cy1"], vb["cy2"]
         xos.rasterizer.rects_filled(
             self.frame,
             int(ox1 * w),
@@ -552,34 +591,34 @@ class StudyApp(xos.Application):
             self.frame,
             [ox1, cy1, ox2, cy2],
             CLR_CARD_EDGE[:3],
-            1.75,
+            strk_outer,
         )
 
         self.caption.x1 = ox1
         self.caption.x2 = ox2
-        self.caption.y1 = self._map_layout_y_norm(0.129)
-        self.caption.y2 = self._map_layout_y_norm(0.168)
+        self.caption.y1 = vb["caption_y1"]
+        self.caption.y2 = vb["caption_y2"]
         self.thread_status.x1 = ox1
         self.thread_status.x2 = ox2
-        self.thread_status.y1 = self._map_layout_y_norm(0.176)
-        self.thread_status.y2 = self._map_layout_y_norm(0.222)
+        self.thread_status.y1 = vb["thread_y1"]
+        self.thread_status.y2 = vb["thread_y2"]
         self.feedback_ui.x1 = ox1
         self.feedback_ui.x2 = ox2
-        self.feedback_ui.y1 = self._map_layout_y_norm(0.230)
+        self.feedback_ui.y1 = vb["feedback_y1"]
 
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
         hx1, hx2 = self._hero_norm_x(word, w, ox1, ox2)
         self.hero.x1 = hx1
         self.hero.x2 = hx2
-        self.hero.y1 = self._map_layout_y_norm(0.048)
-        self.hero.y2 = self._map_layout_y_norm(0.126)
+        self.hero.y1 = vb["hero_y1"]
+        self.hero.y2 = vb["hero_y2"]
         self.hero.render(self.frame)
 
         self.caption.render(self.frame)
 
-        ft_y2 = oy1 - 0.015
-        y_lo = self._map_layout_y_norm(0.24)
+        ft_y2 = oy1 - 0.015 * STUDY_UI_SCALE
+        y_lo = vb["feedback_y2_min"]
         y_hi = min(self._map_layout_y_norm(0.92), sy2 - 2e-3)
         self.feedback_ui.y2 = max(y_lo, min(y_hi, ft_y2))
 
@@ -612,7 +651,7 @@ class StudyApp(xos.Application):
                 self.frame,
                 [ox1, oy1, ox2, oy2],
                 CLR_COMPOSER_EDGE[:3],
-                1.25,
+                strk_comp,
             )
 
             self.chat_value.x1 = ix1
@@ -674,7 +713,7 @@ class StudyApp(xos.Application):
                 self.frame,
                 [ox1, oy1, ox2, oy2],
                 CLR_HINT_BAND[:3],
-                1.25,
+                strk_comp,
             )
             gb = self.guess_buf.strip()
             self.chat_value.text = gb if gb else "—"
