@@ -13,7 +13,10 @@ use crate::engine::keyboard::shortcuts::{NamedSpecialKey, SpecialKeyEvent};
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos", target_os = "linux")
 ))]
-use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
+use crate::rasterizer::text::{
+    fonts,
+    text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer},
+};
 use crate::rasterizer::fill;
 
 #[cfg(all(
@@ -104,6 +107,7 @@ struct IosRemoteSession {
     disconnected_since: Option<Instant>,
     last_rejoin_attempt_at: Option<Instant>,
     status_text: TextRasterizer,
+    status_text_font_version: u64,
 }
 
 impl IosRemoteApp {
@@ -295,8 +299,10 @@ fn draw_status_center_message(
     fh: usize,
     toolbar_h_px: usize,
     rasterizer: &mut TextRasterizer,
+    status_font_version: &mut u64,
     text: &str,
 ) {
+    let _ = sync_rasterizer_to_default_font(rasterizer, status_font_version);
     if fw == 0 || fh == 0 || toolbar_h_px >= fh {
         return;
     }
@@ -439,6 +445,7 @@ impl Application for IosRemoteApp {
             disconnected_since: None,
             last_rejoin_attempt_at: None,
             status_text: TextRasterizer::new(fonts::default_font(), 24.0),
+            status_text_font_version: fonts::default_font_version(),
         });
         Ok(())
     }
@@ -502,6 +509,7 @@ impl Application for IosRemoteApp {
                 dst_h,
                 tb_i,
                 &mut s.status_text,
+                &mut s.status_text_font_version,
                 "Connection lost - waiting for iOS app",
             );
             draw_ios_remote_toolbar(state.frame_buffer_mut(), dst_w, dst_h, dst_w_f, s.receiver_wants_frames);
@@ -614,6 +622,7 @@ impl Application for IosRemoteApp {
                         dst_h,
                         tb_i,
                         &mut s.status_text,
+                        &mut s.status_text_font_version,
                         "Connection lost - waiting for iOS app",
                     );
                     s.has_frame = false;

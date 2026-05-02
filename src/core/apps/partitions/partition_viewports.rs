@@ -11,6 +11,7 @@ const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
 pub struct PartitionA {
     pub data: PartitionData,
     text_rasterizer: RefCell<TextRasterizer>,
+    default_font_version: RefCell<u64>,
 }
 
 impl PartitionA {
@@ -22,6 +23,7 @@ impl PartitionA {
         Self {
             data: PartitionData::new(left, right, top, bottom, COLOR_A),
             text_rasterizer: RefCell::new(text_rasterizer),
+            default_font_version: RefCell::new(fonts::default_font_version()),
         }
     }
 }
@@ -64,6 +66,16 @@ impl Partition for PartitionA {
         }
 
         // Draw centered text
+        {
+            let v = fonts::default_font_version();
+            let mut dv = self.default_font_version.borrow_mut();
+            if v != *dv {
+                *dv = v;
+                self.text_rasterizer
+                    .borrow_mut()
+                    .set_font(fonts::default_font());
+            }
+        }
         let mut text_rasterizer = self.text_rasterizer.borrow_mut();
         text_rasterizer.tick(rect_w as f32, rect_h as f32);
 

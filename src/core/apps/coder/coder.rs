@@ -118,6 +118,7 @@ pub struct CoderApp {
     last_applied_ui_scale: f32,
     explorer_search_query: String,
     explorer_search_focused: bool,
+    default_font_version: u64,
 }
 
 impl CoderApp {
@@ -689,6 +690,34 @@ impl CoderApp {
             last_applied_ui_scale: f32::NAN,
             explorer_search_query: String::new(),
             explorer_search_focused: false,
+            default_font_version: fonts::default_font_version(),
+        }
+    }
+
+    /// Keep tab strip / explorer labels on the F3 default font when the user changes it.
+    fn sync_default_font_rasters(&mut self) {
+        let v = fonts::default_font_version();
+        if v == self.default_font_version {
+            return;
+        }
+        self.default_font_version = v;
+        self.code_app.default_font_version = v;
+        self.terminal_app.default_font_version = v;
+        self.console_app.default_font_version = v;
+        let f = fonts::default_font();
+        self.clear_button_label.set_font(f.clone());
+        self.code_tab_label.set_font(f.clone());
+        self.terminal_tab_label.set_font(f.clone());
+        self.viewport_tab_label.set_font(f.clone());
+        self.run_button_label.set_font(f.clone());
+        for r in &mut self.editor_tab_labels {
+            r.set_font(f.clone());
+        }
+        self.editor_tab_close_label.set_font(f.clone());
+        self.explorer_search_label.set_font(f.clone());
+        self.explorer_search_text.set_font(f.clone());
+        for r in &mut self.file_list_rasterizers {
+            r.set_font(f.clone());
         }
     }
 
@@ -1903,6 +1932,7 @@ impl Application for CoderApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        self.sync_default_font_rasters();
         // Update terminal from background thread output
         if let Ok(buffer) = self.python_output_buffer.try_lock() {
             if !buffer.is_empty() {

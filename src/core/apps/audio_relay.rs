@@ -39,6 +39,7 @@ pub struct AudioRelay {
     output_devices: Vec<AudioDevice>,
     // Font for text rendering
     font: Option<Font>,
+    default_font_version: u64,
 }
 
 impl AudioRelay {
@@ -60,6 +61,7 @@ impl AudioRelay {
             input_devices: Vec::new(),
             output_devices: Vec::new(),
             font,
+            default_font_version: fonts::default_font_version(),
         }
     }
 }
@@ -147,6 +149,11 @@ impl Application for AudioRelay {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        let v = fonts::default_font_version();
+        if v != self.default_font_version {
+            self.default_font_version = v;
+            self.font = Some(fonts::default_font());
+        }
         // Fill background
         let buffer = state.frame_buffer_mut();
         let len = buffer.len();

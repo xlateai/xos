@@ -1,7 +1,7 @@
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer};
 use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -128,6 +128,8 @@ pub struct TextApp {
     pub bottom_chrome_height_px: f32,
     /// Pixels below the safe region top reserved for parent chrome (e.g. coder editor tab bar).
     pub top_chrome_height_px: f32,
+    /// Last seen [`fonts::default_font_version`] for F3 default font hot-swap.
+    pub default_font_version: u64,
 }
 
 
@@ -203,6 +205,7 @@ impl TextApp {
             uses_parent_ui_scale: false,
             bottom_chrome_height_px: 0.0,
             top_chrome_height_px: 0.0,
+            default_font_version: fonts::default_font_version(),
         }
     }
 
@@ -296,6 +299,12 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        if sync_rasterizer_to_default_font(
+            &mut self.text_rasterizer,
+            &mut self.default_font_version,
+        ) {
+            self.fade_map.clear();
+        }
         // Process any pending keyboard characters first
         while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
             self.on_key_char(state, ch);

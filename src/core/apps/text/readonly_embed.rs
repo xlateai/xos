@@ -3,7 +3,8 @@
 
 use crate::engine::EngineState;
 use crate::ui::onscreen_keyboard::KeyType;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::fonts;
+use crate::rasterizer::text::text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer};
 use fontdue::Font;
 use std::time::Instant;
 use std::time::Duration;
@@ -70,6 +71,7 @@ pub struct TranscriptTextView {
     trackpad_last_tap_y: f32,
     smooth_cursor_x: f32,
     selection_anim_phase: f32,
+    default_font_version: u64,
 }
 
 impl TranscriptTextView {
@@ -105,6 +107,7 @@ impl TranscriptTextView {
             trackpad_last_tap_y: 0.0,
             smooth_cursor_x: 0.0,
             selection_anim_phase: 0.0,
+            default_font_version: fonts::default_font_version(),
         }
     }
 
@@ -113,10 +116,8 @@ impl TranscriptTextView {
     }
 
     pub fn set_font(&mut self, font: Font) {
-        let font_size = self.text_rasterizer.font_size;
-        let text = self.text_rasterizer.text.clone();
-        self.text_rasterizer = TextRasterizer::new(font, font_size);
-        self.text_rasterizer.set_text(text);
+        self.text_rasterizer.set_font(font);
+        self.default_font_version = fonts::default_font_version();
     }
 
     /// Replace document text. If [`Self::stick_to_tail`] is true and the string changed, we snap to
@@ -375,6 +376,10 @@ impl TranscriptTextView {
 
     /// `rect` is `(x0, y0, x1, y1)` in frame pixels. Clips drawing to that rectangle.
     pub fn tick(&mut self, state: &mut EngineState, rect: (f32, f32, f32, f32)) {
+        let _ = sync_rasterizer_to_default_font(
+            &mut self.text_rasterizer,
+            &mut self.default_font_version,
+        );
         self.last_rect = rect;
         let (rx0, ry0, rx1, ry1) = rect;
         let content_w = (rx1 - rx0 - H_PAD * 2.0).max(1.0);
