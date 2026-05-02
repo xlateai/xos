@@ -10,8 +10,9 @@ use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, 
 use crate::rasterizer::text::fonts;
 use crate::ui::{Button, UiText};
 use crate::ui::rich_text::{
-    blit_rgba_subrect, rich_text_plain_preview, rich_text_pick_char_index, rich_text_render_into_buffer,
-    rgba_subrect_clone,
+    blit_rgba_subrect, rich_text_plain_preview, rich_text_pick_char_index, rich_text_overlay_plain_selection,
+    rich_text_render_into_buffer,
+    rgba_subrect_clone, RichLayout,
 };
 use crate::ui::text::UiTextRenderState;
 
@@ -34,7 +35,6 @@ struct RichTextBlitCacheKey {
     default_fg: [u8; 4],
     hitboxes: bool,
     baselines: bool,
-    sel: Option<(usize, usize)>,
     opaque_under_rgb: Option<[u8; 3]>,
 }
 
@@ -48,6 +48,7 @@ struct RichTextBlitCacheSlot {
     lines: Vec<u32>,
     hitboxes: Vec<[[f32; 2]; 2]>,
     baselines: Vec<[[f32; 2]; 2]>,
+    layout: RichLayout,
 }
 
 static RICH_TEXT_BLIT_CACHE_SLOTS: Lazy<Mutex<HashMap<i64, RichTextBlitCacheSlot>>> =
@@ -670,7 +671,6 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         default_fg,
         hitboxes,
         baselines,
-        sel,
         opaque_under_rgb: opaque_under_arr,
     };
 
@@ -693,20 +693,34 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                         hit.lines.clone(),
                         hit.hitboxes.clone(),
                         hit.baselines.clone(),
+                        hit.layout.clone(),
                     )
                 })
         };
 
-        if let Some((hit_px1, hit_py1, bw, bh, pixels, lines, hitboxes, baselines)) = cached_hit
+        if let Some((hit_px1, hit_py1, bw, bh, pixels, lines, hitboxes, baselines, layout)) =
+            cached_hit
         {
             let _ = blit_rgba_subrect(buffer, canvas_width, hit_px1, hit_py1, &pixels, bw, bh);
+            rich_text_overlay_plain_selection(
+                buffer,
+                canvas_width,
+                canvas_height,
+                px1,
+                py1,
+                px2,
+                py2,
+                &layout,
+                sel,
+                opaque_under_rgb,
+            );
             UiTextRenderState {
                 lines,
                 hitboxes,
                 baselines,
             }
         } else {
-            let rs = rich_text_render_into_buffer(
+            let (rs, layout) = rich_text_render_into_buffer(
                 buffer,
                 canvas_width,
                 canvas_height,
@@ -722,10 +736,12 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 baselines,
                 sel,
                 opaque_under_rgb,
+                true,
             )
             .map_err(|e| vm.new_runtime_error(e))?;
+
             if px2 > px1 && py2 > py1 {
-                if let Some((pixels, bw, bh)) =
+                if let Some((pixels, bw_b, bh_b)) =
                     rgba_subrect_clone(buffer, canvas_width, px1, py1, px2, py2)
                 {
                     let mut cg = RICH_TEXT_BLIT_CACHE_SLOTS.lock().unwrap();
@@ -735,20 +751,35 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                             key: cache_key,
                             px_x1: px1,
                             px_y1: py1,
-                            bw,
-                            bh,
+                            bw: bw_b,
+                            bh: bh_b,
                             pixels,
                             lines: rs.lines.clone(),
                             hitboxes: rs.hitboxes.clone(),
                             baselines: rs.baselines.clone(),
+                            layout: layout.clone(),
                         },
                     );
                 }
             }
+
+            rich_text_overlay_plain_selection(
+                buffer,
+                canvas_width,
+                canvas_height,
+                px1,
+                py1,
+                px2,
+                py2,
+                &layout,
+                sel,
+                opaque_under_rgb,
+            );
+
             rs
         }
     } else {
-        rich_text_render_into_buffer(
+        let (state, _layout) = rich_text_render_into_buffer(
             buffer,
             canvas_width,
             canvas_height,
@@ -764,8 +795,10 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             baselines,
             sel,
             opaque_under_rgb,
+            false,
         )
-        .map_err(|e| vm.new_runtime_error(e))?
+        .map_err(|e| vm.new_runtime_error(e))?;
+        state
     };
 
     let lines_py = vm.ctx.new_list(

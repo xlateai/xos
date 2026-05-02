@@ -263,7 +263,7 @@ pub fn layout_rich(
 const SEL_BG: (u8, u8, u8, u8) = (50, 130, 255, 115);
 
 #[allow(clippy::too_many_arguments)]
-fn draw_selection_highlight(
+pub(crate) fn rich_text_draw_plain_selection_highlight(
     buffer: &mut [u8],
     frame_w: usize,
     frame_h: usize,
@@ -301,6 +301,167 @@ fn draw_selection_highlight(
                 y.saturating_add(h),
                 SEL_BG,
             );
+        }
+    }
+}
+
+/// After a cached RGBA tile (glyphs sans selection), draw the pulsing/plain selection shim and repaint
+/// only glyphs overlapping that range — keeps drag-selection at full blit throughput.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rich_text_overlay_plain_selection(
+    buffer: &mut [u8],
+    frame_width: usize,
+    frame_height: usize,
+    clip_x1: i32,
+    clip_y1: i32,
+    clip_x2: i32,
+    clip_y2: i32,
+    layout: &RichLayout,
+    selection: Option<(usize, usize)>,
+    opaque_under_rgb: Option<(u8, u8, u8)>,
+) {
+    let Some((lo, hi)) = plain_sel_range_clamped(selection, layout.plain_len) else {
+        return;
+    };
+    rich_text_draw_plain_selection_highlight(buffer, frame_width, frame_height, layout, selection);
+    blend_rich_viewport_glyphs(
+        buffer,
+        frame_width,
+        frame_height,
+        clip_x1,
+        clip_y1,
+        clip_x2,
+        clip_y2,
+        layout,
+        false,
+        opaque_under_rgb,
+        |idx, _ch| (lo..hi).contains(&idx),
+    );
+}
+
+#[inline]
+fn plain_sel_range_clamped(sel: Option<(usize, usize)>, plain_len: usize) -> Option<(usize, usize)> {
+    let (raw_lo, raw_hi) = sel?;
+    let mut lo = raw_lo.min(raw_hi);
+    let mut hi = raw_lo.max(raw_hi);
+    if lo == hi {
+        return None;
+    }
+    hi = hi.min(plain_len);
+    lo = lo.min(hi);
+    Some((lo, hi))
+}
+
+/// Hitboxes omitted when `hitboxes == false` (viewport cache overlay path).
+#[allow(clippy::too_many_arguments)]
+fn blend_rich_viewport_glyphs<P>(
+    buffer: &mut [u8],
+    frame_width: usize,
+    frame_height: usize,
+    clip_x1: i32,
+    clip_y1: i32,
+    clip_x2: i32,
+    clip_y2: i32,
+    layout: &RichLayout,
+    hitboxes: bool,
+    opaque_under_rgb: Option<(u8, u8, u8)>,
+    mut glyph_take: P,
+) where
+    P: FnMut(usize, char) -> bool,
+{
+    let hitbox_red = (255, 0, 0, 255);
+    for g in &layout.glyphs {
+        if !glyph_take(g.char_index, g.ch) {
+            continue;
+        }
+
+        let gx1 = g.x;
+        let gy1 = g.y;
+        let gx2 = g.x + g.w;
+        let gy2 = g.y + g.h;
+        if g.ch == '\n' {
+            continue;
+        }
+        if hitboxes {
+            fill_rect_buffer(
+                buffer,
+                frame_width,
+                frame_height,
+                gx1,
+                gy1,
+                gx2,
+                gy1 + 1,
+                hitbox_red,
+            );
+            fill_rect_buffer(
+                buffer,
+                frame_width,
+                frame_height,
+                gx1,
+                gy2 - 1,
+                gx2,
+                gy2,
+                hitbox_red,
+            );
+            fill_rect_buffer(
+                buffer,
+                frame_width,
+                frame_height,
+                gx1,
+                gy1,
+                gx1 + 1,
+                gy2,
+                hitbox_red,
+            );
+            fill_rect_buffer(
+                buffer,
+                frame_width,
+                frame_height,
+                gx2 - 1,
+                gy1,
+                gx2,
+                gy2,
+                hitbox_red,
+            );
+        }
+
+        let bold = g.bold;
+        let iw = g.w.max(1) as usize;
+        let ih = g.h.max(1) as usize;
+
+        if let Some((bx_lo, bx_hi, by_lo, by_hi)) =
+            viewport_glyph_blit_ranges(gx1, gy1, iw, ih, clip_x1, clip_y1, clip_x2, clip_y2)
+        {
+            for by in by_lo..by_hi {
+                let row = by * iw;
+                for bx in bx_lo..bx_hi {
+                    let idx_bm = row + bx;
+                    if idx_bm >= g.bitmap.len() {
+                        continue;
+                    }
+                    let ia = g.bitmap[idx_bm];
+                    if ia == 0 {
+                        continue;
+                    }
+                    let sx = gx1 + bx as i32;
+                    let sy = gy1 + by as i32;
+                    blend_glyph_px(
+                        buffer,
+                        frame_width,
+                        frame_height,
+                        sx,
+                        sy,
+                        ia,
+                        g.fg,
+                        clip_x1,
+                        clip_y1,
+                        clip_x2,
+                        clip_y2,
+                        bold,
+                        opaque_under_rgb,
+                    );
+                }
+            }
         }
     }
 }
@@ -411,6 +572,10 @@ fn blend_glyph_px(
 ///
 /// When `opaque_under_rgb` is set, glyphs composite against that solid RGB (viewport plate filled
 /// beforehand) instead of reading the framebuffer each pixel — used for Study card/composer panels.
+///
+/// [`defer_plain_selection_paint`]: when `true`, skip the selection highlight under-glyphs pass;
+/// callers that use pixel [`crate::py::ui`] cache slots overlay selection afterward so drag-select
+/// does not invalidate cached tiles.
 #[allow(clippy::too_many_arguments)]
 pub fn rich_text_render_into_buffer(
     buffer: &mut [u8],
@@ -428,11 +593,13 @@ pub fn rich_text_render_into_buffer(
     baselines: bool,
     selection: Option<(usize, usize)>,
     opaque_under_rgb: Option<(u8, u8, u8)>,
-) -> Result<crate::ui::text::UiTextRenderState, String> {
+    defer_plain_selection_paint: bool,
+) -> Result<(crate::ui::text::UiTextRenderState, RichLayout), String> {
     use crate::ui::text::UiTextRenderState;
 
     if frame_width == 0 || frame_height == 0 {
-        return Ok(UiTextRenderState::default());
+        let layout = RichLayout::default();
+        return Ok((UiTextRenderState::default(), layout));
     }
 
     let x1 = (x1_norm.clamp(0.0, 1.0) * frame_width as f32).round() as i32;
@@ -440,7 +607,8 @@ pub fn rich_text_render_into_buffer(
     let x2 = (x2_norm.clamp(0.0, 1.0) * frame_width as f32).round() as i32;
     let y2 = (y2_norm.clamp(0.0, 1.0) * frame_height as f32).round() as i32;
     if x2 <= x1 || y2 <= y1 {
-        return Ok(UiTextRenderState::default());
+        let layout = RichLayout::default();
+        return Ok((UiTextRenderState::default(), layout));
     }
 
     let bw = x2 - x1;
@@ -450,7 +618,9 @@ pub fn rich_text_render_into_buffer(
 
     let layout = layout_rich(&styled, x1, y1, bw, bh, font_size_px.max(1.0))?;
 
-    draw_selection_highlight(buffer, frame_width, frame_height, &layout, selection);
+    if !defer_plain_selection_paint {
+        rich_text_draw_plain_selection_highlight(buffer, frame_width, frame_height, &layout, selection);
+    }
 
     let mut state = UiTextRenderState::default();
     state.lines = layout.lines_chars.clone();
@@ -488,8 +658,6 @@ pub fn rich_text_render_into_buffer(
         }
     }
 
-    let hitbox_red = (255, 0, 0, 255);
-
     for g in &layout.glyphs {
         if g.ch == '\n' {
             continue;
@@ -508,95 +676,23 @@ pub fn rich_text_render_into_buffer(
                 (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
             ],
         ]);
-        if hitboxes {
-            fill_rect_buffer(
-                buffer,
-                frame_width,
-                frame_height,
-                gx1,
-                gy1,
-                gx2,
-                gy1 + 1,
-                hitbox_red,
-            );
-            fill_rect_buffer(
-                buffer,
-                frame_width,
-                frame_height,
-                gx1,
-                gy2 - 1,
-                gx2,
-                gy2,
-                hitbox_red,
-            );
-            fill_rect_buffer(
-                buffer,
-                frame_width,
-                frame_height,
-                gx1,
-                gy1,
-                gx1 + 1,
-                gy2,
-                hitbox_red,
-            );
-            fill_rect_buffer(
-                buffer,
-                frame_width,
-                frame_height,
-                gx2 - 1,
-                gy1,
-                gx2,
-                gy2,
-                hitbox_red,
-            );
-        }
-
-        let clip_x1 = x1;
-        let clip_y1 = y1;
-        let clip_x2 = x2;
-        let clip_y2 = y2;
-
-        let bold = g.bold;
-        let iw = g.w.max(1) as usize;
-        let ih = g.h.max(1) as usize;
-
-        if let Some((bx_lo, bx_hi, by_lo, by_hi)) =
-            viewport_glyph_blit_ranges(gx1, gy1, iw, ih, clip_x1, clip_y1, clip_x2, clip_y2)
-        {
-            for by in by_lo..by_hi {
-                let row = by * iw;
-                for bx in bx_lo..bx_hi {
-                    let idx_bm = row + bx;
-                    if idx_bm >= g.bitmap.len() {
-                        continue;
-                    }
-                    let ia = g.bitmap[idx_bm];
-                    if ia == 0 {
-                        continue;
-                    }
-                    let sx = gx1 + bx as i32;
-                    let sy = gy1 + by as i32;
-                    blend_glyph_px(
-                        buffer,
-                        frame_width,
-                        frame_height,
-                        sx,
-                        sy,
-                        ia,
-                        g.fg,
-                        clip_x1,
-                        clip_y1,
-                        clip_x2,
-                        clip_y2,
-                        bold,
-                        opaque_under_rgb,
-                    );
-                }
-            }
-        }
     }
 
-    Ok(state)
+    blend_rich_viewport_glyphs(
+        buffer,
+        frame_width,
+        frame_height,
+        x1,
+        y1,
+        x2,
+        y2,
+        &layout,
+        hitboxes,
+        opaque_under_rgb,
+        |_, _| true,
+    );
+
+    Ok((state, layout))
 }
 
 /// Character index hit-test in **visible plaintext** coordinate space (-1 when miss / outside box).
