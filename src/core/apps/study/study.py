@@ -266,10 +266,10 @@ class StudyApp(xos.Application):
         if ch in ("\r", "\n"):
             self._submit_guess()
             return
-        if ch == "\u{1b}":
+        if ch == "\x1b":
             self.guess_buf = ""
             return
-        if ch == "\b" or ch == "\u{7f}":
+        if ch == "\b" or ch == "\x7f":
             if len(self.guess_buf) > 0:
                 self.guess_buf = self.guess_buf[:-1]
             return
