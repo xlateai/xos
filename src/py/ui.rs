@@ -35,6 +35,7 @@ struct RichTextBlitCacheKey {
     hitboxes: bool,
     baselines: bool,
     sel: Option<(usize, usize)>,
+    opaque_under_rgb: Option<[u8; 3]>,
 }
 
 struct RichTextBlitCacheSlot {
@@ -587,6 +588,33 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         })?),
     };
 
+    let opaque_under_rgb: Option<(u8, u8, u8)> = match args.kwargs.get("blend_under_rgb") {
+        None => None,
+        Some(obj) => {
+            let tup = obj
+                .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| {
+                    vm.new_type_error(
+                        "blend_under_rgb must be an (r, g, b) tuple when provided".to_string(),
+                    )
+                })?;
+            let slice = tup.as_slice();
+            if slice.len() != 3 {
+                return Err(vm.new_type_error(
+                    "blend_under_rgb must be an (r, g, b) tuple when provided".to_string(),
+                ));
+            }
+            let r: i32 = slice[0].clone().try_into_value(vm)?;
+            let g: i32 = slice[1].clone().try_into_value(vm)?;
+            let b: i32 = slice[2].clone().try_into_value(vm)?;
+            Some((
+                r.clamp(0, 255) as u8,
+                g.clamp(0, 255) as u8,
+                b.clamp(0, 255) as u8,
+            ))
+        }
+    };
+
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
@@ -628,6 +656,7 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let px2 = (x2n.clamp(0.0, 1.0) * canvas_width as f32).round() as i32;
     let py2 = (y2n.clamp(0.0, 1.0) * canvas_height as f32).round() as i32;
 
+    let opaque_under_arr = opaque_under_rgb.map(|(r, g, b)| [r, g, b]);
     let cache_key = RichTextBlitCacheKey {
         canvas_w: canvas_width,
         canvas_h: canvas_height,
@@ -642,6 +671,7 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         hitboxes,
         baselines,
         sel,
+        opaque_under_rgb: opaque_under_arr,
     };
 
     let buffer = unsafe {
@@ -691,6 +721,7 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 hitboxes,
                 baselines,
                 sel,
+                opaque_under_rgb,
             )
             .map_err(|e| vm.new_runtime_error(e))?;
             if px2 > px1 && py2 > py1 {
@@ -732,6 +763,7 @@ fn rich_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             hitboxes,
             baselines,
             sel,
+            opaque_under_rgb,
         )
         .map_err(|e| vm.new_runtime_error(e))?
     };
@@ -1520,6 +1552,7 @@ class RichText:
         placeholder="",
         mutable=False,
         show_cursor=True,
+        blend_under_rgb=None,
     ):
         self.text = text
         self.x1 = x1
@@ -1537,6 +1570,7 @@ class RichText:
         self.placeholder = placeholder
         self.mutable = mutable
         self.show_cursor = show_cursor
+        self.blend_under_rgb = blend_under_rgb
         self._last_render_state = None
 
     def plain(self):
@@ -1583,6 +1617,7 @@ class RichText:
         selection_start=-1,
         selection_end=-1,
         cache_slot=None,
+        blend_under_rgb=None,
     ):
         import xos
 
@@ -1610,6 +1645,9 @@ class RichText:
             )
             if cache_slot is not None:
                 kw["cache_slot"] = int(cache_slot)
+            bu = self.blend_under_rgb if blend_under_rgb is None else blend_under_rgb
+            if bu is not None:
+                kw["blend_under_rgb"] = (int(bu[0]), int(bu[1]), int(bu[2]))
             state = _rich_render(
                 self.text,
                 self.x1,
@@ -1648,6 +1686,7 @@ def rich_text(
     placeholder="",
     mutable=False,
     show_cursor=True,
+    blend_under_rgb=None,
 ):
     return RichText(
         text,
@@ -1666,6 +1705,7 @@ def rich_text(
         placeholder=placeholder,
         mutable=mutable,
         show_cursor=show_cursor,
+        blend_under_rgb=blend_under_rgb,
     )
 "#;
     let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());

@@ -9,6 +9,8 @@ ENGLISH_SENTENCE_COL = "Sentence-meaning"
 # `RichText` / `Text.render(..., cache_slot=…)` blit cachedRGBA when markup/text/rect/fonts match — glyphs are globally cached separately.
 _STUDY_FEEDBACK_RICH_CACHE_SLOT = 771
 _STUDY_HERO_TEXT_CACHE_SLOT = 772
+_STUDY_CAPTION_TEXT_CACHE_SLOT = 773
+_STUDY_THREAD_TEXT_CACHE_SLOT = 774
 JAPANESE_SENTENCE_COL = "Sentence-expression"
 JAPANESE_KANA_SENTENCE_COL = "Sentence-kana"
 
@@ -297,6 +299,7 @@ class StudyApp(xos.Application):
             minecraft=True,
             selectable=True,
             mutable=False,
+            blend_under_rgb=_UNDER_CARD_RGB,
         )
         self.chat_placeholder = xos.ui.text(
             "Message…  romaji",
@@ -664,7 +667,7 @@ class StudyApp(xos.Application):
         self.hero.y2 = vb["hero_y2"]
         self.hero.render(self.frame, cache_slot=_STUDY_HERO_TEXT_CACHE_SLOT)
 
-        self.caption.render(self.frame)
+        self.caption.render(self.frame, cache_slot=_STUDY_CAPTION_TEXT_CACHE_SLOT)
 
         ft_y2 = oy1 - 0.015 * STUDY_UI_SCALE
         y_lo = vb["feedback_y2_min"]
@@ -686,7 +689,9 @@ class StudyApp(xos.Application):
                 if not bool(getattr(self, "onscreen_keyboard_visible", False))
                 else "Type romaji · Enter sends"
             )
-            self.thread_status.render(self.frame)
+            self.thread_status.render(
+                self.frame, cache_slot=_STUDY_THREAD_TEXT_CACHE_SLOT
+            )
 
             xos.rasterizer.rects_filled(
                 self.frame,
@@ -726,7 +731,9 @@ class StudyApp(xos.Application):
             self.thread_status.text = "Review · your answer is frozen below"
             self.thread_status.color = CLR_THREAD[:3]
             self.chat_value.font_size = review_fs
-            self.thread_status.render(self.frame)
+            self.thread_status.render(
+                self.frame, cache_slot=_STUDY_THREAD_TEXT_CACHE_SLOT
+            )
 
             self.chat_value.mutable = False
             self.chat_value.show_cursor = False

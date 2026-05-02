@@ -318,6 +318,7 @@ fn blend_glyph_px(
     clip_x2: i32,
     clip_y2: i32,
     faux_bold: bool,
+    opaque_under_rgb: Option<(u8, u8, u8)>,
 ) {
     if glyph_alpha == 0 {
         return;
@@ -325,7 +326,7 @@ fn blend_glyph_px(
     let alpha = (glyph_alpha as f32 / 255.0) * (fg[3] as f32 / 255.0);
 
     #[inline(always)]
-    fn write_px(
+    fn write_px_read_dest(
         buffer: &mut [u8],
         frame_w: usize,
         sx: i32,
@@ -354,16 +355,62 @@ fn blend_glyph_px(
         buffer[ib + 3] = 0xff;
     }
 
+    #[inline(always)]
+    fn write_px_under_solid(
+        buffer: &mut [u8],
+        frame_w: usize,
+        sx: i32,
+        sy: i32,
+        fg: [u8; 4],
+        alpha: f32,
+        ur: f32,
+        ug: f32,
+        ub: f32,
+    ) {
+        if sx < 0 || sy < 0 {
+            return;
+        }
+        let sx = sx as usize;
+        let sy = sy as usize;
+        let fw = frame_w;
+        if sx >= fw {
+            return;
+        }
+        let idx = sy * fw + sx;
+        let ib = idx * 4;
+        if ib + 3 >= buffer.len() {
+            return;
+        }
+        let inv = 1.0 - alpha;
+        buffer[ib] = (fg[0] as f32 * alpha + ur * inv) as u8;
+        buffer[ib + 1] = (fg[1] as f32 * alpha + ug * inv) as u8;
+        buffer[ib + 2] = (fg[2] as f32 * alpha + ub * inv) as u8;
+        buffer[ib + 3] = 0xff;
+    }
+
+    let under = opaque_under_rgb.map(|(r, g, b)| (r as f32, g as f32, b as f32));
+
     if px < clip_x1 || py < clip_y1 || px >= clip_x2 || py >= clip_y2 {
         return;
     }
-    write_px(buffer, frame_w, px, py, fg, alpha);
+
+    match under {
+        None => write_px_read_dest(buffer, frame_w, px, py, fg, alpha),
+        Some((ur, ug, ub)) => write_px_under_solid(buffer, frame_w, px, py, fg, alpha, ur, ug, ub),
+    }
     if faux_bold {
-        write_px(buffer, frame_w, px + 1, py, fg, alpha * 0.55);
+        let a2 = alpha * 0.55;
+        match under {
+            None => write_px_read_dest(buffer, frame_w, px + 1, py, fg, a2),
+            Some((ur, ug, ub)) => write_px_under_solid(buffer, frame_w, px + 1, py, fg, a2, ur, ug, ub),
+        }
     }
 }
 
 /// Render markup into the RGBA framebuffer; `hitboxes` / `baselines` match [`UiText`].
+///
+/// When `opaque_under_rgb` is set, glyphs composite against that solid RGB (viewport plate filled
+/// beforehand) instead of reading the framebuffer each pixel — used for Study card/composer panels.
 #[allow(clippy::too_many_arguments)]
 pub fn rich_text_render_into_buffer(
     buffer: &mut [u8],
@@ -380,6 +427,7 @@ pub fn rich_text_render_into_buffer(
     hitboxes: bool,
     baselines: bool,
     selection: Option<(usize, usize)>,
+    opaque_under_rgb: Option<(u8, u8, u8)>,
 ) -> Result<crate::ui::text::UiTextRenderState, String> {
     use crate::ui::text::UiTextRenderState;
 
@@ -541,6 +589,7 @@ pub fn rich_text_render_into_buffer(
                         clip_x2,
                         clip_y2,
                         bold,
+                        opaque_under_rgb,
                     );
                 }
             }
