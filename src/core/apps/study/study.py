@@ -166,8 +166,8 @@ def romaji_to_hiragana(romaji):
 
 
 # Guessing-game–style semantics: yellow labels, magenta kanji cue, cyan Japanese, blue English,
-# green/red outcomes — bumped saturation for OLED-style contrast on dark UI.
-CLR_BG = (6, 8, 22, 255)
+# green/red outcomes — bumped saturation on a pure-black stage.
+CLR_BG = (0, 0, 0, 255)
 CLR_CARD = (38, 16, 52, 255)
 CLR_CARD_EDGE = (255, 90, 255, 255)
 CLR_COMPOSER = (32, 20, 48, 255)
@@ -177,6 +177,9 @@ CLR_THREAD = (115, 255, 255, 255)
 CLR_CAPTION = (255, 235, 90, 255)
 CLR_KANJI = (255, 118, 255, 255)
 CLR_HINT_BAND = (200, 95, 255, 255)
+
+# Viewport text sizes (also multiplied by Application.xos_scale inside xos.ui Text/RichText.render).
+FS = 1.2
 
 
 class StudyApp(xos.Application):
@@ -199,44 +202,44 @@ class StudyApp(xos.Application):
         self.input_focus = False
         self._pick_word()
 
-        # Centered Kanji hero — symmetric margins (narrower strip reads as centered on viewport).
+        # Hero band y-ranges; x-range is set each tick from word width (centered in full-bleed card).
         self.hero = xos.ui.text(
             "",
-            0.14,
+            0.01,
             0.048,
-            0.86,
+            0.99,
             0.126,
             color=CLR_KANJI[:3],
             hitboxes=False,
             baselines=False,
-            font_size=48.0,
+            font_size=48.0 * FS,
         )
         self.caption = xos.ui.text(
             "Japanese · romaji reply",
-            0.14,
+            0.02,
             0.129,
-            0.86,
+            0.98,
             0.168,
             color=CLR_CAPTION[:3],
-            font_size=18.0,
+            font_size=18.0 * FS,
         )
         self.thread_status = xos.ui.text(
             "",
-            0.10,
+            0.02,
             0.176,
-            0.90,
+            0.98,
             0.222,
             color=CLR_THREAD[:3],
-            font_size=19.0,
+            font_size=19.0 * FS,
         )
         self.feedback_ui = xos.ui.rich_text(
             "",
-            0.06,
+            0.04,
             0.230,
-            0.94,
+            0.96,
             0.88,
             color=(248, 252, 255),
-            font_size=21.0,
+            font_size=21.0 * FS,
             minecraft=True,
             selectable=True,
             mutable=False,
@@ -248,7 +251,7 @@ class StudyApp(xos.Application):
             0.0,
             0.0,
             color=CLR_MUTED[:3],
-            font_size=22.0,
+            font_size=22.0 * FS,
             placeholder="Message…  romaji",
             mutable=False,
             show_cursor=False,
@@ -260,7 +263,7 @@ class StudyApp(xos.Application):
             0.0,
             0.0,
             color=(245, 245, 248),
-            font_size=22.0,
+            font_size=22.0 * FS,
             mutable=True,
             show_cursor=True,
             hitboxes=False,
@@ -272,7 +275,7 @@ class StudyApp(xos.Application):
             0.0,
             0.0,
             color=CLR_MUTED[:3],
-            font_size=15.0,
+            font_size=15.0 * FS,
             mutable=False,
             show_cursor=False,
             hitboxes=False,
@@ -281,6 +284,18 @@ class StudyApp(xos.Application):
     def _pick_word(self):
         i = int(xos.random.randint(0, self.n - 1))
         self.current = xos.csv.row(self.table, i)
+
+    def _hero_norm_x(self, word, frame_w_px):
+        """Place the hero in a trimmed horizontal band (~centered Kanji/vocab glyph run)."""
+        sc = float(getattr(self, "xos_scale", 1.0))
+        fs = float(self.hero.font_size) * sc
+        n = max(1, len(word))
+        tw = fs * max(1.25, float(n) * 0.9)
+        tw = min(tw, frame_w_px * 0.94)
+        cx = frame_w_px * 0.5
+        x1 = (cx - tw * 0.5) / frame_w_px
+        x2 = (cx + tw * 0.5) / frame_w_px
+        return max(0.01, x1), min(0.99, x2)
 
     def _composer_layout(self):
         w, h = self.get_width(), self.get_height()
@@ -407,7 +422,8 @@ class StudyApp(xos.Application):
     def tick(self):
         self.frame.clear(CLR_BG[:3])
         w, h = self.get_width(), self.get_height()
-        card = (0.10, 0.036, 0.90, 0.154)
+        # Hero card spans the full viewport width; Kanji is centered via `_hero_norm_x`.
+        card = (0.0, 0.032, 1.0, 0.158)
         cx1, cy1, cx2, cy2 = card
         xos.rasterizer.rects_filled(
             self.frame,
@@ -427,6 +443,9 @@ class StudyApp(xos.Application):
 
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
+        hx1, hx2 = self._hero_norm_x(word, w)
+        self.hero.x1 = hx1
+        self.hero.x2 = hx2
         self.hero.render(self.frame)
 
         self.caption.render(self.frame)

@@ -781,6 +781,13 @@ Call super().__init__() in your app __init__ before using tick()."
                         vm.ctx.new_bool(kbd_vis),
                         vm,
                     );
+
+                    // On-screen keyboard: clicks enqueue into `pending_chars`; drain each tick like TextApp/coder.
+                    while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
+                        let ch_str = ch.to_string();
+                        let py_s = vm.ctx.new_str(ch_str.as_str());
+                        let _ = vm.call_method(&app_instance, "on_key_char", (py_s,));
+                    }
                     
                     // Call tick
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
@@ -810,6 +817,12 @@ Call super().__init__() in your app __init__ before using tick()."
         if let Some(ref app_instance) = self.app_instance {
             let x = state.mouse.x;
             let y = state.mouse.y;
+            let shape = state.frame.shape();
+            let fw = shape[1] as f32;
+            let fh = shape[0] as f32;
+            if state.keyboard.onscreen.on_mouse_down(x, y, fw, fh) {
+                return;
+            }
 
             // Left-click double-tap: optional OSK routing via Python `on_viewport_double_tap`,
             // `xos.keyboard.toggle_onscreen`, then shared [`ViewportDoubleTap`] (same thresholds as coder / TextApp).
@@ -857,6 +870,7 @@ Call super().__init__() in your app __init__ before using tick()."
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
+        state.keyboard.onscreen.on_mouse_up();
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
