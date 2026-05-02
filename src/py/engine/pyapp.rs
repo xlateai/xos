@@ -428,7 +428,7 @@ class Tensor:
         return self.__str__()
 
 class Frame:
-    """Wrapper to make frame dict behave like an object with methods"""
+    """Frame dict wrapper. Keys include ``width``, ``height``, ``tensor``, and ``safe_x1``…``safe_y2`` (0..1 insets)."""
     def __init__(self, data):
         self._data = data
         self._tensor = Tensor(data.get('tensor', {}))

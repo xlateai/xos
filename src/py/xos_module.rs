@@ -789,6 +789,10 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
     frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
+    frame_dict.set_item("safe_x1", vm.ctx.new_float(0.0).into(), vm)?;
+    frame_dict.set_item("safe_y1", vm.ctx.new_float(0.0).into(), vm)?;
+    frame_dict.set_item("safe_x2", vm.ctx.new_float(1.0).into(), vm)?;
+    frame_dict.set_item("safe_y2", vm.ctx.new_float(1.0).into(), vm)?;
     Ok(frame_dict.into())
 }
 

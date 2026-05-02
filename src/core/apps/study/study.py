@@ -292,35 +292,56 @@ class StudyApp(xos.Application):
         """Single UI zoom coefficient for Study: mirrors F3/Application.xos_scale (percent / 100)."""
         return float(getattr(self, "xos_scale", 1.0))
 
-    def _hero_norm_x(self, word, frame_w_px, band_x1, band_x2):
-        """Trimmed glyph band for the vocab, horizontally centered inside the chat column `[band_x1, band_x2]`."""
-        sc = self._study_viewport_ui_coef()
-        fs = float(self.hero.font_size) * sc
-        n = max(1, len(word))
-        tw = fs * max(1.25, float(n) * 0.9)
-        bw = max(1e-6, (band_x2 - band_x1) * frame_w_px)
-        tw = min(tw, bw * 0.98)
+    def _safe_bounds(self):
+        """Framebuffer-normalized safe area (matches ``FrameState.safe_region_boundaries``)."""
+        d = getattr(self.frame, "_data", {})
+        try:
+            return (
+                float(d.get("safe_x1", 0.0)),
+                float(d.get("safe_y1", 0.0)),
+                float(d.get("safe_x2", 1.0)),
+                float(d.get("safe_y2", 1.0)),
+            )
+        except (TypeError, ValueError):
+            return (0.0, 0.0, 1.0, 1.0)
+
+    def _map_layout_y_norm(self, y):
+        """Map a legacy layout Y in 0..1 (full framebuffer) into the vertical safe strip."""
+        _sx1, sy1, _sx2, sy2 = self._safe_bounds()
+        span = max(0.0, sy2 - sy1)
+        return sy1 + float(y) * span
+
+    def _hero_norm_x(self, band_x1, band_x2):
+        """Kanji cue: use nearly the full chat column width so glyphs are not squeezed into early wraps."""
+        eps = 4e-4
+        bw = max(2.0 * eps, band_x2 - band_x1)
         cx = (band_x1 + band_x2) * 0.5
-        hw_norm = tw / (2.0 * frame_w_px)
-        eps = 1e-4
-        x1 = max(band_x1 + eps, cx - hw_norm)
-        x2 = min(band_x2 - eps, cx + hw_norm)
+        half = 0.5 * bw - eps * 4.0
+        x1 = max(band_x1 + eps, cx - half)
+        x2 = min(band_x2 - eps, cx + half)
         return x1, x2
 
     def _composer_layout(self):
         w, h = self.get_width(), self.get_height()
+        sx1, sy1, sx2, sy2 = self._safe_bounds()
         coef = self._study_viewport_ui_coef()
         ktop = float(getattr(self, "keyboard_top_y", 1.0))
         # Float geometry so margins scale smoothly with coef (fonts already scale via the same coef).
+        safe_left_px = sx1 * float(w)
+        safe_right_px = sx2 * float(w)
+        safe_top_px = sy1 * float(h)
+        safe_bottom_px = sy2 * float(h)
         margin_px = max(10.0, 12.0 * coef)
         gap_px = max(4.0, 6.0 * coef)
-        comp_h = max(44.0, 50.0 * coef)
-        bottom_px = min(float(h), ktop * float(h) - gap_px)
+        # ~30% taller composer bar (hit target + romaji line).
+        comp_h = 1.3 * max(44.0, 50.0 * coef)
+        bottom_px = min(safe_bottom_px, ktop * float(h) - gap_px)
         top_px = bottom_px - comp_h
-        min_top = 0.22 * float(h)
+        sh = max(1.0, safe_bottom_px - safe_top_px)
+        min_top = safe_top_px + 0.22 * sh
         top_px = max(top_px, min_top)
-        ml = margin_px
-        mr = float(w) - margin_px
+        ml = safe_left_px + margin_px
+        mr = safe_right_px - margin_px
         x1n = ml / float(w)
         x2n = mr / float(w)
         y1n = top_px / float(h)
@@ -504,10 +525,11 @@ class StudyApp(xos.Application):
         lay = self._composer_layout()
         ox1, oy1, ox2, oy2 = lay["outer"]
         ix1, iy1, ix2, iy2 = lay["inner"]
+        _sx1, _sy1, _sx2, sy2 = self._safe_bounds()
 
         # Hero panel + caption/thread/feedback share the composer’s horizontal band exactly (`ox1`…`ox2`).
-        cy1 = 0.032
-        cy2 = 0.158
+        cy1 = self._map_layout_y_norm(0.032)
+        cy2 = self._map_layout_y_norm(0.158)
         xos.rasterizer.rects_filled(
             self.frame,
             int(ox1 * w),
@@ -526,22 +548,31 @@ class StudyApp(xos.Application):
 
         self.caption.x1 = ox1
         self.caption.x2 = ox2
+        self.caption.y1 = self._map_layout_y_norm(0.129)
+        self.caption.y2 = self._map_layout_y_norm(0.168)
         self.thread_status.x1 = ox1
         self.thread_status.x2 = ox2
+        self.thread_status.y1 = self._map_layout_y_norm(0.176)
+        self.thread_status.y2 = self._map_layout_y_norm(0.222)
         self.feedback_ui.x1 = ox1
         self.feedback_ui.x2 = ox2
+        self.feedback_ui.y1 = self._map_layout_y_norm(0.230)
 
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
-        hx1, hx2 = self._hero_norm_x(word, w, ox1, ox2)
+        hx1, hx2 = self._hero_norm_x(ox1, ox2)
         self.hero.x1 = hx1
         self.hero.x2 = hx2
+        self.hero.y1 = self._map_layout_y_norm(0.048)
+        self.hero.y2 = self._map_layout_y_norm(0.126)
         self.hero.render(self.frame)
 
         self.caption.render(self.frame)
 
         ft_y2 = oy1 - 0.015
-        self.feedback_ui.y2 = max(0.24, min(0.92, ft_y2))
+        y_lo = self._map_layout_y_norm(0.24)
+        y_hi = min(self._map_layout_y_norm(0.92), sy2 - 2e-3)
+        self.feedback_ui.y2 = max(y_lo, min(y_hi, ft_y2))
 
         if self.state == "prompt":
             self.feedback_ui.text = ""

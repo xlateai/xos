@@ -92,7 +92,12 @@ pub fn create_py_frame_state(vm: &VirtualMachine, frame: &mut FrameState) -> PyR
     frame_dict.set_item("width", vm.ctx.new_int(shape[1]).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(shape[0]).into(), vm)?;
     frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
-    
+    let s = &frame.safe_region_boundaries;
+    frame_dict.set_item("safe_x1", vm.ctx.new_float(f64::from(s.x1)).into(), vm)?;
+    frame_dict.set_item("safe_y1", vm.ctx.new_float(f64::from(s.y1)).into(), vm)?;
+    frame_dict.set_item("safe_x2", vm.ctx.new_float(f64::from(s.x2)).into(), vm)?;
+    frame_dict.set_item("safe_y2", vm.ctx.new_float(f64::from(s.y2)).into(), vm)?;
+
     Ok(frame_dict.into())
 }
 
@@ -132,7 +137,12 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
     let height = shape[0];
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
-    
+    let s = &frame.safe_region_boundaries;
+    frame_dict.set_item("safe_x1", vm.ctx.new_float(f64::from(s.x1)).into(), vm)?;
+    frame_dict.set_item("safe_y1", vm.ctx.new_float(f64::from(s.y1)).into(), vm)?;
+    frame_dict.set_item("safe_x2", vm.ctx.new_float(f64::from(s.x2)).into(), vm)?;
+    frame_dict.set_item("safe_y2", vm.ctx.new_float(f64::from(s.y2)).into(), vm)?;
+
     Ok(())
 }
 
