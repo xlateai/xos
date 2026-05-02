@@ -15,6 +15,7 @@ pub mod dtypes;
 pub mod data;
 pub mod csv;
 pub mod path;
+pub mod clipboard;
 pub mod ui;
 pub mod viewport_keyboard_bridge;
 pub mod keyboard_mod;

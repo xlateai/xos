@@ -369,6 +369,71 @@ class StudyApp(xos.Application):
         self.fb_anchor = None
         self.fb_sel = None
 
+    def _feedback_selection_plain_slice(self):
+        """Selected substring in markdown-free plain indices (matches ``RichText.pick`` / highlight)."""
+        if self.state != "feedback" or self.fb_sel is None:
+            return ""
+        lo, hi = self.fb_sel
+        plain = self.feedback_ui.plain()
+        n = len(plain)
+        lo = max(0, min(int(lo), n))
+        hi = max(0, min(int(hi), n))
+        if hi <= lo:
+            return ""
+        return plain[lo:hi]
+
+    def on_key_shortcut(self, action):
+        """Desktop Cmd/Ctrl and OSK action row — share implementation for copy/paste."""
+        if action == "copy":
+            chunk = self._feedback_selection_plain_slice()
+            if not chunk and self.state == "prompt" and self.guess_buf:
+                chunk = self.guess_buf
+            if chunk:
+                xos.clipboard.set(chunk)
+            return
+
+        if action == "cut":
+            if self.state == "feedback":
+                chunk = self._feedback_selection_plain_slice()
+                if chunk:
+                    xos.clipboard.set(chunk)
+                return
+            if (
+                self.state == "prompt"
+                and getattr(self.chat_value, "mutable", False)
+                and self.guess_buf
+            ):
+                xos.clipboard.set(self.guess_buf)
+                self.guess_buf = ""
+            return
+
+        if action == "paste":
+            if self.state != "prompt" or not getattr(self.chat_value, "mutable", False):
+                return
+            text = (
+                xos.clipboard.get()
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+                .split("\n", 1)[0]
+            )
+            if not text:
+                return
+            for ch in text:
+                if ord(ch) < 32 and ch != "\t":
+                    continue
+                if len(self.guess_buf) >= 160:
+                    break
+                self.guess_buf += ch
+            return
+
+        if action == "select_all":
+            if self.state == "feedback":
+                plain = self.feedback_ui.plain()
+                self.fb_sel = (0, len(plain))
+            return
+
+        # undo / redo — study has no stacks; subclasses can extend.
+
     def on_viewport_double_tap(self, x, y):
         lay = self._composer_layout()
         ox1, oy1, ox2, oy2 = lay["outer"]

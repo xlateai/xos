@@ -1,5 +1,32 @@
 use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
+use std::time::Instant;
+
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState, ViewportDoubleTap};
+use crate::ui::onscreen_keyboard::KeyType;
+
+fn shortcut_action_to_python_label(action: ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::Copy => "copy",
+        ShortcutAction::Cut => "cut",
+        ShortcutAction::Paste => "paste",
+        ShortcutAction::SelectAll => "select_all",
+        ShortcutAction::Undo => "undo",
+        ShortcutAction::Redo => "redo",
+    }
+}
+
+fn keyboard_key_type_to_python_label(key: KeyType) -> Option<&'static str> {
+    Some(match key {
+        KeyType::Copy => "copy",
+        KeyType::Cut => "cut",
+        KeyType::Paste => "paste",
+        KeyType::SelectAll => "select_all",
+        KeyType::Undo => "undo",
+        KeyType::Redo => "redo",
+        _ => return None,
+    })
+}
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
@@ -635,6 +662,11 @@ class Application:
         """Keyboard / OSK character input. Enter is ``\\n``, Backspace ``\\b``, Esc ``\\u001b``. Override (optional)."""
         pass
     
+    def on_key_shortcut(self, action):
+        """Cmd/Ctrl shortcuts (desktop) and on-screen keyboard action row mirror the same ``action`` strings:
+        ``copy``, ``cut``, ``paste``, ``select_all``, ``undo``, ``redo``. Override for clipboard/editing."""
+        pass
+    
     def run(self):
         """Run the application with the xos engine."""
         # Store self in builtins so Rust can find it from any scope
@@ -788,7 +820,25 @@ Call super().__init__() in your app __init__ before using tick()."
                         let py_s = vm.ctx.new_str(ch_str.as_str());
                         let _ = vm.call_method(&app_instance, "on_key_char", (py_s,));
                     }
-                    
+
+                    // OSK action row (copy/paste/…) → same strings as desktop Cmd/Ctrl (`on_key_shortcut`).
+                    // Order matches TextApp: discrete action first, then hold-repeat undos/redos etc.
+                    if let Some(act) = state.keyboard.onscreen.get_last_action_key() {
+                        if let Some(label) = keyboard_key_type_to_python_label(act) {
+                            let py_s = vm.ctx.new_str(label);
+                            let _ = vm.call_method(&app_instance, "on_key_shortcut", (py_s,));
+                        }
+                    }
+                    let now_kbd = Instant::now();
+                    if let Some(rep) =
+                        state.keyboard.onscreen.check_action_key_hold_repeat(now_kbd)
+                    {
+                        if let Some(label) = keyboard_key_type_to_python_label(rep) {
+                            let py_s = vm.ctx.new_str(label);
+                            let _ = vm.call_method(&app_instance, "on_key_shortcut", (py_s,));
+                        }
+                    }
+
                     // Call tick
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
@@ -946,6 +996,16 @@ Call super().__init__() in your app __init__ before using tick()."
             self.interpreter.enter(move |vm| {
                 let py_s = vm.ctx.new_str(ch_str.as_str());
                 let _ = vm.call_method(&app_instance, "on_key_char", (py_s,));
+            });
+        }
+    }
+
+    fn on_key_shortcut(&mut self, _state: &mut EngineState, shortcut: ShortcutAction) {
+        if let Some(app_instance) = self.app_instance.clone() {
+            let label = shortcut_action_to_python_label(shortcut);
+            self.interpreter.enter(move |vm| {
+                let py_s = vm.ctx.new_str(label);
+                let _ = vm.call_method(&app_instance, "on_key_shortcut", (py_s,));
             });
         }
     }

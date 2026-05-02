@@ -198,12 +198,26 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         }
     };
 
-    let mut app = match apps::get_app(app_name_str) {
-        Some(a) => a,
-        None => {
-            return CString::new(format!("App '{}' not found", app_name_str))
-                .unwrap()
-                .into_raw();
+    // Log + panic hook before anything that might fail (helps debug black-screen init issues).
+    setup_logging();
+
+    let mut app: Box<dyn Application> = if app_name_str == "study" {
+        match crate::python_api::runtime::ios_bootstrap_study_py_app() {
+            Ok(pyapp) => Box::new(pyapp),
+            Err(e) => {
+                return CString::new(format!("study (Python): {}", e))
+                    .unwrap()
+                    .into_raw();
+            }
+        }
+    } else {
+        match apps::get_app(app_name_str) {
+            Some(a) => a,
+            None => {
+                return CString::new(format!("App '{}' not found", app_name_str))
+                    .unwrap()
+                    .into_raw();
+            }
         }
     };
 
@@ -257,9 +271,6 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
 
     let mut state = ENGINE_STATE.lock().unwrap();
     *state = Some(ios_state);
-    
-    // Set up logging redirection
-    setup_logging();
 
     ptr::null_mut()
 }
