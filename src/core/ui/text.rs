@@ -114,6 +114,10 @@ pub struct UiText {
     pub hitboxes: bool,
     pub baselines: bool,
     pub font_size_px: f32,
+    /// When set (e.g. viewport Study over a filled card), glyphs composite against this RGB instead of reading
+    /// the framebuffer — same math as Porter–Duff SRC‑over onto a solid plate, avoids RMW bandwidth like the
+    /// standalone [`crate::apps::text::TextApp`] glyph path (`text.rs`).
+    pub opaque_under_rgb: Option<(u8, u8, u8)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -242,47 +246,105 @@ impl UiText {
             let w_bm = character.metrics.width;
             let fg_a = self.color.3 as f32 / 255.0;
 
-            if self.color.3 >= 253 {
-                for by in by_lo..by_hi {
-                    let row = by * w_bm;
-                    for bx in bx_lo..bx_hi {
-                        let glyph_alpha = character.bitmap[row + bx];
-                        if glyph_alpha == 0 {
-                            continue;
+            match (self.opaque_under_rgb, self.color.3 >= 253) {
+                (Some((ur, ug, ub)), true) => {
+                    for by in by_lo..by_hi {
+                        let row = by * w_bm;
+                        for bx in bx_lo..bx_hi {
+                            let glyph_alpha = character.bitmap[row + bx];
+                            if glyph_alpha == 0 {
+                                continue;
+                            }
+                            let sx = px + bx as i32;
+                            let sy = py + by as i32;
+                            let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                            let ga = glyph_alpha as u16;
+                            let inv = (255_u16).saturating_sub(ga);
+                            buffer[idx] =
+                                ((self.color.0 as u16 * ga + ur as u16 * inv + 127) / 255) as u8;
+                            buffer[idx + 1] =
+                                ((self.color.1 as u16 * ga + ug as u16 * inv + 127) / 255) as u8;
+                            buffer[idx + 2] =
+                                ((self.color.2 as u16 * ga + ub as u16 * inv + 127) / 255) as u8;
+                            buffer[idx + 3] = 0xff;
                         }
-                        let sx = px + bx as i32;
-                        let sy = py + by as i32;
-                        let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
-                        let ga = glyph_alpha as u16;
-                        let inv = (255_u16).saturating_sub(ga);
-                        buffer[idx] = ((self.color.0 as u16 * ga + buffer[idx] as u16 * inv + 127) / 255) as u8;
-                        buffer[idx + 1] =
-                            ((self.color.1 as u16 * ga + buffer[idx + 1] as u16 * inv + 127) / 255) as u8;
-                        buffer[idx + 2] =
-                            ((self.color.2 as u16 * ga + buffer[idx + 2] as u16 * inv + 127) / 255) as u8;
-                        buffer[idx + 3] = 0xff;
                     }
                 }
-            } else {
-                for by in by_lo..by_hi {
-                    let row = by * w_bm;
-                    for bx in bx_lo..bx_hi {
-                        let glyph_alpha = character.bitmap[row + bx];
-                        if glyph_alpha == 0 {
-                            continue;
-                        }
-                        let sx = px + bx as i32;
-                        let sy = py + by as i32;
-                        let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
-                        let alpha = (glyph_alpha as f32 / 255.0) * fg_a;
-                        let inv_alpha = 1.0 - alpha;
+                (Some((ur, ug, ub)), false) => {
+                    for by in by_lo..by_hi {
+                        let row = by * w_bm;
+                        for bx in bx_lo..bx_hi {
+                            let glyph_alpha = character.bitmap[row + bx];
+                            if glyph_alpha == 0 {
+                                continue;
+                            }
+                            let sx = px + bx as i32;
+                            let sy = py + by as i32;
+                            let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                            let alpha = (glyph_alpha as f32 / 255.0) * fg_a;
+                            let inv_alpha = 1.0 - alpha;
 
-                        buffer[idx] = (self.color.0 as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
-                        buffer[idx + 1] =
-                            (self.color.1 as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
-                        buffer[idx + 2] =
-                            (self.color.2 as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
-                        buffer[idx + 3] = 0xff;
+                            buffer[idx] =
+                                (self.color.0 as f32 * alpha + ur as f32 * inv_alpha) as u8;
+                            buffer[idx + 1] =
+                                (self.color.1 as f32 * alpha + ug as f32 * inv_alpha) as u8;
+                            buffer[idx + 2] =
+                                (self.color.2 as f32 * alpha + ub as f32 * inv_alpha) as u8;
+                            buffer[idx + 3] = 0xff;
+                        }
+                    }
+                }
+                (None, true) => {
+                    for by in by_lo..by_hi {
+                        let row = by * w_bm;
+                        for bx in bx_lo..bx_hi {
+                            let glyph_alpha = character.bitmap[row + bx];
+                            if glyph_alpha == 0 {
+                                continue;
+                            }
+                            let sx = px + bx as i32;
+                            let sy = py + by as i32;
+                            let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                            let ga = glyph_alpha as u16;
+                            let inv = (255_u16).saturating_sub(ga);
+                            buffer[idx] =
+                                ((self.color.0 as u16 * ga + buffer[idx] as u16 * inv + 127) / 255) as u8;
+                            buffer[idx + 1] = ((self.color.1 as u16 * ga
+                                + buffer[idx + 1] as u16 * inv
+                                + 127)
+                                / 255) as u8;
+                            buffer[idx + 2] = ((self.color.2 as u16 * ga
+                                + buffer[idx + 2] as u16 * inv
+                                + 127)
+                                / 255) as u8;
+                            buffer[idx + 3] = 0xff;
+                        }
+                    }
+                }
+                (None, false) => {
+                    for by in by_lo..by_hi {
+                        let row = by * w_bm;
+                        for bx in bx_lo..bx_hi {
+                            let glyph_alpha = character.bitmap[row + bx];
+                            if glyph_alpha == 0 {
+                                continue;
+                            }
+                            let sx = px + bx as i32;
+                            let sy = py + by as i32;
+                            let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                            let alpha = (glyph_alpha as f32 / 255.0) * fg_a;
+                            let inv_alpha = 1.0 - alpha;
+
+                            buffer[idx] =
+                                (self.color.0 as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
+                            buffer[idx + 1] = (self.color.1 as f32 * alpha
+                                + buffer[idx + 1] as f32 * inv_alpha)
+                                as u8;
+                            buffer[idx + 2] = (self.color.2 as f32 * alpha
+                                + buffer[idx + 2] as f32 * inv_alpha)
+                                as u8;
+                            buffer[idx + 3] = 0xff;
+                        }
                     }
                 }
             }

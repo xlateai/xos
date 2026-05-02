@@ -52,6 +52,38 @@ struct RichTextBlitCacheSlot {
 static RICH_TEXT_BLIT_CACHE_SLOTS: Lazy<Mutex<HashMap<i64, RichTextBlitCacheSlot>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Same idea as [`RichTextBlitCacheKey`], for viewport `UiText` (`xos.ui.Text`).
+#[derive(Clone, PartialEq, Eq)]
+struct PlainTextBlitCacheKey {
+    canvas_w: usize,
+    canvas_h: usize,
+    text: String,
+    x1n: u32,
+    y1n: u32,
+    x2n: u32,
+    y2n: u32,
+    font_bits: u32,
+    color: [u8; 4],
+    hitboxes: bool,
+    baselines: bool,
+    opaque_under_rgb: Option<[u8; 3]>,
+}
+
+struct PlainTextBlitCacheSlot {
+    key: PlainTextBlitCacheKey,
+    pixels: Vec<u8>,
+    bw: usize,
+    bh: usize,
+    px_x1: i32,
+    px_y1: i32,
+    lines: Vec<u32>,
+    hitboxes: Vec<[[f32; 2]; 2]>,
+    baselines: Vec<[[f32; 2]; 2]>,
+}
+
+static PLAIN_TEXT_BLIT_CACHE_SLOTS: Lazy<Mutex<HashMap<i64, PlainTextBlitCacheSlot>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 fn py_number_to_f64(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f64> {
     if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
         return Ok(v);
@@ -190,6 +222,12 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// Internal render hook for xos.ui.Text.render(...)
 /// Usage: _text_render(text, x1, y1, x2, y2, color, hitboxes=False, baselines=False, font_size=24.0)
+///
+/// Keyword-only: **`cache_slot=int`** caches the tinted RGBA sub-rectangle (glyphs are globally cached separately;
+/// this avoids per-frame CPU alpha-blend cost for unchanged hero labels, captions, …).
+///
+/// **`blend_under_rgb=(r,g,b)`** — composite glyphs against this solid plate instead of read-modify-write with
+/// the framebuffer (matches [`crate::apps::text::TextApp`] style cost when the viewport already filled that RGB).
 fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 {
@@ -236,6 +274,40 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         24.0
     };
 
+    let cache_slot: Option<i64> = match args.kwargs.get("cache_slot") {
+        None => None,
+        Some(obj) => Some(obj.clone().try_into_value::<i64>(vm).map_err(|_| {
+            vm.new_type_error("cache_slot must be int or omitted".to_string())
+        })?),
+    };
+
+    let opaque_under_rgb: Option<(u8, u8, u8)> = match args.kwargs.get("blend_under_rgb") {
+        None => None,
+        Some(obj) => {
+            let tup = obj
+                .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                .ok_or_else(|| {
+                    vm.new_type_error(
+                        "blend_under_rgb must be an (r, g, b) tuple when provided".to_string(),
+                    )
+                })?;
+            let slice = tup.as_slice();
+            if slice.len() != 3 {
+                return Err(vm.new_type_error(
+                    "blend_under_rgb must be an (r, g, b) tuple when provided".to_string(),
+                ));
+            }
+            let r: i32 = slice[0].clone().try_into_value(vm)?;
+            let g: i32 = slice[1].clone().try_into_value(vm)?;
+            let b: i32 = slice[2].clone().try_into_value(vm)?;
+            Some((
+                r.clamp(0, 255) as u8,
+                g.clamp(0, 255) as u8,
+                b.clamp(0, 255) as u8,
+            ))
+        }
+    };
+
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
@@ -259,22 +331,107 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         ));
     }
 
+    let x1n = x1 as f32;
+    let y1n = y1 as f32;
+    let x2n = x2 as f32;
+    let y2n = y2 as f32;
+    let px1 = (x1n.clamp(0.0, 1.0) * canvas_width as f32).round() as i32;
+    let py1 = (y1n.clamp(0.0, 1.0) * canvas_height as f32).round() as i32;
+    let px2 = (x2n.clamp(0.0, 1.0) * canvas_width as f32).round() as i32;
+    let py2 = (y2n.clamp(0.0, 1.0) * canvas_height as f32).round() as i32;
+
+    let color_arr = [r8, g8, b8, a8];
+    let opaque_under_arr = opaque_under_rgb.map(|(r, g, b)| [r, g, b]);
+    let cache_key = PlainTextBlitCacheKey {
+        canvas_w: canvas_width,
+        canvas_h: canvas_height,
+        text: text.clone(),
+        x1n: x1n.to_bits(),
+        y1n: y1n.to_bits(),
+        x2n: x2n.to_bits(),
+        y2n: y2n.to_bits(),
+        font_bits: font_size_px.max(1.0).to_bits(),
+        color: color_arr,
+        hitboxes,
+        baselines,
+        opaque_under_rgb: opaque_under_arr,
+    };
+
     let text_ui = UiText {
         text,
-        x1_norm: x1 as f32,
-        y1_norm: y1 as f32,
-        x2_norm: x2 as f32,
-        y2_norm: y2 as f32,
+        x1_norm: x1n,
+        y1_norm: y1n,
+        x2_norm: x2n,
+        y2_norm: y2n,
         color: (r8, g8, b8, a8),
         hitboxes,
         baselines,
         font_size_px,
+        opaque_under_rgb,
     };
 
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
-    let render_state = text_ui
-        .render(buffer, canvas_width, canvas_height)
-        .map_err(|e| vm.new_runtime_error(e))?;
+
+    let render_state = if let Some(slot) = cache_slot {
+        let cached_hit = {
+            let g = PLAIN_TEXT_BLIT_CACHE_SLOTS.lock().unwrap();
+            g.get(&slot)
+                .filter(|hit| hit.key == cache_key)
+                .map(|hit| {
+                    (
+                        hit.px_x1,
+                        hit.px_y1,
+                        hit.bw,
+                        hit.bh,
+                        hit.pixels.clone(),
+                        hit.lines.clone(),
+                        hit.hitboxes.clone(),
+                        hit.baselines.clone(),
+                    )
+                })
+        };
+
+        if let Some((hit_px1, hit_py1, bw, bh, pixels, lines, hitboxes_v, baselines_v)) =
+            cached_hit
+        {
+            let _ = blit_rgba_subrect(buffer, canvas_width, hit_px1, hit_py1, &pixels, bw, bh);
+            UiTextRenderState {
+                lines,
+                hitboxes: hitboxes_v,
+                baselines: baselines_v,
+            }
+        } else {
+            let rs = text_ui
+                .render(buffer, canvas_width, canvas_height)
+                .map_err(|e| vm.new_runtime_error(e))?;
+            if px2 > px1 && py2 > py1 {
+                if let Some((pixels, bw, bh)) =
+                    rgba_subrect_clone(buffer, canvas_width, px1, py1, px2, py2)
+                {
+                    let mut cg = PLAIN_TEXT_BLIT_CACHE_SLOTS.lock().unwrap();
+                    cg.insert(
+                        slot,
+                        PlainTextBlitCacheSlot {
+                            key: cache_key,
+                            px_x1: px1,
+                            px_y1: py1,
+                            bw,
+                            bh,
+                            pixels,
+                            lines: rs.lines.clone(),
+                            hitboxes: rs.hitboxes.clone(),
+                            baselines: rs.baselines.clone(),
+                        },
+                    );
+                }
+            }
+            rs
+        }
+    } else {
+        text_ui
+            .render(buffer, canvas_width, canvas_height)
+            .map_err(|e| vm.new_runtime_error(e))?
+    };
 
     let lines_py = vm.ctx.new_list(
         render_state
@@ -1214,6 +1371,7 @@ class Text:
         placeholder="",
         mutable=False,
         show_cursor=True,
+        blend_under_rgb=None,
     ):
         self.text = text
         self.x1 = x1
@@ -1227,6 +1385,7 @@ class Text:
         self.placeholder = placeholder
         self.mutable = mutable
         self.show_cursor = show_cursor
+        self.blend_under_rgb = blend_under_rgb
         self._last_render_state = None
 
     def contains_pixel(self, px, py, frame_w=None, frame_h=None):
@@ -1244,7 +1403,16 @@ class Text:
             and float(self.y1) * frame_h <= float(py) < float(self.y2) * frame_h
         )
 
-    def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
+    def render(
+        self,
+        frame=None,
+        color=None,
+        hitboxes=None,
+        baselines=None,
+        font_size=None,
+        cache_slot=None,
+        blend_under_rgb=None,
+    ):
         import xos
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
@@ -1263,6 +1431,12 @@ class Text:
                     xos.frame._begin_standalone(vid, w, h)
                     bound = True
         try:
+            kw = {}
+            if cache_slot is not None:
+                kw["cache_slot"] = int(cache_slot)
+            bu = self.blend_under_rgb if blend_under_rgb is None else blend_under_rgb
+            if bu is not None:
+                kw["blend_under_rgb"] = (int(bu[0]), int(bu[1]), int(bu[2]))
             state = _text_render(
                 self.text,
                 self.x1,
@@ -1273,6 +1447,7 @@ class Text:
                 resolved_hitboxes,
                 resolved_baselines,
                 resolved_font_size,
+                **kw,
             )
             wrapped = TextRenderState(state)
             self._last_render_state = wrapped
@@ -1305,6 +1480,7 @@ def text(
     placeholder="",
     mutable=False,
     show_cursor=True,
+    blend_under_rgb=None,
 ):
     return Text(
         text,
@@ -1319,6 +1495,7 @@ def text(
         placeholder=placeholder,
         mutable=mutable,
         show_cursor=show_cursor,
+        blend_under_rgb=blend_under_rgb,
     )
 
 class RichText:

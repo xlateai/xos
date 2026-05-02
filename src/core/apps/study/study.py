@@ -6,8 +6,9 @@ KANA_COL = "Vocab-kana"
 MEANING_COL = "Vocab-meaning"
 ENGLISH_SENTENCE_COL = "Sentence-meaning"
 
-# `RichText.render(..., cache_slot=…)` blits cached RGBA when feedback markup/selection/layout match (big FPS win).
+# `RichText` / `Text.render(..., cache_slot=…)` blit cachedRGBA when markup/text/rect/fonts match — glyphs are globally cached separately.
 _STUDY_FEEDBACK_RICH_CACHE_SLOT = 771
+_STUDY_HERO_TEXT_CACHE_SLOT = 772
 JAPANESE_SENTENCE_COL = "Sentence-expression"
 JAPANESE_KANA_SENTENCE_COL = "Sentence-kana"
 
@@ -173,6 +174,8 @@ CLR_BG = (8, 8, 10, 255)
 CLR_CARD = (22, 22, 26, 255)
 CLR_CARD_EDGE = (68, 68, 74, 255)
 CLR_COMPOSER = (18, 18, 22, 255)
+_UNDER_CARD_RGB = tuple(CLR_CARD[:3])
+_UNDER_COMPOSER_RGB = tuple(CLR_COMPOSER[:3])
 CLR_COMPOSER_EDGE = (90, 90, 96, 255)
 CLR_MUTED = (130, 130, 138, 255)
 CLR_THREAD = (205, 205, 212, 255)
@@ -261,6 +264,7 @@ class StudyApp(xos.Application):
             hitboxes=False,
             baselines=False,
             font_size=HERO_FONT_BASE,
+            blend_under_rgb=_UNDER_CARD_RGB,
         )
         self.caption = xos.ui.text(
             "Japanese · romaji reply",
@@ -270,6 +274,7 @@ class StudyApp(xos.Application):
             0.168,
             color=CLR_CAPTION[:3],
             font_size=18.0 * FS,
+            blend_under_rgb=_UNDER_CARD_RGB,
         )
         self.thread_status = xos.ui.text(
             "",
@@ -279,6 +284,7 @@ class StudyApp(xos.Application):
             0.222,
             color=CLR_THREAD[:3],
             font_size=19.0 * FS * REVIEW_TEXT_SCALE,
+            blend_under_rgb=_UNDER_CARD_RGB,
         )
         self.feedback_ui = xos.ui.rich_text(
             "",
@@ -303,6 +309,7 @@ class StudyApp(xos.Application):
             placeholder="Message…  romaji",
             mutable=False,
             show_cursor=False,
+            blend_under_rgb=_UNDER_COMPOSER_RGB,
         )
         self.chat_value = xos.ui.text(
             "",
@@ -315,6 +322,7 @@ class StudyApp(xos.Application):
             mutable=True,
             show_cursor=True,
             hitboxes=False,
+            blend_under_rgb=_UNDER_COMPOSER_RGB,
         )
         self.composer_hint = xos.ui.text(
             "",
@@ -327,6 +335,7 @@ class StudyApp(xos.Application):
             mutable=False,
             show_cursor=False,
             hitboxes=False,
+            blend_under_rgb=_UNDER_COMPOSER_RGB,
         )
 
     def _pick_word(self):
@@ -653,7 +662,7 @@ class StudyApp(xos.Application):
         self.hero.x2 = hx2
         self.hero.y1 = vb["hero_y1"]
         self.hero.y2 = vb["hero_y2"]
-        self.hero.render(self.frame)
+        self.hero.render(self.frame, cache_slot=_STUDY_HERO_TEXT_CACHE_SLOT)
 
         self.caption.render(self.frame)
 
