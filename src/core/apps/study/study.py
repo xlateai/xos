@@ -165,18 +165,20 @@ def romaji_to_hiragana(romaji):
     return hiragana
 
 
-# Guessing-game–style semantics: yellow labels, magenta kanji cue, cyan Japanese, blue English,
-# green/red outcomes — bumped saturation on a pure-black stage.
-CLR_BG = (0, 0, 0, 255)
-CLR_CARD = (38, 16, 52, 255)
-CLR_CARD_EDGE = (255, 90, 255, 255)
-CLR_COMPOSER = (32, 20, 48, 255)
-CLR_COMPOSER_EDGE = (200, 110, 255, 255)
-CLR_MUTED = (160, 150, 195, 255)
-CLR_THREAD = (115, 255, 255, 255)
-CLR_CAPTION = (255, 235, 90, 255)
-CLR_KANJI = (255, 118, 255, 255)
-CLR_HINT_BAND = (200, 95, 255, 255)
+# Minimal UI: monochrome surfaces and gray type on black (Minecraft-rich feedback uses matching &codes).
+CLR_BG = (8, 8, 10, 255)
+CLR_CARD = (22, 22, 26, 255)
+CLR_CARD_EDGE = (68, 68, 74, 255)
+CLR_COMPOSER = (18, 18, 22, 255)
+CLR_COMPOSER_EDGE = (90, 90, 96, 255)
+CLR_MUTED = (130, 130, 138, 255)
+CLR_THREAD = (205, 205, 212, 255)
+CLR_CAPTION = (178, 178, 184, 255)
+CLR_KANJI = (248, 248, 252, 255)
+CLR_HINT_BAND = (52, 52, 56, 255)
+
+# Scale for the review block (feedback rich text + thread line + composer summary in feedback mode).
+REVIEW_TEXT_SCALE = 1.3
 
 # Viewport text sizes: bases below are multiplied inside Text/RichText.render by `xos.Application.xos_scale`
 # (same value as `_study_viewport_ui_coef()` drives for composer geometry below).
@@ -233,7 +235,7 @@ class StudyApp(xos.Application):
             0.98,
             0.222,
             color=CLR_THREAD[:3],
-            font_size=19.0 * FS,
+            font_size=19.0 * FS * REVIEW_TEXT_SCALE,
         )
         self.feedback_ui = xos.ui.rich_text(
             "",
@@ -241,8 +243,8 @@ class StudyApp(xos.Application):
             0.230,
             0.96,
             0.88,
-            color=(248, 252, 255),
-            font_size=21.0 * FS,
+            color=(220, 220, 226),
+            font_size=21.0 * FS * REVIEW_TEXT_SCALE,
             minecraft=True,
             selectable=True,
             mutable=False,
@@ -278,7 +280,7 @@ class StudyApp(xos.Application):
             0.0,
             0.0,
             color=CLR_MUTED[:3],
-            font_size=15.0 * FS,
+            font_size=15.0 * FS * REVIEW_TEXT_SCALE,
             mutable=False,
             show_cursor=False,
             hitboxes=False,
@@ -311,14 +313,20 @@ class StudyApp(xos.Application):
         span = max(0.0, sy2 - sy1)
         return sy1 + float(y) * span
 
-    def _hero_norm_x(self, band_x1, band_x2):
-        """Kanji cue: use nearly the full chat column width so glyphs are not squeezed into early wraps."""
+    def _hero_norm_x(self, word, frame_w_px, band_x1, band_x2):
+        """Kanji cue: width from a generous CJK estimate, centered in the composer column."""
         eps = 4e-4
-        bw = max(2.0 * eps, band_x2 - band_x1)
+        sc = self._study_viewport_ui_coef()
+        fs = float(self.hero.font_size) * sc
+        bw_px = max(1.0, (band_x2 - band_x1) * frame_w_px)
+        n = max(1, len(word))
+        # Wide enough per glyph that short vocab does not wrap; cap so long strings still use most of band.
+        tw_px = fs * max(2.25, float(n) * 1.14)
+        tw_px = min(tw_px, bw_px * 0.995)
         cx = (band_x1 + band_x2) * 0.5
-        half = 0.5 * bw - eps * 4.0
-        x1 = max(band_x1 + eps, cx - half)
-        x2 = min(band_x2 - eps, cx + half)
+        hw_norm = tw_px / (2.0 * frame_w_px)
+        x1 = max(band_x1 + eps, cx - hw_norm)
+        x2 = min(band_x2 - eps, cx + hw_norm)
         return x1, x2
 
     def _composer_layout(self):
@@ -367,21 +375,22 @@ class StudyApp(xos.Application):
         vword = w.get(VOCAB_COL, "")
         mean = w.get(MEANING_COL, "")
         ok = self.last_correct
-        head = "&a&lCorrect!&r&r\n" if ok else "&c&lIncorrect&r&r\n"
+        # Only &0–&f, &l/&r ; keep contrast on blacks/grays (&f white, &7–&8 grays).
+        head = "&f&lCorrect!&r&r\n" if ok else "&8&lIncorrect&r&r\n"
         line1 = (
             f"{head}"
-            f"&e「{vk}」&rは&d&l{vword}&r。\n"
-            f"&9({mean})&r"
+            f"&f「{vk}」&rは&7&l{vword}&r。\n"
+            f"&8({mean})&r"
         )
         parts = [
             line1,
             "",
-            f"&b&l{ja}&r",
-            f"&b{kana}&r",
-            f"&9&l{en}&r",
+            f"&f&l{ja}&r",
+            f"&7{kana}&r",
+            f"&f&l{en}&r",
             "",
-            "&e&lDrag to select&r · &l&dEnter continues&r\n"
-            "&7Double-tap the bar ⇄ on-screen keyboard&r",
+            "&7&lDrag to select&r · &r&8Enter continues&r\n"
+            "&8Double-tap the bar ⇄ on-screen keyboard&r",
         ]
         return "\n".join(parts)
 
@@ -560,7 +569,7 @@ class StudyApp(xos.Application):
 
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
-        hx1, hx2 = self._hero_norm_x(ox1, ox2)
+        hx1, hx2 = self._hero_norm_x(word, w, ox1, ox2)
         self.hero.x1 = hx1
         self.hero.x2 = hx2
         self.hero.y1 = self._map_layout_y_norm(0.048)
@@ -574,9 +583,14 @@ class StudyApp(xos.Application):
         y_hi = min(self._map_layout_y_norm(0.92), sy2 - 2e-3)
         self.feedback_ui.y2 = max(y_lo, min(y_hi, ft_y2))
 
+        prompt_fs = 22.0 * FS
+        review_fs = prompt_fs * REVIEW_TEXT_SCALE
+
         if self.state == "prompt":
             self.feedback_ui.text = ""
             self.thread_status.color = CLR_THREAD[:3]
+            self.chat_value.font_size = prompt_fs
+            self.chat_placeholder.font_size = prompt_fs
             self.chat_value.mutable = True
             self.chat_value.show_cursor = True
             self.thread_status.text = (
@@ -623,6 +637,7 @@ class StudyApp(xos.Application):
         else:
             self.thread_status.text = "Review · your answer is frozen below"
             self.thread_status.color = CLR_THREAD[:3]
+            self.chat_value.font_size = review_fs
             self.thread_status.render(self.frame)
 
             self.chat_value.mutable = False
