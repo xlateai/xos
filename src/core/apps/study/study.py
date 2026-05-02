@@ -208,19 +208,22 @@ def _sentence_with_lime_vocab(s, vword):
     return "".join(chunks)
 
 
-def _kana_line_with_lime_reading(kana_line, vk):
-    """Sentence kana row: occurrences of vocab reading ``vk`` in lime, rest muted ``&7``."""
+def _kana_line_with_reading_highlight(kana_line, vk, mc="a"):
+    """Sentence kana row: occurrences of reading ``vk`` in ``mc`` (&a lime, ``&c`` red when wrong); rest muted ``&7``."""
     ks = str(kana_line)
     vk = str(vk) if vk is not None else ""
     if not vk or vk not in ks:
         return f"&7{ks}&r"
+    if len(mc) != 1:
+        mc = "a"
+    tag = f"&{mc}"
     parts = ks.split(vk)
     chunks = []
     for i, p in enumerate(parts):
         if p:
             chunks.append(f"&7{p}&r")
         if i < len(parts) - 1:
-            chunks.append(f"&a&l{vk}&r")
+            chunks.append(f"{tag}&l{vk}&r")
     return "".join(chunks)
 
 
@@ -446,18 +449,18 @@ class StudyApp(xos.Application):
         vword = w.get(VOCAB_COL, "")
         mean = w.get(MEANING_COL, "")
         ok = self.last_correct
-        # &a = Minecraft bright lime/green over black; lime matches ``CLR_KANJI`` accent.
+        read_mc = "a" if ok else "c"  # &a lime (correct answer); &c red for reading when incorrect.
         head = "&f&lCorrect!&r&r\n" if ok else "&8&lIncorrect&r&r\n"
         line1 = (
             f"{head}"
-            f"&f「&a&l{vk}&r&f」は&a&l{vword}&r。\n"
+            f"&f「&{read_mc}&l{vk}&r&f」は&a&l{vword}&r。\n"
             f"&8({mean})&r"
         )
         parts = [
             line1,
             "",
             _sentence_with_lime_vocab(ja, vword),
-            _kana_line_with_lime_reading(kana, vk),
+            _kana_line_with_reading_highlight(kana, vk, read_mc),
             f"&f&l{en}&r",
             "",
             "&7&lDrag to select&r · &r&8Enter continues&r\n"
