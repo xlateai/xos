@@ -39,7 +39,7 @@ impl From<u8> for FontFamily {
     }
 }
 
-static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::DotGothic16 as u8);
+static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::NotoSansJp as u8);
 static DEFAULT_FONT_VERSION: AtomicU64 = AtomicU64::new(1);
 static FONT_CACHE_JETBRAINS_MONO: OnceLock<Font> = OnceLock::new();
 static FONT_CACHE_NOTO_SANS_JP: OnceLock<Font> = OnceLock::new();

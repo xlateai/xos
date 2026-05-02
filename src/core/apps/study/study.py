@@ -165,13 +165,18 @@ def romaji_to_hiragana(romaji):
     return hiragana
 
 
-CLR_BG = (5, 5, 8, 255)
-CLR_CARD = (18, 18, 22, 255)
-CLR_CARD_EDGE = (45, 48, 58, 255)
-CLR_COMPOSER = (28, 28, 34, 255)
-CLR_COMPOSER_EDGE = (52, 54, 64, 255)
-CLR_MUTED = (130, 132, 145, 255)
-CLR_ACCENT = (130, 200, 255, 255)
+# Guessing-game–style semantics: yellow labels, magenta kanji cue, cyan Japanese, blue English,
+# green/red outcomes — bumped saturation for OLED-style contrast on dark UI.
+CLR_BG = (6, 8, 22, 255)
+CLR_CARD = (38, 16, 52, 255)
+CLR_CARD_EDGE = (255, 90, 255, 255)
+CLR_COMPOSER = (32, 20, 48, 255)
+CLR_COMPOSER_EDGE = (200, 110, 255, 255)
+CLR_MUTED = (160, 150, 195, 255)
+CLR_THREAD = (115, 255, 255, 255)
+CLR_CAPTION = (255, 235, 90, 255)
+CLR_KANJI = (255, 118, 255, 255)
+CLR_HINT_BAND = (200, 95, 255, 255)
 
 
 class StudyApp(xos.Application):
@@ -194,42 +199,43 @@ class StudyApp(xos.Application):
         self.input_focus = False
         self._pick_word()
 
+        # Centered Kanji hero — symmetric margins (narrower strip reads as centered on viewport).
         self.hero = xos.ui.text(
             "",
-            0.08,
-            0.065,
-            0.92,
-            0.15,
-            color=xos.color.WHITE,
+            0.14,
+            0.048,
+            0.86,
+            0.126,
+            color=CLR_KANJI[:3],
             hitboxes=False,
             baselines=False,
             font_size=48.0,
         )
         self.caption = xos.ui.text(
             "Japanese · romaji reply",
-            0.08,
-            0.152,
-            0.92,
-            0.19,
-            color=CLR_MUTED[:3],
-            font_size=17.0,
+            0.14,
+            0.129,
+            0.86,
+            0.168,
+            color=CLR_CAPTION[:3],
+            font_size=18.0,
         )
         self.thread_status = xos.ui.text(
             "",
-            0.06,
-            0.20,
-            0.94,
-            0.27,
-            color=CLR_ACCENT[:3],
-            font_size=18.0,
+            0.10,
+            0.176,
+            0.90,
+            0.222,
+            color=CLR_THREAD[:3],
+            font_size=19.0,
         )
         self.feedback_ui = xos.ui.rich_text(
             "",
-            0.05,
-            0.28,
-            0.95,
+            0.06,
+            0.230,
+            0.94,
             0.88,
-            color=xos.color.WHITE,
+            color=(248, 252, 255),
             font_size=21.0,
             minecraft=True,
             selectable=True,
@@ -257,6 +263,18 @@ class StudyApp(xos.Application):
             font_size=22.0,
             mutable=True,
             show_cursor=True,
+            hitboxes=False,
+        )
+        self.composer_hint = xos.ui.text(
+            "",
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            color=CLR_MUTED[:3],
+            font_size=15.0,
+            mutable=False,
+            show_cursor=False,
             hitboxes=False,
         )
 
@@ -301,16 +319,21 @@ class StudyApp(xos.Application):
         vword = w.get(VOCAB_COL, "")
         mean = w.get(MEANING_COL, "")
         ok = self.last_correct
-        head = "&aCorrect&r\n" if ok else "&cIncorrect&r\n"
-        line1 = f"{head}「{vk}」は「{vword}」。（{mean}）"
+        head = "&a&lCorrect!&r&r\n" if ok else "&c&lIncorrect&r&r\n"
+        line1 = (
+            f"{head}"
+            f"&e「{vk}」&rは&d&l{vword}&r。\n"
+            f"&9({mean})&r"
+        )
         parts = [
             line1,
             "",
-            ja,
-            kana,
-            en,
+            f"&b&l{ja}&r",
+            f"&b{kana}&r",
+            f"&9&l{en}&r",
             "",
-            "&eDrag to select · Enter continues&r",
+            "&e&lDrag to select&r · &l&dEnter continues&r\n"
+            "&7Double-tap the bar ⇄ on-screen keyboard&r",
         ]
         return "\n".join(parts)
 
@@ -320,16 +343,24 @@ class StudyApp(xos.Application):
         self.fb_sel = None
 
     def on_viewport_double_tap(self, x, y):
-        if self.state != "prompt":
-            return
-        if (
-            getattr(self.chat_value, "mutable", False)
-            and self.chat_value.contains_pixel(x, y)
-        ):
+        lay = self._composer_layout()
+        ox1, oy1, ox2, oy2 = lay["outer"]
+        fw, fh = self.get_width(), self.get_height()
+        nx = float(x) / float(fw)
+        ny = float(y) / float(fh)
+        if ox1 <= nx <= ox2 and oy1 <= ny <= oy2:
             xos.keyboard.toggle_onscreen()
 
     def on_mouse_down(self, x, y):
+        fw, fh = self.get_width(), self.get_height()
+        lay = self._composer_layout()
+        ox1, oy1, ox2, oy2 = lay["outer"]
+        nx = float(x) / float(fw)
+        ny = float(y) / float(fh)
+        in_comp = ox1 <= nx <= ox2 and oy1 <= ny <= oy2
         if self.state == "feedback":
+            if in_comp:
+                return
             ix = self.feedback_ui.pick(x, y)
             if ix < 0:
                 self._clear_feedback_selection()
@@ -376,20 +407,22 @@ class StudyApp(xos.Application):
     def tick(self):
         self.frame.clear(CLR_BG[:3])
         w, h = self.get_width(), self.get_height()
+        card = (0.10, 0.036, 0.90, 0.154)
+        cx1, cy1, cx2, cy2 = card
         xos.rasterizer.rects_filled(
             self.frame,
-            int(0.05 * w),
-            int(0.04 * h),
-            int(0.95 * w),
-            int(0.175 * h),
+            int(cx1 * w),
+            int(cy1 * h),
+            int(cx2 * w),
+            int(cy2 * h),
             CLR_CARD,
         )
-        # rectangles() expects flat [x1,y1,x2,y2] normalized, not [[pt],[pt]] (see tensor_flat_data_list).
+        # rectangles() expects flat [x1,y1,x2,y2] normalized, not nested lists.
         xos.rasterizer.rectangles(
             self.frame,
-            [0.05, 0.04, 0.95, 0.175],
+            [cx1, cy1, cx2, cy2],
             CLR_CARD_EDGE[:3],
-            1.0,
+            1.75,
         )
 
         word = self.current.get(VOCAB_COL, "") if self.current else ""
@@ -402,10 +435,16 @@ class StudyApp(xos.Application):
         ox1, oy1, ox2, oy2 = lay["outer"]
         ix1, iy1, ix2, iy2 = lay["inner"]
 
+        ft_y2 = oy1 - 0.015
+        self.feedback_ui.y2 = max(0.24, min(0.92, ft_y2))
+
         if self.state == "prompt":
             self.feedback_ui.text = ""
+            self.thread_status.color = CLR_THREAD[:3]
+            self.chat_value.mutable = True
+            self.chat_value.show_cursor = True
             self.thread_status.text = (
-                "Double-tap the bar to show the keyboard"
+                "Double-tap the bar ⇄ keyboard"
                 if not bool(getattr(self, "onscreen_keyboard_visible", False))
                 else "Type romaji · Enter sends"
             )
@@ -423,7 +462,7 @@ class StudyApp(xos.Application):
                 self.frame,
                 [ox1, oy1, ox2, oy2],
                 CLR_COMPOSER_EDGE[:3],
-                1.0,
+                1.25,
             )
 
             self.chat_value.x1 = ix1
@@ -443,20 +482,60 @@ class StudyApp(xos.Application):
             else:
                 self.chat_value.text = self.guess_buf + self._carets_on()
                 self.chat_value.render(self.frame)
+            self.composer_hint.text = ""
 
-            ft_y2 = oy1 - 0.012
-            self.feedback_ui.y2 = max(0.28, min(0.92, ft_y2))
         else:
-            self.thread_status.text = "Review"
+            self.thread_status.text = "Review · your answer is frozen below"
+            self.thread_status.color = CLR_THREAD[:3]
             self.thread_status.render(self.frame)
+
+            self.chat_value.mutable = False
+            self.chat_value.show_cursor = False
+
+            span = iy2 - iy1
+            mid_y = iy1 + 0.58 * span
+            self.chat_value.x1 = ix1
+            self.chat_value.y1 = iy1
+            self.chat_value.x2 = ix2
+            self.chat_value.y2 = mid_y
+            self.composer_hint.x1 = ix1
+            self.composer_hint.y1 = mid_y
+            self.composer_hint.x2 = ix2
+            self.composer_hint.y2 = iy2
+
             self.feedback_ui.text = self.feedback_text
-            self.feedback_ui.y2 = 0.93
             lo, hi = (-1, -1)
             if self.fb_sel is not None:
                 lo, hi = self.fb_sel
             self.feedback_ui.render(
                 self.frame, selection_start=lo, selection_end=hi
             )
+
+            xos.rasterizer.rects_filled(
+                self.frame,
+                int(ox1 * w),
+                int(oy1 * h),
+                int(ox2 * w),
+                int(oy2 * h),
+                CLR_COMPOSER,
+            )
+            xos.rasterizer.rectangles(
+                self.frame,
+                [ox1, oy1, ox2, oy2],
+                CLR_HINT_BAND[:3],
+                1.25,
+            )
+            gb = self.guess_buf.strip()
+            self.chat_value.text = gb if gb else "—"
+            self.chat_value.render(self.frame)
+
+            kb_on = bool(getattr(self, "onscreen_keyboard_visible", False))
+            self.composer_hint.text = (
+                "⌨ Tap Enter on keyboard · next ·  double-tap bar ⇄ keyboard"
+                if kb_on
+                else "Enter on keyboard advances · double-tap this bar ⇄ keyboard"
+            )
+            self.composer_hint.render(self.frame)
 
     def on_key_char(self, ch):
         if self.state == "feedback":

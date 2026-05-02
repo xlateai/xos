@@ -605,6 +605,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let rich_plain_fn = module.get_attr("_rich_plain", vm).unwrap();
     scope.globals.set_item("_rich_plain", rich_plain_fn, vm).unwrap();
     let py_text_code = r#"
+def _viewport_scaled_font(font_size_px):
+    """F3 / viewport UI scale (`Application.xos_scale`, percent/100) multiplies rasterized text size."""
+    import builtins
+    app = getattr(builtins, "__xos_app_instance__", None)
+    sc = float(getattr(app, "xos_scale", 1.0)) if app is not None else 1.0
+    return float(font_size_px) * sc
+
 class Text:
     def __init__(
         self,
@@ -655,7 +662,9 @@ class Text:
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.baselines if baselines is None else baselines
-        resolved_font_size = self.font_size if font_size is None else font_size
+        resolved_font_size = _viewport_scaled_font(
+            self.font_size if font_size is None else font_size
+        )
         bound = False
         if frame is not None:
             fd = getattr(frame, "_data", None)
@@ -794,7 +803,7 @@ class RichText:
                 self.x2,
                 self.y2,
                 self.color,
-                self.font_size,
+                _viewport_scaled_font(self.font_size),
                 self.minecraft,
             )
         )
@@ -815,7 +824,9 @@ class RichText:
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.baselines if baselines is None else baselines
-        resolved_font_size = self.font_size if font_size is None else font_size
+        resolved_font_size = _viewport_scaled_font(
+            self.font_size if font_size is None else font_size
+        )
         resolved_mc = self.minecraft if minecraft is None else minecraft
         bound = False
         if frame is not None:
