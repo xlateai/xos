@@ -221,9 +221,9 @@ fn panel_geom(
     #[cfg(target_os = "ios")]
     let mesh_seg_h = (30.0 * us).max(22.0);
     #[cfg(not(target_os = "ios"))]
-    let mesh_heading_h = 0.0_f32;
+    let _mesh_heading_h = 0.0_f32;
     #[cfg(not(target_os = "ios"))]
-    let mesh_seg_h = 0.0_f32;
+    let _mesh_seg_h = 0.0_f32;
     let font_options_h = if font_option_count == 0 {
         0.0
     } else {

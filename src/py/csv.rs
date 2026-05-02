@@ -26,8 +26,10 @@ fn next_handle() -> u64 {
 fn csv_id_from_handle_obj(obj: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult<u64> {
     if let Some(dict) = obj.downcast_ref::<PyDict>() {
         let id_o = dict
-            .get_item("_xos_csv_id", vm)?
-            .ok_or_else(|| vm.new_type_error("expected csv table dict from xos.csv.load()".to_string()))?;
+            .get_item("_xos_csv_id", vm)
+            .map_err(|_| vm.new_type_error(
+                "expected csv table dict from xos.csv.load() (missing _xos_csv_id)".to_string(),
+            ))?;
         let id: i64 = id_o.clone().try_into_value(vm)?;
         if id <= 0 {
             return Err(vm.new_value_error("invalid csv handle".to_string()));
@@ -39,8 +41,9 @@ fn csv_id_from_handle_obj(obj: rustpython_vm::PyObjectRef, vm: &VirtualMachine) 
 
 /// xos.csv.load(path) — read full UTF-8 CSV (with header row) into memory.
 fn csv_load(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let path: String = args.bind(vm)?;
-    let path = Path::new(&path.trim());
+    let path_owned: String = args.bind(vm)?;
+    let trimmed = path_owned.trim().to_string();
+    let path = Path::new(&trimmed);
     let mut rd = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)

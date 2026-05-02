@@ -878,12 +878,11 @@ Call super().__init__() in your app __init__ before using tick()."
     }
 
     fn on_key_char(&mut self, _state: &mut EngineState, ch: char) {
-        if let Some(ref app_instance) = self.app_instance {
-            let mut buf = [0u8; 4];
-            let s = ch.encode_utf8(&mut buf);
-            self.interpreter.enter(|vm| {
-                let py_s = vm.ctx.new_str(s);
-                let _ = vm.call_method(app_instance, "on_key_char", (py_s,));
+        if let Some(app_instance) = self.app_instance.clone() {
+            let ch_str = ch.to_string();
+            self.interpreter.enter(move |vm| {
+                let py_s = vm.ctx.new_str(ch_str.as_str());
+                let _ = vm.call_method(&app_instance, "on_key_char", (py_s,));
             });
         }
     }

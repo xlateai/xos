@@ -299,12 +299,12 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
 fn place_extracted_dir(staging: &Path, out_dir: &Path) -> Result<(), String> {
     if let Some(p) = out_dir.parent() {
         fs::create_dir_all(p).map_err(|e| {
-            let mut s = format!("create_dir_all parent of {}: {e}", out_dir.display());
-            #[cfg(target_os = "ios")]
-            s.push_str(
-                " (the long UUID in …/Application/<id>/… is the system sandbox, not an xos path; set XOS_DATA_DIR from Swift if wrong HOME).",
-            );
-            s
+            let ios_note = if cfg!(target_os = "ios") {
+                " (the long UUID in …/Application/<id>/… is the system sandbox, not an xos path; set XOS_DATA_DIR from Swift if wrong HOME)."
+            } else {
+                ""
+            };
+            format!("create_dir_all parent of {}: {e}{ios_note}", out_dir.display())
         })?;
     }
     if out_dir.exists() {
