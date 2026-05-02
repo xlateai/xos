@@ -5,6 +5,7 @@ pub mod engine;
 pub mod audio;
 pub mod keyboard;
 pub mod sensors;
+pub mod viewport_double_tap;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native_engine;
@@ -41,6 +42,7 @@ pub use f3_menu::{
 };
 #[cfg(target_os = "ios")]
 pub use f3_menu::IosRemoteMeshTransport;
+pub use viewport_double_tap::ViewportDoubleTap;
 pub use engine::{
     apply_frame_view_zoom, f3_ui_scale_multiplier, frame_view_pan_by_pixels,
     frame_view_rect_norm, tick_frame_delta, tick_frame_view_zoom, Application,

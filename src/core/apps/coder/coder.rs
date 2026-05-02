@@ -1,7 +1,7 @@
 #[cfg(not(target_os = "ios"))]
 use crate::apps::coder::shortcuts::{detect_coder_shortcut, CoderShortcutAction};
 use crate::engine::keyboard::shortcuts::{ShortcutAction, SpecialKeyEvent};
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ViewportDoubleTap};
 use crate::apps::coder::explorer::{build_explorer_items, fuzzy_score, split_folder_file, ExplorerItem};
 use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
@@ -79,10 +79,7 @@ pub struct CoderApp {
     viewport_app: Option<rustpython_vm::PyObjectRef>,
     viewport_app_setup_done: bool,
     viewport_ticks_completed: u64,
-    // Viewport double-tap tracking
-    viewport_last_tap_time: Option<std::time::Instant>,
-    viewport_last_tap_x: f32,
-    viewport_last_tap_y: f32,
+    viewport_double_tap: ViewportDoubleTap,
     viewport_taskbar_hidden: bool,
     /// Up to [`MAX_OPEN_EDITOR_TABS`] buffers; active index is [`Self::active_editor_tab`].
     open_editor_tabs: Vec<OpenEditorTab>,
@@ -660,9 +657,7 @@ impl CoderApp {
             viewport_app: None,
             viewport_app_setup_done: false,
             viewport_ticks_completed: 0,
-            viewport_last_tap_time: None,
-            viewport_last_tap_x: 0.0,
-            viewport_last_tap_y: 0.0,
+            viewport_double_tap: ViewportDoubleTap::default(),
             viewport_taskbar_hidden: false,
             open_editor_tabs: Vec::new(),
             active_editor_tab: 0,
@@ -2874,38 +2869,15 @@ impl Application for CoderApp {
             }
             Tab::Terminal => self.terminal_app.on_mouse_down(state),
             Tab::Viewport => {
-                // Handle double-tap to show/hide keyboard in viewport
-                use std::time::{Duration, Instant};
-                const DOUBLE_TAP_TIME_MS: u64 = 300;
-                const DOUBLE_TAP_DISTANCE: f32 = 50.0;
-                
-                let now = Instant::now();
-                let is_double_tap = if let Some(last_time) = self.viewport_last_tap_time {
-                    let time_since_last = now.duration_since(last_time);
-                    let distance = ((mouse_x - self.viewport_last_tap_x).powi(2) + (mouse_y - self.viewport_last_tap_y).powi(2)).sqrt();
-                    
-                    time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) && distance < DOUBLE_TAP_DISTANCE
-                } else {
-                    false
-                };
-                
-                if is_double_tap {
-                    // Toggle keyboard
+                if self
+                    .viewport_double_tap
+                    .observe_press(mouse_x, mouse_y)
+                {
                     state.keyboard.onscreen.toggle_minimize();
-                    // Reset tap tracking
-                    self.viewport_last_tap_time = None;
-                } else {
-                    // Update tap tracking
-                    self.viewport_last_tap_time = Some(now);
-                    self.viewport_last_tap_x = mouse_x;
-                    self.viewport_last_tap_y = mouse_y;
-                    
-                    // Forward to Python app if available
-                    if let Some(ref app_instance) = self.viewport_app {
-                        self.interpreter.enter(|vm| {
-                            let _ = vm.call_method(app_instance, "on_mouse_down", (mouse_x, mouse_y));
-                        });
-                    }
+                } else if let Some(ref app_instance) = self.viewport_app {
+                    self.interpreter.enter(|vm| {
+                        let _ = vm.call_method(app_instance, "on_mouse_down", (mouse_x, mouse_y));
+                    });
                 }
             }
         }

@@ -606,7 +606,21 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope.globals.set_item("_rich_plain", rich_plain_fn, vm).unwrap();
     let py_text_code = r#"
 class Text:
-    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
+    def __init__(
+        self,
+        text,
+        x1,
+        y1,
+        x2,
+        y2,
+        color=(255, 255, 255),
+        hitboxes=False,
+        baselines=False,
+        font_size=24.0,
+        placeholder="",
+        mutable=False,
+        show_cursor=True,
+    ):
         self.text = text
         self.x1 = x1
         self.y1 = y1
@@ -616,6 +630,25 @@ class Text:
         self.hitboxes = hitboxes
         self.baselines = baselines
         self.font_size = font_size
+        self.placeholder = placeholder
+        self.mutable = mutable
+        self.show_cursor = show_cursor
+        self._last_render_state = None
+
+    def contains_pixel(self, px, py, frame_w=None, frame_h=None):
+        """Normalized rect hit test vs pixel pointer (omit frame_w/h to use Application size)."""
+        if frame_w is None or frame_h is None:
+            import builtins
+
+            app = getattr(builtins, "__xos_app_instance__", None)
+            if app is None:
+                return False
+            frame_w = int(app.frame.get_width())
+            frame_h = int(app.frame.get_height())
+        return (
+            float(self.x1) * frame_w <= float(px) < float(self.x2) * frame_w
+            and float(self.y1) * frame_h <= float(py) < float(self.y2) * frame_h
+        )
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
         import xos
@@ -645,7 +678,9 @@ class Text:
                 resolved_baselines,
                 resolved_font_size,
             )
-            return TextRenderState(state)
+            wrapped = TextRenderState(state)
+            self._last_render_state = wrapped
+            return wrapped
         finally:
             if bound:
                 xos.frame._end_standalone()
@@ -661,7 +696,20 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
+def text(
+    text,
+    x1,
+    y1,
+    x2,
+    y2,
+    color=(255, 255, 255),
+    hitboxes=False,
+    baselines=False,
+    font_size=24.0,
+    placeholder="",
+    mutable=False,
+    show_cursor=True,
+):
     return Text(
         text,
         x1,
@@ -672,6 +720,9 @@ def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=
         hitboxes=hitboxes,
         baselines=baselines,
         font_size=font_size,
+        placeholder=placeholder,
+        mutable=mutable,
+        show_cursor=show_cursor,
     )
 
 class RichText:
@@ -693,6 +744,9 @@ class RichText:
         selectable=False,
         editable=False,
         use_system_keyboard=False,
+        placeholder="",
+        mutable=False,
+        show_cursor=True,
     ):
         self.text = text
         self.x1 = x1
@@ -707,9 +761,27 @@ class RichText:
         self.selectable = selectable
         self.editable = editable
         self.use_system_keyboard = use_system_keyboard
+        self.placeholder = placeholder
+        self.mutable = mutable
+        self.show_cursor = show_cursor
+        self._last_render_state = None
 
     def plain(self):
         return _rich_plain(self.text, self.minecraft, color=self.color)
+
+    def contains_pixel(self, px, py, frame_w=None, frame_h=None):
+        if frame_w is None or frame_h is None:
+            import builtins
+
+            app = getattr(builtins, "__xos_app_instance__", None)
+            if app is None:
+                return False
+            frame_w = int(app.frame.get_width())
+            frame_h = int(app.frame.get_height())
+        return (
+            float(self.x1) * frame_w <= float(px) < float(self.x2) * frame_w
+            and float(self.y1) * frame_h <= float(py) < float(self.y2) * frame_h
+        )
 
     def pick(self, px, py):
         return int(
@@ -770,7 +842,9 @@ class RichText:
                 selection_start,
                 selection_end,
             )
-            return TextRenderState(state)
+            wrapped = TextRenderState(state)
+            self._last_render_state = wrapped
+            return wrapped
         finally:
             if bound:
                 xos.frame._end_standalone()
@@ -790,6 +864,9 @@ def rich_text(
     selectable=False,
     editable=False,
     use_system_keyboard=False,
+    placeholder="",
+    mutable=False,
+    show_cursor=True,
 ):
     return RichText(
         text,
@@ -805,6 +882,9 @@ def rich_text(
         selectable=selectable,
         editable=editable,
         use_system_keyboard=use_system_keyboard,
+        placeholder=placeholder,
+        mutable=mutable,
+        show_cursor=show_cursor,
     )
 "#;
     let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());

@@ -1165,6 +1165,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the ui submodule
     let ui_module = crate::python_api::ui::make_ui_module(vm);
     module.set_attr("ui", ui_module, vm).unwrap();
+
+    crate::python_api::keyboard_mod::register_keyboard(&module, vm);
     
     // Add the dtypes module and expose dtype constants
     let dtypes_module = crate::python_api::dtypes::make_dtypes_module(vm);

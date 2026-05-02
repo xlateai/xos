@@ -1,5 +1,5 @@
 use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ViewportDoubleTap};
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
@@ -483,6 +483,8 @@ class Application:
         # F3 scale as percent/100 (0.25..5.0 for 25–500%); default 1.0 at 100%.
         # Engine syncs `xos_scale` each tick.
         self.xos_scale = 1.0
+        self.keyboard_top_y = 1.0
+        self.onscreen_keyboard_visible = False
         self._xos_standalone_width = 800
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
@@ -616,6 +618,11 @@ class Application:
         """Called when mouse moves. Override this method (optional)."""
         pass
 
+    def on_viewport_double_tap(self, x, y):
+        """Left double-tap (~300 ms window, ~50 px slop). Call ``xos.keyboard.toggle_onscreen()``
+        after hit-testing mutable fields. Does not invoke ``on_mouse_down``."""
+        pass
+
     def on_scroll(self, dx, dy):
         """Called on mouse wheel / trackpad scroll. Override (optional)."""
         pass
@@ -641,6 +648,7 @@ pub struct PyApp {
     app_instance: Option<PyObjectRef>,
     /// Number of `tick()` calls that have fully finished (starts at 0; incremented after each tick).
     ticks_completed: u64,
+    viewport_double_tap: ViewportDoubleTap,
 }
 
 impl PyApp {
@@ -649,6 +657,7 @@ impl PyApp {
             interpreter,
             app_instance: Some(app_instance),
             ticks_completed: 0,
+            viewport_double_tap: ViewportDoubleTap::default(),
         }
     }
 }
@@ -758,6 +767,20 @@ Call super().__init__() in your app __init__ before using tick()."
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+
+                    let (_, keyboard_top_y, _, _) =
+                        state.keyboard.onscreen.top_edge_coordinates();
+                    let kbd_vis = state.keyboard.onscreen.is_shown();
+                    let _ = app_instance.set_attr(
+                        "keyboard_top_y",
+                        vm.ctx.new_float(keyboard_top_y as f64),
+                        vm,
+                    );
+                    let _ = app_instance.set_attr(
+                        "onscreen_keyboard_visible",
+                        vm.ctx.new_bool(kbd_vis),
+                        vm,
+                    );
                     
                     // Call tick
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
@@ -785,9 +808,35 @@ Call super().__init__() in your app __init__ before using tick()."
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         if let Some(ref app_instance) = self.app_instance {
+            let x = state.mouse.x;
+            let y = state.mouse.y;
+
+            // Left-click double-tap: optional OSK routing via Python `on_viewport_double_tap`,
+            // `xos.keyboard.toggle_onscreen`, then shared [`ViewportDoubleTap`] (same thresholds as coder / TextApp).
+            if state.mouse.is_left_clicking && self.viewport_double_tap.observe_press(x, y) {
+                self.interpreter.enter(|vm| {
+                    let mouse_dict = vm.ctx.new_dict();
+                    let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
+                    let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);
+                    let _ = mouse_dict.set_item(
+                        "is_left_clicking",
+                        vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                        vm,
+                    );
+                    let _ = mouse_dict.set_item(
+                        "is_right_clicking",
+                        vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                        vm,
+                    );
+                    let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+                    let _ = vm.call_method(app_instance, "on_viewport_double_tap", (x, y));
+                });
+                let n = crate::python_api::viewport_keyboard_bridge::take_pending_osk_toggles();
+                crate::python_api::viewport_keyboard_bridge::apply_pending_osk_toggles(&mut state.keyboard, n);
+                return;
+            }
+
             self.interpreter.enter(|vm| {
-                let x = state.mouse.x;
-                let y = state.mouse.y;
                 let mouse_dict = vm.ctx.new_dict();
                 let _ = mouse_dict.set_item("x", vm.ctx.new_float(x as f64).into(), vm);
                 let _ = mouse_dict.set_item("y", vm.ctx.new_float(y as f64).into(), vm);

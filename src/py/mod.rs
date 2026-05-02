@@ -16,6 +16,8 @@ pub mod data;
 pub mod csv;
 pub mod path;
 pub mod ui;
+pub mod viewport_keyboard_bridge;
+pub mod keyboard_mod;
 pub mod nn;
 pub mod burn_train;
 pub mod mesh;
