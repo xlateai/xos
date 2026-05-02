@@ -2140,6 +2140,25 @@ impl Application for CoderApp {
                                 let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
                                 let _ = app_instance.set_attr("t", vm.ctx.new_int(self.viewport_ticks_completed as usize), vm);
                                 let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                                let (_, keyboard_top_y, _, _) =
+                                    state.keyboard.onscreen.top_edge_coordinates();
+                                let kbd_vis = state.keyboard.onscreen.is_shown();
+                                let kbd_tp = state.keyboard.onscreen.is_trackpad_mode();
+                                let _ = app_instance.set_attr(
+                                    "keyboard_top_y",
+                                    vm.ctx.new_float(keyboard_top_y as f64),
+                                    vm,
+                                );
+                                let _ = app_instance.set_attr(
+                                    "onscreen_keyboard_visible",
+                                    vm.ctx.new_bool(kbd_vis),
+                                    vm,
+                                );
+                                let _ = app_instance.set_attr(
+                                    "onscreen_trackpad_mode",
+                                    vm.ctx.new_bool(kbd_tp),
+                                    vm,
+                                );
                                 
                                 // Call tick
                                 if let Err(e) = vm.call_method(app_instance, "tick", ()) {

@@ -376,6 +376,34 @@ impl TranscriptTextView {
 
     /// `rect` is `(x0, y0, x1, y1)` in frame pixels. Clips drawing to that rectangle.
     pub fn tick(&mut self, state: &mut EngineState, rect: (f32, f32, f32, f32)) {
+        let dt = state.delta_time_seconds;
+        let shape = state.frame.shape();
+        let fw = shape[1] as usize;
+        let fh = shape[0] as usize;
+        let show_trackpad_laser =
+            state.keyboard.onscreen.is_trackpad_mode() && state.keyboard.onscreen.is_shown();
+        let buffer = state.frame_buffer_mut();
+        self.tick_with_viewport_frame(
+            dt,
+            buffer,
+            fw,
+            fh,
+            show_trackpad_laser,
+            rect,
+        );
+    }
+
+    /// Scroll physics + glyph draw path aligned with [`super::text::TextApp`](crate::apps::text::TextApp),
+    /// for a sub-rectangle of an existing RGBA framebuffer (viewport Python, Coder-style hosts, etc.).
+    pub fn tick_with_viewport_frame(
+        &mut self,
+        dt_seconds: f32,
+        buffer: &mut [u8],
+        frame_width: usize,
+        frame_height: usize,
+        show_trackpad_laser: bool,
+        rect: (f32, f32, f32, f32),
+    ) {
         let _ = sync_rasterizer_to_default_font(
             &mut self.text_rasterizer,
             &mut self.default_font_version,
@@ -387,7 +415,7 @@ impl TranscriptTextView {
         let content_top = ry0;
         let ox = rx0 + H_PAD;
 
-        let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
+        let dt = dt_seconds.clamp(1e-4, 0.1);
         self.selection_anim_phase += dt;
 
         self.wheel_accel_target *= WHEEL_ACCEL_IDLE_DECAY.powf(dt / SCROLL_REF_DT);
@@ -501,14 +529,9 @@ impl TranscriptTextView {
             self.stick_to_tail = true;
         }
 
-        let shape = state.frame.shape();
-        let width = shape[1] as f32;
-        let height = shape[0] as f32;
-        let w_i = width as i32;
-        let h_i = height as i32;
-        let show_trackpad_laser =
-            state.keyboard.onscreen.is_trackpad_mode() && state.keyboard.onscreen.is_shown();
-        let buffer = state.frame_buffer_mut();
+        let w_i = frame_width as i32;
+        let h_i = frame_height as i32;
+        let fw_u32 = frame_width as u32;
         let vis_top = self.scroll_y;
         let vis_bottom = self.scroll_y + visible_height;
 
@@ -554,7 +577,7 @@ impl TranscriptTextView {
                         if sxf < rx0 || sxf > rx1 || syf < ry0 || syf > ry1 {
                             continue;
                         }
-                        let idx = ((y as u32 * shape[1] as u32 + x as u32) * 4) as usize;
+                        let idx = ((y as u32 * fw_u32 + x as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
                             let a = pulse_alpha;
                             let inv = 1.0 - a;
@@ -599,7 +622,7 @@ impl TranscriptTextView {
                     if sx < 0 || sx >= w_i || sy < 0 || sy >= h_i {
                         continue;
                     }
-                    let idx = ((sy as u32 * shape[1] as u32 + sx as u32) * 4) as usize;
+                    let idx = ((sy as u32 * fw_u32 + sx as u32) * 4) as usize;
                     if idx + 3 < buffer.len() {
                         let alpha = val as f32 / 255.0;
                         let inv = 1.0 - alpha;
@@ -642,7 +665,7 @@ impl TranscriptTextView {
                         if sy < ry0 || sy > ry1 {
                             continue;
                         }
-                        let idx = ((y as u32 * shape[1] as u32 + cx as u32) * 4) as usize;
+                        let idx = ((y as u32 * fw_u32 + cx as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
                             buffer[idx] = CURSOR_COLOR.0;
                             buffer[idx + 1] = CURSOR_COLOR.1;
@@ -672,7 +695,7 @@ impl TranscriptTextView {
                         if x < 0 || y < 0 || x >= w_i || y >= h_i {
                             continue;
                         }
-                        let idx = ((y as u32 * shape[1] as u32 + x as u32) * 4) as usize;
+                        let idx = ((y as u32 * fw_u32 + x as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
                             buffer[idx] = 255;
                             buffer[idx + 1] = 0;

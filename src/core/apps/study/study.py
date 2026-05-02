@@ -5,6 +5,9 @@ VOCAB_COL = "Vocab-expression"
 KANA_COL = "Vocab-kana"
 MEANING_COL = "Vocab-meaning"
 ENGLISH_SENTENCE_COL = "Sentence-meaning"
+
+# `RichText.render(..., cache_slot=…)` blits cached RGBA when feedback markup/selection/layout match (big FPS win).
+_STUDY_FEEDBACK_RICH_CACHE_SLOT = 771
 JAPANESE_SENTENCE_COL = "Sentence-expression"
 JAPANESE_KANA_SENTENCE_COL = "Sentence-kana"
 
@@ -735,7 +738,10 @@ class StudyApp(xos.Application):
             if self.fb_sel is not None:
                 lo, hi = self.fb_sel
             self.feedback_ui.render(
-                self.frame, selection_start=lo, selection_end=hi
+                self.frame,
+                selection_start=lo,
+                selection_end=hi,
+                cache_slot=_STUDY_FEEDBACK_RICH_CACHE_SLOT,
             )
 
             xos.rasterizer.rects_filled(

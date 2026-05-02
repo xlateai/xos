@@ -2,7 +2,8 @@
 //! per-glyph tint, faux bold, and UTF-32 selection rectangles (character indices exclude markup / codes).
 
 use crate::rasterizer::fill_rect_buffer;
-use crate::ui::text::shared_ui_text_font;
+use crate::rasterizer::text::text_rasterization::{quantize_viewport_raster_px, viewport_glyph_cache_session};
+use crate::ui::text::{shared_ui_text_font, viewport_glyph_blit_ranges};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct McState {
@@ -170,7 +171,7 @@ pub fn layout_rich(
     inner_height_px: i32,
     font_size_px: f32,
 ) -> Result<RichLayout, String> {
-    let fs = font_size_px.max(1.0);
+    let fs = quantize_viewport_raster_px(font_size_px.max(1.0)).max(1.0);
     let font = shared_ui_text_font()?;
     let lm = font
         .horizontal_line_metrics(fs)
@@ -184,6 +185,8 @@ pub fn layout_rich(
     let mut lines_chars: Vec<u32> = Vec::new();
     let mut x = 0.0_f32;
     let mut baseline_y = ascent;
+
+    let mut glyph_cache_sess = viewport_glyph_cache_session();
 
     let mut line_start_glyph = 0usize;
     for (idx, &(ch, fg, bold)) in styled_chars.iter().enumerate() {
@@ -200,11 +203,9 @@ pub fn layout_rich(
             continue;
         }
 
-        let draw_fs = if bold { fs * 1.04 } else { fs };
-        let (metrics, bitmap_arc) = {
-            let (m, bmp) = font.rasterize(ch, draw_fs);
-            (m, std::sync::Arc::new(bmp))
-        };
+        let draw_fs =
+            quantize_viewport_raster_px(if bold { fs * 1.04 } else { fs }).max(1.0);
+        let (metrics, bitmap_arc) = glyph_cache_sess.cached_raster(&font, ch, draw_fs);
         let adv = metrics.advance_width;
 
         if inner_width_px > 0 && x + adv > inner_width_px as f32 && x > 0.1 {
@@ -508,33 +509,40 @@ pub fn rich_text_render_into_buffer(
         let clip_y2 = y2;
 
         let bold = g.bold;
+        let iw = g.w.max(1) as usize;
+        let ih = g.h.max(1) as usize;
 
-        for by in 0..g.h.max(1) {
-            for bx in 0..g.w.max(1) {
-                let idx_bm = by as usize * g.w.max(1) as usize + bx as usize;
-                if idx_bm >= g.bitmap.len() {
-                    continue;
+        if let Some((bx_lo, bx_hi, by_lo, by_hi)) =
+            viewport_glyph_blit_ranges(gx1, gy1, iw, ih, clip_x1, clip_y1, clip_x2, clip_y2)
+        {
+            for by in by_lo..by_hi {
+                let row = by * iw;
+                for bx in bx_lo..bx_hi {
+                    let idx_bm = row + bx;
+                    if idx_bm >= g.bitmap.len() {
+                        continue;
+                    }
+                    let ia = g.bitmap[idx_bm];
+                    if ia == 0 {
+                        continue;
+                    }
+                    let sx = gx1 + bx as i32;
+                    let sy = gy1 + by as i32;
+                    blend_glyph_px(
+                        buffer,
+                        frame_width,
+                        frame_height,
+                        sx,
+                        sy,
+                        ia,
+                        g.fg,
+                        clip_x1,
+                        clip_y1,
+                        clip_x2,
+                        clip_y2,
+                        bold,
+                    );
                 }
-                let ia = g.bitmap[idx_bm];
-                if ia == 0 {
-                    continue;
-                }
-                let sx = gx1 + bx;
-                let sy = gy1 + by;
-                blend_glyph_px(
-                    buffer,
-                    frame_width,
-                    frame_height,
-                    sx,
-                    sy,
-                    ia,
-                    g.fg,
-                    clip_x1,
-                    clip_y1,
-                    clip_x2,
-                    clip_y2,
-                    bold,
-                );
             }
         }
     }
@@ -601,4 +609,88 @@ pub fn rich_text_pick_char_index(
 pub fn rich_text_plain_preview(raw: &str, minecraft: bool, default_fg: [u8; 4]) -> String {
     let chars = styled_chars_from_markup(raw, minecraft, default_fg);
     chars.into_iter().map(|(ch, _, _)| ch).collect()
+}
+
+/// Copy `[x1, x2) × [y1, y2)` RGBA from a row-major framebuffer (`frame_w` pixels wide), clamped to bounds.
+pub fn rgba_subrect_clone(
+    buffer: &[u8],
+    frame_w: usize,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+) -> Option<(Vec<u8>, usize, usize)> {
+    if frame_w == 0 || x2 <= x1 || y2 <= y1 {
+        return None;
+    }
+    let row_stride = frame_w * 4;
+    if buffer.len() % row_stride != 0 {
+        return None;
+    }
+    let fh = buffer.len() / row_stride;
+    let fw_i = frame_w as i32;
+    let fh_i = fh as i32;
+    let x1c = x1.max(0).min(fw_i);
+    let x2c = x2.max(0).min(fw_i);
+    let y1c = y1.max(0).min(fh_i);
+    let y2c = y2.max(0).min(fh_i);
+    if x2c <= x1c || y2c <= y1c {
+        return None;
+    }
+    let bw = (x2c - x1c) as usize;
+    let bh = (y2c - y1c) as usize;
+    let mut out = vec![0u8; bw * bh * 4];
+    let x1u = x1c as usize;
+    for row in 0..bh {
+        let sy = y1c as usize + row;
+        let src_start = (sy * frame_w + x1u) * 4;
+        let dst_start = row * bw * 4;
+        out[dst_start..dst_start + bw * 4]
+            .copy_from_slice(&buffer[src_start..src_start + bw * 4]);
+    }
+    Some((out, bw, bh))
+}
+
+/// Overwrite `buffer` at `(dst_x, dst_y)` with `src` (`bw`×`bh` RGBA), clamped to the framebuffer.
+pub fn blit_rgba_subrect(
+    buffer: &mut [u8],
+    frame_w: usize,
+    dst_x: i32,
+    dst_y: i32,
+    src: &[u8],
+    bw: usize,
+    bh: usize,
+) -> Option<()> {
+    if frame_w == 0 || bw == 0 || bh == 0 {
+        return None;
+    }
+    let row_stride = frame_w * 4;
+    if buffer.len() % row_stride != 0 || src.len() < bw * bh * 4 {
+        return None;
+    }
+    let fh = buffer.len() / row_stride;
+    let fw_i = frame_w as i32;
+    let fh_i = fh as i32;
+    if dst_x >= fw_i || dst_y >= fh_i || dst_x + bw as i32 <= 0 || dst_y + bh as i32 <= 0 {
+        return Some(());
+    }
+    let x0 = dst_x.max(0) as usize;
+    let y0 = dst_y.max(0) as usize;
+    let x1 = (dst_x as isize + bw as isize).min(fw_i as isize).max(0) as usize;
+    let y1 = (dst_y as isize + bh as isize).min(fh_i as isize).max(0) as usize;
+    if x1 <= x0 || y1 <= y0 {
+        return Some(());
+    }
+    let skip_left = (x0 as isize - dst_x as isize).max(0) as usize;
+    let skip_top = (y0 as isize - dst_y as isize).max(0) as usize;
+    let copy_w = x1 - x0;
+    let copy_h = y1 - y0;
+    for row in 0..copy_h {
+        let src_row_off = ((skip_top + row) * bw + skip_left) * 4;
+        let dst_row = y0 + row;
+        let dst_off = (dst_row * frame_w + x0) * 4;
+        buffer[dst_off..dst_off + copy_w * 4]
+            .copy_from_slice(&src[src_row_off..src_row_off + copy_w * 4]);
+    }
+    Some(())
 }

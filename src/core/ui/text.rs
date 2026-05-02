@@ -1,7 +1,10 @@
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::{
+    quantize_viewport_raster_px, sync_rasterizer_to_default_font, TextRasterizer,
+};
 use fontdue::Font;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 /// Optional interaction hints for viewport text blocks (`UiText`, `RichText` in Python).
@@ -19,6 +22,41 @@ static UI_TEXT_FONT_FAMILY: OnceLock<Mutex<FontFamily>> = OnceLock::new();
 
 pub(crate) fn shared_ui_text_font() -> Result<Font, String> {
     shared_font_inner()
+}
+
+/// Clip a `gw × gh` glyph with top-left `(px, py)` to framebuffer rect `[cx1, cx2) × [cy1, cy2)`.
+///
+/// Returned ranges index the glyph bitmap `[bx_lo, bx_hi)` × `[by_lo, by_hi)` (same convention as
+/// standalone `text` app viewport culling: cost scales with blended pixels, not full bitmap bounds).
+///
+/// Fully outside rects return `None` so callers skip the blend loop entirely.
+#[inline]
+pub(crate) fn viewport_glyph_blit_ranges(
+    px: i32,
+    py: i32,
+    gw: usize,
+    gh: usize,
+    cx1: i32,
+    cy1: i32,
+    cx2: i32,
+    cy2: i32,
+) -> Option<(usize, usize, usize, usize)> {
+    if gw == 0 || gh == 0 {
+        return None;
+    }
+    let gw_i = gw as i32;
+    let gh_i = gh as i32;
+    if px >= cx2 || py >= cy2 || px + gw_i <= cx1 || py + gh_i <= cy1 {
+        return None;
+    }
+    let bx_lo = (cx1 - px).clamp(0, gw_i) as usize;
+    let bx_hi = (cx2 - px).clamp(0, gw_i) as usize;
+    let by_lo = (cy1 - py).clamp(0, gh_i) as usize;
+    let by_hi = (cy2 - py).clamp(0, gh_i) as usize;
+    if bx_lo >= bx_hi || by_lo >= by_hi {
+        return None;
+    }
+    Some((bx_lo, bx_hi, by_lo, by_hi))
 }
 
 fn shared_font_inner() -> Result<Font, String> {
@@ -42,6 +80,27 @@ fn shared_font_inner() -> Result<Font, String> {
     let font = fonts::default_font();
     *guard = Some(font.clone());
     Ok(font)
+}
+
+struct ViewportUiRasterSlot {
+    last_font_sync_ver: u64,
+    raster: TextRasterizer,
+}
+
+struct ViewportUiRasterPool {
+    font_epoch: u64,
+    by_size_bits: HashMap<u32, ViewportUiRasterSlot>,
+}
+
+static VIEWPORT_UI_RASTER_POOL: OnceLock<Mutex<ViewportUiRasterPool>> = OnceLock::new();
+
+fn viewport_ui_raster_pool() -> &'static Mutex<ViewportUiRasterPool> {
+    VIEWPORT_UI_RASTER_POOL.get_or_init(|| {
+        Mutex::new(ViewportUiRasterPool {
+            font_epoch: fonts::default_font_version(),
+            by_size_bits: HashMap::new(),
+        })
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -88,10 +147,26 @@ impl UiText {
         let box_width = (x2 - x1) as f32;
         let box_height = (y2 - y1) as f32;
 
+        let fs = quantize_viewport_raster_px(self.font_size_px.max(1.0)).max(1.0);
         let font = shared_font_inner()?;
-        let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
-        rasterizer.set_text(self.text.clone());
-        rasterizer.tick(box_width, box_height);
+        let mut pool = viewport_ui_raster_pool()
+            .lock()
+            .map_err(|_| "viewport raster pool mutex poisoned".to_string())?;
+        let v = fonts::default_font_version();
+        if pool.font_epoch != v {
+            pool.font_epoch = v;
+            pool.by_size_bits.clear();
+        }
+        let fb = fs.to_bits();
+        let slot = pool.by_size_bits.entry(fb).or_insert_with(|| ViewportUiRasterSlot {
+            last_font_sync_ver: 0,
+            raster: TextRasterizer::new_viewport_global_glyph_cache(font.clone(), fs),
+        });
+        let _ = sync_rasterizer_to_default_font(&mut slot.raster, &mut slot.last_font_sync_ver);
+
+        slot.raster.set_text(self.text.clone());
+        slot.raster.tick(box_width, box_height);
+        let rasterizer = &slot.raster;
 
         // Count characters per wrapped line.
         for line in &rasterizer.lines {
@@ -151,31 +226,64 @@ impl UiText {
                     (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                 ],
             ]);
-            if py >= y2 {
+            let Some((bx_lo, bx_hi, by_lo, by_hi)) = viewport_glyph_blit_ranges(
+                px,
+                py,
+                character.metrics.width,
+                character.metrics.height,
+                x1,
+                y1,
+                x2,
+                y2,
+            ) else {
                 continue;
-            }
+            };
 
-            for by in 0..character.metrics.height {
-                for bx in 0..character.metrics.width {
-                    let glyph_alpha = character.bitmap[by * character.metrics.width + bx];
-                    if glyph_alpha == 0 {
-                        continue;
+            let w_bm = character.metrics.width;
+            let fg_a = self.color.3 as f32 / 255.0;
+
+            if self.color.3 >= 253 {
+                for by in by_lo..by_hi {
+                    let row = by * w_bm;
+                    for bx in bx_lo..bx_hi {
+                        let glyph_alpha = character.bitmap[row + bx];
+                        if glyph_alpha == 0 {
+                            continue;
+                        }
+                        let sx = px + bx as i32;
+                        let sy = py + by as i32;
+                        let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                        let ga = glyph_alpha as u16;
+                        let inv = (255_u16).saturating_sub(ga);
+                        buffer[idx] = ((self.color.0 as u16 * ga + buffer[idx] as u16 * inv + 127) / 255) as u8;
+                        buffer[idx + 1] =
+                            ((self.color.1 as u16 * ga + buffer[idx + 1] as u16 * inv + 127) / 255) as u8;
+                        buffer[idx + 2] =
+                            ((self.color.2 as u16 * ga + buffer[idx + 2] as u16 * inv + 127) / 255) as u8;
+                        buffer[idx + 3] = 0xff;
                     }
+                }
+            } else {
+                for by in by_lo..by_hi {
+                    let row = by * w_bm;
+                    for bx in bx_lo..bx_hi {
+                        let glyph_alpha = character.bitmap[row + bx];
+                        if glyph_alpha == 0 {
+                            continue;
+                        }
+                        let sx = px + bx as i32;
+                        let sy = py + by as i32;
+                        let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
+                        let alpha = (glyph_alpha as f32 / 255.0) * fg_a;
+                        let inv_alpha = 1.0 - alpha;
 
-                    let sx = px + bx as i32;
-                    let sy = py + by as i32;
-                    if sx < x1 || sx >= x2 || sy < y1 || sy >= y2 {
-                        continue;
+                        buffer[idx] = (self.color.0 as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
+                        buffer[idx + 1] =
+                            (self.color.1 as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
+                        buffer[idx + 2] =
+                            (self.color.2 as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
+                        buffer[idx + 3] = 0xff;
                     }
-
-                    let idx = ((sy as usize * frame_width + sx as usize) * 4) as usize;
-                    let alpha = (glyph_alpha as f32 / 255.0) * (self.color.3 as f32 / 255.0);
-                    let inv_alpha = 1.0 - alpha;
-
-                    buffer[idx] = (self.color.0 as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
-                    buffer[idx + 1] = (self.color.1 as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
-                    buffer[idx + 2] = (self.color.2 as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
-                    buffer[idx + 3] = 0xff;
                 }
             }
 

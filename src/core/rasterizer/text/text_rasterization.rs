@@ -1,6 +1,19 @@
 use fontdue::{Font, Metrics};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Snap effective raster sizes (~1/32 px) so glyph cache keys survive f32 jitter
+/// (`font_size_px * viewport_scale`, Python floats, caret toggles leaking into scale, …).
+///
+/// Rasterization and advancement use this same bucket so layouts stay consistent per key.
+#[inline]
+pub(crate) fn quantize_viewport_raster_px(fs: f32) -> f32 {
+    if !fs.is_finite() || fs <= 0.0 {
+        return 1.0;
+    }
+    let fs = fs.min(768.0);
+    (fs * 32.0).round() / 32.0
+}
 
 /// A single rendered glyph in pixel space.
 #[derive(Debug)]
@@ -28,7 +41,7 @@ impl GlyphCache {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
-            max_entries: 16_384,
+            max_entries: 56_832,
         }
     }
 
@@ -37,18 +50,100 @@ impl GlyphCache {
     }
 
     fn get_or_insert(&mut self, font: &Font, ch: char, font_size: f32) -> (Metrics, Arc<Vec<u8>>) {
-        let key = (ch, font_size.to_bits());
+        let fs_q = quantize_viewport_raster_px(font_size.max(1.0)).max(1.0);
+        let key = (ch, fs_q.to_bits());
         if let Some((m, arc)) = self.map.get(&key) {
             return (*m, Arc::clone(arc));
         }
         if self.map.len() >= self.max_entries {
             self.map.clear();
         }
-        let (metrics, bitmap) = font.rasterize(ch, font_size);
+        let (metrics, bitmap) = font.rasterize(ch, fs_q);
         let arc = Arc::new(bitmap);
         self.map.insert(key, (metrics, Arc::clone(&arc)));
         (metrics, arc)
     }
+}
+
+/// Process-wide raster cache for the **default UI viewport font** (`fonts::default_font()`).
+///
+/// Keys include [`super::fonts::FontFamily`] so F3 font swaps never alias bitmaps. Callers should hold
+/// [`ViewportGlyphCacheSession`] once per layout pass (rich text, `TextRasterizer::tick`) so iOS does not
+/// pay a mutex lock per glyph and so the cache is shared across worker/main threads (unlike `thread_local`).
+struct GlobalViewportGlyphScratch {
+    font_version: u64,
+    font_family: u8,
+    map: HashMap<(u8, char, u32), (Metrics, Arc<Vec<u8>>)>,
+}
+
+const GLOBAL_VIEWPORT_GLYPH_MAX: usize = 262_144;
+/// When the table is full, drop a batch of entries instead of clearing (which caused constant JP re-raster).
+const VIEWPORT_GLYPH_EVICT_BATCH: usize = 48_576;
+
+impl GlobalViewportGlyphScratch {
+    fn new() -> Self {
+        Self {
+            font_version: super::fonts::default_font_version(),
+            font_family: super::fonts::default_font_family() as u8,
+            map: HashMap::new(),
+        }
+    }
+
+    fn sync_identity(&mut self) {
+        let v = super::fonts::default_font_version();
+        let fam = super::fonts::default_font_family() as u8;
+        if self.font_version != v || self.font_family != fam {
+            self.font_version = v;
+            self.font_family = fam;
+            self.map.clear();
+        }
+    }
+
+    fn evict_if_full(&mut self) {
+        if self.map.len() < GLOBAL_VIEWPORT_GLYPH_MAX {
+            return;
+        }
+        let n = VIEWPORT_GLYPH_EVICT_BATCH.min(self.map.len());
+        let keys: Vec<(u8, char, u32)> = self.map.keys().take(n).cloned().collect();
+        for k in keys {
+            self.map.remove(&k);
+        }
+    }
+
+    fn lookup_or_rasterize(&mut self, font: &Font, ch: char, font_size: f32) -> (Metrics, Arc<Vec<u8>>) {
+        let fs = quantize_viewport_raster_px(font_size).max(1.0).min(768.0);
+        let key = (self.font_family, ch, fs.to_bits());
+        if let Some((m, arc)) = self.map.get(&key) {
+            return (*m, Arc::clone(arc));
+        }
+        self.evict_if_full();
+        let (metrics, bitmap) = font.rasterize(ch, fs);
+        let arc = Arc::new(bitmap);
+        self.map.insert(key, (metrics, Arc::clone(&arc)));
+        (metrics, arc)
+    }
+}
+
+static VIEWPORT_GLYPH_GLOBAL: OnceLock<Mutex<GlobalViewportGlyphScratch>> = OnceLock::new();
+
+/// One lock per rich-text layout or viewport `TextRasterizer::tick` — **not** per glyph (critical on iOS).
+pub(crate) struct ViewportGlyphCacheSession {
+    scratch: std::sync::MutexGuard<'static, GlobalViewportGlyphScratch>,
+}
+
+impl ViewportGlyphCacheSession {
+    #[inline]
+    pub(crate) fn cached_raster(&mut self, font: &Font, ch: char, font_size: f32) -> (Metrics, Arc<Vec<u8>>) {
+        self.scratch.lookup_or_rasterize(font, ch, font_size)
+    }
+}
+
+#[inline]
+pub(crate) fn viewport_glyph_cache_session() -> ViewportGlyphCacheSession {
+    let m = VIEWPORT_GLYPH_GLOBAL.get_or_init(|| Mutex::new(GlobalViewportGlyphScratch::new()));
+    let mut scratch = m.lock().expect("viewport glyph cache mutex poisoned");
+    scratch.sync_identity();
+    ViewportGlyphCacheSession { scratch }
 }
 
 #[derive(Debug)]
@@ -68,6 +163,8 @@ pub struct TextRasterizer {
     pub line_gap: f32,
     pub font: Font,
     glyph_cache: GlyphCache,
+    /// Fast path for Python/UI viewport text tied to [`super::fonts::default_font`] only.
+    use_global_viewport_glyph_cache: bool,
 }
 
 impl TextRasterizer {
@@ -86,7 +183,17 @@ impl TextRasterizer {
             line_gap: metrics.line_gap,
             font,
             glyph_cache: GlyphCache::new(),
+            use_global_viewport_glyph_cache: false,
         }
+    }
+
+    /// Like [`Self::new`], but reuses the process-wide viewport glyph session (see [`viewport_glyph_cache_session`])
+    /// so CJK-heavy UIs avoid re-rasterizing the same glyphs every frame. Intended only with
+    /// [`super::fonts::default_font`] (viewport / Study).
+    pub fn new_viewport_global_glyph_cache(font: Font, font_size: f32) -> Self {
+        let mut r = Self::new(font, font_size);
+        r.use_global_viewport_glyph_cache = true;
+        r
     }
 
     pub fn set_text(&mut self, text: String) {
@@ -142,6 +249,12 @@ impl TextRasterizer {
         let font = &self.font;
         let fs = self.font_size;
 
+        let mut viewport_glyphs = if self.use_global_viewport_glyph_cache {
+            Some(viewport_glyph_cache_session())
+        } else {
+            None
+        };
+
         for (i, ch) in self.text.chars().enumerate() {
             if ch == '\n' {
                 self.lines.push(LineInfo {
@@ -157,7 +270,11 @@ impl TextRasterizer {
                 continue;
             }
 
-            let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs);
+            let (metrics, bitmap) = if let Some(ref mut sess) = viewport_glyphs {
+                sess.cached_raster(font, ch, fs)
+            } else {
+                self.glyph_cache.get_or_insert(font, ch, fs)
+            };
             let advance = metrics.advance_width;
 
             if x + advance > window_width {

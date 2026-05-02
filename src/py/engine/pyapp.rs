@@ -803,6 +803,7 @@ Call super().__init__() in your app __init__ before using tick()."
                     let (_, keyboard_top_y, _, _) =
                         state.keyboard.onscreen.top_edge_coordinates();
                     let kbd_vis = state.keyboard.onscreen.is_shown();
+                    let kbd_tp = state.keyboard.onscreen.is_trackpad_mode();
                     let _ = app_instance.set_attr(
                         "keyboard_top_y",
                         vm.ctx.new_float(keyboard_top_y as f64),
@@ -811,6 +812,11 @@ Call super().__init__() in your app __init__ before using tick()."
                     let _ = app_instance.set_attr(
                         "onscreen_keyboard_visible",
                         vm.ctx.new_bool(kbd_vis),
+                        vm,
+                    );
+                    let _ = app_instance.set_attr(
+                        "onscreen_trackpad_mode",
+                        vm.ctx.new_bool(kbd_tp),
                         vm,
                     );
 
