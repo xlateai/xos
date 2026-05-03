@@ -6,11 +6,9 @@ KANA_COL = "Vocab-kana"
 MEANING_COL = "Vocab-meaning"
 ENGLISH_SENTENCE_COL = "Sentence-meaning"
 
-# `RichText` / `Text.render(..., cache_slot=…)` blit cachedRGBA when markup/text/rect/fonts match — glyphs are globally cached separately.
-_STUDY_FEEDBACK_RICH_CACHE_SLOT = 771
-_STUDY_HERO_TEXT_CACHE_SLOT = 772
-_STUDY_CAPTION_TEXT_CACHE_SLOT = 773
-_STUDY_THREAD_TEXT_CACHE_SLOT = 774
+_STUDY_HERO_TEXT_CACHE_SLOT = 771
+_STUDY_CAPTION_TEXT_CACHE_SLOT = 772
+_STUDY_THREAD_TEXT_CACHE_SLOT = 773
 JAPANESE_SENTENCE_COL = "Sentence-expression"
 JAPANESE_KANA_SENTENCE_COL = "Sentence-kana"
 
@@ -249,10 +247,8 @@ class StudyApp(xos.Application):
         self.current = None
         self.feedback_text = ""
         self.last_correct = False
-        self.fb_dragging = False
-        self.fb_anchor = None
-        self.fb_sel = None
         self.input_focus = False
+        self._feedback_cached_text = None
         self._pick_word()
 
         # Hero band y-ranges; x-range is set each tick from word width (centered in full-bleed card).
@@ -288,19 +284,11 @@ class StudyApp(xos.Application):
             font_size=19.0 * FS * REVIEW_TEXT_SCALE,
             blend_under_rgb=_UNDER_CARD_RGB,
         )
-        self.feedback_ui = xos.ui.rich_text(
-            "",
-            0.04,
-            0.230,
-            0.96,
-            0.88,
-            color=(220, 220, 226),
-            font_size=21.0 * FS * REVIEW_TEXT_SCALE,
-            minecraft=True,
-            selectable=True,
-            mutable=False,
-            blend_under_rgb=_UNDER_CARD_RGB,
+        # Feedback: same TextRasterizer + scroll + draw loop as transcription / Text app (Python RichText rerasterizes every drag frame).
+        self.feedback_scroll = xos.ui.scrolling_text(
+            font_size=21.0 * FS * REVIEW_TEXT_SCALE, stick_to_tail=False
         )
+        self.feedback_scroll.set_caret_visible(False)
         self.chat_placeholder = xos.ui.text(
             "Message…  romaji",
             0.0,
@@ -484,22 +472,12 @@ class StudyApp(xos.Application):
         return "\n".join(parts)
 
     def _clear_feedback_selection(self):
-        self.fb_dragging = False
-        self.fb_anchor = None
-        self.fb_sel = None
+        self.feedback_scroll.clear_selection()
 
     def _feedback_selection_plain_slice(self):
-        """Selected substring in markdown-free plain indices (matches ``RichText.pick`` / highlight)."""
-        if self.state != "feedback" or self.fb_sel is None:
+        if self.state != "feedback":
             return ""
-        lo, hi = self.fb_sel
-        plain = self.feedback_ui.plain()
-        n = len(plain)
-        lo = max(0, min(int(lo), n))
-        hi = max(0, min(int(hi), n))
-        if hi <= lo:
-            return ""
-        return plain[lo:hi]
+        return self.feedback_scroll.selection_plain()
 
     def on_key_shortcut(self, action):
         """Desktop Cmd/Ctrl and OSK action row — share implementation for copy/paste."""
@@ -547,8 +525,7 @@ class StudyApp(xos.Application):
 
         if action == "select_all":
             if self.state == "feedback":
-                plain = self.feedback_ui.plain()
-                self.fb_sel = (0, len(plain))
+                self.feedback_scroll.select_all_toggle()
             return
 
         # undo / redo — study has no stacks; subclasses can extend.
@@ -572,29 +549,53 @@ class StudyApp(xos.Application):
         if self.state == "feedback":
             if in_comp:
                 return
-            ix = self.feedback_ui.pick(x, y)
-            if ix < 0:
+            if self.feedback_scroll.contains_pixel(x, y):
+                self.feedback_scroll.on_mouse_down(x, y)
+            else:
                 self._clear_feedback_selection()
-                return
-            self.fb_anchor = ix
-            self.fb_sel = (ix, ix + 1)
-            self.fb_dragging = True
             return
         self.input_focus = self.chat_value.contains_pixel(x, y)
 
     def on_mouse_move(self, x, y):
-        if self.state != "feedback" or not self.fb_dragging or self.fb_anchor is None:
+        if self.state != "feedback":
             return
-        ix = self.feedback_ui.pick(x, y)
-        if ix < 0:
+        fw, fh = self.get_width(), self.get_height()
+        lay = self._composer_layout()
+        ox1, oy1, ox2, oy2 = lay["outer"]
+        nx = float(x) / float(fw)
+        ny = float(y) / float(fh)
+        in_comp = ox1 <= nx <= ox2 and oy1 <= ny <= oy2
+        if in_comp:
             return
-        a = self.fb_anchor
-        lo = ix if ix < a else a
-        hi = (a if ix < a else ix) + 1
-        self.fb_sel = (lo, hi)
+        kbd_vis = bool(getattr(self, "onscreen_keyboard_visible", False))
+        self.feedback_scroll.on_mouse_move(x, y, keyboard_shown=kbd_vis)
 
-    def on_mouse_up(self, _x, _y):
-        self.fb_dragging = False
+    def on_mouse_up(self, x, y):
+        if self.state == "feedback":
+            self.feedback_scroll.on_mouse_up()
+
+    def on_scroll(self, dx, dy):
+        if self.state != "feedback":
+            return
+        mx = getattr(self.mouse, "get", lambda k, d=None: d)("x")
+        my = getattr(self.mouse, "get", lambda k, d=None: d)("y")
+        if mx is None or my is None:
+            return
+        fw, fh = self.get_width(), self.get_height()
+        lay = self._composer_layout()
+        ox1, oy1, ox2, oy2 = lay["outer"]
+        nx = float(mx) / float(fw)
+        ny = float(my) / float(fh)
+        in_comp = ox1 <= nx <= ox2 and oy1 <= ny <= oy2
+        if in_comp:
+            return
+        try:
+            mxf = float(mx)
+            myf = float(my)
+        except (TypeError, ValueError):
+            return
+        if self.feedback_scroll.contains_pixel(mxf, myf):
+            self.feedback_scroll.on_scroll(dy)
 
     def _submit_guess(self):
         w = self.current
@@ -654,10 +655,6 @@ class StudyApp(xos.Application):
         self.thread_status.x2 = ox2
         self.thread_status.y1 = vb["thread_y1"]
         self.thread_status.y2 = vb["thread_y2"]
-        self.feedback_ui.x1 = ox1
-        self.feedback_ui.x2 = ox2
-        self.feedback_ui.y1 = vb["feedback_y1"]
-
         word = self.current.get(VOCAB_COL, "") if self.current else ""
         self.hero.text = word
         hx1, hx2 = self._hero_norm_x(word, w, ox1, ox2)
@@ -672,13 +669,17 @@ class StudyApp(xos.Application):
         ft_y2 = oy1 - 0.015 * STUDY_UI_SCALE
         y_lo = vb["feedback_y2_min"]
         y_hi = min(self._map_layout_y_norm(0.92), sy2 - 2e-3)
-        self.feedback_ui.y2 = max(y_lo, min(y_hi, ft_y2))
+        fb_y2 = max(y_lo, min(y_hi, ft_y2))
+        fb_y1 = vb["feedback_y1"]
+        feedback_fs = 21.0 * FS * REVIEW_TEXT_SCALE
+        self.feedback_scroll.set_font_size(feedback_fs)
+        kbd_vis = bool(getattr(self, "onscreen_keyboard_visible", False))
+        kbd_tp = bool(getattr(self, "onscreen_trackpad_mode", False))
 
         prompt_fs = 22.0 * FS
         review_fs = prompt_fs * REVIEW_TEXT_SCALE
 
         if self.state == "prompt":
-            self.feedback_ui.text = ""
             self.thread_status.color = CLR_THREAD[:3]
             self.chat_value.font_size = prompt_fs
             self.chat_placeholder.font_size = prompt_fs
@@ -749,15 +750,15 @@ class StudyApp(xos.Application):
             self.composer_hint.x2 = ix2
             self.composer_hint.y2 = iy2
 
-            self.feedback_ui.text = self.feedback_text
-            lo, hi = (-1, -1)
-            if self.fb_sel is not None:
-                lo, hi = self.fb_sel
-            self.feedback_ui.render(
-                self.frame,
-                selection_start=lo,
-                selection_end=hi,
-                cache_slot=_STUDY_FEEDBACK_RICH_CACHE_SLOT,
+            if self._feedback_cached_text != self.feedback_text:
+                self.feedback_scroll.set_mc_markup(
+                    self.feedback_text,
+                    minecraft=True,
+                    default_rgb=(220, 220, 226),
+                )
+                self._feedback_cached_text = self.feedback_text
+            self.feedback_scroll.tick(
+                ox1, fb_y1, ox2, fb_y2, osk_visible=kbd_vis, trackpad=kbd_tp
             )
 
             xos.rasterizer.rects_filled(
@@ -789,10 +790,14 @@ class StudyApp(xos.Application):
     def on_key_char(self, ch):
         if self.state == "feedback":
             if ch == "\n" or ch == "\r":
+                self.feedback_scroll.set_mc_markup(
+                    "", minecraft=True, default_rgb=(220, 220, 226)
+                )
+                self._feedback_cached_text = None
+                self._clear_feedback_selection()
                 self.state = "prompt"
                 self.guess_buf = ""
                 self.feedback_text = ""
-                self._clear_feedback_selection()
                 self._pick_word()
             return
         self.input_focus = True

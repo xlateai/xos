@@ -2,9 +2,10 @@
 //! [`super::text::TextApp`](crate::apps::text::TextApp) — no keyboard, cursor, selection, or debug overlays.
 
 use crate::engine::EngineState;
-use crate::ui::onscreen_keyboard::KeyType;
 use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer};
+use crate::ui::onscreen_keyboard::KeyType;
+use crate::ui::rich_text::styled_chars_from_markup;
 use fontdue::Font;
 use std::time::Instant;
 use std::time::Duration;
@@ -53,6 +54,10 @@ pub struct TranscriptTextView {
     pub stick_to_tail: bool,
     pending_snap_to_tail: bool,
     color_spans: Vec<ColorSpan>,
+    /// Per visible character RGB from Minecraft / HTML-ish markup (`set_text_from_mc_markup`).
+    mc_char_fg: Vec<(u8, u8, u8)>,
+    /// Faux-bold overlay aligned with [`Self::mc_char_fg`].
+    mc_char_bold: Vec<bool>,
     cursor_position: usize,
     selection_start: Option<usize>,
     selection_end: Option<usize>,
@@ -72,6 +77,8 @@ pub struct TranscriptTextView {
     smooth_cursor_x: f32,
     selection_anim_phase: f32,
     default_font_version: u64,
+    /// When false, omit the insertion caret (read-only panels like Study feedback).
+    pub caret_visible: bool,
 }
 
 impl TranscriptTextView {
@@ -89,6 +96,8 @@ impl TranscriptTextView {
             stick_to_tail: true,
             pending_snap_to_tail: false,
             color_spans: Vec::new(),
+            mc_char_fg: Vec::new(),
+            mc_char_bold: Vec::new(),
             cursor_position: 0,
             selection_start: None,
             selection_end: None,
@@ -108,7 +117,33 @@ impl TranscriptTextView {
             smooth_cursor_x: 0.0,
             selection_anim_phase: 0.0,
             default_font_version: fonts::default_font_version(),
+            caret_visible: true,
         }
+    }
+
+    pub fn set_caret_visible(&mut self, visible: bool) {
+        self.caret_visible = visible;
+    }
+
+    /// Horizontal-drag → highlight; vertical-drag → scroll. `offer` gates iOS (finger) when keyboard hidden.
+    fn try_begin_horizontal_selection(&mut self, abs_dx: f32, abs_dy: f32, offer: bool) {
+        if !offer {
+            return;
+        }
+        let should_select = abs_dx > abs_dy;
+        if !should_select {
+            return;
+        }
+        self.dragging = false;
+        self.selecting = true;
+        let start_idx = self.find_nearest_char_index(
+            self.last_pointer_x,
+            self.last_mouse_y,
+            self.last_rect,
+        );
+        self.selection_start = Some(start_idx);
+        self.selection_end = Some(start_idx);
+        self.cursor_position = start_idx;
     }
 
     pub fn set_font_size(&mut self, font_size: f32) {
@@ -120,15 +155,99 @@ impl TranscriptTextView {
         self.default_font_version = fonts::default_font_version();
     }
 
-    /// Replace document text. If [`Self::stick_to_tail`] is true and the string changed, we snap to
+    /// Replace document text. Clears Minecraft markup tinting (`mc_char_fg`); keeps [`Self::stick_to_tail`]
+    /// tail snap semantics. If [`Self::stick_to_tail`] is true and the string changed, we snap to
     /// the bottom after layout (new transcript lines).
     pub fn set_text(&mut self, text: String) {
+        self.color_spans.clear();
+        self.mc_char_fg.clear();
+        self.mc_char_bold.clear();
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        self.replace_plain_normalized(normalized);
+    }
+
+    /// Plain document from markup: same tint rules as viewport [`crate::ui::rich_text`] (`&` codes, `<b>`).
+    ///
+    /// Resets vertical scroll to the top (study feedback panels, etc.).
+    pub fn set_text_from_mc_markup(
+        &mut self,
+        markup: impl Into<String>,
+        minecraft: bool,
+        default_fg_rgb: [u8; 3],
+    ) {
+        let mk = markup.into();
+        let default_fg = [
+            default_fg_rgb[0],
+            default_fg_rgb[1],
+            default_fg_rgb[2],
+            255,
+        ];
+        let styled = styled_chars_from_markup(&mk, minecraft, default_fg);
+
+        let mut plain = String::with_capacity(styled.len());
+        let mut fg = Vec::with_capacity(styled.len());
+        let mut bd = Vec::with_capacity(styled.len());
+        for (ch, rgba, bold) in styled {
+            plain.push(ch);
+            fg.push((rgba[0], rgba[1], rgba[2]));
+            bd.push(bold);
+        }
+
+        self.color_spans.clear();
+        self.mc_char_fg = fg;
+        self.mc_char_bold = bd;
+        self.scroll_target = 0.0;
+        self.scroll_y = 0.0;
+        self.drag_scroll_momentum = 0.0;
+        self.pending_snap_to_tail = false;
+
+        let normalized = plain.replace("\r\n", "\n").replace('\r', "\n");
+        self.replace_plain_normalized(normalized);
+    }
+
+    pub fn plain_text(&self) -> String {
+        self.text_rasterizer.text.clone()
+    }
+
+    pub fn clipboard_selection_plain(&self) -> Option<String> {
+        self.copy_selection_text()
+    }
+
+    pub fn clear_text_selection(&mut self) {
+        self.selection_start = None;
+        self.selection_end = None;
+        self.selecting = false;
+        self.dragging = false;
+        self.trackpad_selecting = false;
+    }
+
+    pub fn shortcut_select_all_toggle(&mut self) {
+        let _ = self.on_action_key(KeyType::SelectAll);
+    }
+
+    #[inline]
+    fn paint_char_rgb(&self, char_index: usize) -> (u8, u8, u8) {
+        if let Some(&c) = self.mc_char_fg.get(char_index) {
+            return c;
+        }
+        self.color_spans
+            .iter()
+            .find(|s| char_index >= s.start_char && char_index < s.end_char)
+            .map(|s| s.color)
+            .unwrap_or((TEXT_R, TEXT_G, TEXT_B))
+    }
+
+    #[inline]
+    fn paint_char_bold(&self, char_index: usize) -> bool {
+        self.mc_char_bold.get(char_index).copied().unwrap_or(false)
+    }
+
+    fn replace_plain_normalized(&mut self, normalized: String) {
         let cur = self.text_rasterizer.text.replace("\r\n", "\n").replace('\r', "\n");
         if normalized != cur && self.stick_to_tail {
             self.pending_snap_to_tail = true;
         }
-        self.text_rasterizer.set_text(text);
+        self.text_rasterizer.set_text(normalized);
         let max_idx = self.text_rasterizer.text.chars().count();
         self.cursor_position = self.cursor_position.min(max_idx);
         self.selection_start = self.selection_start.map(|v| v.min(max_idx));
@@ -141,7 +260,11 @@ impl TranscriptTextView {
         text: String,
         spans: Vec<(usize, usize, (u8, u8, u8))>,
     ) {
-        self.set_text(text);
+        self.color_spans.clear();
+        self.mc_char_fg.clear();
+        self.mc_char_bold.clear();
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        self.replace_plain_normalized(normalized);
         self.color_spans = spans
             .into_iter()
             .filter(|(s, e, _)| s < e)
@@ -178,7 +301,7 @@ impl TranscriptTextView {
         self.last_drag_sample_time = None;
     }
 
-    pub fn on_mouse_move_drag(&mut self, x: f32, y: f32, _keyboard_shown: bool) {
+    pub fn on_mouse_move_drag(&mut self, x: f32, y: f32, keyboard_shown: bool) {
         if !self.dragging && !self.selecting {
             return;
         }
@@ -190,18 +313,12 @@ impl TranscriptTextView {
             if abs_dx > 5.0 || abs_dy > 5.0 {
                 #[cfg(not(target_os = "ios"))]
                 {
-                    // Vertical drag → scroll (like a touchpad/page); horizontal → text selection.
-                    // Ignore `keyboard_shown` so OSK open does not eat vertical scrolling.
-                    let should_select = abs_dx > abs_dy;
-                    if should_select {
-                        self.dragging = false;
-                        self.selecting = true;
-                        let start_idx =
-                            self.find_nearest_char_index(self.last_pointer_x, self.last_mouse_y, self.last_rect);
-                        self.selection_start = Some(start_idx);
-                        self.selection_end = Some(start_idx);
-                        self.cursor_position = start_idx;
-                    }
+                    self.try_begin_horizontal_selection(abs_dx, abs_dy, true);
+                }
+                #[cfg(target_os = "ios")]
+                {
+                    // Finger + OSK: allow drag-to-select like desktop; keyboard hidden → scroll only.
+                    self.try_begin_horizontal_selection(abs_dx, abs_dy, keyboard_shown);
                 }
             }
         }
@@ -626,19 +743,39 @@ impl TranscriptTextView {
                     if idx + 3 < buffer.len() {
                         let alpha = val as f32 / 255.0;
                         let inv = 1.0 - alpha;
-                        let (r, g, b) = self
-                            .color_spans
-                            .iter()
-                            .find(|s| {
-                                character.char_index >= s.start_char
-                                    && character.char_index < s.end_char
-                            })
-                            .map(|s| s.color)
-                            .unwrap_or((TEXT_R, TEXT_G, TEXT_B));
+                        let (r, g, b) = self.paint_char_rgb(character.char_index);
                         buffer[idx] = (r as f32 * alpha + buffer[idx] as f32 * inv) as u8;
                         buffer[idx + 1] = (g as f32 * alpha + buffer[idx + 1] as f32 * inv) as u8;
                         buffer[idx + 2] = (b as f32 * alpha + buffer[idx + 2] as f32 * inv) as u8;
                         buffer[idx + 3] = 0xff;
+
+                        if self.paint_char_bold(character.char_index) && alpha > 0.0 {
+                            let sx2 = sx + 1;
+                            let sx2f = sx2 as f32;
+                            if sx2 >= 0
+                                && sx2 < w_i
+                                && sy >= 0
+                                && sy < h_i
+                                && !(sx2f < rx0
+                                    || sx2f > rx1
+                                    || syf < ry0
+                                    || syf > ry1)
+                            {
+                                let idx2 =
+                                    ((sy as u32 * fw_u32 + sx2 as u32) * 4) as usize;
+                                if idx2 + 3 < buffer.len() {
+                                    let a2 = alpha * 0.55;
+                                    let inv2 = 1.0 - a2;
+                                    buffer[idx2] =
+                                        (r as f32 * a2 + buffer[idx2] as f32 * inv2) as u8;
+                                    buffer[idx2 + 1] =
+                                        (g as f32 * a2 + buffer[idx2 + 1] as f32 * inv2) as u8;
+                                    buffer[idx2 + 2] =
+                                        (b as f32 * a2 + buffer[idx2 + 2] as f32 * inv2) as u8;
+                                    buffer[idx2 + 3] = 0xff;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -650,7 +787,7 @@ impl TranscriptTextView {
 
         let has_expand_selection =
             matches!((self.selection_start, self.selection_end), (Some(a), Some(b)) if a != b);
-        if !has_expand_selection {
+        if self.caret_visible && !has_expand_selection {
             let cx_f = ox + self.smooth_cursor_x;
             if cx_f >= rx0 && cx_f <= rx1 {
                 let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;

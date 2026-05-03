@@ -1019,6 +1019,24 @@ fn scrolling_set_font_size(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+fn scrolling_set_caret_visible(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_set_caret_visible() takes exactly 2 arguments ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let visible: bool = args_vec[1].clone().try_into_value(vm)?;
+    let mut guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    let view = guard
+        .get_mut(&id)
+        .ok_or_else(|| vm.new_value_error(format!("ScrollingText view id {} not found", id)))?;
+    view.set_caret_visible(visible);
+    Ok(vm.ctx.none())
+}
+
 fn scrolling_set_stick_to_tail(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() != 2 {
@@ -1104,6 +1122,101 @@ fn scrolling_on_scroll(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(view) = guard.get_mut(&id) {
         view.on_scroll(dy as f32);
     }
+    Ok(vm.ctx.none())
+}
+
+/// Viewport Study / transcript-style panel: [`TranscriptTextView::set_text_from_mc_markup`].
+fn scrolling_set_mc_markup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() < 6 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_set_mc_markup() takes at least 6 arguments (id, markup, minecraft, r, g, b) ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let markup: String = args_vec[1].clone().try_into_value(vm)?;
+    let minecraft: bool = args_vec[2].clone().try_into_value(vm)?;
+    let r: i32 = args_vec[3].clone().try_into_value(vm)?;
+    let g: i32 = args_vec[4].clone().try_into_value(vm)?;
+    let b: i32 = args_vec[5].clone().try_into_value(vm)?;
+    let rgb = [
+        r.clamp(0, 255) as u8,
+        g.clamp(0, 255) as u8,
+        b.clamp(0, 255) as u8,
+    ];
+    let mut guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    let view = guard
+        .get_mut(&id)
+        .ok_or_else(|| vm.new_value_error(format!("ScrollingText view id {} not found", id)))?;
+    view.set_text_from_mc_markup(markup, minecraft, rgb);
+    Ok(vm.ctx.none())
+}
+
+fn scrolling_plain_text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 1 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_plain_text() takes exactly 1 argument ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    let view = guard
+        .get(&id)
+        .ok_or_else(|| vm.new_value_error(format!("ScrollingText view id {} not found", id)))?;
+    let s = view.plain_text();
+    Ok(vm.ctx.new_str(s.as_str()).into())
+}
+
+fn scrolling_selection_plain(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 1 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_selection_plain() takes exactly 1 argument ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    let view = guard
+        .get(&id)
+        .ok_or_else(|| vm.new_value_error(format!("ScrollingText view id {} not found", id)))?;
+    let s = view.clipboard_selection_plain().unwrap_or_default();
+    Ok(vm.ctx.new_str(s.as_str()).into())
+}
+
+fn scrolling_clear_selection(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 1 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_clear_selection() takes exactly 1 argument ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let mut guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    if let Some(view) = guard.get_mut(&id) {
+        view.clear_text_selection();
+    }
+    Ok(vm.ctx.none())
+}
+
+fn scrolling_select_all_toggle(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 1 {
+        return Err(vm.new_type_error(format!(
+            "_scrolling_select_all_toggle() takes exactly 1 argument ({} given)",
+            args_vec.len()
+        )));
+    }
+    let id: u64 = args_vec[0].clone().try_into_value::<i64>(vm)? as u64;
+    let mut guard = SCROLL_TEXT_VIEWS.lock().unwrap();
+    let view = guard
+        .get_mut(&id)
+        .ok_or_else(|| vm.new_value_error(format!("ScrollingText view id {} not found", id)))?;
+    view.shortcut_select_all_toggle();
     Ok(vm.ctx.none())
 }
 
@@ -1232,6 +1345,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_scrolling_set_caret_visible",
+            vm.new_function("_scrolling_set_caret_visible", scrolling_set_caret_visible),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_scrolling_set_stick_to_tail",
             vm.new_function("_scrolling_set_stick_to_tail", scrolling_set_stick_to_tail),
             vm,
@@ -1262,6 +1382,41 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr(
             "_scrolling_on_scroll",
             vm.new_function("_scrolling_on_scroll", scrolling_on_scroll),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_scrolling_set_mc_markup",
+            vm.new_function("_scrolling_set_mc_markup", scrolling_set_mc_markup),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_scrolling_plain_text",
+            vm.new_function("_scrolling_plain_text", scrolling_plain_text),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_scrolling_selection_plain",
+            vm.new_function("_scrolling_selection_plain", scrolling_selection_plain),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_scrolling_clear_selection",
+            vm.new_function("_scrolling_clear_selection", scrolling_clear_selection),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_scrolling_select_all_toggle",
+            vm.new_function("_scrolling_select_all_toggle", scrolling_select_all_toggle),
             vm,
         )
         .unwrap();
@@ -1298,6 +1453,10 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope.globals
         .set_item("_scrolling_set_font_size", scrolling_set_font_size_fn, vm)
         .unwrap();
+    let scrolling_set_cv_fn = module.get_attr("_scrolling_set_caret_visible", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_set_caret_visible", scrolling_set_cv_fn, vm)
+        .unwrap();
     let scrolling_set_stick_fn = module.get_attr("_scrolling_set_stick_to_tail", vm).unwrap();
     scope.globals
         .set_item("_scrolling_set_stick_to_tail", scrolling_set_stick_fn, vm)
@@ -1322,6 +1481,26 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope.globals
         .set_item("_scrolling_tick", scrolling_tick_fn, vm)
         .unwrap();
+    let scrolling_set_mc_markup_fn = module.get_attr("_scrolling_set_mc_markup", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_set_mc_markup", scrolling_set_mc_markup_fn, vm)
+        .unwrap();
+    let scrolling_plain_text_fn = module.get_attr("_scrolling_plain_text", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_plain_text", scrolling_plain_text_fn, vm)
+        .unwrap();
+    let scrolling_sel_plain_fn = module.get_attr("_scrolling_selection_plain", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_selection_plain", scrolling_sel_plain_fn, vm)
+        .unwrap();
+    let scrolling_clr_sel_fn = module.get_attr("_scrolling_clear_selection", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_clear_selection", scrolling_clr_sel_fn, vm)
+        .unwrap();
+    let scrolling_sat_fn = module.get_attr("_scrolling_select_all_toggle", vm).unwrap();
+    scope.globals
+        .set_item("_scrolling_select_all_toggle", scrolling_sat_fn, vm)
+        .unwrap();
     let py_text_code = r#"
 def _viewport_scaled_font(font_size_px):
     """F3 / viewport UI scale (`Application.xos_scale`, percent/100) multiplies rasterized text size."""
@@ -1338,6 +1517,10 @@ class ScrollingTextView:
         self._hid = int(_scrolling_create(fs))
         self._x1 = self._y1 = self._x2 = self._y2 = 0.0
         _scrolling_set_stick_to_tail(self._hid, bool(stick_to_tail))
+
+    def set_caret_visible(self, visible=True):
+        """Insertion caret drawing in the viewport (off for read-only study-style panels when visible=False)."""
+        _scrolling_set_caret_visible(self._hid, bool(visible))
 
     def dispose(self):
         hid = getattr(self, "_hid", None)
@@ -1387,6 +1570,27 @@ class ScrollingTextView:
 
     def on_scroll(self, dy):
         _scrolling_on_scroll(self._hid, float(dy))
+
+    def set_mc_markup(self, markup, minecraft=True, default_rgb=(255, 255, 255)):
+        """Minecraft/HTML-ish markup rendered on the [`TextRasterizer`] transcript path (same tint rules as viewport RichText)."""
+        rgb = tuple(int(default_rgb[i]) for i in range(3))
+        _scrolling_set_mc_markup(
+            self._hid, str(markup), bool(minecraft), rgb[0], rgb[1], rgb[2]
+        )
+
+    def plain_text(self):
+        return str(_scrolling_plain_text(self._hid))
+
+    def selection_plain(self):
+        """Selected substring (empty when none); codepoint-aligned like RichText/plain()."""
+        return str(_scrolling_selection_plain(self._hid))
+
+    def clear_selection(self):
+        _scrolling_clear_selection(self._hid)
+
+    def select_all_toggle(self):
+        """Mirrors Cmd/Ctrl-A / OSK select-all transcript behavior (toggle)."""
+        _scrolling_select_all_toggle(self._hid)
 
     def tick(self, x1, y1, x2, y2, dt=None, *, osk_visible=None, trackpad=None):
         import builtins
