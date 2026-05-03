@@ -204,17 +204,32 @@ echo ""
 # Try to build - if signing fails, provide helpful instructions
 BUILD_OUTPUT=$(mktemp)
 set +e  # Temporarily disable exit on error to capture output
+# Clang (Xcode 16+) explicit precompiled modules: stale .pcm paths in DerivedData yield
+# "fatal error: module file '…ExplicitPrecompiledModules/UIKit-….pcm' not found".
+# Scrubbing that folder + clean once retries the canonical fix without nuking DerivedData every run.
+COMMON_XCODE_FLAGS=(
+    -workspace xos.xcworkspace
+    -scheme xos
+    -configuration Debug
+    -destination "id=$DEVICE_UDID"
+    -derivedDataPath "$DERIVED_DATA_PATH"
+    -allowProvisioningUpdates
+    CODE_SIGN_STYLE=Automatic
+    XOS_DEFAULT_APP="$APP_NAME"
+)
 # Avoid copy metadata / resource forks from build inputs into the .app
-COPYFILE_DISABLE=1 xcodebuild -workspace xos.xcworkspace \
-    -scheme xos \
-    -configuration Debug \
-    -destination "id=$DEVICE_UDID" \
-    -derivedDataPath "$DERIVED_DATA_PATH" \
-    -allowProvisioningUpdates \
-    CODE_SIGN_STYLE=Automatic \
-    XOS_DEFAULT_APP="$APP_NAME" \
-    build 2>&1 | tee "$BUILD_OUTPUT"
+COPYFILE_DISABLE=1 xcodebuild "${COMMON_XCODE_FLAGS[@]}" build 2>&1 | tee "$BUILD_OUTPUT"
 BUILD_STATUS=${PIPESTATUS[0]}
+if [ $BUILD_STATUS -ne 0 ] && [ "${XOS_IOS_SKIP_PCM_SCRUB:-0}" != "1" ] \
+    && grep -qE 'fatal error: .*module file|.pcm.*not found' "$BUILD_OUTPUT" 2>/dev/null; then
+    echo ""
+    echo "🔧 Stale Clang explicit-module cache (.pcm); clearing and rebuilding once…"
+    echo "   (set XOS_IOS_SKIP_PCM_SCRUB=1 to skip this retry)"
+    rm -rf "$DERIVED_DATA_PATH/Build/Intermediates.noindex/ExplicitPrecompiledModules" 2>/dev/null || true
+    COPYFILE_DISABLE=1 xcodebuild "${COMMON_XCODE_FLAGS[@]}" clean >/dev/null 2>&1 || true
+    COPYFILE_DISABLE=1 xcodebuild "${COMMON_XCODE_FLAGS[@]}" build 2>&1 | tee "$BUILD_OUTPUT"
+    BUILD_STATUS=${PIPESTATUS[0]}
+fi
 set -e  # Re-enable exit on error
 
 if [ $BUILD_STATUS -ne 0 ]; then

@@ -6,6 +6,7 @@
 //
 // http://opensource.org/licenses/mit-license.php
 
+use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -437,24 +438,35 @@ fn library_name(name: &str) -> &str {
 }
 
 fn link_libraries<T: AsRef<Path>>(root: T) {
+    // CMake installs the same static archives in multiple tree locations (e.g. per-target subdirs,
+    // multi-config generators). Emitting `rustc-link-lib=static=…` twice pulls every .o in twice
+    // when building a Rust `staticlib` (duplicate symbol errors). Link each logical lib once and
+    // keep the first-discovered search path.
     let mut current_dir = None;
+    let mut linked: HashSet<String> = HashSet::new();
     for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_file() {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .filter(is_library)
-                .iter()
-                .for_each(|name| {
-                    let parent = path.parent();
-                    if parent != current_dir.as_deref() {
-                        let dir = parent.unwrap();
-                        println!("cargo:rustc-link-search={}", dir.display());
-                        current_dir = Some(dir.to_path_buf())
-                    }
-                    println!("cargo:rustc-link-lib=static={}", library_name(name));
-                });
+        if !path.is_file() {
+            continue;
         }
+        let Some(name) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| is_library(n))
+        else {
+            continue;
+        };
+        let lib = library_name(name);
+        if !linked.insert(lib.to_string()) {
+            continue;
+        }
+        let parent = path.parent();
+        if parent != current_dir.as_deref() {
+            let dir = parent.unwrap();
+            println!("cargo:rustc-link-search={}", dir.display());
+            current_dir = Some(dir.to_path_buf());
+        }
+        println!("cargo:rustc-link-lib=static={}", lib);
     }
 }
 
