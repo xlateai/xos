@@ -372,8 +372,6 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let app_py = av[1].clone();
 
     let (fw_u, fh_u) = frame_wh_from_app(vm, app_py.clone())?;
-    let fw = fw_u.max(1) as f64;
-    let fh = fh_u.max(1) as f64;
 
     let s: String = getattr_required(vm, text_py.clone(), "text")?
         .clone()
@@ -392,10 +390,14 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_value_error("Text rect must satisfy x2 > x1 and y2 > y1".to_string()));
     }
 
-    let vx = (x1 * fw).floor() as i32;
-    let vy = (y1 * fh).floor() as i32;
-    let vw = ((x2 - x1) * fw).floor().clamp(1.0, fw) as u32;
-    let vh = ((y2 - y1) * fh).floor().clamp(1.0, fh) as u32;
+    let (vx, vy, vw, vh) = TextApp::rounded_norm_rect_to_px(
+        x1 as f32,
+        y1 as f32,
+        x2 as f32,
+        y2 as f32,
+        fw_u.max(1) as f32,
+        fh_u.max(1) as f32,
+    );
 
     let fs_raw = py_number_to_f64(getattr_required(vm, text_py.clone(), "font_size")?, vm, "font_size")?;
     let fs = fs_raw as f32;
@@ -410,6 +412,7 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let copypaste = read_bool_prop(vm, text_py.clone(), "copypaste", true)?;
 
     let mut t = TextApp::new();
+    t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
     t.python_viewport = Some((vx, vy, vw, vh));
     t.text_rasterizer.set_text(s);
     t.set_font_size(fs);

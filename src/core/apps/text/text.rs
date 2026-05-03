@@ -144,6 +144,8 @@ pub struct TextApp {
     pub top_chrome_height_px: f32,
     /// When set (`Some((x_px, y_px, width, height))`), layouts and paints into a framebuffer sub-rectangle (Python `xos.ui.Text`).
     pub python_viewport: Option<(i32, i32, u32, u32)>,
+    /// Normalized `[0,1]²` rect (`x1`,`y1`,`x2`,`y2`) for Python embed; [`Self::python_viewport`] is rebuilt each [`tick`] via [`UiText`] rounding.
+    pub python_viewport_norm: Option<(f32, f32, f32, f32)>,
     pub py_scrollable: bool,
     pub py_selectable: bool,
     pub py_allow_shortcuts: bool,
@@ -226,6 +228,7 @@ impl TextApp {
             bottom_chrome_height_px: 0.0,
             top_chrome_height_px: 0.0,
             python_viewport: None,
+            python_viewport_norm: None,
             py_scrollable: true,
             py_selectable: true,
             py_allow_shortcuts: true,
@@ -234,29 +237,67 @@ impl TextApp {
         }
     }
 
-    /// Max scroll offset pairing [`Self::viewport_metrics`] visible height vs laid-out text extent.
+    /// Rounded pixel viewport from normalized rect — must match [`crate::ui::text::UiText::render`].
+    pub(crate) fn rounded_norm_rect_to_px(
+        nx1: f32,
+        ny1: f32,
+        nx2: f32,
+        ny2: f32,
+        frame_w: f32,
+        frame_h: f32,
+    ) -> (i32, i32, u32, u32) {
+        let fw = frame_w.max(1.0);
+        let fh = frame_h.max(1.0);
+        let xa = (nx1.clamp(0.0, 1.0) * fw).round() as i32;
+        let ya = (ny1.clamp(0.0, 1.0) * fh).round() as i32;
+        let xb = (nx2.clamp(0.0, 1.0) * fw).round() as i32;
+        let yb = (ny2.clamp(0.0, 1.0) * fh).round() as i32;
+        let vw = (xb.saturating_sub(xa)).max(1) as u32;
+        let vh = (yb.saturating_sub(ya)).max(1) as u32;
+        (xa, ya, vw, vh)
+    }
+
+    fn sync_python_viewport_from_norm(&mut self, frame_w: f32, frame_h: f32) {
+        let Some((nx1, ny1, nx2, ny2)) = self.python_viewport_norm else {
+            return;
+        };
+        self.python_viewport = Some(Self::rounded_norm_rect_to_px(
+            nx1, ny1, nx2, ny2, frame_w, frame_h,
+        ));
+    }
+
+    /// Lowest document Y that must stay visible below the last line (`baseline + descent`).
+    /// Scroll limits use **absolute** doc Y (viewport covers `[scroll_y, scroll_y + visible_h]`), not `(max_y−min_y)`.
+    #[inline]
+    fn document_bottom_y_px(&self) -> f32 {
+        let a = self.text_rasterizer.ascent;
+        let d = self.text_rasterizer.descent.abs();
+        let line_height = a + d + self.text_rasterizer.line_gap;
+
+        let last_line_bottom = self
+            .text_rasterizer
+            .lines
+            .last()
+            .map(|l| l.baseline_y + d)
+            .unwrap_or(line_height);
+
+        if self.text_rasterizer.characters.is_empty() {
+            return last_line_bottom.max(line_height).max(1.0);
+        }
+
+        let mut glyph_bottom = f32::NEG_INFINITY;
+        for c in &self.text_rasterizer.characters {
+            glyph_bottom = glyph_bottom.max(c.y + c.height);
+        }
+        // Bitmap bbox can sit slightly above the line box; still allow scrolling to full descender depth.
+        glyph_bottom.max(last_line_bottom).max(1.0)
+    }
+
+    /// Max scroll offset: last pixel row of content can meet the bottom of the viewport.
     fn max_scroll_y_for_viewport(&self, state: &EngineState) -> f32 {
         let visible_height = self.viewport_metrics(state).visible_h;
-        let line_height =
-            self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
-        let text_content_height = if !self.text_rasterizer.lines.is_empty() {
-            let first_y = self
-                .text_rasterizer
-                .lines
-                .first()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            let last_y = self
-                .text_rasterizer
-                .lines
-                .last()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            (last_y - first_y).abs() + line_height * 2.0
-        } else {
-            line_height
-        };
-        (text_content_height - visible_height).max(0.0)
+        let doc_bottom = self.document_bottom_y_px();
+        (doc_bottom - visible_height).max(0.0)
     }
 
     fn viewport_metrics(&self, state: &EngineState) -> TextViewportMetrics {
@@ -271,14 +312,13 @@ impl TextApp {
             let vx = vx_i as f32;
             let vy = vy_i as f32;
             let vw = vw_u.max(1) as f32;
+            // Match [`UiText::render`] clip rect height (no keyboard clip — render draws the same box).
             let vh = vh_u.max(1) as f32;
-            let viewport_bottom = (vy + vh).min(content_bottom);
-            let vh_eff = (viewport_bottom - vy).max(1.0);
             TextViewportMetrics {
                 frame_w,
                 frame_h,
                 layout_w: vw,
-                visible_h: vh_eff,
+                visible_h: vh,
                 draw_x: vx,
                 draw_y: vy,
                 embed: true,
@@ -431,6 +471,8 @@ impl Application for TextApp {
             (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
         };
 
+        self.sync_python_viewport_from_norm(width, height);
+
         let vp_m = self.viewport_metrics(state);
         let layout_w = vp_m.layout_w;
         let visible_height = vp_m.visible_h;
@@ -467,6 +509,9 @@ impl Application for TextApp {
         
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
 
+        // Reflow/Wrap FIRST: scroll limits MUST use lines from *this* frame's wrap width (`layout_w`).
+        self.text_rasterizer.tick(layout_w, visible_height);
+
         // Mouse wheel streak decay: only while the user is not actively emitting wheel events (FPS-stable).
         let wheel_idle_for_decay = match self.wheel_last_activity {
             None => true,
@@ -485,20 +530,12 @@ impl Application for TextApp {
             self.drag_scroll_momentum = 0.0;
         }
 
-        // 2. Calculate elastic bounds (visible height respects optional Python viewport)
-        // Natural bounds: 0 (top of text) to height of all text
-        let line_height = self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
-        let text_content_height = if !self.text_rasterizer.lines.is_empty() {
-            let first_y = self.text_rasterizer.lines.first().map(|l| l.baseline_y).unwrap_or(0.0);
-            let last_y = self.text_rasterizer.lines.last().map(|l| l.baseline_y).unwrap_or(0.0);
-            (last_y - first_y).abs() + line_height * 2.0
-        } else {
-            line_height
-        };
-        
+        // Scroll bounds: viewport top is `scroll_y` in doc space; bottom is `scroll_y + visible_height`.
+        let doc_bottom = self.document_bottom_y_px();
+
         // 3. Calculate natural content bounds
         let natural_min = 0.0;
-        let natural_max = (text_content_height - visible_height).max(0.0);
+        let natural_max = (doc_bottom - visible_height).max(0.0);
         
         // 4. Calculate overscroll limits (based on screen percentage)
         let overscroll_distance = visible_height * SCROLL_OVERSCROLL_LIMIT;
@@ -529,8 +566,6 @@ impl Application for TextApp {
             self.scroll_target = self.scroll_target.max(limit_min).min(limit_max);
             self.scroll_y = self.scroll_target;
         }
-
-        self.text_rasterizer.tick(layout_w, visible_height);
 
         // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
         let wrap_width = layout_w;

@@ -398,29 +398,30 @@ impl TranscriptTextView {
             self.drag_scroll_momentum = 0.0;
         }
 
-        // Bounds from previous frame layout (same as `TextApp::tick` — one frame of lag on height).
-        let lh0 = self.text_rasterizer.ascent
+        // Reflow before scroll limits (same as [`TextApp::tick`]) so wrap width → correct `natural_max`.
+        self.text_rasterizer.tick(content_w, visible_height);
+
+        let lh = self.text_rasterizer.ascent
             + self.text_rasterizer.descent.abs()
             + self.text_rasterizer.line_gap;
-        let text_content_height_prev = if !self.text_rasterizer.lines.is_empty() {
-            let first_y = self
-                .text_rasterizer
-                .lines
-                .first()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            let last_y = self
-                .text_rasterizer
-                .lines
-                .last()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            (last_y - first_y).abs() + lh0 * 2.0
+        let d = self.text_rasterizer.descent.abs();
+        let last_line_bottom = self
+            .text_rasterizer
+            .lines
+            .last()
+            .map(|l| l.baseline_y + d)
+            .unwrap_or(lh);
+        let doc_bottom = if self.text_rasterizer.characters.is_empty() {
+            last_line_bottom.max(lh).max(1.0)
         } else {
-            lh0
+            let mut glyph_bottom = f32::NEG_INFINITY;
+            for c in &self.text_rasterizer.characters {
+                glyph_bottom = glyph_bottom.max(c.y + c.height);
+            }
+            glyph_bottom.max(last_line_bottom).max(1.0)
         };
         let natural_min = 0.0;
-        let natural_max = (text_content_height_prev - visible_height).max(0.0);
+        let natural_max = (doc_bottom - visible_height).max(0.0);
         let overscroll_distance = visible_height * SCROLL_OVERSCROLL_LIMIT;
         let limit_min = natural_min - overscroll_distance;
         let limit_max = natural_max + overscroll_distance;
@@ -449,34 +450,7 @@ impl TranscriptTextView {
             self.scroll_y = self.scroll_target;
         }
 
-        self.text_rasterizer.tick(content_w, visible_height);
-
-        // New layout: snap to bottom for growing transcript, then re-clamp to new extents.
-        let lh1 = self.text_rasterizer.ascent
-            + self.text_rasterizer.descent.abs()
-            + self.text_rasterizer.line_gap;
-        let text_content_height = if !self.text_rasterizer.lines.is_empty() {
-            let first_y = self
-                .text_rasterizer
-                .lines
-                .first()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            let last_y = self
-                .text_rasterizer
-                .lines
-                .last()
-                .map(|l| l.baseline_y)
-                .unwrap_or(0.0);
-            (last_y - first_y).abs() + lh1 * 2.0
-        } else {
-            lh1
-        };
-        let natural_max = (text_content_height - visible_height).max(0.0);
-        let overscroll_distance = visible_height * SCROLL_OVERSCROLL_LIMIT;
-        let limit_min = natural_min - overscroll_distance;
-        let limit_max = natural_max + overscroll_distance;
-
+        // Growing transcript / tail snap after layout-aligned bounds above.
         if self.pending_snap_to_tail {
             self.scroll_target = natural_max;
             self.scroll_y = natural_max;
@@ -489,7 +463,7 @@ impl TranscriptTextView {
             }
         }
 
-        if (natural_max - self.scroll_target).abs() < lh1 * 0.75 {
+        if (natural_max - self.scroll_target).abs() < lh * 0.75 {
             self.stick_to_tail = true;
         }
 
