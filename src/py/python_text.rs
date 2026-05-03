@@ -9,7 +9,7 @@ use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine};
 
 use crate::apps::text::TextApp;
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 
 /// Monotonic id assignment for [`Text`] handles (Python-visible as `_native_id`).
 static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
@@ -75,7 +75,11 @@ pub(crate) enum PyUiEventKind {
     MouseDown,
     MouseUp,
     MouseMove,
-    Scroll { dx: f32, dy: f32 },
+    Scroll {
+        dx: f32,
+        dy: f32,
+        unit: ScrollWheelUnit,
+    },
     Key(char),
     Shortcut(ShortcutAction),
 }
@@ -108,7 +112,17 @@ pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyR
                 .ok()
                 .and_then(|o| o.clone().try_into_value::<f64>(vm).ok())
                 .unwrap_or(0.0) as f32;
-            PyUiEventKind::Scroll { dx, dy }
+            let unit = dict
+                .get_item("unit", vm)
+                .ok()
+                .and_then(|o| o.str(vm).ok())
+                .map(|s| s.to_string())
+                .map(|u| match u.to_ascii_lowercase().as_str() {
+                    "line" | "lines" => ScrollWheelUnit::Line,
+                    _ => ScrollWheelUnit::Pixel,
+                })
+                .unwrap_or(ScrollWheelUnit::Pixel);
+            PyUiEventKind::Scroll { dx, dy, unit }
         }
         "key_char" => {
             let s = dict.get_item("char", vm)?.str(vm)?.to_string();
@@ -164,7 +178,7 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
         PyUiEventKind::MouseDown => t.on_mouse_down(state),
         PyUiEventKind::MouseUp => t.on_mouse_up(state),
         PyUiEventKind::MouseMove => t.on_mouse_move(state),
-        PyUiEventKind::Scroll { dx, dy } => t.on_scroll(state, dx, dy),
+        PyUiEventKind::Scroll { dx, dy, unit } => t.on_scroll(state, dx, dy, unit),
         PyUiEventKind::Key(ch) => t.on_key_char(state, ch),
         PyUiEventKind::Shortcut(sa) => t.apply_keyboard_shortcut(sa, state),
     }

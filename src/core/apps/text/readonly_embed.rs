@@ -1,7 +1,7 @@
 //! Read-only text in a screen rectangle: same scroll / wheel / drag physics and glyph draw path as
 //! [`super::text::TextApp`](crate::apps::text::TextApp) — no keyboard, cursor, selection, or debug overlays.
 
-use crate::engine::EngineState;
+use crate::engine::{EngineState, ScrollWheelUnit};
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
@@ -10,16 +10,16 @@ use std::time::Duration;
 
 // Keep in sync with `text.rs` for identical feel
 const SCROLL_REF_DT: f32 = 1.0 / 60.0;
-const SCROLL_ELASTIC_STRENGTH: f32 = 0.04;
+const SCROLL_ELASTIC_RATE: f32 = 28.0;
 const SCROLL_OVERSCROLL_LIMIT: f32 = 0.25;
-const SCROLL_SMOOTH_RATE: f32 = 18.0;
+const SCROLL_SMOOTH_RATE: f32 = 40.0;
 const DRAG_MOMENTUM_DECAY: f32 = 0.94;
 const DRAG_MOMENTUM_STOP: f32 = 38.0;
-const MOUSE_WHEEL_LINE_SCALE: f32 = 80.0;
+const MOUSE_WHEEL_LINE_SCALE: f32 = 240.0;
+const TRACKPAD_SCROLL_PIXEL_SCALE: f32 = 1.0;
 const WHEEL_CHARGE_PER_NOTCH: f32 = 0.085;
 const WHEEL_ACCEL_IDLE_DECAY: f32 = 0.86;
-const WHEEL_ACCEL_SMOOTH_RATE: f32 = 14.0;
-const WHEEL_STEP_SMOOTH_BLEND: f32 = 0.42;
+const WHEEL_STREAK_HOLD: Duration = Duration::from_millis(72);
 const H_PAD: f32 = 6.0;
 
 const TEXT_R: u8 = 230;
@@ -47,7 +47,7 @@ pub struct TranscriptTextView {
     drag_scroll_momentum: f32,
     last_drag_sample_time: Option<Instant>,
     wheel_accel_target: f32,
-    wheel_accel_smooth: f32,
+    wheel_last_activity: Option<Instant>,
     /// When the user is scrolled to the bottom, new content can auto-snap there.
     pub stick_to_tail: bool,
     pending_snap_to_tail: bool,
@@ -83,7 +83,7 @@ impl TranscriptTextView {
             drag_scroll_momentum: 0.0,
             last_drag_sample_time: None,
             wheel_accel_target: 0.0,
-            wheel_accel_smooth: 0.0,
+            wheel_last_activity: None,
             stick_to_tail: true,
             pending_snap_to_tail: false,
             color_spans: Vec::new(),
@@ -153,19 +153,16 @@ impl TranscriptTextView {
     }
 
     /// Same wheel semantics as [`super::text::TextApp::on_scroll`](crate::apps::text::TextApp::on_scroll).
-    pub fn on_scroll(&mut self, dy: f32) {
+    pub fn on_scroll(&mut self, dy: f32, unit: ScrollWheelUnit) {
         self.stick_to_tail = false;
         self.drag_scroll_momentum = 0.0;
-        let scaled = if dy.abs() <= 3.0 {
-            dy * MOUSE_WHEEL_LINE_SCALE
-        } else {
-            dy
+        self.wheel_last_activity = Some(Instant::now());
+        let scaled = match unit {
+            ScrollWheelUnit::Line => dy * MOUSE_WHEEL_LINE_SCALE,
+            ScrollWheelUnit::Pixel => dy * TRACKPAD_SCROLL_PIXEL_SCALE,
         };
         self.wheel_accel_target = (self.wheel_accel_target + WHEEL_CHARGE_PER_NOTCH).min(1.0);
-        let step = self.wheel_accel_target - self.wheel_accel_smooth;
-        self.wheel_accel_smooth += step * WHEEL_STEP_SMOOTH_BLEND;
-        self.wheel_accel_smooth = self.wheel_accel_smooth.clamp(0.0, 1.0);
-        let mult = 1.0 + 2.0 * self.wheel_accel_smooth;
+        let mult = 1.0 + 2.0 * self.wheel_accel_target;
         self.scroll_target -= scaled * mult;
     }
 
@@ -226,7 +223,7 @@ impl TranscriptTextView {
         }
         self.last_drag_sample_time = Some(now);
         self.wheel_accel_target = 0.0;
-        self.wheel_accel_smooth = 0.0;
+        self.wheel_last_activity = None;
         self.scroll_target -= dy;
         self.scroll_y = self.scroll_target;
         self.last_pointer_x = x;
@@ -359,7 +356,7 @@ impl TranscriptTextView {
             self.scroll_y = self.scroll_target;
             self.drag_scroll_momentum = 0.0;
             self.wheel_accel_target = 0.0;
-            self.wheel_accel_smooth = 0.0;
+            self.wheel_last_activity = None;
             self.stick_to_tail = false;
         } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
             let progress = 1.0 - (dist_from_bottom / edge_threshold.max(1.0));
@@ -368,7 +365,7 @@ impl TranscriptTextView {
             self.scroll_y = self.scroll_target;
             self.drag_scroll_momentum = 0.0;
             self.wheel_accel_target = 0.0;
-            self.wheel_accel_smooth = 0.0;
+            self.wheel_last_activity = None;
             self.stick_to_tail = false;
         }
     }
@@ -385,16 +382,14 @@ impl TranscriptTextView {
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
         self.selection_anim_phase += dt;
 
-        self.wheel_accel_target *= WHEEL_ACCEL_IDLE_DECAY.powf(dt / SCROLL_REF_DT);
-        self.wheel_accel_target = self.wheel_accel_target.clamp(0.0, 1.0);
-        let wa_diff = self.wheel_accel_target - self.wheel_accel_smooth;
-        if wa_diff.abs() > 1e-5 {
-            let a = 1.0 - (-WHEEL_ACCEL_SMOOTH_RATE * dt).exp();
-            self.wheel_accel_smooth += wa_diff * a;
-        } else {
-            self.wheel_accel_smooth = self.wheel_accel_target;
+        let wheel_idle_for_decay = match self.wheel_last_activity {
+            None => true,
+            Some(t) => t.elapsed() >= WHEEL_STREAK_HOLD,
+        };
+        if wheel_idle_for_decay {
+            self.wheel_accel_target *= WHEEL_ACCEL_IDLE_DECAY.powf(dt / SCROLL_REF_DT);
+            self.wheel_accel_target = self.wheel_accel_target.clamp(0.0, 1.0);
         }
-        self.wheel_accel_smooth = self.wheel_accel_smooth.clamp(0.0, 1.0);
 
         if !self.dragging && self.drag_scroll_momentum.abs() > DRAG_MOMENTUM_STOP {
             self.scroll_target += self.drag_scroll_momentum * dt;
@@ -433,10 +428,12 @@ impl TranscriptTextView {
         if !self.dragging {
             if self.scroll_target < natural_min {
                 let overshoot = natural_min - self.scroll_target;
-                self.scroll_target += overshoot * SCROLL_ELASTIC_STRENGTH;
+                let b = 1.0 - (-SCROLL_ELASTIC_RATE * dt).exp();
+                self.scroll_target += overshoot * b;
             } else if self.scroll_target > natural_max {
                 let overshoot = self.scroll_target - natural_max;
-                self.scroll_target -= overshoot * SCROLL_ELASTIC_STRENGTH;
+                let b = 1.0 - (-SCROLL_ELASTIC_RATE * dt).exp();
+                self.scroll_target -= overshoot * b;
             }
             self.scroll_target = self.scroll_target.max(limit_min).min(limit_max);
 

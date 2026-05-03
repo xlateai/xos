@@ -441,7 +441,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onScroll(
             return;
         };
 
-        host.app.on_scroll(&mut host.engine, dx, dy);
+        host.app.on_scroll(&mut host.engine, dx, dy, xos::engine::ScrollWheelUnit::Pixel);
     });
 }
 

@@ -32,10 +32,6 @@ class TextDemo(xos.Application):
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
-
-        # ts = self.text.render(
-        #     self.frame,
-        # )
         ts = self.text.tick(self)
 
         if self.t % 300 == 0:

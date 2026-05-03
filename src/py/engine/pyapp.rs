@@ -2,7 +2,7 @@ use rustpython_vm::{
     Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
 };
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
 
 /// Format a Python exception with traceback info
@@ -51,7 +51,11 @@ pub(crate) enum RoutedPyEvent {
     MouseDown,
     MouseUp,
     MouseMove,
-    Scroll { dx: f32, dy: f32 },
+    Scroll {
+        dx: f32,
+        dy: f32,
+        unit: ScrollWheelUnit,
+    },
     KeyChar(char),
     Shortcut(ShortcutAction),
 }
@@ -68,10 +72,15 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent) -> PyResult {
         RoutedPyEvent::MouseMove => {
             d.set_item("kind", vm.ctx.new_str("mouse_move").into(), vm)?;
         }
-        RoutedPyEvent::Scroll { dx, dy } => {
+        RoutedPyEvent::Scroll { dx, dy, unit } => {
             d.set_item("kind", vm.ctx.new_str("scroll").into(), vm)?;
             d.set_item("dx", vm.ctx.new_float(dx as f64).into(), vm)?;
             d.set_item("dy", vm.ctx.new_float(dy as f64).into(), vm)?;
+            let u = match unit {
+                ScrollWheelUnit::Line => "line",
+                ScrollWheelUnit::Pixel => "pixel",
+            };
+            d.set_item("unit", vm.ctx.new_str(u).into(), vm)?;
         }
         RoutedPyEvent::KeyChar(ch) => {
             d.set_item("kind", vm.ctx.new_str("key_char").into(), vm)?;
@@ -957,7 +966,7 @@ Call super().__init__() in your app __init__ before using tick()."
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32, unit: ScrollWheelUnit) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let mouse_dict = vm.ctx.new_dict();
@@ -975,7 +984,12 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
-                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::Scroll { dx, dy });
+                try_dispatch_python_on_events(
+                    vm,
+                    app_instance,
+                    state,
+                    RoutedPyEvent::Scroll { dx, dy, unit },
+                );
             });
         }
     }

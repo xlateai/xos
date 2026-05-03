@@ -7,7 +7,7 @@ use crate::auth::{
 fn is_logged_in() -> bool {
     true
 }
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::mesh::{MeshMode, MeshSession};
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts;
@@ -761,9 +761,9 @@ impl Application for TextMeshApp {
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32, unit: ScrollWheelUnit) {
         if self.phase == AppPhase::Editor {
-            self.text_app.on_scroll(state, dx, dy);
+            self.text_app.on_scroll(state, dx, dy, unit);
         }
     }
 

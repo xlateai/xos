@@ -496,9 +496,12 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
     }
 
     if scroll_sum.abs() > f64::EPSILON {
-        state
-            .app
-            .on_scroll(&mut state.engine_state, 0.0, scroll_sum as f32);
+        state.app.on_scroll(
+            &mut state.engine_state,
+            0.0,
+            scroll_sum as f32,
+            crate::engine::ScrollWheelUnit::Pixel,
+        );
     }
     if !chars_merged.is_empty() {
         for ch in chars_merged.chars() {

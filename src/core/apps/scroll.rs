@@ -1,4 +1,4 @@
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::fill;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (32, 32, 32);
@@ -84,7 +84,7 @@ impl Application for ScrollApp {
         }
     }
 
-    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32, _unit: ScrollWheelUnit) {
         self.scroll_x += dx;
         self.scroll_y += dy;
     }

@@ -404,9 +404,12 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(dx, dy) => (dx, dy),
-                    MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                use crate::engine::ScrollWheelUnit;
+                let (dx, dy, unit) = match delta {
+                    MouseScrollDelta::LineDelta(dx, dy) => (dx, dy, ScrollWheelUnit::Line),
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        (pos.x as f32, pos.y as f32, ScrollWheelUnit::Pixel)
+                    }
                 };
                 if self.command_held
                     && ((self.shift_held
@@ -419,7 +422,7 @@ impl ApplicationHandler for AppState {
                     }
                     return;
                 }
-                let _ = self.app.on_scroll(&mut self.engine_state, dx, dy);
+                let _ = self.app.on_scroll(&mut self.engine_state, dx, dy, unit);
             }
             WindowEvent::Ime(ime) => {
                 match ime {

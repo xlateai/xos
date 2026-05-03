@@ -504,6 +504,16 @@ pub fn frame_view_pan_by_pixels(
     engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
 }
 
+/// How [`Application::on_scroll`] reported vertical deltas should be interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ScrollWheelUnit {
+    /// Discrete line steps (mouse wheel notch): deltas are multiplied to pixel-like distances.
+    Line,
+    /// High-resolution delta (touchpad / smooth scrolling): deltas are logical pixels (~1∶1).
+    #[default]
+    Pixel,
+}
+
 pub trait Application {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String>;
     fn tick(&mut self, state: &mut EngineState);
@@ -511,7 +521,14 @@ pub trait Application {
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
-    fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
+    fn on_scroll(
+        &mut self,
+        _state: &mut EngineState,
+        _delta_x: f32,
+        _delta_y: f32,
+        _unit: ScrollWheelUnit,
+    ) {
+    }
     fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {}
     fn on_special_key(
         &mut self,

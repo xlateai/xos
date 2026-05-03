@@ -5,7 +5,7 @@ use crate::apps::text::TranscriptTextView;
 use crate::clipboard;
 use crate::engine::audio;
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
 use crate::ui::{
@@ -1682,7 +1682,7 @@ impl Application for TranscribeApp {
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, _delta_x: f32, delta_y: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, _delta_x: f32, delta_y: f32, unit: ScrollWheelUnit) {
         let Some((x0, y0, x1, y1)) = self.ui_bounds.transcript else {
             return;
         };
@@ -1712,6 +1712,6 @@ impl Application for TranscribeApp {
             return;
         }
         self.transcript_tap_scrolled = true;
-        self.transcript_view.on_scroll(delta_y);
+        self.transcript_view.on_scroll(delta_y, unit);
     }
 }

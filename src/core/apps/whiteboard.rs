@@ -1,4 +1,4 @@
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 
 const DRAW_COLOR: (u8, u8, u8) = (255, 0, 255);
 const STROKE_WIDTH: f32 = 2.0;
@@ -214,7 +214,7 @@ impl Application for Whiteboard {
         );
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32, _unit: ScrollWheelUnit) {
         let factor = if dy > 0.0 { 1.1 } else { 1.0 / 1.1 };
 
         let mouse_screen_x = state.mouse.x;
