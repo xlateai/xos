@@ -475,14 +475,20 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
-    if av.len() != 2 {
+    if av.len() < 2 || av.len() > 3 {
         return Err(vm.new_type_error(
-            "_text_tick requires (native_id, font_size) — pass float(self.font_size) each frame".to_string(),
+            "_text_tick requires (native_id, font_size[, py_input_focused]) — focused bool synced from Text.is_focused"
+                .to_string(),
         ));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
     let fs = py_number_to_f64(av[1].clone(), vm, "font_size")? as f32;
-    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state, fs));
+    let focused = av
+        .get(2)
+        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .transpose()?
+        .unwrap_or(false);
+    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state, fs, focused));
     if ran.is_none() {
         return Err(vm.new_runtime_error(
             "_text_tick must run during Application.tick (engine TLS not set)".to_string(),
@@ -600,12 +606,14 @@ class Text:
         self.show_cursor = kwargs.get("show_cursor", True)
         self.shortcuts = kwargs.get("shortcuts", True)
         self.copypaste = kwargs.get("copypaste", True)
+        self.is_focused = False
 
     def tick(self, app):
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
-        xos.ui._text_tick(int(self._native_id), float(self.font_size))
+        caret = bool(self.show_cursor and self.is_focused)
+        xos.ui._text_tick(int(self._native_id), float(self.font_size), bool(self.is_focused))
         state = xos.ui._text_render(
             self.text,
             self.x1,
@@ -617,12 +625,26 @@ class Text:
             baselines=self.baselines,
             font_size=self.font_size,
             native_widget_id=int(self._native_id),
-            show_cursor=self.show_cursor,
+            show_cursor=caret,
         )
         return TextRenderState(state)
 
     def on_events(self, app):
         import xos
+        ev = getattr(app, "_xos_event", None)
+        if isinstance(ev, dict) and ev.get("kind") == "mouse_down":
+            fd = getattr(app.frame, "_data", app.frame)
+            fw = float(fd["width"])
+            fh = float(fd["height"])
+            xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+            ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+            xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+            yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+            vw = max(1, xb - xa)
+            vh = max(1, yb - ya)
+            mx = float(app.mouse["x"])
+            my = float(app.mouse["y"])
+            self.is_focused = xa <= mx < xa + vw and ya <= my < ya + vh
         nid = getattr(self, "_native_id", None)
         if nid is None:
             self._native_id = int(xos.ui._text_register(self, app))
@@ -650,7 +672,7 @@ class Text:
             nid = getattr(self, "_native_id", None)
             if nid is not None:
                 extra["native_widget_id"] = int(nid)
-                extra["show_cursor"] = self.show_cursor
+                extra["show_cursor"] = bool(self.show_cursor and self.is_focused)
             state = _text_render(
                 self.text,
                 self.x1,
@@ -667,6 +689,52 @@ class Text:
         finally:
             if bound:
                 xos.frame._end_standalone()
+
+class Group:
+    """Sequential widget container: forwards tick() / on_events() to children (e.g. several Text editors)."""
+
+    __slots__ = ("_children",)
+
+    def __init__(self, *children):
+        self._children = tuple(children)
+
+    @property
+    def font_size(self):
+        cs = self._children
+        if not cs:
+            return 24.0
+        return float(getattr(cs[0], "font_size", 24.0))
+
+    @font_size.setter
+    def font_size(self, value):
+        v = float(value)
+        for c in self._children:
+            if hasattr(c, "font_size"):
+                c.font_size = v
+
+    def tick(self, app):
+        lines_acc = []
+        hb_acc = []
+        bl_acc = []
+        for c in self._children:
+            r = c.tick(app)
+            if not isinstance(r, TextRenderState):
+                continue
+            lines_acc.extend(list(r.lines))
+            hb_acc.extend(r.hitboxes.list())
+            bl_acc.extend(r.baselines.list())
+        return TextRenderState(
+            {"lines": lines_acc, "hitboxes": hb_acc, "baselines": bl_acc},
+        )
+
+    def on_events(self, app):
+        for c in self._children:
+            if hasattr(c, "on_events"):
+                c.on_events(app)
+
+
+def group(*children):
+    return Group(*children)
 
 class TextRenderState:
     def __init__(self, state_dict):
@@ -712,6 +780,12 @@ def onscreen_keyboard():
     }
     if let Ok(kb_fn) = scope.globals.get_item("onscreen_keyboard", vm) {
         module.set_attr("onscreen_keyboard", kb_fn, vm).unwrap();
+    }
+    if let Ok(grp_cls) = scope.globals.get_item("Group", vm) {
+        module.set_attr("Group", grp_cls, vm).unwrap();
+    }
+    if let Ok(grp_fn) = scope.globals.get_item("group", vm) {
+        module.set_attr("group", grp_fn, vm).unwrap();
     }
 
     module

@@ -4,28 +4,35 @@ import xos
 DEFAULT_FONT_SIZE = 48.0
 
 
+def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+    return xos.ui.text(
+        "",
+        x1,
+        y1,
+        x2,
+        y2,
+        editable=True,
+        font=None,
+        font_size=DEFAULT_FONT_SIZE,
+        color=xos.color.WHITE,
+        hitboxes=True,
+        baselines=True,
+        selectable=True,
+        scrollable=True,
+        show_cursor=True,
+    )
+
+
 class TextDemo(xos.Application):
     def __init__(self):
         super().__init__()
 
         self.keyboard = xos.ui.onscreen_keyboard()
+        
         # Font uses the engine/F3 default family; `scale` applies on each tick () after xos_sync.
-        self.text = xos.ui.text(
-            "",
-            0,
-            0,  # top left
-            1.0,
-            1.0,  # bottom right (normalized viewport coordinates)
-            editable=True,
-            font=None,
-            font_size=DEFAULT_FONT_SIZE,
-            color=xos.color.WHITE,
-            hitboxes=True,
-            baselines=True,
-            selectable=True,
-            scrollable=True,
-            show_cursor=True,
-        )
+        self.text1 = make_text(self, x1=0.0, y1=0.0, x2=0.5, y2=1.0)
+        self.text2 = make_text(self, x1=0.5, y1=0.0, x2=1.0, y2=1.0)
+        self.text = xos.ui.group(self.text1, self.text2)
 
     def tick(self):
         # Matches F3 UI scale slider (percent/100) each frame — synced before your tick runs.

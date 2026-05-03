@@ -230,6 +230,20 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     let Some(t) = map.get_mut(&id) else {
         return;
     };
+    let mx = state.mouse.x;
+    let my = state.mouse.y;
+    if t.python_viewport.is_some() {
+        let skip = match &kind {
+            PyUiEventKind::Key(_) | PyUiEventKind::Shortcut(_) => !t.py_input_focused,
+            PyUiEventKind::Scroll { .. }
+            | PyUiEventKind::MouseDown
+            | PyUiEventKind::MouseUp
+            | PyUiEventKind::MouseMove => !t.python_viewport_contains_screen_point(mx, my),
+        };
+        if skip {
+            return;
+        }
+    }
     match kind {
         PyUiEventKind::MouseDown => t.on_mouse_down(state),
         PyUiEventKind::MouseUp => t.on_mouse_up(state),
@@ -240,7 +254,7 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     }
 }
 
-pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32) {
+pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32, py_input_focused: bool) {
     let mut g = registry_mut();
     let Some(map) = g.as_mut() else {
         return;
@@ -248,6 +262,7 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32) {
     let Some(t) = map.get_mut(&id) else {
         return;
     };
+    t.py_input_focused = py_input_focused;
     // Quarter-pixel quantization: stray float noise from Python shouldn't rebuild layout / clear glyphs every tick.
     let fs = (font_size_px * 4.0).round() / 4.0;
     if (t.text_rasterizer.font_size - fs).abs() >= 0.02 {

@@ -186,6 +186,8 @@ pub struct TextApp {
     pub(crate) embed_fast_glyph_paint: bool,
     /// Per-frame reuse for [`Self::paint_viewport`] line-vs-viewport overlap (avoids `Vec::collect` each paint).
     paint_line_visible_scratch: Vec<bool>,
+    /// Python embedded: synced from [`xos.ui.Text.is_focused`] each [`tick`]; gates character keys, shortcuts, and pointer hit-testing.
+    pub py_input_focused: bool,
 }
 
 
@@ -272,7 +274,20 @@ impl TextApp {
             engine_font_family_version_seen: fonts::default_font_version(),
             embed_fast_glyph_paint: false,
             paint_line_visible_scratch: Vec::new(),
+            py_input_focused: false,
         }
+    }
+
+    /// Whether (`mx`,`my`) lies inside the rounded Python embed viewport (normalized rect → px).
+    pub(crate) fn python_viewport_contains_screen_point(&self, mx: f32, my: f32) -> bool {
+        let Some((vx, vy, vw, vh)) = self.python_viewport else {
+            return true;
+        };
+        let x0 = vx as f32;
+        let y0 = vy as f32;
+        let x1 = x0 + vw as f32;
+        let y1 = y0 + vh as f32;
+        mx >= x0 && mx < x1 && my >= y0 && my < y1
     }
 
     /// Rounded pixel viewport from normalized rect — must match [`crate::ui::text::UiText::render`].
