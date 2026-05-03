@@ -76,6 +76,7 @@ pub(crate) fn collect_native_text_widget_render_state(
     scroll_y: f32,
     fw: usize,
     fh: usize,
+    include_hitboxes: bool,
 ) -> Option<UiTextRenderState> {
     let g = registry_mut();
     let map = g.as_ref()?;
@@ -89,6 +90,7 @@ pub(crate) fn collect_native_text_widget_render_state(
         scroll_y,
         fw,
         fh,
+        include_hitboxes,
     ))
 }
 

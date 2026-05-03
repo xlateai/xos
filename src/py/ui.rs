@@ -315,7 +315,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     )
                 }) {
                     render_state_opt =
-                        collect_native_text_widget_render_state(nid, xa, ya, xb, yb, viewport_scroll_y, cw, ch);
+                        collect_native_text_widget_render_state(nid, xa, ya, xb, yb, viewport_scroll_y, cw, ch, hitboxes);
                 }
             }
         }

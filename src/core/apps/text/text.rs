@@ -432,6 +432,30 @@ impl TextApp {
             glyph_rgba.3 as u32,
         );
 
+        let vis_top_doc = self.scroll_y;
+        let vis_bottom_doc = self.scroll_y + visible_height;
+        let a_doc = self.text_rasterizer.ascent;
+        let d_doc = self.text_rasterizer.descent.abs();
+        // Loose vertical band around each line baseline—skip all glyphs on lines that cannot intersect viewport.
+        let line_pad_y = self.text_rasterizer.line_gap * 0.5 + self.text_rasterizer.font_size * 0.15;
+        let line_may_overlap_viewport: Vec<bool> = self
+            .text_rasterizer
+            .lines
+            .iter()
+            .map(|ln| {
+                let lt = ln.baseline_y - a_doc - line_pad_y;
+                let lb = ln.baseline_y + d_doc + line_pad_y;
+                !(lb < vis_top_doc || lt > vis_bottom_doc)
+            })
+            .collect();
+
+        let line_quick_visible = |line_idx: usize| -> bool {
+            match line_may_overlap_viewport.get(line_idx) {
+                Some(false) => false,
+                Some(true) | None => true,
+            }
+        };
+
         // Draw baselines (offset by layout origin)
         if DRAW_BASELINES && self.show_debug_visuals {
             for line in &self.text_rasterizer.lines {
@@ -463,6 +487,9 @@ impl TextApp {
             let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
 
             for character in &self.text_rasterizer.characters {
+                if !line_quick_visible(character.line_index) {
+                    continue;
+                }
                 if character.char_index >= start_idx && character.char_index < end_idx {
                     let char_left = character.x;
                     let char_right = character.x + character.metrics.advance_width;
@@ -517,15 +544,16 @@ impl TextApp {
             }
         }
 
-        let vis_top = self.scroll_y;
-        let vis_bottom = self.scroll_y + visible_height;
         let fast_paint = self.embed_fast_glyph_paint;
         let ga_f = ga as f32 / 255.0;
 
         for character in &self.text_rasterizer.characters {
+            if !line_quick_visible(character.line_index) {
+                continue;
+            }
             let g_top = character.y;
             let g_bottom = character.y + character.height;
-            if g_bottom < vis_top || g_top > vis_bottom {
+            if g_bottom < vis_top_doc || g_top > vis_bottom_doc {
                 continue;
             }
             let slide_max = character.width;

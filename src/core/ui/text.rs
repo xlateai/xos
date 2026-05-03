@@ -158,8 +158,8 @@ pub struct UiTextRenderState {
     pub baselines: Vec<[[f32; 2]; 2]>,
 }
 
-/// Builds line counts and normalized baseline / glyph boxes from an already-layouted [`TextRasterizer`].
-/// Used when Python UI reuses [`crate::apps::text::TextApp`] layout instead of re-running [`UiText::render`].
+/// Builds line counts, baselines tensor, and optional per-glyph hitboxes from [`TextRasterizer`].
+/// Mirrors [`UiText::render`] tensors: baselines always match wrapped lines; hitboxes omitted when `hitboxes=false`.
 pub fn collect_ui_text_render_state(
     rasterizer: &TextRasterizer,
     x1: i32,
@@ -169,6 +169,7 @@ pub fn collect_ui_text_render_state(
     sy: f32,
     frame_width: usize,
     frame_height: usize,
+    include_hitboxes: bool,
 ) -> UiTextRenderState {
     let mut state = UiTextRenderState::default();
 
@@ -188,24 +189,26 @@ pub fn collect_ui_text_render_state(
         ]);
     }
 
-    for character in &rasterizer.characters {
-        let px = x1 + character.x.round() as i32;
-        let py = y1 + (character.y - sy).round() as i32;
-        let gx1 = px;
-        let gy1 = py;
-        let gx2 = px + character.metrics.width as i32;
-        let gy2 = py + character.metrics.height as i32;
+    if include_hitboxes {
+        for character in &rasterizer.characters {
+            let px = x1 + character.x.round() as i32;
+            let py = y1 + (character.y - sy).round() as i32;
+            let gx1 = px;
+            let gy1 = py;
+            let gx2 = px + character.metrics.width as i32;
+            let gy2 = py + character.metrics.height as i32;
 
-        state.hitboxes.push([
-            [
-                (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
-            ],
-            [
-                (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
-            ],
-        ]);
+            state.hitboxes.push([
+                [
+                    (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                ],
+                [
+                    (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                ],
+            ]);
+        }
     }
 
     state
