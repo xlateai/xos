@@ -1,7 +1,8 @@
-use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
+use rustpython_vm::{
+    Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
+};
 use crate::engine::{Application, EngineState};
-use crate::python_api::engine::py_bindings::create_py_engine_state_snapshot;
-use crate::python_api::engine::py_engine_tls::TickEngineStateGuard;
+use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
@@ -44,11 +45,45 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
     output
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RoutedPyEvent {
+    MouseDown,
+    MouseUp,
+    MouseMove,
+    Scroll { dx: f32, dy: f32 },
+    KeyChar(char),
+}
+
+fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent) -> PyResult {
+    let d = vm.ctx.new_dict();
+    match ev {
+        RoutedPyEvent::MouseDown => {
+            d.set_item("kind", vm.ctx.new_str("mouse_down").into(), vm)?;
+        }
+        RoutedPyEvent::MouseUp => {
+            d.set_item("kind", vm.ctx.new_str("mouse_up").into(), vm)?;
+        }
+        RoutedPyEvent::MouseMove => {
+            d.set_item("kind", vm.ctx.new_str("mouse_move").into(), vm)?;
+        }
+        RoutedPyEvent::Scroll { dx, dy } => {
+            d.set_item("kind", vm.ctx.new_str("scroll").into(), vm)?;
+            d.set_item("dx", vm.ctx.new_float(dx as f64).into(), vm)?;
+            d.set_item("dy", vm.ctx.new_float(dy as f64).into(), vm)?;
+        }
+        RoutedPyEvent::KeyChar(ch) => {
+            d.set_item("kind", vm.ctx.new_str("key_char").into(), vm)?;
+            d.set_item("char", vm.ctx.new_str(ch.to_string()).into(), vm)?;
+        }
+    }
+    Ok(d.into())
+}
+
 fn try_dispatch_python_on_events(
     vm: &VirtualMachine,
     app_instance: &PyObjectRef,
-    state: &EngineState,
-    last_key_char: Option<char>,
+    state: &mut EngineState,
+    ev: RoutedPyEvent,
 ) {
     let Ok(Some(cb)) = vm.get_attribute_opt(app_instance.clone(), "on_events") else {
         return;
@@ -56,19 +91,25 @@ fn try_dispatch_python_on_events(
     if !cb.is_callable() {
         return;
     }
-    let es = match create_py_engine_state_snapshot(vm, state, last_key_char) {
-        Ok(es) => es,
+    let dict = match build_routed_event_dict(vm, ev) {
+        Ok(o) => o,
         Err(e) => {
-            eprintln!("Failed to build xos.EngineState snapshot: {:?}", e);
+            eprintln!(
+                "Failed to build routed _xos_event dict:\n{}",
+                format_python_exception(vm, &e)
+            );
             return;
         }
     };
-    if let Err(e) = vm.call_method(app_instance, "on_events", (es,)) {
+    let _evt_store = app_instance.set_attr("_xos_event", dict, vm);
+    let _guard = CallbackEngineStateGuard::install(state);
+    if let Err(e) = vm.call_method(app_instance, "on_events", ()) {
         eprintln!(
             "Python on_events error:\n{}",
             format_python_exception(vm, &e)
         );
     }
+    let _clear = app_instance.set_attr("_xos_event", vm.ctx.none(), vm);
 }
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
@@ -813,6 +854,13 @@ Call super().__init__() in your app __init__ before using tick()."
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let _keyboard_hit = state.keyboard.onscreen.on_mouse_down(
+            state.mouse.x,
+            state.mouse.y,
+            shape[1] as f32,
+            shape[0] as f32,
+        );
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
@@ -832,12 +880,13 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_down", (x, y));
-                try_dispatch_python_on_events(vm, app_instance, state, None);
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseDown);
             });
         }
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
+        state.keyboard.onscreen.on_mouse_up();
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
@@ -857,7 +906,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
-                try_dispatch_python_on_events(vm, app_instance, state, None);
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseUp);
             });
         }
     }
@@ -882,7 +931,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_move", (x, y));
-                try_dispatch_python_on_events(vm, app_instance, state, None);
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseMove);
             });
         }
     }
@@ -905,7 +954,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
-                try_dispatch_python_on_events(vm, app_instance, state, None);
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::Scroll { dx, dy });
             });
         }
     }
@@ -913,7 +962,7 @@ Call super().__init__() in your app __init__ before using tick()."
     fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
-                try_dispatch_python_on_events(vm, app_instance, state, Some(ch));
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::KeyChar(ch));
             });
         }
     }

@@ -15,6 +15,7 @@ pub mod dtypes;
 pub mod data;
 pub mod path;
 pub mod ui;
+pub mod python_text;
 pub mod nn;
 pub mod burn_train;
 pub mod mesh;

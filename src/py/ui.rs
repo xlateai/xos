@@ -1,7 +1,41 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{
+    builtins::PyDict, PyObjectRef, PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs,
+};
+use crate::apps::text::TextApp;
 use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
-use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_WIDTH, CURRENT_FRAME_HEIGHT};
+use crate::python_api::python_text::{
+    alloc_widget_id, dispatch_text_widget_from_app, insert_widget, tick_text_widget,
+};
+use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
 use crate::ui::{Button, UiText};
+
+fn frame_wh_from_app(vm: &VirtualMachine, app: PyObjectRef) -> PyResult<(u32, u32)> {
+    let frame = vm.get_attribute_opt(app.clone(), "frame")?.ok_or_else(|| {
+        vm.new_attribute_error("Application has no 'frame' attribute".to_string())
+    })?;
+    let data_obj = match vm.get_attribute_opt(frame.clone(), "_data") {
+        Ok(Some(d)) => d,
+        Ok(None) | Err(_) => frame,
+    };
+    let dict = data_obj.downcast_ref::<PyDict>().ok_or_else(|| {
+        vm.new_type_error("application.frame must be a Frame with dict _data".to_string())
+    })?;
+    let w: usize = dict.get_item("width", vm)?.clone().try_into_value(vm)?;
+    let h: usize = dict.get_item("height", vm)?.clone().try_into_value(vm)?;
+    Ok((w as u32, h as u32))
+}
+
+fn read_bool_prop(vm: &VirtualMachine, obj: PyObjectRef, key: &'static str, default: bool) -> PyResult<bool> {
+    match vm.get_attribute_opt(obj.clone(), key)? {
+        Some(v) => v.clone().try_into_value(vm),
+        None => Ok(default),
+    }
+}
+
+fn getattr_required(vm: &VirtualMachine, obj: PyObjectRef, name: &'static str) -> PyResult<PyObjectRef> {
+    vm.get_attribute_opt(obj.clone(), name)?
+        .ok_or_else(|| vm.new_attribute_error(format!("missing attribute '{}'", name)))
+}
 
 fn py_number_to_f64(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f64> {
     if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
@@ -296,6 +330,100 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(state.into())
 }
 
+/// Native [`TextApp`] registration — returns integer widget id (`_native_id`).
+fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 2 {
+        return Err(vm.new_type_error("_text_register requires (text_ui, app)".to_string()));
+    }
+    let text_py = av[0].clone();
+    let app_py = av[1].clone();
+
+    let (fw_u, fh_u) = frame_wh_from_app(vm, app_py.clone())?;
+    let fw = fw_u.max(1) as f64;
+    let fh = fh_u.max(1) as f64;
+
+    let s: String = getattr_required(vm, text_py.clone(), "text")?
+        .clone()
+        .try_into_value(vm)?;
+    let x1 = py_number_to_f64(getattr_required(vm, text_py.clone(), "x1")?, vm, "x1")?;
+    let y1 = py_number_to_f64(getattr_required(vm, text_py.clone(), "y1")?, vm, "y1")?;
+    let x2 = py_number_to_f64(getattr_required(vm, text_py.clone(), "x2")?, vm, "x2")?;
+    let y2 = py_number_to_f64(getattr_required(vm, text_py.clone(), "y2")?, vm, "y2")?;
+
+    if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&y1) || !(0.0..=1.0).contains(&x2) || !(0.0..=1.0).contains(&y2) {
+        return Err(vm.new_value_error(
+            "Text rect x1, y1, x2, y2 must be normalized in [0.0, 1.0]".to_string(),
+        ));
+    }
+    if !(x2 > x1 && y2 > y1) {
+        return Err(vm.new_value_error("Text rect must satisfy x2 > x1 and y2 > y1".to_string()));
+    }
+
+    let vx = (x1 * fw).floor() as i32;
+    let vy = (y1 * fh).floor() as i32;
+    let vw = ((x2 - x1) * fw).floor().clamp(1.0, fw) as u32;
+    let vh = ((y2 - y1) * fh).floor().clamp(1.0, fh) as u32;
+
+    let fs_raw = py_number_to_f64(getattr_required(vm, text_py.clone(), "font_size")?, vm, "font_size")?;
+    let fs = fs_raw as f32;
+    let hitboxes = read_bool_prop(vm, text_py.clone(), "hitboxes", false)?;
+    let baselines = read_bool_prop(vm, text_py.clone(), "baselines", false)?;
+
+    let selectable = read_bool_prop(vm, text_py.clone(), "selectable", true)?;
+    let scrollable = read_bool_prop(vm, text_py.clone(), "scrollable", true)?;
+    let editable = read_bool_prop(vm, text_py.clone(), "editable", true)?;
+    let show_cursor = read_bool_prop(vm, text_py.clone(), "show_cursor", true)?;
+    let shortcuts = read_bool_prop(vm, text_py.clone(), "shortcuts", true)?;
+    let copypaste = read_bool_prop(vm, text_py.clone(), "copypaste", true)?;
+
+    let mut t = TextApp::new();
+    t.python_viewport = Some((vx, vy, vw, vh));
+    t.text_rasterizer.set_text(s);
+    t.set_font_size(fs);
+    t.read_only = !editable;
+    t.show_cursor = show_cursor;
+    t.show_debug_visuals = hitboxes || baselines;
+    t.py_selectable = selectable;
+    t.py_scrollable = scrollable;
+    t.py_allow_shortcuts = shortcuts;
+    t.py_allow_copypaste = copypaste;
+    t.uses_parent_ui_scale = true;
+    // Draw into an already-cleared framebuffer (Python `frame.clear`); avoid full-screen black fill each tick.
+    t.transparent_background = true;
+    t.embed_skip_frame_present = true;
+
+    let id = alloc_widget_id();
+    insert_widget(id, t);
+    Ok(vm.ctx.new_int(id as usize).into())
+}
+
+fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error("_text_tick requires (native_id,)".to_string()));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state));
+    if ran.is_none() {
+        return Err(vm.new_runtime_error(
+            "_text_tick must run during Application.tick (engine TLS not set)".to_string(),
+        ));
+    }
+    Ok(vm.ctx.none())
+}
+
+fn text_widget_dispatch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 2 {
+        return Err(vm.new_type_error("_text_dispatch requires (native_id, app)".to_string()));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let app_py = av[1].clone();
+    dispatch_text_widget_from_app(vm, id as u64, app_py)?;
+    Ok(vm.ctx.none())
+}
+
 fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _ = args;
     let ran = with_tick_engine_state_mut(|state| {
@@ -318,11 +446,6 @@ fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-fn text_on_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let _ = args;
-    Ok(vm.ctx.none())
-}
-
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module.set_attr("button", vm.new_function("button", button), vm).unwrap();
@@ -339,10 +462,16 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
-            "_text_on_events",
-            vm.new_function("_text_on_events", text_on_events),
+            "_text_register",
+            vm.new_function("_text_register", text_widget_register),
             vm,
         )
+        .unwrap();
+    module
+        .set_attr("_text_tick", vm.new_function("_text_tick", text_widget_tick), vm)
+        .unwrap();
+    module
+        .set_attr("_text_dispatch", vm.new_function("_text_dispatch", text_widget_dispatch), vm)
         .unwrap();
 
     let scope = vm.new_scope_with_builtins();
@@ -353,6 +482,9 @@ class OnScreenKeyboard:
     def tick(self, app):
         import xos
         xos.ui._onscreen_keyboard_tick()
+
+    def on_events(self, app):
+        pass
 
 class Text:
     def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, **kwargs):
@@ -365,13 +497,39 @@ class Text:
         self.hitboxes = hitboxes
         self.baselines = baselines
         self.font_size = font_size
+        self._native_id = None
         self._kwargs = kwargs
+        self.selectable = kwargs.get("selectable", True)
+        self.scrollable = kwargs.get("scrollable", True)
+        self.editable = kwargs.get("editable", True)
+        self.show_cursor = kwargs.get("show_cursor", True)
+        self.shortcuts = kwargs.get("shortcuts", True)
+        self.copypaste = kwargs.get("copypaste", True)
 
-    def on_events(self, state, **kwargs):
+    def tick(self, app):
         import xos
-        merged = dict(self._kwargs)
-        merged.update(kwargs)
-        xos.ui._text_on_events(self, state, merged)
+        if self._native_id is None:
+            self._native_id = int(xos.ui._text_register(self, app))
+        xos.ui._text_tick(self._native_id)
+        state = xos.ui._text_render(
+            self.text,
+            self.x1,
+            self.y1,
+            self.x2,
+            self.y2,
+            self.color,
+            hitboxes=self.hitboxes,
+            baselines=self.baselines,
+            font_size=self.font_size,
+        )
+        return TextRenderState(state)
+
+    def on_events(self, app):
+        import xos
+        nid = getattr(self, "_native_id", None)
+        if nid is None:
+            return
+        xos.ui._text_dispatch(int(nid), app)
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
         import xos

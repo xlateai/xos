@@ -8,9 +8,10 @@ class TextDemo(xos.Application):
         self.keyboard = xos.ui.onscreen_keyboard()
         self.text = xos.ui.text(
             "hello world",
-            0, 0,  # top left
-            1.0, 1.0,  # bottom right (normalized viweport coordinates)
-            font=None,  # default font
+            0,
+            0,  # top left
+            1.0,
+            1.0,  # bottom right (normalized viewport coordinates)
             font_size=24.0 * self.scale,  # scaling font size with f3 menu
             color=xos.color.WHITE,
             hitboxes=True,
@@ -41,9 +42,6 @@ class TextDemo(xos.Application):
     def on_events(self):
         self.text.on_events(self)
         self.keyboard.on_events(self)
-
-    def on_f2_pressed(self):
-        self.keyboard.toggle()
 
 if __name__ == "__main__":
     TextDemo().run()
