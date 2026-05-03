@@ -196,7 +196,9 @@ pub fn make_audio_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
 }
 
-/// Clean up all audio resources (both microphones and speakers)
+/// Clean up microphones, speakers, and (desktop only) recordings opened from Python (`xos.audio`).
+///
+/// Inactive when nothing was ever allocated — avoids global speaker/mic chatter on coder startup/shutdown.
 pub fn cleanup_all_audio() {
     microphone::cleanup_all_microphones_rust();
     speakers::cleanup_all_speakers_rust();

@@ -475,3 +475,35 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
     }
 }
 
+#[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+pub fn ios_bootstrap_study_py_app() -> Result<crate::python_api::engine::pyapp::PyApp, String> {
+    use crate::python_api::engine::pyapp::PyApp;
+    use rustpython_vm::Interpreter;
+
+    crate::data::ensure_japanese_vocab_csv().map_err(|e| format!("{e}"))?;
+
+    const STUDY_PY: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/core/apps/study/study.py"
+    ));
+
+    let interpreter = Interpreter::with_init(Default::default(), |vm| {
+        vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
+    });
+
+    let (result, output, app_instance, _) =
+        execute_python_code(&interpreter, STUDY_PY, "<study>", None, None, &[]);
+
+    let output_trim = output.trim_end();
+    if !output_trim.is_empty() {
+        eprintln!("{}", output_trim);
+    }
+
+    result.map_err(|e| format!("study.py: {e}"))?;
+
+    let app_instance = app_instance.ok_or_else(|| {
+        "study.py did not bind an Application (__xos_app_instance__). Ensure `StudyApp().run()` runs when __name__ == '__main__'.".to_string()
+    })?;
+
+    Ok(PyApp::new(interpreter, app_instance))
+}

@@ -164,6 +164,8 @@ impl StandalonePreviewApp {
                     frame_view_center_x: 0.5,
                     frame_view_center_y: 0.5,
                     f3_fps_label_override: None,
+                    overlay_red_pointer_enabled: false,
+                    overlay_red_pointer_radius: 0.0,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);
@@ -787,6 +789,10 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
     frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
+    frame_dict.set_item("safe_x1", vm.ctx.new_float(0.0).into(), vm)?;
+    frame_dict.set_item("safe_y1", vm.ctx.new_float(0.0).into(), vm)?;
+    frame_dict.set_item("safe_x2", vm.ctx.new_float(1.0).into(), vm)?;
+    frame_dict.set_item("safe_y2", vm.ctx.new_float(1.0).into(), vm)?;
     Ok(frame_dict.into())
 }
 
@@ -1154,12 +1160,20 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let data_module = crate::python_api::data::make_data_module(vm);
     module.set_attr("data", data_module, vm).unwrap();
 
+    let csv_module = crate::python_api::csv::make_csv_module(vm);
+    module.set_attr("csv", csv_module, vm).unwrap();
+
     let path_module = crate::python_api::path::make_path_module(vm);
     module.set_attr("path", path_module, vm).unwrap();
+
+    let clipboard_module = crate::python_api::clipboard::make_clipboard_module(vm);
+    module.set_attr("clipboard", clipboard_module, vm).unwrap();
 
     // Add the ui submodule
     let ui_module = crate::python_api::ui::make_ui_module(vm);
     module.set_attr("ui", ui_module, vm).unwrap();
+
+    crate::python_api::keyboard_mod::register_keyboard(&module, vm);
     
     // Add the dtypes module and expose dtype constants
     let dtypes_module = crate::python_api::dtypes::make_dtypes_module(vm);

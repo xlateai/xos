@@ -1,7 +1,7 @@
 #[cfg(not(target_os = "ios"))]
 use crate::apps::coder::shortcuts::{detect_coder_shortcut, CoderShortcutAction};
 use crate::engine::keyboard::shortcuts::{ShortcutAction, SpecialKeyEvent};
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ViewportDoubleTap};
 use crate::apps::coder::explorer::{build_explorer_items, fuzzy_score, split_folder_file, ExplorerItem};
 use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
@@ -79,10 +79,7 @@ pub struct CoderApp {
     viewport_app: Option<rustpython_vm::PyObjectRef>,
     viewport_app_setup_done: bool,
     viewport_ticks_completed: u64,
-    // Viewport double-tap tracking
-    viewport_last_tap_time: Option<std::time::Instant>,
-    viewport_last_tap_x: f32,
-    viewport_last_tap_y: f32,
+    viewport_double_tap: ViewportDoubleTap,
     viewport_taskbar_hidden: bool,
     /// Up to [`MAX_OPEN_EDITOR_TABS`] buffers; active index is [`Self::active_editor_tab`].
     open_editor_tabs: Vec<OpenEditorTab>,
@@ -118,6 +115,7 @@ pub struct CoderApp {
     last_applied_ui_scale: f32,
     explorer_search_query: String,
     explorer_search_focused: bool,
+    default_font_version: u64,
 }
 
 impl CoderApp {
@@ -659,9 +657,7 @@ impl CoderApp {
             viewport_app: None,
             viewport_app_setup_done: false,
             viewport_ticks_completed: 0,
-            viewport_last_tap_time: None,
-            viewport_last_tap_x: 0.0,
-            viewport_last_tap_y: 0.0,
+            viewport_double_tap: ViewportDoubleTap::default(),
             viewport_taskbar_hidden: false,
             open_editor_tabs: Vec::new(),
             active_editor_tab: 0,
@@ -689,6 +685,34 @@ impl CoderApp {
             last_applied_ui_scale: f32::NAN,
             explorer_search_query: String::new(),
             explorer_search_focused: false,
+            default_font_version: fonts::default_font_version(),
+        }
+    }
+
+    /// Keep tab strip / explorer labels on the F3 default font when the user changes it.
+    fn sync_default_font_rasters(&mut self) {
+        let v = fonts::default_font_version();
+        if v == self.default_font_version {
+            return;
+        }
+        self.default_font_version = v;
+        self.code_app.default_font_version = v;
+        self.terminal_app.default_font_version = v;
+        self.console_app.default_font_version = v;
+        let f = fonts::default_font();
+        self.clear_button_label.set_font(f.clone());
+        self.code_tab_label.set_font(f.clone());
+        self.terminal_tab_label.set_font(f.clone());
+        self.viewport_tab_label.set_font(f.clone());
+        self.run_button_label.set_font(f.clone());
+        for r in &mut self.editor_tab_labels {
+            r.set_font(f.clone());
+        }
+        self.editor_tab_close_label.set_font(f.clone());
+        self.explorer_search_label.set_font(f.clone());
+        self.explorer_search_text.set_font(f.clone());
+        for r in &mut self.file_list_rasterizers {
+            r.set_font(f.clone());
         }
     }
 
@@ -840,33 +864,28 @@ xos.print = __custom_print__
     }
     
     fn execute_background_script(&mut self, code: &str) {
-        // Clone what we need for the thread
         let code_str = code.to_string();
-        let output_buffer = Arc::clone(&self.python_output_buffer);
-        let running_flag = Arc::clone(&self.python_thread_running);
-        let generation_counter = Arc::clone(&self.python_thread_generation);
-        
-        // Increment generation (invalidates any previous thread's output)
+
         let current_generation = {
             let mut gen = self.python_thread_generation.lock().unwrap();
             *gen += 1;
             *gen
         };
-        
-        // Mark thread as running
+
         *self.python_thread_running.lock().unwrap() = true;
-        
-        // Spawn background thread to execute Python
-        let handle = thread::spawn(move || {
-            // Create interpreter in this thread
-            let interpreter = Interpreter::with_init(Default::default(), |vm| {
-                vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
-            });
-            
-            // Create print callback that checks generation
+
+        #[cfg(not(target_os = "ios"))]
+        let output_buffer = Arc::clone(&self.python_output_buffer);
+        #[cfg(not(target_os = "ios"))]
+        let running_flag = Arc::clone(&self.python_thread_running);
+        #[cfg(not(target_os = "ios"))]
+        let generation_counter = Arc::clone(&self.python_thread_generation);
+
+        #[cfg(not(target_os = "ios"))]
+        let print_callback: crate::python_api::runtime::PrintCallback = {
             let buffer_for_callback = Arc::clone(&output_buffer);
             let gen_for_callback = Arc::clone(&generation_counter);
-            let print_callback: crate::python_api::runtime::PrintCallback = Arc::new(move |text: &str| {
+            Arc::new(move |text: &str| {
                 if let Ok(current_gen) = gen_for_callback.lock() {
                     if *current_gen == current_generation {
                         if let Ok(mut buffer) = buffer_for_callback.lock() {
@@ -874,45 +893,88 @@ xos.print = __custom_print__
                         }
                     }
                 }
-            });
-            
-            // Execute using unified runtime
-            let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
-                &interpreter,
-                &code_str,
-                "<coder>",
-                None,
-                Some(print_callback),
-                &[],
-            );
-            
-            // Handle errors (only if still current generation)
-            if let Err(error_msg) = result {
-                if let Ok(current_gen) = generation_counter.lock() {
-                    if *current_gen == current_generation {
-                        if let Ok(mut buffer) = output_buffer.lock() {
-                            buffer.push_str("\n");
-                            buffer.push_str(&error_msg);
-                            buffer.push_str("\n");
+            })
+        };
+
+        #[cfg(not(target_os = "ios"))]
+        {
+            let pc = Arc::clone(&print_callback);
+            let handle = thread::spawn(move || {
+                let interpreter = Interpreter::with_init(Default::default(), |vm| {
+                    vm.add_native_module(
+                        "xos".to_owned(),
+                        Box::new(crate::python_api::xos_module::make_module),
+                    );
+                });
+
+                let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
+                    &interpreter,
+                    &code_str,
+                    "<coder>",
+                    None,
+                    Some(pc),
+                    &[],
+                );
+
+                if let Err(error_msg) = result {
+                    if let Ok(current_gen) = generation_counter.lock() {
+                        if *current_gen == current_generation {
+                            if let Ok(mut buffer) = output_buffer.lock() {
+                                buffer.push_str("\n");
+                                buffer.push_str(&error_msg);
+                                buffer.push_str("\n");
+                            }
                         }
                     }
                 }
-            }
-            
-            // Mark thread as no longer running (only if still current generation)
-            if let Ok(current_gen) = generation_counter.lock() {
-                if *current_gen == current_generation {
-                    if let Ok(mut flag) = running_flag.lock() {
-                        *flag = false;
+
+                if let Ok(current_gen) = generation_counter.lock() {
+                    if *current_gen == current_generation {
+                        if let Ok(mut flag) = running_flag.lock() {
+                            *flag = false;
+                        }
                     }
                 }
+            });
+            self.python_thread_handle = Some(handle);
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            let buffer_for_ios = Arc::clone(&self.python_output_buffer);
+            let gen_for_ios = Arc::clone(&self.python_thread_generation);
+            let print_callback_ios: crate::python_api::runtime::PrintCallback = Arc::new(
+                move |text: &str| {
+                    if let Ok(current_gen) = gen_for_ios.lock() {
+                        if *current_gen == current_generation {
+                            if let Ok(mut buffer) = buffer_for_ios.lock() {
+                                buffer.push_str(text);
+                            }
+                        }
+                    }
+                },
+            );
+
+            // Main/engine thread only: interpreter + AudioSession/player are not reliably used from a spawned thread here.
+            let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
+                &self.interpreter,
+                &code_str,
+                "<coder>",
+                None,
+                Some(print_callback_ios),
+                &[],
+            );
+            if let Err(error_msg) = result {
+                if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                    buffer.push_str("\n");
+                    buffer.push_str(&error_msg);
+                    buffer.push_str("\n");
+                }
             }
-        });
-        
-        // Store the thread handle
-        self.python_thread_handle = Some(handle);
-        
-        // Switch to terminal tab to show output
+            *self.python_thread_running.lock().unwrap() = false;
+            self.python_thread_handle = None;
+        }
+
         if self.active_tab == Tab::Code {
             self.active_tab = Tab::Terminal;
         }
@@ -1193,19 +1255,16 @@ builtins.print = __custom_print__
             return;
         }
 
-        // Stop viewport app if running.
         if is_viewport_running {
             self.viewport_app = None;
             self.viewport_app_setup_done = false;
             self.viewport_ticks_completed = 0;
-            crate::python_api::audio::cleanup_all_audio();
             self.terminal_app
                 .text_rasterizer
                 .text
                 .push_str("\n[xos] Viewport app stopped\n");
         }
 
-        // Stop background thread if running.
         if is_background_running {
             if let Ok(mut gen) = self.python_thread_generation.lock() {
                 *gen += 1;
@@ -1214,10 +1273,13 @@ builtins.print = __custom_print__
                 *flag = false;
             }
             self.python_thread_handle = None;
-            crate::python_api::audio::cleanup_all_audio();
             if let Ok(mut buffer) = self.python_output_buffer.lock() {
                 buffer.push_str("\n[xos] Script stopped by user\n");
             }
+        }
+
+        if is_viewport_running || is_background_running {
+            crate::python_api::audio::cleanup_all_audio();
         }
     }
     
@@ -1903,6 +1965,7 @@ impl Application for CoderApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        self.sync_default_font_rasters();
         // Update terminal from background thread output
         if let Ok(buffer) = self.python_output_buffer.try_lock() {
             if !buffer.is_empty() {
@@ -2115,6 +2178,25 @@ impl Application for CoderApp {
                                 let _ = app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm);
                                 let _ = app_instance.set_attr("t", vm.ctx.new_int(self.viewport_ticks_completed as usize), vm);
                                 let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                                let (_, keyboard_top_y, _, _) =
+                                    state.keyboard.onscreen.top_edge_coordinates();
+                                let kbd_vis = state.keyboard.onscreen.is_shown();
+                                let kbd_tp = state.keyboard.onscreen.is_trackpad_mode();
+                                let _ = app_instance.set_attr(
+                                    "keyboard_top_y",
+                                    vm.ctx.new_float(keyboard_top_y as f64),
+                                    vm,
+                                );
+                                let _ = app_instance.set_attr(
+                                    "onscreen_keyboard_visible",
+                                    vm.ctx.new_bool(kbd_vis),
+                                    vm,
+                                );
+                                let _ = app_instance.set_attr(
+                                    "onscreen_trackpad_mode",
+                                    vm.ctx.new_bool(kbd_tp),
+                                    vm,
+                                );
                                 
                                 // Call tick
                                 if let Err(e) = vm.call_method(app_instance, "tick", ()) {
@@ -2844,38 +2926,15 @@ impl Application for CoderApp {
             }
             Tab::Terminal => self.terminal_app.on_mouse_down(state),
             Tab::Viewport => {
-                // Handle double-tap to show/hide keyboard in viewport
-                use std::time::{Duration, Instant};
-                const DOUBLE_TAP_TIME_MS: u64 = 300;
-                const DOUBLE_TAP_DISTANCE: f32 = 50.0;
-                
-                let now = Instant::now();
-                let is_double_tap = if let Some(last_time) = self.viewport_last_tap_time {
-                    let time_since_last = now.duration_since(last_time);
-                    let distance = ((mouse_x - self.viewport_last_tap_x).powi(2) + (mouse_y - self.viewport_last_tap_y).powi(2)).sqrt();
-                    
-                    time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) && distance < DOUBLE_TAP_DISTANCE
-                } else {
-                    false
-                };
-                
-                if is_double_tap {
-                    // Toggle keyboard
+                if self
+                    .viewport_double_tap
+                    .observe_press(mouse_x, mouse_y)
+                {
                     state.keyboard.onscreen.toggle_minimize();
-                    // Reset tap tracking
-                    self.viewport_last_tap_time = None;
-                } else {
-                    // Update tap tracking
-                    self.viewport_last_tap_time = Some(now);
-                    self.viewport_last_tap_x = mouse_x;
-                    self.viewport_last_tap_y = mouse_y;
-                    
-                    // Forward to Python app if available
-                    if let Some(ref app_instance) = self.viewport_app {
-                        self.interpreter.enter(|vm| {
-                            let _ = vm.call_method(app_instance, "on_mouse_down", (mouse_x, mouse_y));
-                        });
-                    }
+                } else if let Some(ref app_instance) = self.viewport_app {
+                    self.interpreter.enter(|vm| {
+                        let _ = vm.call_method(app_instance, "on_mouse_down", (mouse_x, mouse_y));
+                    });
                 }
             }
         }

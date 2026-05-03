@@ -60,6 +60,7 @@ pub struct IosSensorsApp {
     sensor_selector: Selector,
     // Button state
     button_hovered: bool,
+    default_font_version: u64,
 }
 
 impl IosSensorsApp {
@@ -119,7 +120,22 @@ impl IosSensorsApp {
             current_sensor: SensorType::Magnetometer,
             sensor_selector,
             button_hovered: false,
+            default_font_version: fonts::default_font_version(),
         }
+    }
+
+    fn sync_default_font_rasters(&mut self) {
+        let v = fonts::default_font_version();
+        if v == self.default_font_version {
+            return;
+        }
+        self.default_font_version = v;
+        let f = fonts::default_font();
+        self.magnitude_text.set_font(f.clone());
+        self.coordinates_text.set_font(f.clone());
+        self.count_text.set_font(f.clone());
+        self.rate_text.set_font(f.clone());
+        self.button_text.set_font(f.clone());
     }
 }
 
@@ -161,6 +177,7 @@ impl Application for IosSensorsApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        self.sync_default_font_rasters();
         let shape = state.frame.shape();
         let width = shape[1] as u32;
         let height = shape[0] as u32;

@@ -62,6 +62,18 @@ class SystemType:
         return not self.__eq__(other)
 "#;
 
+/// xos.system.exit(code=0) — terminate the host process (`std::process::exit`).
+fn system_exit(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let code: i32 = if !args.args.is_empty() {
+        args.args[0].clone().try_into_value(vm)?
+    } else if let Some(c) = args.kwargs.get("code") {
+        c.clone().try_into_value(vm)?
+    } else {
+        0
+    };
+    std::process::exit(code);
+}
+
 /// xos.system.get_system_type() - Get current system type
 fn get_system_type(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let system_type = SystemType::current();
@@ -134,6 +146,7 @@ _types = _TypesNamespace()
     
     // Add get_system_type function
     let _ = module.set_attr("get_system_type", vm.new_function("get_system_type", get_system_type), vm);
+    let _ = module.set_attr("exit", vm.new_function("exit", system_exit), vm);
     
     module
 }

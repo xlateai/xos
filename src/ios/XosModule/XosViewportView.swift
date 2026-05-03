@@ -192,11 +192,11 @@ public class XosViewportView: UIView {
     }
     
     /// Same role as **F3** on desktop: toggles FPS / UI scale (`f3_menu`). Three-finger **hold**
-    /// (~0.85s), similar in spirit to Expo’s dev-menu gesture.
+    /// (~0.64s), similar in spirit to Expo’s dev-menu gesture.
     private func setupThreeFingerF3Gesture() {
         let gr = UILongPressGestureRecognizer(target: self, action: #selector(handleThreeFingerF3LongPress(_:)))
         gr.numberOfTouchesRequired = 3
-        gr.minimumPressDuration = 0.85
+        gr.minimumPressDuration = 0.6375
         gr.cancelsTouchesInView = true
         addGestureRecognizer(gr)
     }

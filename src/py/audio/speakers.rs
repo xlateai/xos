@@ -513,32 +513,36 @@ pub fn speaker_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// Clean up ALL active speakers (called when stopping app or switching)
 pub fn cleanup_all_speakers(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    crate::print("[xos.audio] Cleaning up all speakers...");
-    cleanup_all_speakers_rust();
-    crate::print("[xos.audio] All speakers cleaned up");
+    let n = cleanup_all_speakers_rust();
+    if n > 0 {
+        crate::print(&format!("[xos.audio] Cleaned up {n} speaker(s)"));
+    }
     Ok(vm.ctx.none())
 }
 
-/// Rust-side function to cleanup all speakers (called from CoderApp Drop or cleanup_all_audio)
-pub fn cleanup_all_speakers_rust() {
+/// Rust-side teardown for all active speakers (CoderApp / host shutdown).
+///
+/// Quiet when idle so apps that never open `xos.audio.Speaker` do not spam the console.
+/// Returns how many playback instances were dropped.
+pub fn cleanup_all_speakers_rust() -> usize {
     let speaker_ptrs: Vec<usize> = if let Ok(mut speakers) = get_active_speakers().lock() {
-        let ptrs: Vec<usize> = speakers.drain().collect();
-        crate::print(&format!("[xos.audio] Cleaning up {} speaker(s)", ptrs.len()));
-        ptrs
+        speakers.drain().collect()
     } else {
         vec![]
     };
-    
-    // Drop the Rust-side objects
+    let n = speaker_ptrs.len();
+
     for ptr in speaker_ptrs {
         if ptr != 0 {
-            crate::print(&format!("[xos.audio] Dropping speaker at ptr={:#x}", ptr));
             unsafe {
                 let _ = Box::from_raw(ptr as *mut AudioPlayer);
             }
         }
     }
-    crate::print("[xos.audio] Speaker cleanup complete");
+    if n > 0 && std::env::var_os("XOS_LOG_AUDIO_CLEANUP").is_some() {
+        crate::print("[xos.audio] Speaker cleanup complete");
+    }
+    n
 }
 
 /// Extract f32 samples from xos.Tensor - NO fallbacks, crashes if wrong format

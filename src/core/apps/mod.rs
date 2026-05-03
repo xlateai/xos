@@ -91,4 +91,5 @@ define_apps! {
     Hang => hang::HangApp,
     Transcribe => transcribe::TranscribeApp,
     Vad => vad::VadApp,
+    Study => study::StudyApp,
 }

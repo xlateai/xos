@@ -1,0 +1,5 @@
+{
+  "japanese_vocabs_6000": {
+    "csv_url": "https://huggingface.co/datasets/nollied/Japanese-Vocab-6k/resolve/main/japanese_vocabs_6000.csv?download=true"
+  }
+}

@@ -12,9 +12,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Project trees under iCloud (Desktop / Documents) often get extended attributes on *build* outputs;
-# the final `codesign` of the .app then fails with "resource fork / detritus". Using DerivedData
-# on local APFS avoids that. Override with e.g. XOS_IOS_DERIVED_DATA="$PWD/build".
-DERIVED_DATA_PATH="${XOS_IOS_DERIVED_DATA:-/private/tmp/xos-ios.derived.$(id -u)}"
+# the final `codesign` of the .app then fails with "resource fork / detritus".
+#
+# Default DerivedData under src/ios/build/DerivedData (gitignored): /tmp-based paths are often cleared
+# mid-build; mixed Swift + Obj-C Pods then fail with missing ExplicitPrecompiledModules (*.pcm).
+# Override: XOS_IOS_DERIVED_DATA=/path/to/DerivedData
+DERIVED_DATA_PATH="${XOS_IOS_DERIVED_DATA:-$SCRIPT_DIR/build/DerivedData}"
 mkdir -p "$DERIVED_DATA_PATH" 2>/dev/null || {
   echo "❌ Could not create DerivedData directory: $DERIVED_DATA_PATH"
   exit 1
@@ -204,6 +207,13 @@ echo ""
 # Try to build - if signing fails, provide helpful instructions
 BUILD_OUTPUT=$(mktemp)
 set +e  # Temporarily disable exit on error to capture output
+
+# Drop stale explicit Clang modules so ObjC Pod sources don't reference missing .pcm from a half build.
+if [ "${XOS_IOS_SCRUB_MODULES:-1}" != "0" ] && [ -n "$DERIVED_DATA_PATH" ]; then
+    rm -rf "$DERIVED_DATA_PATH/Build/Intermediates.noindex/ExplicitPrecompiledModules" 2>/dev/null || true
+    rm -rf "$DERIVED_DATA_PATH/ModuleCache.noindex" 2>/dev/null || true
+fi
+
 # Avoid copy metadata / resource forks from build inputs into the .app
 COPYFILE_DISABLE=1 xcodebuild -workspace xos.xcworkspace \
     -scheme xos \
@@ -267,6 +277,17 @@ if [ $BUILD_STATUS -ne 0 ]; then
         echo "   After setting up signing, run this command again."
         rm -f "$BUILD_OUTPUT"
         exit 1
+    fi
+
+    # Stale Clang explicit modules → missing .pcm (common after /tmp clean or Xcode upgrade).
+    if grep -qE "ExplicitPrecompiledModules/.*\\.pcm.*not found|module file .*\\.pcm.*not found" "$BUILD_OUTPUT" 2>/dev/null; then
+        echo ""
+        echo "🔧 Clang module cache mismatch (missing .pcm). Try a clean iOS DerivedData:"
+        echo "     rm -rf \"$DERIVED_DATA_PATH\""
+        echo "   Or scrub only explicit modules next run is automatic; for a full wipe also:"
+        echo "     rm -rf \"$SCRIPT_DIR/build/DerivedData\""
+        echo "   Override location: export XOS_IOS_DERIVED_DATA=/path/you/control"
+        echo ""
     fi
     
     # Other build errors

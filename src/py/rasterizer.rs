@@ -969,7 +969,8 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let font = font_lock.as_ref().unwrap();
     
     // Create text rasterizer
-    let mut rasterizer = TextRasterizer::new(font.clone(), font_size as f32);
+    let mut rasterizer =
+        TextRasterizer::new_viewport_global_glyph_cache(font.clone(), font_size as f32);
     rasterizer.set_text(text_str);
     rasterizer.tick(max_width, height as f32);
     
