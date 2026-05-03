@@ -231,6 +231,31 @@ impl TextApp {
         }
     }
 
+    /// Max scroll offset pairing [`Self::viewport_metrics`] visible height vs laid-out text extent.
+    fn max_scroll_y_for_viewport(&self, state: &EngineState) -> f32 {
+        let visible_height = self.viewport_metrics(state).visible_h;
+        let line_height =
+            self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
+        let text_content_height = if !self.text_rasterizer.lines.is_empty() {
+            let first_y = self
+                .text_rasterizer
+                .lines
+                .first()
+                .map(|l| l.baseline_y)
+                .unwrap_or(0.0);
+            let last_y = self
+                .text_rasterizer
+                .lines
+                .last()
+                .map(|l| l.baseline_y)
+                .unwrap_or(0.0);
+            (last_y - first_y).abs() + line_height * 2.0
+        } else {
+            line_height
+        };
+        (text_content_height - visible_height).max(0.0)
+    }
+
     fn viewport_metrics(&self, state: &EngineState) -> TextViewportMetrics {
         let shape = state.frame.shape();
         let frame_w = shape[1] as f32;
@@ -718,58 +743,6 @@ impl Application for TextApp {
             }
             
             if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
-                // Continuous auto-scroll when laser is near edges (while trackpad is active)
-                if self.trackpad_active {
-                    let visible_height = content_bottom - content_top;
-                    let edge_threshold = visible_height * 0.01; // 1% margin from edge
-                    
-                    // Distance from top edge
-                    let dist_from_top = laser_y - content_top;
-                    // Distance from bottom edge  
-                    let dist_from_bottom = content_bottom - laser_y;
-                    
-                    let base_scroll_speed = 15.0; // 50% faster than old 10.0
-                    
-                    let mut did_scroll = false;
-                    if dist_from_top >= 0.0 && dist_from_top <= edge_threshold {
-                        // Near top edge - scroll up
-                        // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
-                        let progress = 1.0 - (dist_from_top / edge_threshold); // 0 at threshold, 1 at edge
-                        let scroll_speed = base_scroll_speed * progress;
-                        self.drag_scroll_momentum = 0.0;
-                        self.wheel_accel_target = 0.0;
-                        self.wheel_accel_smooth = 0.0;
-                        self.scroll_target = (self.scroll_target - scroll_speed).max(0.0);
-                        self.scroll_y = self.scroll_target;
-                        did_scroll = true;
-                    } else if dist_from_bottom >= 0.0 && dist_from_bottom <= edge_threshold {
-                        // Near bottom edge - scroll down
-                        // Speed ranges from slow at edge_threshold to base_scroll_speed at edge (0)
-                        let progress = 1.0 - (dist_from_bottom / edge_threshold); // 0 at threshold, 1 at edge
-                        let scroll_speed = base_scroll_speed * progress;
-                        self.drag_scroll_momentum = 0.0;
-                        self.wheel_accel_target = 0.0;
-                        self.wheel_accel_smooth = 0.0;
-                        self.scroll_target += scroll_speed;
-                        self.scroll_y = self.scroll_target;
-                        did_scroll = true;
-                    }
-                    
-                    // Update cursor position if we scrolled
-                    if did_scroll {
-                        // Inline layout coords (`to_text_xy` borrows state; we're inside `buffer` mut borrow)
-                        let text_x = laser_x - draw_off_x;
-                        let text_y = laser_y - draw_off_y + self.scroll_y;
-                        let char_index = self.find_nearest_char_index(text_x, text_y);
-                        
-                        // If selecting, update selection end; otherwise just move cursor
-                        if self.trackpad_selecting {
-                            self.selection_end = Some(char_index);
-                        }
-                        self.cursor_position = char_index;
-                    }
-                }
-                
                 let dot_radius = 6.0; // 1.5x larger (was 4.0)
                 let dot_x_i = laser_x.round() as i32;
                 let dot_y_i = laser_y.round() as i32;
@@ -976,13 +949,37 @@ impl Application for TextApp {
                     // Move laser 2x with mouse movement (double speed)
                     let new_laser_x = (laser_x + mouse_dx * 2.0).max(0.0).min(width);
                     
-                    // Constrain laser to stay above keyboard (and parent chrome e.g. coder task bar)
+                    // Constrain laser vertically to the document strip; spill past top/bottom **only while
+                    // actively drag-sliding** converts to scroll instead of proximity “edge hover” scrolling.
                     let safe_region = &state.frame.safe_region_boundaries;
                     let content_top = self.layout_content_top(safe_region.y1, height);
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                     let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
                     
-                    let new_laser_y = (laser_y + mouse_dy * 2.0).max(content_top).min(content_bottom);
+                    let unconstrained_y = laser_y + mouse_dy * 2.0;
+                    let new_laser_y = if self.trackpad_active && state.mouse.is_left_clicking {
+                        let vp = self.viewport_metrics(state);
+                        let visible_h = vp.visible_h;
+                        let overscroll = visible_h * SCROLL_OVERSCROLL_LIMIT;
+                        let scroll_min = -overscroll;
+                        let scroll_upper = self.max_scroll_y_for_viewport(state) + overscroll;
+
+                        let mut y = unconstrained_y;
+                        if unconstrained_y < content_top {
+                            let spill = content_top - unconstrained_y;
+                            self.scroll_target = (self.scroll_target - spill).max(scroll_min);
+                            self.scroll_y = self.scroll_target;
+                            y = content_top;
+                        } else if unconstrained_y > content_bottom {
+                            let spill = unconstrained_y - content_bottom;
+                            self.scroll_target = (self.scroll_target + spill).min(scroll_upper);
+                            self.scroll_y = self.scroll_target;
+                            y = content_bottom;
+                        }
+                        y
+                    } else {
+                        unconstrained_y.max(content_top).min(content_bottom)
+                    };
                     
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
@@ -1113,30 +1110,37 @@ impl Application for TextApp {
         let height = shape[0] as f32;
         let width = shape[1] as f32;
 
-        // Embedded Python `xos.ui.Text`: `PyApp` already called [`OnScreenKeyboard::on_mouse_down`] and
-        // queued any character/action. Do not call it again here. If this press landed on a real OSK key,
-        // skip text hit-testing — otherwise taps on Enter / All still move the caret and feel broken.
+        // Embedded Python `xos.ui.Text`: [`PyApp`] already called [`OnScreenKeyboard::on_mouse_down`] and
+        // queued any character/action. Any press in the **visible OSK strip** (keys + gaps) must not run
+        // text hit-testing: `check_key_type_at_position` misses gaps / nearest-target mismatches and would
+        // set `pending_cursor_tap_*`, snapping the caret on mouse-up — e.g. after OSK Enter, the next key
+        // release appears to jump to the prior line.
         if self.python_viewport.is_some() && state.keyboard.onscreen.is_shown() {
-            if state
-                .keyboard
-                .onscreen
-                .check_key_type_at_position(state.mouse.x, state.mouse.y, width, height)
-                .is_some()
-            {
-                self.touch_started_on_keyboard = true;
-                let held_key = state.keyboard.onscreen.get_held_key_type();
-                if let Some(key_type) = held_key {
-                    match key_type {
-                        KeyType::Shift | KeyType::SymbolToggle => {
-                            self.temp_trackpad_initial_x = Some(state.mouse.x);
-                            self.temp_trackpad_initial_y = Some(state.mouse.y);
+            let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+            let keyboard_region_top = keyboard_top_y * height;
+
+            if state.mouse.y >= keyboard_region_top {
+                // Trackpad strip uses the standalone trackpad branches below (`is_trackpad_mode`).
+                if !state.keyboard.onscreen.is_trackpad_mode() {
+                    self.touch_started_on_keyboard = true;
+                    self.pending_cursor_tap_x = None;
+                    self.pending_cursor_tap_y = None;
+
+                    let held_key = state.keyboard.onscreen.get_held_key_type();
+                    if let Some(key_type) = held_key {
+                        match key_type {
+                            KeyType::Shift | KeyType::SymbolToggle => {
+                                self.temp_trackpad_initial_x = Some(state.mouse.x);
+                                self.temp_trackpad_initial_y = Some(state.mouse.y);
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
+                    return;
                 }
-                return;
+            } else {
+                self.touch_started_on_keyboard = false;
             }
-            self.touch_started_on_keyboard = false;
         }
 
         // Check if keyboard handled the event (Python host forwards pointer first when embedded — skip dup)
@@ -1369,6 +1373,15 @@ impl Application for TextApp {
 }
 
 impl TextApp {
+    /// Selection + trackpad laser for [`xos.ui._text_render`] (fields stay crate-private otherwise).
+    pub fn ui_peek_overlay(&self) -> (Option<usize>, Option<usize>, Option<(f32, f32)>) {
+        (
+            self.selection_start,
+            self.selection_end,
+            self.trackpad_laser_x.zip(self.trackpad_laser_y),
+        )
+    }
+
     /// Cursor + selection state used by collaborative wrappers (e.g. text mesh).
     pub fn shared_selection_state(&self) -> (usize, Option<usize>, Option<usize>) {
         (self.cursor_position, self.selection_start, self.selection_end)

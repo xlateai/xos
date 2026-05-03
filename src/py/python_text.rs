@@ -37,17 +37,36 @@ pub fn insert_widget(id: u64, editor: TextApp) {
     ensure_registry(&mut g).insert(id, editor);
 }
 
-/// Snapshot native editor state so [`xos.ui._text_render`] matches [`TextApp`] layout and caret.
-pub fn peek_editor_visual_state(id: u64) -> Option<(String, usize, bool, f32)> {
+/// Snapshot native [`TextApp`] layout, caret, selection, and trackpad laser for [`xos.ui._text_render`].
+#[derive(Clone, Debug)]
+pub struct EditorRenderPeek {
+    pub text: String,
+    pub cursor_position: usize,
+    pub show_cursor: bool,
+    pub font_size_px: f32,
+    /// Vertical document scroll (must match `_text_render` layout offset).
+    pub scroll_y: f32,
+    pub selection_start: Option<usize>,
+    pub selection_end: Option<usize>,
+    /// Full-frame pixels when trackpad laser is active (same coordinates as standalone [`TextApp`] draw).
+    pub trackpad_pointer: Option<(f32, f32)>,
+}
+
+pub fn peek_editor_visual_state(id: u64) -> Option<EditorRenderPeek> {
     let g = registry_mut();
     let map = g.as_ref()?;
     let t = map.get(&id)?;
-    Some((
-        t.text_rasterizer.text.clone(),
-        t.cursor_position,
-        t.show_cursor,
-        t.text_rasterizer.font_size,
-    ))
+    let (selection_start, selection_end, trackpad_pointer) = t.ui_peek_overlay();
+    Some(EditorRenderPeek {
+        text: t.text_rasterizer.text.clone(),
+        cursor_position: t.cursor_position,
+        show_cursor: t.show_cursor,
+        font_size_px: t.text_rasterizer.font_size,
+        scroll_y: t.scroll_y,
+        selection_start,
+        selection_end,
+        trackpad_pointer,
+    })
 }
 
 #[derive(Clone, Debug)]

@@ -236,13 +236,22 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut show_cursor = false;
     let mut cursor_position = 0usize;
 
+    let mut selection_start_opt: Option<usize> = None;
+    let mut selection_end_opt: Option<usize> = None;
+    let mut trackpad_pointer: Option<(f32, f32)> = None;
+    let mut viewport_scroll_y = 0.0_f32;
+
     if let Some(nid_obj) = args.kwargs.get("native_widget_id") {
         let nid: u64 = nid_obj.clone().try_into_value(vm)?;
-        if let Some((t, cp, sc, fs)) = peek_editor_visual_state(nid) {
-            text = t;
-            cursor_position = cp;
-            show_cursor = sc;
-            font_size_px = fs;
+        if let Some(peek) = peek_editor_visual_state(nid) {
+            text = peek.text;
+            cursor_position = peek.cursor_position;
+            show_cursor = peek.show_cursor;
+            font_size_px = peek.font_size_px;
+            viewport_scroll_y = peek.scroll_y;
+            selection_start_opt = peek.selection_start;
+            selection_end_opt = peek.selection_end;
+            trackpad_pointer = peek.trackpad_pointer;
         }
     }
     if let Some(v) = args.kwargs.get("show_cursor") {
@@ -289,6 +298,10 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         font_size_px,
         show_cursor,
         cursor_position,
+        selection_start: selection_start_opt,
+        selection_end: selection_end_opt,
+        trackpad_pointer_px: trackpad_pointer,
+        viewport_scroll_y,
     };
 
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };

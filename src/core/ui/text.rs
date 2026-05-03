@@ -2,10 +2,15 @@ use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 static UI_TEXT_FONT: OnceLock<Mutex<Option<Font>>> = OnceLock::new();
 static UI_TEXT_FONT_FAMILY: OnceLock<Mutex<FontFamily>> = OnceLock::new();
+
+/// Mirrors standalone [`crate::apps::text::TextApp`] selection tint.
+const SELECTION_OVERLAY_RGBA: (u8, u8, u8, u8) = (50, 120, 200, 128);
+const TRACKPAD_DOT_RADIUS_PX: f32 = 3.0;
 
 fn shared_font() -> Result<Font, String> {
     let lock = UI_TEXT_FONT.get_or_init(|| Mutex::new(None));
@@ -44,6 +49,12 @@ pub struct UiText {
     /// When true (and layout succeeded), draws a caret at [`Self::cursor_position`] (Unicode scalar index).
     pub show_cursor: bool,
     pub cursor_position: usize,
+    pub selection_start: Option<usize>,
+    pub selection_end: Option<usize>,
+    /// Full-frame pixel position for the trackpad laser (embedded editor only).
+    pub trackpad_pointer_px: Option<(f32, f32)>,
+    /// Document-space vertical scroll copied from embedded [`crate::apps::text::TextApp::scroll_y`].
+    pub viewport_scroll_y: f32,
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -165,6 +176,7 @@ impl UiText {
 
         let box_width = (x2 - x1) as f32;
         let box_height = (y2 - y1) as f32;
+        let sy = self.viewport_scroll_y;
 
         let font = shared_font()?;
         let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
@@ -179,7 +191,7 @@ impl UiText {
         if self.baselines {
             let baseline_color = (100, 100, 100, 255);
             for line in &rasterizer.lines {
-                let by = y1 + line.baseline_y.round() as i32;
+                let by = y1 + (line.baseline_y - sy).round() as i32;
                 let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
                 state.baselines.push([
                     [
@@ -197,7 +209,7 @@ impl UiText {
             }
         } else {
             for line in &rasterizer.lines {
-                let by = y1 + line.baseline_y.round() as i32;
+                let by = y1 + (line.baseline_y - sy).round() as i32;
                 let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
                 state.baselines.push([
                     [
@@ -212,13 +224,86 @@ impl UiText {
             }
         }
 
+        if let Some((start_idx, end_idx)) = normalized_selection(self.selection_start, self.selection_end) {
+            if end_idx > start_idx {
+                let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
+                for character in &rasterizer.characters {
+                    if character.char_index >= start_idx && character.char_index < end_idx {
+                        let char_left = character.x;
+                        let char_right = character.x + character.metrics.advance_width;
+                        line_selections
+                            .entry(character.line_index)
+                            .and_modify(|(min_x, max_x, baseline_y)| {
+                                *min_x = min_x.min(char_left);
+                                *max_x = max_x.max(char_right);
+                                *baseline_y = rasterizer
+                                    .lines
+                                    .get(character.line_index)
+                                    .map(|line| line.baseline_y)
+                                    .unwrap_or(*baseline_y);
+                            })
+                            .or_insert_with(|| {
+                                let baseline_y = rasterizer
+                                    .lines
+                                    .get(character.line_index)
+                                    .map(|line| line.baseline_y)
+                                    .unwrap_or(0.0);
+                                (char_left, char_right, baseline_y)
+                            });
+                    }
+                }
+
+                let fw_i = frame_width as i32;
+                let fh_i = frame_height as i32;
+                for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
+                    let sel_left = (*min_x as i32) + x1;
+                    let sel_right = (*max_x as i32) + x1;
+                    let sel_top = y1 + (baseline_y - rasterizer.ascent - sy).round() as i32;
+                    let sel_bottom = y1 + (baseline_y + rasterizer.descent - sy).round() as i32;
+
+                    let y_lo = sel_top.min(sel_bottom).max(y1).max(0).min(fh_i.min(y2));
+                    let y_hi = sel_top.max(sel_bottom).max(y1).max(0).min(fh_i.min(y2));
+                    let x_lo = sel_left.min(sel_right).max(x1).max(0).min(fw_i.min(x2));
+                    let x_hi = sel_left.max(sel_right).max(x1).max(0).min(fw_i.min(x2));
+
+                    let alpha_sel = SELECTION_OVERLAY_RGBA.3 as f32 / 255.0;
+                    let inv_sel = 1.0 - alpha_sel;
+                    for y in y_lo..y_hi {
+                        for x in x_lo..x_hi {
+                            let idx = ((y as usize * frame_width + x as usize) * 4) as usize;
+                            if idx + 3 >= buffer.len() {
+                                continue;
+                            }
+                            buffer[idx] = (buffer[idx] as f32 * inv_sel
+                                + SELECTION_OVERLAY_RGBA.0 as f32 * alpha_sel)
+                                as u8;
+                            buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_sel
+                                + SELECTION_OVERLAY_RGBA.1 as f32 * alpha_sel)
+                                as u8;
+                            buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_sel
+                                + SELECTION_OVERLAY_RGBA.2 as f32 * alpha_sel)
+                                as u8;
+                        }
+                    }
+                }
+            }
+        }
+
+        let vis_top = sy;
+        let vis_bottom = sy + box_height;
+
         for character in &rasterizer.characters {
             let px = x1 + character.x.round() as i32;
-            let py = y1 + character.y.round() as i32;
+            let py = y1 + (character.y - sy).round() as i32;
             let gx1 = px;
             let gy1 = py;
             let gx2 = px + character.metrics.width as i32;
             let gy2 = py + character.metrics.height as i32;
+
+            let g_top = character.y;
+            let g_bottom = character.y + character.height;
+            let glyphs_visible =
+                !(g_bottom < vis_top || g_top > vis_bottom);
             state.hitboxes.push([
                 [
                     (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
@@ -229,7 +314,7 @@ impl UiText {
                     (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                 ],
             ]);
-            if py >= y2 {
+            if !glyphs_visible || py >= y2 {
                 continue;
             }
 
@@ -268,8 +353,8 @@ impl UiText {
 
         if self.show_cursor {
             let (cx, baseline_y) = cursor_xy_in_layout(&rasterizer, self.cursor_position);
-            let cursor_top = y1 + (baseline_y - rasterizer.ascent).round() as i32;
-            let cursor_bottom = y1 + (baseline_y + rasterizer.descent).round() as i32;
+            let cursor_top = y1 + (baseline_y - rasterizer.ascent - sy).round() as i32;
+            let cursor_bottom = y1 + (baseline_y + rasterizer.descent - sy).round() as i32;
             let cx_i = x1 + cx.round() as i32;
 
             let y_lo = cursor_top.min(cursor_bottom);
@@ -287,6 +372,33 @@ impl UiText {
                         y + 1,
                         CURSOR,
                     );
+                }
+            }
+        }
+
+        if let Some((lx, ly)) = self.trackpad_pointer_px {
+            let dot_x_i = lx.round() as i32;
+            let dot_y_i = ly.round() as i32;
+            let r = TRACKPAD_DOT_RADIUS_PX.ceil() as i32;
+            let fw_i = frame_width as i32;
+            let fh_i = frame_height as i32;
+            let r_sq = TRACKPAD_DOT_RADIUS_PX * TRACKPAD_DOT_RADIUS_PX;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if ((dx * dx + dy * dy) as f32) > r_sq {
+                        continue;
+                    }
+                    let x = dot_x_i + dx;
+                    let y = dot_y_i + dy;
+                    if x >= 0 && x < fw_i && y >= 0 && y < fh_i {
+                        let idx = ((y as usize * frame_width + x as usize) * 4) as usize;
+                        if idx + 3 < buffer.len() {
+                            buffer[idx] = 255;
+                            buffer[idx + 1] = 0;
+                            buffer[idx + 2] = 0;
+                            buffer[idx + 3] = 255;
+                        }
+                    }
                 }
             }
         }
