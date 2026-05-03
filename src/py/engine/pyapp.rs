@@ -1,5 +1,7 @@
 use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
 use crate::engine::{Application, EngineState};
+use crate::python_api::engine::py_bindings::create_py_engine_state_snapshot;
+use crate::python_api::engine::py_engine_tls::TickEngineStateGuard;
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
@@ -40,6 +42,33 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
     }
     
     output
+}
+
+fn try_dispatch_python_on_events(
+    vm: &VirtualMachine,
+    app_instance: &PyObjectRef,
+    state: &EngineState,
+    last_key_char: Option<char>,
+) {
+    let Ok(Some(cb)) = vm.get_attribute_opt(app_instance.clone(), "on_events") else {
+        return;
+    };
+    if !cb.is_callable() {
+        return;
+    }
+    let es = match create_py_engine_state_snapshot(vm, state, last_key_char) {
+        Ok(es) => es,
+        Err(e) => {
+            eprintln!("Failed to build xos.EngineState snapshot: {:?}", e);
+            return;
+        }
+    };
+    if let Err(e) = vm.call_method(app_instance, "on_events", (es,)) {
+        eprintln!(
+            "Python on_events error:\n{}",
+            format_python_exception(vm, &e)
+        );
+    }
 }
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
@@ -400,6 +429,9 @@ class Tensor:
     def __repr__(self):
         return self.__str__()
 
+class EngineState:
+    """Snapshot of engine context for Python ``Application.on_events`` (attributes set each call)."""
+
 class Frame:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
@@ -755,7 +787,8 @@ Call super().__init__() in your app __init__ before using tick()."
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     
-                    // Call tick
+                    // Call tick (xos.ui may call into Rust with `TickEngineStateGuard` active)
+                    let _tls_guard = TickEngineStateGuard::install(state);
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
                         eprintln!("Python tick error:\n{}", error_msg);
@@ -799,6 +832,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_down", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, None);
             });
         }
     }
@@ -823,6 +857,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, None);
             });
         }
     }
@@ -847,6 +882,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_move", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, None);
             });
         }
     }
@@ -869,6 +905,15 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
+                try_dispatch_python_on_events(vm, app_instance, state, None);
+            });
+        }
+    }
+
+    fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
+        if let Some(ref app_instance) = self.app_instance {
+            self.interpreter.enter(|vm| {
+                try_dispatch_python_on_events(vm, app_instance, state, Some(ch));
             });
         }
     }

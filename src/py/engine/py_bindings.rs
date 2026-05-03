@@ -1,5 +1,5 @@
 use rustpython_vm::{PyResult, VirtualMachine, PyObjectRef};
-use crate::engine::FrameState;
+use crate::engine::{EngineState, FrameState};
 
 /// Python wrapper for Array<u8>
 #[derive(Debug)]
@@ -141,5 +141,55 @@ pub fn update_py_frame_state(vm: &VirtualMachine, frame_obj: PyObjectRef, frame:
 pub fn sync_py_buffer_to_rust(_vm: &VirtualMachine, _frame_obj: PyObjectRef, _frame: &mut FrameState) -> PyResult<()> {
     // No-op: rasterizer writes directly to Rust buffer
     Ok(())
+}
+
+/// Instantiate `xos.EngineState` (must be registered on `vm.builtins`) and populate snapshot fields.
+pub fn create_py_engine_state_snapshot(
+    vm: &VirtualMachine,
+    state: &EngineState,
+    last_key_char: Option<char>,
+) -> PyResult<PyObjectRef> {
+    let cls = vm.builtins.get_attr("EngineState", vm)?;
+    let es = cls.call((), vm)?;
+
+    let mouse_dict = vm.ctx.new_dict();
+    mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+    mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+    mouse_dict.set_item(
+        "is_left_clicking",
+        vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+        vm,
+    )?;
+    mouse_dict.set_item(
+        "is_right_clicking",
+        vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+        vm,
+    )?;
+    es.set_attr("mouse", mouse_dict, vm)?;
+
+    let shape = state.frame.shape();
+    es.set_attr("frame_width", vm.ctx.new_int(shape[1] as usize), vm)?;
+    es.set_attr("frame_height", vm.ctx.new_int(shape[0] as usize), vm)?;
+    es.set_attr(
+        "delta_time",
+        vm.ctx.new_float(state.delta_time_seconds as f64),
+        vm,
+    )?;
+    es.set_attr(
+        "ui_scale",
+        vm.ctx.new_float(state.f3_ui_scale_multiplier() as f64),
+        vm,
+    )?;
+
+    match last_key_char {
+        Some(c) => {
+            es.set_attr("last_key_char", vm.ctx.new_str(c.to_string()), vm)?;
+        }
+        None => {
+            es.set_attr("last_key_char", vm.ctx.none(), vm)?;
+        }
+    }
+
+    Ok(es)
 }
 

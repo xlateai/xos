@@ -1,4 +1,5 @@
 use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_WIDTH, CURRENT_FRAME_HEIGHT};
 use crate::ui::{Button, UiText};
 
@@ -295,6 +296,33 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(state.into())
 }
 
+fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    let ran = with_tick_engine_state_mut(|state| {
+        let shape = state.frame.shape();
+        let w = shape[1] as u32;
+        let h = shape[0] as u32;
+        let safe = state.frame.safe_region_boundaries.clone();
+        let buf = state.frame.buffer_mut();
+        state
+            .keyboard
+            .onscreen
+            .tick(buf, w, h, state.mouse.x, state.mouse.y, &safe);
+    });
+    if ran.is_none() {
+        return Err(vm.new_runtime_error(
+            "onscreen_keyboard.tick() must run inside Application.tick() (engine context required)."
+                .to_string(),
+        ));
+    }
+    Ok(vm.ctx.none())
+}
+
+fn text_on_events(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    Ok(vm.ctx.none())
+}
+
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module.set_attr("button", vm.new_function("button", button), vm).unwrap();
@@ -302,13 +330,32 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr("_text_render", vm.new_function("_text_render", text_render), vm)
         .unwrap();
+    module
+        .set_attr(
+            "_onscreen_keyboard_tick",
+            vm.new_function("_onscreen_keyboard_tick", onscreen_keyboard_tick),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_on_events",
+            vm.new_function("_text_on_events", text_on_events),
+            vm,
+        )
+        .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let text_render_fn = module.get_attr("_text_render", vm).unwrap();
     scope.globals.set_item("_text_render", text_render_fn, vm).unwrap();
     let py_text_code = r#"
+class OnScreenKeyboard:
+    def tick(self, app):
+        import xos
+        xos.ui._onscreen_keyboard_tick()
+
 class Text:
-    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
+    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, **kwargs):
         self.text = text
         self.x1 = x1
         self.y1 = y1
@@ -318,6 +365,13 @@ class Text:
         self.hitboxes = hitboxes
         self.baselines = baselines
         self.font_size = font_size
+        self._kwargs = kwargs
+
+    def on_events(self, state, **kwargs):
+        import xos
+        merged = dict(self._kwargs)
+        merged.update(kwargs)
+        xos.ui._text_on_events(self, state, merged)
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
         import xos
@@ -363,7 +417,7 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0):
+def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, **kwargs):
     return Text(
         text,
         x1,
@@ -374,7 +428,11 @@ def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=
         hitboxes=hitboxes,
         baselines=baselines,
         font_size=font_size,
+        **kwargs
     )
+
+def onscreen_keyboard():
+    return OnScreenKeyboard()
 "#;
     let _ = vm.run_code_string(scope.clone(), py_text_code, "<xos_ui>".to_string());
     if let Ok(text_class) = scope.globals.get_item("Text", vm) {
@@ -385,6 +443,12 @@ def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=
     }
     if let Ok(text_fn) = scope.globals.get_item("text", vm) {
         module.set_attr("text", text_fn, vm).unwrap();
+    }
+    if let Ok(kb_cls) = scope.globals.get_item("OnScreenKeyboard", vm) {
+        module.set_attr("OnScreenKeyboard", kb_cls, vm).unwrap();
+    }
+    if let Ok(kb_fn) = scope.globals.get_item("onscreen_keyboard", vm) {
+        module.set_attr("onscreen_keyboard", kb_fn, vm).unwrap();
     }
 
     module
