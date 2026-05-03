@@ -1,7 +1,9 @@
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::{
+    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
+};
 use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -182,6 +184,8 @@ pub struct TextApp {
     pub(crate) engine_font_family_version_seen: u64,
     /// Python embedded full-screen text: skip slide-in + per-glyph [`HashMap`] fade (big win for large fonts / long docs).
     pub(crate) embed_fast_glyph_paint: bool,
+    /// Per-frame reuse for [`Self::paint_viewport`] line-vs-viewport overlap (avoids `Vec::collect` each paint).
+    paint_line_visible_scratch: Vec<bool>,
 }
 
 
@@ -267,6 +271,7 @@ impl TextApp {
             follow_engine_default_font: false,
             engine_font_family_version_seen: fonts::default_font_version(),
             embed_fast_glyph_paint: false,
+            paint_line_visible_scratch: Vec::new(),
         }
     }
 
@@ -437,20 +442,22 @@ impl TextApp {
         let a_doc = self.text_rasterizer.ascent;
         let d_doc = self.text_rasterizer.descent.abs();
         // Loose vertical band around each line baseline—skip all glyphs on lines that cannot intersect viewport.
-        let line_pad_y = self.text_rasterizer.line_gap * 0.5 + self.text_rasterizer.font_size * 0.15;
-        let line_may_overlap_viewport: Vec<bool> = self
-            .text_rasterizer
-            .lines
-            .iter()
-            .map(|ln| {
-                let lt = ln.baseline_y - a_doc - line_pad_y;
-                let lb = ln.baseline_y + d_doc + line_pad_y;
-                !(lb < vis_top_doc || lt > vis_bottom_doc)
-            })
-            .collect();
+        let n_lines = self.text_rasterizer.lines.len();
+        self.paint_line_visible_scratch.resize(n_lines, false);
+        for (i, ln) in self.text_rasterizer.lines.iter().enumerate() {
+            self.paint_line_visible_scratch[i] = line_band_intersects_doc_viewport(
+                ln.baseline_y,
+                a_doc,
+                d_doc,
+                self.text_rasterizer.line_gap,
+                self.text_rasterizer.font_size,
+                vis_top_doc,
+                visible_height,
+            );
+        }
 
         let line_quick_visible = |line_idx: usize| -> bool {
-            match line_may_overlap_viewport.get(line_idx) {
+            match self.paint_line_visible_scratch.get(line_idx) {
                 Some(false) => false,
                 Some(true) | None => true,
             }
@@ -458,7 +465,10 @@ impl TextApp {
 
         // Draw baselines (offset by layout origin)
         if DRAW_BASELINES && self.show_debug_visuals {
-            for line in &self.text_rasterizer.lines {
+            for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
+                if !line_quick_visible(line_idx) {
+                    continue;
+                }
                 let y = ((line.baseline_y - self.scroll_y) + draw_off_y) as i32;
                 if y >= 0 && y < height as i32 && y >= clip_top && y < clip_bottom {
                     fill_rect_buffer(
@@ -488,6 +498,15 @@ impl TextApp {
 
             for character in &self.text_rasterizer.characters {
                 if !line_quick_visible(character.line_index) {
+                    continue;
+                }
+                let ch_vis = character_may_appear_in_viewport(
+                    character,
+                    layout_w,
+                    vis_top_doc,
+                    visible_height,
+                );
+                if !ch_vis {
                     continue;
                 }
                 if character.char_index >= start_idx && character.char_index < end_idx {

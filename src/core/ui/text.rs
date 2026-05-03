@@ -1,6 +1,8 @@
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::{
+    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
+};
 use fontdue::Font;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -148,24 +150,24 @@ fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32)
 
 #[derive(Clone, Debug, Default)]
 pub struct UiTextRenderState {
-    /// Character count per wrapped line.
+    /// Character count per wrapped line that currently intersects the viewport (chunked like on-screen rows).
     pub lines: Vec<u32>,
-    /// Per character, normalized axis-aligned box: `[[x1,y1],[x2,y2]]` (top-left, bottom-right) in [0,1]².
-    /// Matches tensor layout `(N, 2, 2)` with N = number of rendered glyphs.
+    /// Per visible glyph (`character_may_appear_in_viewport`), normalized axis-aligned box: `[[x1,y1],[x2,y2]]` in [0,1]².
+    /// Matches `(N, 2, 2)`. Omitted entirely when callers pass `include_hitboxes=false`.
     pub hitboxes: Vec<[[f32; 2]; 2]>,
-    /// Per wrapped line, baseline segment in normalized coords: `[[x1,y1],[x2,y2]]` (segment endpoints).
-    /// Matches tensor layout `(L, 2, 2)` with L = number of lines.
+    /// Per viewport-visible wrapped line, baseline segment in normalized coords: `[[x1,y1],[x2,y2]]`.
+    /// Same ordering/length as [`Self::lines`].
     pub baselines: Vec<[[f32; 2]; 2]>,
 }
 
-/// Builds line counts, baselines tensor, and optional per-glyph hitboxes from [`TextRasterizer`].
-/// Mirrors [`UiText::render`] tensors: baselines always match wrapped lines; hitboxes omitted when `hitboxes=false`.
+/// Builds line counts (viewport-visible lines only), matching baselines, and optional viewport-visible glyph hitboxes.
+/// Mirrors chunked [`UiText::render`] tensors.
 pub fn collect_ui_text_render_state(
     rasterizer: &TextRasterizer,
     x1: i32,
     y1: i32,
     x2: i32,
-    _y2: i32,
+    y2: i32,
     sy: f32,
     frame_width: usize,
     frame_height: usize,
@@ -175,8 +177,22 @@ pub fn collect_ui_text_render_state(
 
     let fw = frame_width as f32;
     let fh = frame_height as f32;
+    let vis_doc_h = (y2 - y1).max(0) as f32;
+    let layout_w = (x2 - x1).max(0) as f32;
 
     for line in &rasterizer.lines {
+        if !line_band_intersects_doc_viewport(
+            line.baseline_y,
+            rasterizer.ascent,
+            rasterizer.descent,
+            rasterizer.line_gap,
+            rasterizer.font_size,
+            sy,
+            vis_doc_h,
+        ) {
+            continue;
+        }
+
         state
             .lines
             .push((line.end_index.saturating_sub(line.start_index)) as u32);
@@ -191,6 +207,9 @@ pub fn collect_ui_text_render_state(
 
     if include_hitboxes {
         for character in &rasterizer.characters {
+            if !character_may_appear_in_viewport(character, layout_w, sy, vis_doc_h) {
+                continue;
+            }
             let px = x1 + character.x.round() as i32;
             let py = y1 + (character.y - sy).round() as i32;
             let gx1 = px;
@@ -239,44 +258,39 @@ impl UiText {
         rasterizer.set_text(self.text.clone());
         rasterizer.tick(box_width, box_height);
 
-        // Count characters per wrapped line.
+        let baseline_color = (100, 100, 100, 255);
         for line in &rasterizer.lines {
-            state.lines.push((line.end_index.saturating_sub(line.start_index)) as u32);
-        }
-
-        if self.baselines {
-            let baseline_color = (100, 100, 100, 255);
-            for line in &rasterizer.lines {
-                let by = y1 + (line.baseline_y - sy).round() as i32;
-                let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
-                state.baselines.push([
-                    [
-                        (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
-                    [
-                        (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
-                ]);
-                if by >= y1 && by < y2 {
-                    fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
-                }
+            if !line_band_intersects_doc_viewport(
+                line.baseline_y,
+                rasterizer.ascent,
+                rasterizer.descent,
+                rasterizer.line_gap,
+                rasterizer.font_size,
+                sy,
+                box_height,
+            ) {
+                continue;
             }
-        } else {
-            for line in &rasterizer.lines {
-                let by = y1 + (line.baseline_y - sy).round() as i32;
-                let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
-                state.baselines.push([
-                    [
-                        (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
-                    [
-                        (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
-                ]);
+
+            state
+                .lines
+                .push((line.end_index.saturating_sub(line.start_index)) as u32);
+
+            let by = y1 + (line.baseline_y - sy).round() as i32;
+            let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
+            state.baselines.push([
+                [
+                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                ],
+                [
+                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                    y_norm,
+                ],
+            ]);
+
+            if self.baselines && by >= y1 && by < y2 {
+                fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
             }
         }
 
@@ -284,6 +298,9 @@ impl UiText {
             if end_idx > start_idx {
                 let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
                 for character in &rasterizer.characters {
+                    if !character_may_appear_in_viewport(character, box_width, sy, box_height) {
+                        continue;
+                    }
                     if character.char_index >= start_idx && character.char_index < end_idx {
                         let char_left = character.x;
                         let char_right = character.x + character.metrics.advance_width;
@@ -345,10 +362,9 @@ impl UiText {
             }
         }
 
-        let vis_top = sy;
-        let vis_bottom = sy + box_height;
-
         for character in &rasterizer.characters {
+            let in_viewport = character_may_appear_in_viewport(character, box_width, sy, box_height);
+
             let px = x1 + character.x.round() as i32;
             let py = y1 + (character.y - sy).round() as i32;
             let gx1 = px;
@@ -356,21 +372,20 @@ impl UiText {
             let gx2 = px + character.metrics.width as i32;
             let gy2 = py + character.metrics.height as i32;
 
-            let g_top = character.y;
-            let g_bottom = character.y + character.height;
-            let glyphs_visible =
-                !(g_bottom < vis_top || g_top > vis_bottom);
-            state.hitboxes.push([
-                [
-                    (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
-                ],
-                [
-                    (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
-                ],
-            ]);
-            if !glyphs_visible || py >= y2 {
+            if self.hitboxes && in_viewport {
+                state.hitboxes.push([
+                    [
+                        (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                    ],
+                    [
+                        (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+                    ],
+                ]);
+            }
+
+            if !in_viewport || py >= y2 {
                 continue;
             }
 
@@ -398,7 +413,7 @@ impl UiText {
                 }
             }
 
-            if self.hitboxes {
+            if self.hitboxes && in_viewport {
                 let hitbox_color = (255, 0, 0, 255);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx2, gy1 + 1, hitbox_color);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy2 - 1, gx2, gy2, hitbox_color);

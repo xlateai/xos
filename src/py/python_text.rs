@@ -248,9 +248,10 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32) {
     let Some(t) = map.get_mut(&id) else {
         return;
     };
-    // Match [`TextRasterizer::set_font_size`] threshold — avoid redundant clears when Python passes the same size every tick.
-    if (t.text_rasterizer.font_size - font_size_px).abs() >= 0.02 {
-        t.set_font_size(font_size_px);
+    // Quarter-pixel quantization: stray float noise from Python shouldn't rebuild layout / clear glyphs every tick.
+    let fs = (font_size_px * 4.0).round() / 4.0;
+    if (t.text_rasterizer.font_size - fs).abs() >= 0.02 {
+        t.set_font_size(fs);
     }
     t.tick(state);
 }
