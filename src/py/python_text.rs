@@ -270,3 +270,65 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32, py_
     }
     t.tick(state);
 }
+
+/// Copy Python [`xos.ui.Text`] `x1..y2` into the native [`TextApp`] before [`tick_text_widget`].
+/// Call every frame if coordinates may change (matches `_text_render` / hit-testing).
+pub fn sync_embed_text_norm_rect(
+    id: u64,
+    state: &EngineState,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+) -> Result<(), &'static str> {
+    if !(0.0..=1.0).contains(&x1)
+        || !(0.0..=1.0).contains(&y1)
+        || !(0.0..=1.0).contains(&x2)
+        || !(0.0..=1.0).contains(&y2)
+    {
+        return Err("text rect coordinates must lie in [0.0, 1.0]");
+    }
+    if !(x2 > x1 && y2 > y1) {
+        return Err("text rect must satisfy x2 > x1 and y2 > y1");
+    }
+
+    let shape = state.frame.shape();
+    let fw = shape[1].max(1) as f32;
+    let fh = shape[0].max(1) as f32;
+
+    let mut g = registry_mut();
+    let Some(map) = g.as_mut() else {
+        return Err("text widget registry unavailable");
+    };
+    let Some(t) = map.get_mut(&id) else {
+        return Err("unknown native text widget id");
+    };
+    if t.python_viewport_norm.is_none() {
+        return Err("widget was not registered as Python embedded text");
+    }
+
+    t.python_viewport_norm = Some((x1, y1, x2, y2));
+    let px = TextApp::rounded_norm_rect_to_px(x1, y1, x2, y2, fw, fh);
+    t.python_viewport = Some(px);
+    Ok(())
+}
+
+#[inline]
+pub fn onscreen_keyboard_top_y_norm(state: &EngineState) -> f32 {
+    let (_, y1, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+    y1
+}
+
+/// When the OSK is visible, true if the current pointer is in the keyboard band (pixels `y ≥ top`).
+/// Matches embedded [`TextApp::on_mouse_down`] OSK handling so key presses don't retarget [`xos.ui.Text.is_focused`].
+#[inline]
+pub fn pointer_mouse_in_shown_osk_strip(state: &EngineState) -> bool {
+    if !state.keyboard.onscreen.is_shown() {
+        return false;
+    }
+    let shape = state.frame.shape();
+    let height = shape[0].max(1) as f32;
+    let (_, top_norm, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+    let keyboard_band_top_px = top_norm * height;
+    state.mouse.y >= keyboard_band_top_px
+}

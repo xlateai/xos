@@ -42,6 +42,10 @@ class TextDemo(xos.Application):
         self.frame.clear(xos.color.BLACK)
         ts = self.text.tick(self)
 
+        # align the bottom with the top of our keyboard's edge
+        self.text1.y2 = self.keyboard.y1
+        self.text2.y2 = self.keyboard.y1
+
         if self.t % 300 == 0:
             print("fps:", self.fps)
             print("lines:", ts.lines.shape)

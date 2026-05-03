@@ -852,20 +852,22 @@ impl Application for TextApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
-        // Process any pending keyboard characters first
-        while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
-            self.on_key_char(state, ch);
-        }
-        
-        // Process action keys from keyboard
-        if let Some(action) = state.keyboard.onscreen.get_last_action_key() {
-            self.handle_action_key(action, state);
-        }
-        
-        // Process action key repeats (for undo/redo hold)
-        let now = Instant::now();
-        if let Some(action) = state.keyboard.onscreen.check_action_key_hold_repeat(now) {
-            self.handle_action_key(action, state);
+        // OSK queues are global: only the focused Python embed (or any standalone app) may drain them.
+        // Otherwise the first widget ticked (e.g. text1 in a Group) consumes all `pop_pending_char` input.
+        let ingest_onscreen_keys = self.python_viewport.is_none() || self.py_input_focused;
+        if ingest_onscreen_keys {
+            while let Some(ch) = state.keyboard.onscreen.pop_pending_char() {
+                self.on_key_char(state, ch);
+            }
+
+            if let Some(action) = state.keyboard.onscreen.get_last_action_key() {
+                self.handle_action_key(action, state);
+            }
+
+            let now = Instant::now();
+            if let Some(action) = state.keyboard.onscreen.check_action_key_hold_repeat(now) {
+                self.handle_action_key(action, state);
+            }
         }
 
         if self.follow_engine_default_font {

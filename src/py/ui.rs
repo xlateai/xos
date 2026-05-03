@@ -3,10 +3,12 @@ use rustpython_vm::{
 };
 use crate::apps::text::TextApp;
 use crate::rasterizer::text::fonts;
-use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
+use crate::python_api::engine::py_engine_tls::{with_callback_engine_state_mut, with_tick_engine_state_mut};
 use crate::python_api::python_text::{
-    alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app, insert_widget,
-    paint_native_embed_text_from_engine, peek_editor_visual_state, tick_text_widget,
+    alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
+    insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
+    peek_editor_visual_state, pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect,
+    tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
 use crate::ui::{Button, UiText};
@@ -530,6 +532,47 @@ fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// Normalized Y of the on-screen keyboard’s top edge (`[0,1]`, same space as `Text.y1` / `Text.y2`).
+fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    match with_tick_engine_state_mut(|state| onscreen_keyboard_top_y_norm(state)) {
+        Some(y) => Ok(vm.ctx.new_float(y as f64).into()),
+        None => Err(vm.new_runtime_error(
+            "_onscreen_keyboard_top_norm() must run during Application.tick() (engine TLS required)."
+                .to_string(),
+        )),
+    }
+}
+
+/// True during `on_events` when `mouse_*` corresponds to the visible on-screen keyboard strip (no Python focus churn).
+fn text_focus_skip_pointer_for_osk(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let blocked = with_callback_engine_state_mut(|s| pointer_mouse_in_shown_osk_strip(s)).unwrap_or(false);
+    Ok(vm.ctx.new_bool(blocked).into())
+}
+
+fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 5 {
+        return Err(vm.new_type_error(
+            "_text_sync_norm_rect requires (native_id, x1, y1, x2, y2) in normalized [0,1] coordinates"
+                .to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let x1 = py_number_to_f64(av[1].clone(), vm, "x1")? as f32;
+    let y1 = py_number_to_f64(av[2].clone(), vm, "y1")? as f32;
+    let x2 = py_number_to_f64(av[3].clone(), vm, "x2")? as f32;
+    let y2 = py_number_to_f64(av[4].clone(), vm, "y2")? as f32;
+
+    match with_tick_engine_state_mut(|state| sync_embed_text_norm_rect(id as u64, state, x1, y1, x2, y2)) {
+        None => Err(vm.new_runtime_error(
+            "_text_sync_norm_rect must run during Application.tick() (engine TLS required).".to_string(),
+        )),
+        Some(Ok(())) => Ok(vm.ctx.none()),
+        Some(Err(msg)) => Err(vm.new_value_error(msg.to_string())),
+    }
+}
+
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module.set_attr("button", vm.new_function("button", button), vm).unwrap();
@@ -546,8 +589,29 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_onscreen_keyboard_top_norm",
+            vm.new_function("_onscreen_keyboard_top_norm", onscreen_keyboard_top_norm),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_text_register",
             vm.new_function("_text_register", text_widget_register),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_skip_focus_for_osk_pointer",
+            vm.new_function("_text_skip_focus_for_osk_pointer", text_focus_skip_pointer_for_osk),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_sync_norm_rect",
+            vm.new_function("_text_sync_norm_rect", text_widget_sync_norm_rect),
             vm,
         )
         .unwrap();
@@ -563,9 +627,17 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope.globals.set_item("_text_render", text_render_fn, vm).unwrap();
     let py_text_code = r#"
 class OnScreenKeyboard:
+    def __init__(self):
+        # Normalized Y of keyboard top (`[0,1]`), same as `Text.y1`/`y2`. Updated each `tick` after OSK layout.
+        self.y1 = 1.0
+
     def tick(self, app):
         import xos
         xos.ui._onscreen_keyboard_tick()
+        try:
+            self.y1 = float(xos.ui._onscreen_keyboard_top_norm())
+        except RuntimeError:
+            pass
 
     def on_events(self, app):
         pass
@@ -612,6 +684,13 @@ class Text:
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
+        xos.ui._text_sync_norm_rect(
+            int(self._native_id),
+            float(self.x1),
+            float(self.y1),
+            float(self.x2),
+            float(self.y2),
+        )
         caret = bool(self.show_cursor and self.is_focused)
         xos.ui._text_tick(int(self._native_id), float(self.font_size), bool(self.is_focused))
         state = xos.ui._text_render(
@@ -633,18 +712,20 @@ class Text:
         import xos
         ev = getattr(app, "_xos_event", None)
         if isinstance(ev, dict) and ev.get("kind") == "mouse_down":
-            fd = getattr(app.frame, "_data", app.frame)
-            fw = float(fd["width"])
-            fh = float(fd["height"])
-            xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
-            ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
-            xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
-            yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
-            vw = max(1, xb - xa)
-            vh = max(1, yb - ya)
-            mx = float(app.mouse["x"])
-            my = float(app.mouse["y"])
-            self.is_focused = xa <= mx < xa + vw and ya <= my < ya + vh
+            # OSK taps share screen X with text columns; don't move focus — same band as [`TextApp::on_mouse_down`].
+            if not xos.ui._text_skip_focus_for_osk_pointer():
+                fd = getattr(app.frame, "_data", app.frame)
+                fw = float(fd["width"])
+                fh = float(fd["height"])
+                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+                vw = max(1, xb - xa)
+                vh = max(1, yb - ya)
+                mx = float(app.mouse["x"])
+                my = float(app.mouse["y"])
+                self.is_focused = xa <= mx < xa + vw and ya <= my < ya + vh
         nid = getattr(self, "_native_id", None)
         if nid is None:
             self._native_id = int(xos.ui._text_register(self, app))
