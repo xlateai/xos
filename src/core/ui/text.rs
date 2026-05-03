@@ -165,7 +165,7 @@ pub fn collect_ui_text_render_state(
     x1: i32,
     y1: i32,
     x2: i32,
-    y2: i32,
+    _y2: i32,
     sy: f32,
     frame_width: usize,
     frame_height: usize,

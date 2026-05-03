@@ -238,7 +238,7 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     }
 }
 
-pub fn tick_text_widget(id: u64, state: &mut EngineState) {
+pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32) {
     let mut g = registry_mut();
     let Some(map) = g.as_mut() else {
         return;
@@ -246,5 +246,9 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState) {
     let Some(t) = map.get_mut(&id) else {
         return;
     };
+    // Match [`TextRasterizer::set_font_size`] threshold — avoid redundant clears when Python passes the same size every tick.
+    if (t.text_rasterizer.font_size - font_size_px).abs() >= 0.02 {
+        t.set_font_size(font_size_px);
+    }
     t.tick(state);
 }

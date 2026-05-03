@@ -2,6 +2,7 @@ use rustpython_vm::{
     builtins::PyDict, PyObjectRef, PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs,
 };
 use crate::apps::text::TextApp;
+use crate::rasterizer::text::fonts;
 use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
 use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app, insert_widget,
@@ -463,6 +464,9 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Draw into an already-cleared framebuffer (Python `frame.clear`); avoid full-screen black fill each tick.
     t.transparent_background = true;
     t.embed_skip_frame_present = true;
+    t.embed_fast_glyph_paint = true;
+    t.follow_engine_default_font = true;
+    t.engine_font_family_version_seen = fonts::default_font_version();
 
     let id = alloc_widget_id();
     insert_widget(id, t);
@@ -471,11 +475,14 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
-    if av.len() != 1 {
-        return Err(vm.new_type_error("_text_tick requires (native_id,)".to_string()));
+    if av.len() != 2 {
+        return Err(vm.new_type_error(
+            "_text_tick requires (native_id, font_size) — pass float(self.font_size) each frame".to_string(),
+        ));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
-    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state));
+    let fs = py_number_to_f64(av[1].clone(), vm, "font_size")? as f32;
+    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state, fs));
     if ran.is_none() {
         return Err(vm.new_runtime_error(
             "_text_tick must run during Application.tick (engine TLS not set)".to_string(),
@@ -558,7 +565,24 @@ class OnScreenKeyboard:
         pass
 
 class Text:
-    def __init__(self, text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, **kwargs):
+    def __init__(
+        self,
+        text,
+        x1,
+        y1,
+        x2,
+        y2,
+        color=(255, 255, 255),
+        hitboxes=False,
+        baselines=False,
+        font_size=24.0,
+        font=None,
+        **kwargs,
+    ):
+        if font is not None:
+            raise TypeError(
+                "xos.ui.Text does not support custom fonts yet; omit font or pass None to use the F3 / engine default."
+            )
         self.text = text
         self.x1 = x1
         self.y1 = y1
@@ -567,7 +591,7 @@ class Text:
         self.color = color
         self.hitboxes = hitboxes
         self.baselines = baselines
-        self.font_size = font_size
+        self.font_size = float(font_size)
         self._native_id = None
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
@@ -581,7 +605,7 @@ class Text:
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
-        xos.ui._text_tick(self._native_id)
+        xos.ui._text_tick(int(self._native_id), float(self.font_size))
         state = xos.ui._text_render(
             self.text,
             self.x1,
@@ -655,7 +679,7 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, **kwargs):
+def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, font=None, **kwargs):
     return Text(
         text,
         x1,
@@ -666,6 +690,7 @@ def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=
         hitboxes=hitboxes,
         baselines=baselines,
         font_size=font_size,
+        font=font,
         **kwargs
     )
 

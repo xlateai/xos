@@ -176,6 +176,12 @@ pub struct TextApp {
     pub py_allow_copypaste: bool,
     /// When true, [`TextApp::tick`] updates layout/scroll/OSK ingestion but skips painting — Python uses [`xos.ui._text_render`].
     pub embed_skip_frame_present: bool,
+    /// Python `Text` widgets use engine default fonts only (`font=None`); follow F3 default family changes.
+    pub(crate) follow_engine_default_font: bool,
+    /// Watermark paired with [`TextRasterizer::sync_default_font_family_from_engine`] for [`Self::follow_engine_default_font`].
+    pub(crate) engine_font_family_version_seen: u64,
+    /// Python embedded full-screen text: skip slide-in + per-glyph [`HashMap`] fade (big win for large fonts / long docs).
+    pub(crate) embed_fast_glyph_paint: bool,
 }
 
 
@@ -258,6 +264,9 @@ impl TextApp {
             py_allow_shortcuts: true,
             py_allow_copypaste: true,
             embed_skip_frame_present: false,
+            follow_engine_default_font: false,
+            engine_font_family_version_seen: fonts::default_font_version(),
+            embed_fast_glyph_paint: false,
         }
     }
 
@@ -510,6 +519,8 @@ impl TextApp {
 
         let vis_top = self.scroll_y;
         let vis_bottom = self.scroll_y + visible_height;
+        let fast_paint = self.embed_fast_glyph_paint;
+        let ga_f = ga as f32 / 255.0;
 
         for character in &self.text_rasterizer.characters {
             let g_top = character.y;
@@ -524,38 +535,50 @@ impl TextApp {
                 continue;
             }
 
-            let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
-            let fade = self.fade_map.entry(fade_key).or_insert(0.0);
-            *fade = (*fade + 0.16).min(1.0);
+            let (fade_alpha_byte, slide_offset, alpha_outline) = if fast_paint {
+                (255u32, 0_i32, 255u8)
+            } else {
+                let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
+                let fade = self.fade_map.entry(fade_key).or_insert(0.0);
+                *fade = (*fade + 0.16).min(1.0);
+                let fade_alpha_byte = ((*fade * 255.0).round() as u32).min(255);
+                let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
+                let alpha_outline = ((*fade * 255.0).round() as u8).min(255);
+                (fade_alpha_byte, slide_offset, alpha_outline)
+            };
 
-            let fade_alpha_byte = ((*fade * 255.0).round() as u32).min(255);
-
-            let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
             let px = draw_off_x as i32 + (character.x as i32) + slide_offset;
             let py = draw_off_y as i32 + ((character.y - self.scroll_y) as i32);
             let pw = character.width as u32;
             let ph = character.height as u32;
 
-            let alpha_outline = ((*fade * 255.0).round() as u8).min(255);
+            let fade_f = fade_alpha_byte as f32 / 255.0;
 
             for y in 0..character.metrics.height {
                 for x in 0..character.metrics.width {
-                    let val = character.bitmap[y * character.metrics.width + x] as u32;
-                    let faded_glyph_alpha = ((val * fade_alpha_byte) / 255).min(255);
-                    let src_a_u = ((faded_glyph_alpha * ga) / 255).min(255);
-                    let src_a = src_a_u as u8;
+                    let val = character.bitmap[y * character.metrics.width + x];
+                    if val == 0 {
+                        continue;
+                    }
 
                     let sx = px + x as i32;
                     let sy = py + y as i32;
 
                     let in_viewport = sx >= clip_left && sx < clip_right && sy >= clip_top && sy < clip_bottom;
-                    if in_viewport && sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
-                        let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
-                        buffer[idx + 0] = ((gr * src_a_u) / 255).min(255) as u8;
-                        buffer[idx + 1] = ((gg * src_a_u) / 255).min(255) as u8;
-                        buffer[idx + 2] = ((gb * src_a_u) / 255).min(255) as u8;
-                        buffer[idx + 3] = src_a;
+                    if !in_viewport || sx < 0 || sx >= width as i32 || sy < 0 || sy >= height as i32 {
+                        continue;
                     }
+
+                    let glyph_frac = val as f32 / 255.0;
+                    // Same blend model as [`crate::ui::text::UiText::render`] so selection shows through AA edges.
+                    let composite = (glyph_frac * fade_f * ga_f).clamp(0.0, 1.0);
+                    let inv = 1.0 - composite;
+
+                    let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
+                    buffer[idx + 0] = (gr as f32 * composite + buffer[idx + 0] as f32 * inv).clamp(0.0, 255.0) as u8;
+                    buffer[idx + 1] = (gg as f32 * composite + buffer[idx + 1] as f32 * inv).clamp(0.0, 255.0) as u8;
+                    buffer[idx + 2] = (gb as f32 * composite + buffer[idx + 2] as f32 * inv).clamp(0.0, 255.0) as u8;
+                    buffer[idx + 3] = 0xff;
                 }
             }
 
@@ -782,9 +805,14 @@ impl Application for TextApp {
         if let Some(action) = state.keyboard.onscreen.check_action_key_hold_repeat(now) {
             self.handle_action_key(action, state);
         }
+
+        if self.follow_engine_default_font {
+            self.text_rasterizer
+                .sync_default_font_family_from_engine(&mut self.engine_font_family_version_seen);
+        }
         
         // Extract all needed values in a block to release borrows
-        let (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown) = {
+        let (width, height, content_top, _content_bottom, is_trackpad_mode, is_keyboard_shown) = {
             let shape = state.frame.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
@@ -893,19 +921,21 @@ impl Application for TextApp {
             self.scroll_y = self.scroll_target;
         }
 
-        // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
-        let wrap_width = layout_w;
-        let font_size = self.text_rasterizer.font_size;
-        let layout_changed_for_fade = (wrap_width - self.last_fade_wrap_width).abs() > 0.01
-            || (font_size - self.last_fade_font_size).abs() > 0.01;
-        if layout_changed_for_fade {
-            self.fade_map.clear();
-            for character in &self.text_rasterizer.characters {
-                let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
-                self.fade_map.insert(fade_key, 1.0);
+        if !self.embed_fast_glyph_paint {
+            // Reflow/resize changes every glyph (x,y), which would reset fade keys — seed full opacity so resize stays solid.
+            let wrap_width = layout_w;
+            let font_size = self.text_rasterizer.font_size;
+            let layout_changed_for_fade = (wrap_width - self.last_fade_wrap_width).abs() > 0.01
+                || (font_size - self.last_fade_font_size).abs() > 0.01;
+            if layout_changed_for_fade {
+                self.fade_map.clear();
+                for character in &self.text_rasterizer.characters {
+                    let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
+                    self.fade_map.insert(fade_key, 1.0);
+                }
+                self.last_fade_wrap_width = wrap_width;
+                self.last_fade_font_size = font_size;
             }
-            self.last_fade_wrap_width = wrap_width;
-            self.last_fade_font_size = font_size;
         }
 
         if self.embed_skip_frame_present {
@@ -1584,26 +1614,30 @@ impl TextApp {
     fn ensure_cursor_visible(&mut self, content_height: f32) {
         let (_, cursor_baseline_y) = self.get_cursor_screen_position();
         let line_height = self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
-        
+
+        // Match scroll limits in [`tick`]: requesting past `natural_max` fights elastic clamps → jitter typing at EOF.
+        let doc_bottom = self.document_bottom_y_px();
+        let natural_max = (doc_bottom - content_height).max(0.0);
+
         // Calculate cursor top and bottom in text coordinates
         let cursor_top = cursor_baseline_y - self.text_rasterizer.ascent;
         let cursor_bottom = cursor_baseline_y + self.text_rasterizer.descent;
-        
+
         // Calculate visible range in text coordinates
         let visible_top = self.scroll_y;
         let visible_bottom = self.scroll_y + content_height;
-        
+
         // Add padding to make scrolling feel more natural
         // Use full line height for top padding, and 1.5x line height for bottom padding to ensure full character visibility
         let top_padding = line_height * 0.5;
         let bottom_padding = line_height * 1.5;
-        
+
         // If cursor is above visible area, scroll up
         if cursor_top < visible_top + top_padding {
             self.drag_scroll_momentum = 0.0;
             self.wheel_accel_target = 0.0;
             self.wheel_last_activity = None;
-            self.scroll_target = (cursor_top - top_padding).max(0.0);
+            self.scroll_target = (cursor_top - top_padding).max(0.0).min(natural_max);
             self.scroll_y = self.scroll_target;
         }
         // If cursor is below visible area, scroll down
@@ -1611,7 +1645,9 @@ impl TextApp {
             self.drag_scroll_momentum = 0.0;
             self.wheel_accel_target = 0.0;
             self.wheel_last_activity = None;
-            self.scroll_target = cursor_bottom + bottom_padding - content_height;
+            self.scroll_target = (cursor_bottom + bottom_padding - content_height)
+                .max(0.0)
+                .min(natural_max);
             self.scroll_y = self.scroll_target;
         }
     }
