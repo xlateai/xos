@@ -10,6 +10,7 @@ use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine};
 use crate::apps::text::TextApp;
 use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
+use crate::ui::text::{collect_ui_text_render_state, UiTextRenderState};
 
 /// Monotonic id assignment for [`Text`] handles (Python-visible as `_native_id`).
 static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
@@ -36,6 +37,59 @@ pub fn alloc_widget_id() -> u64 {
 pub fn insert_widget(id: u64, editor: TextApp) {
     let mut g = registry_mut();
     ensure_registry(&mut g).insert(id, editor);
+}
+
+/// Blits a registered [`TextApp`] using layout from `_text_tick` (no second [`TextRasterizer::tick`]).
+pub(crate) fn paint_native_embed_text_from_engine(
+    id: u64,
+    engine: &EngineState,
+    buffer: &mut [u8],
+    stride_w: usize,
+    stride_h: usize,
+    glyph_rgba: (u8, u8, u8, u8),
+    paint_cursor: bool,
+) -> bool {
+    let mut g = registry_mut();
+    let Some(map) = g.as_mut() else {
+        return false;
+    };
+    let Some(app) = map.get_mut(&id) else {
+        return false;
+    };
+    app.paint_into_buffer_for_engine_frame(
+        engine,
+        buffer,
+        stride_w,
+        stride_h,
+        glyph_rgba,
+        paint_cursor,
+    )
+    .is_ok()
+}
+
+pub(crate) fn collect_native_text_widget_render_state(
+    id: u64,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    scroll_y: f32,
+    fw: usize,
+    fh: usize,
+) -> Option<UiTextRenderState> {
+    let g = registry_mut();
+    let map = g.as_ref()?;
+    let app = map.get(&id)?;
+    Some(collect_ui_text_render_state(
+        &app.text_rasterizer,
+        x1,
+        y1,
+        x2,
+        y2,
+        scroll_y,
+        fw,
+        fh,
+    ))
 }
 
 /// Snapshot native [`TextApp`] layout, caret, selection, and trackpad laser for [`xos.ui._text_render`].

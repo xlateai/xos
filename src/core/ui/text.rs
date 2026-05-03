@@ -158,6 +158,59 @@ pub struct UiTextRenderState {
     pub baselines: Vec<[[f32; 2]; 2]>,
 }
 
+/// Builds line counts and normalized baseline / glyph boxes from an already-layouted [`TextRasterizer`].
+/// Used when Python UI reuses [`crate::apps::text::TextApp`] layout instead of re-running [`UiText::render`].
+pub fn collect_ui_text_render_state(
+    rasterizer: &TextRasterizer,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    sy: f32,
+    frame_width: usize,
+    frame_height: usize,
+) -> UiTextRenderState {
+    let mut state = UiTextRenderState::default();
+
+    let fw = frame_width as f32;
+    let fh = frame_height as f32;
+
+    for line in &rasterizer.lines {
+        state
+            .lines
+            .push((line.end_index.saturating_sub(line.start_index)) as u32);
+
+        let by = y1 + (line.baseline_y - sy).round() as i32;
+        let y_norm = (by as f32 / fh).clamp(0.0, 1.0);
+        state.baselines.push([
+            [(x1 as f32 / fw).clamp(0.0, 1.0), y_norm],
+            [(x2 as f32 / fw).clamp(0.0, 1.0), y_norm],
+        ]);
+    }
+
+    for character in &rasterizer.characters {
+        let px = x1 + character.x.round() as i32;
+        let py = y1 + (character.y - sy).round() as i32;
+        let gx1 = px;
+        let gy1 = py;
+        let gx2 = px + character.metrics.width as i32;
+        let gy2 = py + character.metrics.height as i32;
+
+        state.hitboxes.push([
+            [
+                (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+            ],
+            [
+                (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+            ],
+        ]);
+    }
+
+    state
+}
+
 impl UiText {
     pub fn render(&self, buffer: &mut [u8], frame_width: usize, frame_height: usize) -> Result<UiTextRenderState, String> {
         let mut state = UiTextRenderState::default();

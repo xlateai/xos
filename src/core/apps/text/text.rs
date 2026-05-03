@@ -63,14 +63,38 @@ const ARROW_DOWN: char = '\u{2193}';  // ↓
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
-struct TextViewportMetrics {
+pub(crate) struct TextViewportMetrics {
     frame_w: f32,
     frame_h: f32,
-    layout_w: f32,
-    visible_h: f32,
-    draw_x: f32,
-    draw_y: f32,
-    embed: bool,
+    pub(crate) layout_w: f32,
+    pub(crate) visible_h: f32,
+    pub(crate) draw_x: f32,
+    pub(crate) draw_y: f32,
+    pub(crate) embed: bool,
+}
+
+/// Immutable clip/layout rectangle for [`TextApp::paint_viewport`] (mirrors standalone tick paint math).
+#[derive(Clone, Copy)]
+pub(crate) struct ViewportPaintCtx {
+    pub(crate) fw: usize,
+    pub(crate) fh: usize,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) w_i: i32,
+    pub(crate) h_i: i32,
+    pub(crate) clip_left: i32,
+    pub(crate) clip_top: i32,
+    pub(crate) clip_right: i32,
+    pub(crate) clip_bottom: i32,
+    pub(crate) draw_off_x: f32,
+    pub(crate) draw_off_y: f32,
+    pub(crate) layout_w: f32,
+    pub(crate) visible_height: f32,
+    pub(crate) content_top: f32,
+    pub(crate) is_trackpad_mode: bool,
+    pub(crate) is_keyboard_shown: bool,
+    /// Caret overlay (standalone uses [`TextApp::show_cursor`]; Python may override per `_text_render`).
+    pub(crate) paint_cursor: bool,
 }
 
 pub struct TextApp {
@@ -300,7 +324,7 @@ impl TextApp {
         (doc_bottom - visible_height).max(0.0)
     }
 
-    fn viewport_metrics(&self, state: &EngineState) -> TextViewportMetrics {
+    pub(crate) fn viewport_metrics(&self, state: &EngineState) -> TextViewportMetrics {
         let shape = state.frame.shape();
         let frame_w = shape[1] as f32;
         let frame_h = shape[0] as f32;
@@ -336,6 +360,314 @@ impl TextApp {
         }
     }
 
+    pub(crate) fn build_viewport_paint_ctx(
+        &self,
+        vp_m: TextViewportMetrics,
+        width: f32,
+        height: f32,
+        content_top: f32,
+        is_trackpad_mode: bool,
+        is_keyboard_shown: bool,
+        paint_cursor: bool,
+    ) -> ViewportPaintCtx {
+        let layout_w = vp_m.layout_w;
+        let visible_height = vp_m.visible_h;
+        let draw_off_x = vp_m.draw_x;
+        let draw_off_y = vp_m.draw_y;
+        ViewportPaintCtx {
+            fw: width as usize,
+            fh: height as usize,
+            width,
+            height,
+            w_i: width as i32,
+            h_i: height as i32,
+            clip_left: draw_off_x as i32,
+            clip_top: draw_off_y as i32,
+            clip_right: (draw_off_x + layout_w) as i32,
+            clip_bottom: (draw_off_y + visible_height) as i32,
+            draw_off_x,
+            draw_off_y,
+            layout_w,
+            visible_height,
+            content_top,
+            is_trackpad_mode,
+            is_keyboard_shown,
+            paint_cursor,
+        }
+    }
+
+    pub(crate) fn paint_viewport(&mut self, ctx: &ViewportPaintCtx, buffer: &mut [u8], glyph_rgba: (u8, u8, u8, u8)) {
+        let fw = ctx.fw;
+        let fh = ctx.fh;
+        let width = ctx.width;
+        let height = ctx.height;
+        let w_i = ctx.w_i;
+        let h_i = ctx.h_i;
+        let clip_left = ctx.clip_left;
+        let clip_top = ctx.clip_top;
+        let clip_right = ctx.clip_right;
+        let clip_bottom = ctx.clip_bottom;
+        let draw_off_x = ctx.draw_off_x;
+        let draw_off_y = ctx.draw_off_y;
+        let layout_w = ctx.layout_w;
+        let visible_height = ctx.visible_height;
+        let content_top = ctx.content_top;
+        let is_trackpad_mode = ctx.is_trackpad_mode;
+        let is_keyboard_shown = ctx.is_keyboard_shown;
+        let paint_cursor = ctx.paint_cursor;
+
+        let (gr, gg, gb, ga) = (
+            glyph_rgba.0 as u32,
+            glyph_rgba.1 as u32,
+            glyph_rgba.2 as u32,
+            glyph_rgba.3 as u32,
+        );
+
+        // Draw baselines (offset by layout origin)
+        if DRAW_BASELINES && self.show_debug_visuals {
+            for line in &self.text_rasterizer.lines {
+                let y = ((line.baseline_y - self.scroll_y) + draw_off_y) as i32;
+                if y >= 0 && y < height as i32 && y >= clip_top && y < clip_bottom {
+                    fill_rect_buffer(
+                        buffer,
+                        fw,
+                        fh,
+                        clip_left,
+                        y,
+                        clip_right,
+                        y + 1,
+                        (BASELINE_COLOR.0, BASELINE_COLOR.1, BASELINE_COLOR.2, 0xff),
+                    );
+                }
+            }
+        }
+
+        // Draw selection highlighting
+        if let (Some(sel_start), Some(sel_end)) = (self.selection_start, self.selection_end) {
+            let (start_idx, end_idx) = if sel_start <= sel_end {
+                (sel_start, sel_end)
+            } else {
+                (sel_end, sel_start)
+            };
+
+            use std::collections::HashMap;
+            let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
+
+            for character in &self.text_rasterizer.characters {
+                if character.char_index >= start_idx && character.char_index < end_idx {
+                    let char_left = character.x;
+                    let char_right = character.x + character.metrics.advance_width;
+
+                    line_selections
+                        .entry(character.line_index)
+                        .and_modify(|(min_x, max_x, baseline_y)| {
+                            *min_x = min_x.min(char_left);
+                            *max_x = max_x.max(char_right);
+                            *baseline_y = self
+                                .text_rasterizer
+                                .lines
+                                .get(character.line_index)
+                                .map(|line| line.baseline_y)
+                                .unwrap_or(*baseline_y);
+                        })
+                        .or_insert_with(|| {
+                            let baseline_y = self
+                                .text_rasterizer
+                                .lines
+                                .get(character.line_index)
+                                .map(|line| line.baseline_y)
+                                .unwrap_or(0.0);
+                            (char_left, char_right, baseline_y)
+                        });
+                }
+            }
+
+            for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
+                let sel_left = *min_x as i32;
+                let sel_right = *max_x as i32;
+                let sel_top =
+                    ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y) as i32;
+                let sel_bottom =
+                    ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y) as i32;
+
+                let y_lo = sel_top.min(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
+                let y_hi = sel_top.max(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
+                let x_lo = sel_left.min(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
+                let x_hi = sel_left.max(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
+
+                for y in y_lo..y_hi {
+                    for x in x_lo..x_hi {
+                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                        let alpha = SELECTION_COLOR.3 as f32 / 255.0;
+                        let inv_alpha = 1.0 - alpha;
+                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
+                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
+                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
+                    }
+                }
+            }
+        }
+
+        let vis_top = self.scroll_y;
+        let vis_bottom = self.scroll_y + visible_height;
+
+        for character in &self.text_rasterizer.characters {
+            let g_top = character.y;
+            let g_bottom = character.y + character.height;
+            if g_bottom < vis_top || g_top > vis_bottom {
+                continue;
+            }
+            let slide_max = character.width;
+            let g_left = character.x - slide_max;
+            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
+            if g_right < 0.0 || g_left > layout_w {
+                continue;
+            }
+
+            let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
+            let fade = self.fade_map.entry(fade_key).or_insert(0.0);
+            *fade = (*fade + 0.16).min(1.0);
+
+            let fade_alpha_byte = ((*fade * 255.0).round() as u32).min(255);
+
+            let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
+            let px = draw_off_x as i32 + (character.x as i32) + slide_offset;
+            let py = draw_off_y as i32 + ((character.y - self.scroll_y) as i32);
+            let pw = character.width as u32;
+            let ph = character.height as u32;
+
+            let alpha_outline = ((*fade * 255.0).round() as u8).min(255);
+
+            for y in 0..character.metrics.height {
+                for x in 0..character.metrics.width {
+                    let val = character.bitmap[y * character.metrics.width + x] as u32;
+                    let faded_glyph_alpha = ((val * fade_alpha_byte) / 255).min(255);
+                    let src_a_u = ((faded_glyph_alpha * ga) / 255).min(255);
+                    let src_a = src_a_u as u8;
+
+                    let sx = px + x as i32;
+                    let sy = py + y as i32;
+
+                    let in_viewport = sx >= clip_left && sx < clip_right && sy >= clip_top && sy < clip_bottom;
+                    if in_viewport && sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
+                        let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
+                        buffer[idx + 0] = ((gr * src_a_u) / 255).min(255) as u8;
+                        buffer[idx + 1] = ((gg * src_a_u) / 255).min(255) as u8;
+                        buffer[idx + 2] = ((gb * src_a_u) / 255).min(255) as u8;
+                        buffer[idx + 3] = src_a;
+                    }
+                }
+            }
+
+            if SHOW_BOUNDING_RECTANGLES && self.show_debug_visuals {
+                Self::draw_rect(
+                    buffer,
+                    width as u32,
+                    height as u32,
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    alpha_outline,
+                    self.bound_color,
+                );
+            }
+        }
+
+        if paint_cursor {
+            let (target_x, baseline_y) = self.get_cursor_screen_position();
+
+            self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+
+            let cursor_top =
+                ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y).round() as i32;
+            let cursor_bottom =
+                ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y).round() as i32;
+            let cx = (draw_off_x + self.smooth_cursor_x).round() as i32;
+
+            for y in cursor_top..cursor_bottom {
+                if y >= clip_top && y < clip_bottom && cx >= clip_left && cx < clip_right
+                    && y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32
+                {
+                    let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
+                    buffer[idx + 0] = CURSOR_COLOR.0;
+                    buffer[idx + 1] = CURSOR_COLOR.1;
+                    buffer[idx + 2] = CURSOR_COLOR.2;
+                    buffer[idx + 3] = 0xff;
+                }
+            }
+        }
+
+        if is_trackpad_mode && is_keyboard_shown {
+            if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
+                self.initialize_laser_at_cursor(content_top);
+            }
+
+            if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                let dot_radius = 6.0;
+                let dot_x_i = laser_x.round() as i32;
+                let dot_y_i = laser_y.round() as i32;
+
+                for dy in -(dot_radius as i32)..=(dot_radius as i32) {
+                    for dx in -(dot_radius as i32)..=(dot_radius as i32) {
+                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                        if distance <= dot_radius {
+                            let x = dot_x_i + dx;
+                            let y = dot_y_i + dy;
+                            if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                                let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                                buffer[idx + 0] = 255;
+                                buffer[idx + 1] = 0;
+                                buffer[idx + 2] = 0;
+                                buffer[idx + 3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Blit this widget into `buffer` (`stride_w` × `stride_h` RGBA8) using the same viewport math as [`Self::tick`].
+    pub(crate) fn paint_into_buffer_for_engine_frame(
+        &mut self,
+        engine: &EngineState,
+        buffer: &mut [u8],
+        stride_w: usize,
+        stride_h: usize,
+        glyph_rgba: (u8, u8, u8, u8),
+        paint_cursor: bool,
+    ) -> Result<(), &'static str> {
+        let shape = engine.frame.shape();
+        let width = shape[1] as f32;
+        let height = shape[0] as f32;
+        if stride_w != width as usize || stride_h != height as usize {
+            return Err("stride does not match engine frame dimensions");
+        }
+        let needed = stride_w.saturating_mul(stride_h).saturating_mul(4);
+        if buffer.len() < needed {
+            return Err("frame buffer slice too short");
+        }
+
+        let safe = &engine.frame.safe_region_boundaries;
+        let content_top = self.layout_content_top(safe.y1, height);
+        let is_trackpad_mode = engine.keyboard.onscreen.is_trackpad_mode();
+        let is_keyboard_shown = engine.keyboard.onscreen.is_shown();
+
+        let vp_m = self.viewport_metrics(engine);
+        let ctx = self.build_viewport_paint_ctx(
+            vp_m,
+            width,
+            height,
+            content_top,
+            is_trackpad_mode,
+            is_keyboard_shown,
+            paint_cursor,
+        );
+        self.paint_viewport(&ctx, buffer, glyph_rgba);
+        Ok(())
+    }
+
     /// Layout-space XY for glyph hit-testing: x in `[0, layout_w]`, y in document coords (includes [`Self::scroll_y`]).
     fn to_text_xy(&self, state: &EngineState, screen_x: f32, screen_y: f32) -> (f32, f32) {
         let vp = self.viewport_metrics(state);
@@ -346,7 +678,7 @@ impl TextApp {
     }
 
     #[inline]
-    fn layout_content_top(&self, safe_y1: f32, height: f32) -> f32 {
+    pub(crate) fn layout_content_top(&self, safe_y1: f32, height: f32) -> f32 {
         safe_y1 * height + self.top_chrome_height_px
     }
 
@@ -476,13 +808,7 @@ impl Application for TextApp {
         let vp_m = self.viewport_metrics(state);
         let layout_w = vp_m.layout_w;
         let visible_height = vp_m.visible_h;
-        let draw_off_x = vp_m.draw_x;
-        let draw_off_y = vp_m.draw_y;
         let python_embed_active = vp_m.embed;
-        let clip_left = draw_off_x as i32;
-        let clip_top = draw_off_y as i32;
-        let clip_right = (draw_off_x + layout_w) as i32;
-        let clip_bottom = (draw_off_y + visible_height) as i32;
 
         // Standalone text app: F3 multiplier is `ui_scale_percent / 100` (25–500% → 0.25–5.0), same as coder.
         if !self.uses_parent_ui_scale {
@@ -598,213 +924,20 @@ impl Application for TextApp {
         }
 
         let buffer = state.frame_buffer_mut();
-        let fw = width as usize;
-        let fh = height as usize;
-        let w_i = width as i32;
-        let h_i = height as i32;
-
-        // Draw baselines (offset by layout origin)
-        if DRAW_BASELINES && self.show_debug_visuals {
-            for line in &self.text_rasterizer.lines {
-                let y = ((line.baseline_y - self.scroll_y) + draw_off_y) as i32;
-                if y >= 0 && y < height as i32 && y >= clip_top && y < clip_bottom {
-                    fill_rect_buffer(
-                        buffer,
-                        fw,
-                        fh,
-                        clip_left,
-                        y,
-                        clip_right,
-                        y + 1,
-                        (BASELINE_COLOR.0, BASELINE_COLOR.1, BASELINE_COLOR.2, 0xff),
-                    );
-                }
-            }
-        }
-        
-        // Draw selection highlighting
-        if let (Some(sel_start), Some(sel_end)) = (self.selection_start, self.selection_end) {
-            let (start_idx, end_idx) = if sel_start <= sel_end {
-                (sel_start, sel_end)
-            } else {
-                (sel_end, sel_start)
-            };
-            
-            // Group selected characters by line and find min/max x positions per line
-            use std::collections::HashMap;
-            let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new(); // line_idx -> (min_x, max_x, baseline_y)
-            
-            for character in &self.text_rasterizer.characters {
-                if character.char_index >= start_idx && character.char_index < end_idx {
-                    let char_left = character.x;
-                    let char_right = character.x + character.metrics.advance_width;
-                    
-                    line_selections.entry(character.line_index)
-                        .and_modify(|(min_x, max_x, baseline_y)| {
-                            *min_x = min_x.min(char_left);
-                            *max_x = max_x.max(char_right);
-                            *baseline_y = self.text_rasterizer.lines.get(character.line_index)
-                                .map(|line| line.baseline_y)
-                                .unwrap_or(*baseline_y);
-                        })
-                        .or_insert_with(|| {
-                            let baseline_y = self.text_rasterizer.lines.get(character.line_index)
-                                .map(|line| line.baseline_y)
-                                .unwrap_or(0.0);
-                            (char_left, char_right, baseline_y)
-                        });
-                }
-            }
-            
-            // Draw selection rectangles per line (clip to viewport — avoids O(selection×pixels) off-screen)
-            for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
-                let sel_left = *min_x as i32;
-                let sel_right = *max_x as i32;
-                let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y) as i32;
-                let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y) as i32;
-                
-                let y_lo = sel_top.min(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let y_hi = sel_top.max(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let x_lo = sel_left.min(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
-                let x_hi = sel_left.max(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
-                
-                // Draw semi-transparent selection rectangle
-                for y in y_lo..y_hi {
-                    for x in x_lo..x_hi {
-                        let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                        // Alpha blend the selection color
-                        let alpha = SELECTION_COLOR.3 as f32 / 255.0;
-                        let inv_alpha = 1.0 - alpha;
-                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
-                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
-                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
-                    }
-                }
-            }
-        }
-    
-        // Viewport in document space: only blit glyphs that can appear on screen. Glyph bitmaps are
-        // cached in [`TextRasterizer`] (CPU); the cost per frame is proportional to *drawn* pixels.
-        let vis_top = self.scroll_y;
-        let vis_bottom = self.scroll_y + visible_height;
-
-        // Draw characters with fade and slide-in (offset by content_top)
-        for character in &self.text_rasterizer.characters {
-            let g_top = character.y;
-            let g_bottom = character.y + character.height;
-            if g_bottom < vis_top || g_top > vis_bottom {
-                continue;
-            }
-            // Slide-in can shift the glyph left by up to one bitmap width; include that in x bounds.
-            let slide_max = character.width;
-            let g_left = character.x - slide_max;
-            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
-            if g_right < 0.0 || g_left > layout_w {
-                continue;
-            }
-
-            let fade_key = (character.ch, character.x.to_bits(), character.y.to_bits());
-            let fade = self.fade_map.entry(fade_key).or_insert(0.0);
-            *fade = (*fade + 0.16).min(1.0); // Fast fade
-
-            let alpha = (*fade * 255.0).round() as u8;
-
-            // Slide in from the right using bitmap width as base
-            let slide_offset = (character.width as f32 * 1.0 * (1.0 - *fade)) as i32;
-            let px = draw_off_x as i32 + (character.x as i32) + slide_offset;
-            let py = draw_off_y as i32 + ((character.y - self.scroll_y) as i32);
-            let pw = character.width as u32;
-            let ph = character.height as u32;
-    
-            for y in 0..character.metrics.height {
-                for x in 0..character.metrics.width {
-                    let val = character.bitmap[y * character.metrics.width + x];
-                    let faded_val = ((val as u16 * alpha as u16) / 255) as u8;
-    
-                    let sx = px + x as i32;
-                    let sy = py + y as i32;
-
-                    let in_viewport = sx >= clip_left && sx < clip_right && sy >= clip_top && sy < clip_bottom;
-                    if in_viewport && sx >= 0 && sx < width as i32 && sy >= 0 && sy < height as i32 {
-                        let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
-                        buffer[idx + 0] = ((TEXT_COLOR.0 as u16 * faded_val as u16) / 255) as u8;
-                        buffer[idx + 1] = ((TEXT_COLOR.1 as u16 * faded_val as u16) / 255) as u8;
-                        buffer[idx + 2] = ((TEXT_COLOR.2 as u16 * faded_val as u16) / 255) as u8;
-                        buffer[idx + 3] = faded_val;
-                    }
-                }
-            }
-    
-            if SHOW_BOUNDING_RECTANGLES && self.show_debug_visuals {
-                Self::draw_rect(
-                    buffer,
-                    width as u32,
-                    height as u32,
-                    px,
-                    py,
-                    pw,
-                    ph,
-                    alpha,
-                    self.bound_color,
-                );
-            }
-        }
-    
-        // Draw cursor (offset like glyphs)
-        if self.show_cursor {
-            let (target_x, baseline_y) = self.get_cursor_screen_position();
-        
-            // Smooth the x-position (linear interpolation)
-            self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
-            
-            let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y).round() as i32;
-            let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y).round() as i32;
-            let cx = (draw_off_x + self.smooth_cursor_x).round() as i32;
-            
-            for y in cursor_top..cursor_bottom {
-                if y >= clip_top && y < clip_bottom && cx >= clip_left && cx < clip_right
-                    && y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32 {
-                    let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
-                    buffer[idx + 0] = CURSOR_COLOR.0;
-                    buffer[idx + 1] = CURSOR_COLOR.1;
-                    buffer[idx + 2] = CURSOR_COLOR.2;
-                    buffer[idx + 3] = 0xff;
-                }
-            }
-        }
-        
-        // Draw trackpad laser pointer if in trackpad mode AND keyboard is visible
-        if is_trackpad_mode && is_keyboard_shown {
-            // Initialize laser if not already set (at current cursor position)
-            if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
-                self.initialize_laser_at_cursor(content_top);
-            }
-            
-            if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
-                let dot_radius = 6.0; // 1.5x larger (was 4.0)
-                let dot_x_i = laser_x.round() as i32;
-                let dot_y_i = laser_y.round() as i32;
-                
-                // Draw a simple solid red dot
-                for dy in -(dot_radius as i32)..=(dot_radius as i32) {
-                    for dx in -(dot_radius as i32)..=(dot_radius as i32) {
-                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
-                        if distance <= dot_radius {
-                            let x = dot_x_i + dx;
-                            let y = dot_y_i + dy;
-                            if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                                let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                                // Simple bright red dot
-                                buffer[idx + 0] = 255; // R
-                                buffer[idx + 1] = 0;   // G
-                                buffer[idx + 2] = 0;   // B
-                                buffer[idx + 3] = 255; // A
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let vp_ctx = self.build_viewport_paint_ctx(
+            vp_m,
+            width,
+            height,
+            content_top,
+            is_trackpad_mode,
+            is_keyboard_shown,
+            self.show_cursor,
+        );
+        self.paint_viewport(
+            &vp_ctx,
+            buffer,
+            (TEXT_COLOR.0, TEXT_COLOR.1, TEXT_COLOR.2, 255),
+        );
     }
     
 

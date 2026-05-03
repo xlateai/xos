@@ -1,5 +1,7 @@
 use fontdue::{Font, Metrics};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A single rendered glyph in pixel space.
@@ -68,6 +70,8 @@ pub struct TextRasterizer {
     pub line_gap: f32,
     pub font: Font,
     glyph_cache: GlyphCache,
+    /// Matches last successful [`Self::tick`] inputs (text + geometry + font size).
+    last_tick_layout_fp: Option<u64>,
 }
 
 impl TextRasterizer {
@@ -86,12 +90,17 @@ impl TextRasterizer {
             line_gap: metrics.line_gap,
             font,
             glyph_cache: GlyphCache::new(),
+            last_tick_layout_fp: None,
         }
     }
 
     pub fn set_text(&mut self, text: String) {
         // Normalize Windows-style CRLF to LF so '\r' doesn't render as a visible trailing glyph.
-        self.text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if normalized != self.text {
+            self.last_tick_layout_fp = None;
+        }
+        self.text = normalized;
     }
 
     /// Updates metrics for a new font size (call before [`tick`](Self::tick) to relayout).
@@ -99,6 +108,7 @@ impl TextRasterizer {
         if (self.font_size - font_size).abs() < 0.02 {
             return;
         }
+        self.last_tick_layout_fp = None;
         self.font_size = font_size;
         self.glyph_cache.clear();
         let metrics = self
@@ -110,12 +120,29 @@ impl TextRasterizer {
         self.line_gap = metrics.line_gap;
     }
 
-    pub fn tick(&mut self, window_width: f32, _window_height: f32) {
+    #[inline]
+    fn layout_fp(&self, window_width: f32, window_height: f32) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.text.hash(&mut h);
+        self.font_size.to_bits().hash(&mut h);
+        window_width.to_bits().hash(&mut h);
+        window_height.to_bits().hash(&mut h);
+        h.finish()
+    }
+
+    pub fn tick(&mut self, window_width: f32, window_height: f32) {
         // Callers often assign `text` directly (e.g. coder); normalize CRLF here too so `\r`
         // never renders as a trailing glyph on Windows-sourced files.
         if self.text.contains('\r') {
             self.text = self.text.replace("\r\n", "\n").replace('\r', "\n");
+            self.last_tick_layout_fp = None;
         }
+
+        let fp = self.layout_fp(window_width, window_height);
+        if self.last_tick_layout_fp == Some(fp) {
+            return;
+        }
+        self.last_tick_layout_fp = Some(fp);
 
         self.characters.clear();
         self.lines.clear();
@@ -183,6 +210,11 @@ impl TextRasterizer {
             start_index: line_start,
             end_index: last_index + 1,
         });
+    }
+
+    /// Call after mutating [`Self::text`] without going through [`Self::set_text`].
+    pub fn invalidate_layout_cache(&mut self) {
+        self.last_tick_layout_fp = None;
     }
 }
 

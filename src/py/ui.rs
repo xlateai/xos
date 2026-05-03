@@ -4,7 +4,8 @@ use rustpython_vm::{
 use crate::apps::text::TextApp;
 use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
 use crate::python_api::python_text::{
-    alloc_widget_id, dispatch_text_widget_from_app, insert_widget, peek_editor_visual_state, tick_text_widget,
+    alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app, insert_widget,
+    paint_native_embed_text_from_engine, peek_editor_visual_state, tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
 use crate::ui::{Button, UiText};
@@ -281,33 +282,68 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         ));
     }
 
-    let text_ui = UiText {
-        text,
-        x1_norm: x1 as f32,
-        y1_norm: y1 as f32,
-        x2_norm: x2 as f32,
-        y2_norm: y2 as f32,
-        color: (
-            r.clamp(0, 255) as u8,
-            g.clamp(0, 255) as u8,
-            b.clamp(0, 255) as u8,
-            a.clamp(0, 255) as u8,
-        ),
-        hitboxes,
-        baselines,
-        font_size_px,
-        show_cursor,
-        cursor_position,
-        selection_start: selection_start_opt,
-        selection_end: selection_end_opt,
-        trackpad_pointer_px: trackpad_pointer,
-        viewport_scroll_y,
-    };
+    let glyph_rgba = (
+        r.clamp(0, 255) as u8,
+        g.clamp(0, 255) as u8,
+        b.clamp(0, 255) as u8,
+        a.clamp(0, 255) as u8,
+    );
 
-    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
-    let render_state = text_ui
-        .render(buffer, canvas_width, canvas_height)
-        .map_err(|e| vm.new_runtime_error(e))?;
+    let buffer =
+        unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
+
+    let mut render_state_opt = None;
+    if let Some(nid_obj) = args.kwargs.get("native_widget_id") {
+        if let Ok(nid) = nid_obj.clone().try_into_value::<u64>(vm) {
+            if peek_editor_visual_state(nid).is_some() {
+                let cw = canvas_width;
+                let ch = canvas_height;
+                let xa = ((x1 as f32).clamp(0.0, 1.0) * cw as f32).round() as i32;
+                let ya = ((y1 as f32).clamp(0.0, 1.0) * ch as f32).round() as i32;
+                let xb = ((x2 as f32).clamp(0.0, 1.0) * cw as f32).round() as i32;
+                let yb = ((y2 as f32).clamp(0.0, 1.0) * ch as f32).round() as i32;
+                if let Some(true) = with_tick_engine_state_mut(|engine| {
+                    paint_native_embed_text_from_engine(
+                        nid,
+                        engine,
+                        buffer,
+                        cw,
+                        ch,
+                        glyph_rgba,
+                        show_cursor,
+                    )
+                }) {
+                    render_state_opt =
+                        collect_native_text_widget_render_state(nid, xa, ya, xb, yb, viewport_scroll_y, cw, ch);
+                }
+            }
+        }
+    }
+
+    let render_state = if let Some(rs) = render_state_opt {
+        rs
+    } else {
+        let text_ui = UiText {
+            text,
+            x1_norm: x1 as f32,
+            y1_norm: y1 as f32,
+            x2_norm: x2 as f32,
+            y2_norm: y2 as f32,
+            color: glyph_rgba,
+            hitboxes,
+            baselines,
+            font_size_px,
+            show_cursor,
+            cursor_position,
+            selection_start: selection_start_opt,
+            selection_end: selection_end_opt,
+            trackpad_pointer_px: trackpad_pointer,
+            viewport_scroll_y,
+        };
+        text_ui
+            .render(buffer, canvas_width, canvas_height)
+            .map_err(|e| vm.new_runtime_error(e))?
+    };
 
     let lines_py = vm.ctx.new_list(
         render_state
