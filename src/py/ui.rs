@@ -528,7 +528,8 @@ class Text:
         import xos
         nid = getattr(self, "_native_id", None)
         if nid is None:
-            return
+            self._native_id = int(xos.ui._text_register(self, app))
+            nid = self._native_id
         xos.ui._text_dispatch(int(nid), app)
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):

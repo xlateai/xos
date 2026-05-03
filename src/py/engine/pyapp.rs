@@ -540,7 +540,13 @@ class Frame:
                 xos.frame._end_standalone()
 
 class Application:
-    """Base class for xos applications. Extend this class and implement __init__() and tick()."""
+    """Base class for xos applications. Extend this class and implement __init__() and tick().
+
+    Routed input sets ``self._xos_event`` (a dict with ``kind``, etc.) before ``on_events()`` runs and
+    clears it only after your handler returns, so every component sees the same event in one call.
+    Conventional order is ``self.keyboard.on_events(self)`` then ``self.text.on_events(self)`` for
+    pointer and ``key_char`` alike — no special cases per event type are required.
+    """
     
     def __init__(self, headless=None):
         import builtins

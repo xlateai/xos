@@ -45,8 +45,8 @@ class TextDemo(xos.Application):
             print("baselines:", ts.baselines.shape)
 
     def on_events(self):
-        self.text.on_events(self)
         self.keyboard.on_events(self)
+        self.text.on_events(self)
 
 if __name__ == "__main__":
     TextDemo().run()

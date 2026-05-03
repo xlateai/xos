@@ -1211,7 +1211,20 @@ impl Application for TextApp {
         };
         
         if is_double_tap {
-            // Toggle keyboard (works from content area or keyboard region)
+            // While keyboard is visible, taps on the keyboard bar are mostly key hits — typing can
+            // produce two taps within DOUBLE_TAP_TIME_MS; don't treat that as "toggle keyboard".
+            let quick_typing_on_keyboard = state.keyboard.onscreen.is_shown()
+                && (state.mouse.y >= keyboard_region_top || self.last_tap_y >= keyboard_region_top);
+            if quick_typing_on_keyboard {
+                // Refresh tap baseline so we don't accumulate spurious gesture state
+                self.last_tap_time = Some(now);
+                self.last_tap_x = state.mouse.x;
+                self.last_tap_y = state.mouse.y;
+                self.last_tap_scrolled = false;
+                return;
+            }
+
+            // Toggle keyboard (typically from double-tap in the text area)
             state.keyboard.onscreen.toggle_minimize();
             // Reset tap tracking to prevent triple-tap from immediately closing
             self.last_tap_time = None;
