@@ -37,6 +37,19 @@ pub fn insert_widget(id: u64, editor: TextApp) {
     ensure_registry(&mut g).insert(id, editor);
 }
 
+/// Snapshot native editor state so [`xos.ui._text_render`] matches [`TextApp`] layout and caret.
+pub fn peek_editor_visual_state(id: u64) -> Option<(String, usize, bool, f32)> {
+    let g = registry_mut();
+    let map = g.as_ref()?;
+    let t = map.get(&id)?;
+    Some((
+        t.text_rasterizer.text.clone(),
+        t.cursor_position,
+        t.show_cursor,
+        t.text_rasterizer.font_size,
+    ))
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum PyUiEventKind {
     MouseDown,

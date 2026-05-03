@@ -15,13 +15,13 @@ class TextDemo(xos.Application):
             0,  # top left
             1.0,
             1.0,  # bottom right (normalized viewport coordinates)
+            editable=True,
             font_size=DEFAULT_FONT_SIZE * self.scale,  # scaling font size with f3 menu
             color=xos.color.WHITE,
-            hitboxes=True,
-            baselines=True,
+            hitboxes=False,
+            baselines=False,
             selectable=True,
             scrollable=True,
-            editable=True,
             show_cursor=True,
         )
 

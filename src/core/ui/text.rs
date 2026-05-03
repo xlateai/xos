@@ -41,6 +41,98 @@ pub struct UiText {
     pub hitboxes: bool,
     pub baselines: bool,
     pub font_size_px: f32,
+    /// When true (and layout succeeded), draws a caret at [`Self::cursor_position`] (Unicode scalar index).
+    pub show_cursor: bool,
+    pub cursor_position: usize,
+}
+
+/// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
+fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32) {
+    let line_info_with_idx = r
+        .lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| {
+            line.start_index <= cursor_position && cursor_position <= line.end_index
+        });
+
+    if let Some((line_idx, line)) = line_info_with_idx {
+        let chars_in_line: Vec<_> = r
+            .characters
+            .iter()
+            .filter(|c| c.line_index == line_idx)
+            .collect();
+
+        if chars_in_line.is_empty() {
+            (0.0, line.baseline_y)
+        } else if cursor_position == line.start_index {
+            (0.0, line.baseline_y)
+        } else {
+            let mut found_char = None;
+            let mut char_after = None;
+
+            for character in r.characters.iter() {
+                if character.char_index == cursor_position {
+                    found_char = Some(character);
+                    break;
+                } else if character.char_index > cursor_position && character.line_index == line_idx {
+                    char_after = Some(character);
+                    break;
+                }
+            }
+
+            if let Some(char_at_cursor) = found_char {
+                (char_at_cursor.x, line.baseline_y)
+            } else if let Some(char_after_cursor) = char_after {
+                (char_after_cursor.x, line.baseline_y)
+            } else if let Some(last_in_line) = chars_in_line.last() {
+                (
+                    last_in_line.x + last_in_line.metrics.advance_width,
+                    line.baseline_y,
+                )
+            } else {
+                (0.0, line.baseline_y)
+            }
+        }
+    } else if cursor_position == 0 {
+        if let Some(first_line) = r.lines.first() {
+            (0.0, first_line.baseline_y)
+        } else {
+            (0.0, r.ascent)
+        }
+    } else if cursor_position >= r.text.chars().count() {
+        if let Some(last_line) = r.lines.last() {
+            let last_line_idx = r.lines.len().saturating_sub(1);
+            let chars_in_last_line: Vec<_> = r
+                .characters
+                .iter()
+                .filter(|c| c.line_index == last_line_idx)
+                .collect();
+
+            if chars_in_last_line.is_empty() {
+                (0.0, last_line.baseline_y)
+            } else if let Some(last_char) = chars_in_last_line.last() {
+                (
+                    last_char.x + last_char.metrics.advance_width,
+                    last_line.baseline_y,
+                )
+            } else {
+                (0.0, last_line.baseline_y)
+            }
+        } else if let Some(last) = r.characters.last() {
+            (
+                last.x + last.metrics.advance_width,
+                r.lines
+                    .last()
+                    .map(|line| line.baseline_y)
+                    .unwrap_or(r.ascent),
+            )
+        } else {
+            (0.0, r.ascent)
+        }
+    } else {
+        (0.0, r.ascent)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -171,6 +263,31 @@ impl UiText {
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy2 - 1, gx2, gy2, hitbox_color);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx1 + 1, gy2, hitbox_color);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx2 - 1, gy1, gx2, gy2, hitbox_color);
+            }
+        }
+
+        if self.show_cursor {
+            let (cx, baseline_y) = cursor_xy_in_layout(&rasterizer, self.cursor_position);
+            let cursor_top = y1 + (baseline_y - rasterizer.ascent).round() as i32;
+            let cursor_bottom = y1 + (baseline_y + rasterizer.descent).round() as i32;
+            let cx_i = x1 + cx.round() as i32;
+
+            let y_lo = cursor_top.min(cursor_bottom);
+            let y_hi = cursor_top.max(cursor_bottom);
+            const CURSOR: (u8, u8, u8, u8) = (0, 255, 0, 255);
+            for y in y_lo..y_hi {
+                if y >= y1 && y < y2 && cx_i >= x1 && cx_i < x2 {
+                    fill_rect_buffer(
+                        buffer,
+                        frame_width,
+                        frame_height,
+                        cx_i,
+                        y,
+                        cx_i + 1,
+                        y + 1,
+                        CURSOR,
+                    );
+                }
             }
         }
 

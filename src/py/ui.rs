@@ -4,7 +4,7 @@ use rustpython_vm::{
 use crate::apps::text::TextApp;
 use crate::python_api::engine::py_engine_tls::with_tick_engine_state_mut;
 use crate::python_api::python_text::{
-    alloc_widget_id, dispatch_text_widget_from_app, insert_widget, tick_text_widget,
+    alloc_widget_id, dispatch_text_widget_from_app, insert_widget, peek_editor_visual_state, tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
 use crate::ui::{Button, UiText};
@@ -174,7 +174,7 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Internal render hook for xos.ui.Text.render(...)
-/// Usage: _text_render(text, x1, y1, x2, y2, color, hitboxes=False, baselines=False, font_size=24.0)
+/// Usage: `_text_render(...)` with optional kwargs `native_widget_id`, `show_cursor` (caret uses native layout when id is set).
 fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 {
@@ -222,7 +222,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         false
     };
 
-    let font_size_px: f32 = if args_vec.len() > 8 {
+    let mut font_size_px: f32 = if args_vec.len() > 8 {
         let fs = py_number_to_f64(args_vec[8].clone(), vm, "font_size")?;
         fs as f32
     } else if let Some(v) = args.kwargs.get("font_size") {
@@ -231,6 +231,23 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         24.0
     };
+
+    let mut text = text;
+    let mut show_cursor = false;
+    let mut cursor_position = 0usize;
+
+    if let Some(nid_obj) = args.kwargs.get("native_widget_id") {
+        let nid: u64 = nid_obj.clone().try_into_value(vm)?;
+        if let Some((t, cp, sc, fs)) = peek_editor_visual_state(nid) {
+            text = t;
+            cursor_position = cp;
+            show_cursor = sc;
+            font_size_px = fs;
+        }
+    }
+    if let Some(v) = args.kwargs.get("show_cursor") {
+        show_cursor = v.clone().try_into_value(vm)?;
+    }
 
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
@@ -270,6 +287,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         hitboxes,
         baselines,
         font_size_px,
+        show_cursor,
+        cursor_position,
     };
 
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
@@ -521,6 +540,8 @@ class Text:
             hitboxes=self.hitboxes,
             baselines=self.baselines,
             font_size=self.font_size,
+            native_widget_id=int(self._native_id),
+            show_cursor=self.show_cursor,
         )
         return TextRenderState(state)
 
@@ -549,6 +570,11 @@ class Text:
                     xos.frame._begin_standalone(vid, w, h)
                     bound = True
         try:
+            extra = {}
+            nid = getattr(self, "_native_id", None)
+            if nid is not None:
+                extra["native_widget_id"] = int(nid)
+                extra["show_cursor"] = self.show_cursor
             state = _text_render(
                 self.text,
                 self.x1,
@@ -559,6 +585,7 @@ class Text:
                 resolved_hitboxes,
                 resolved_baselines,
                 resolved_font_size,
+                **extra,
             )
             return TextRenderState(state)
         finally:
