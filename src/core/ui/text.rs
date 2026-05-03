@@ -298,7 +298,22 @@ impl UiText {
             if end_idx > start_idx {
                 let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
                 for character in &rasterizer.characters {
-                    if !character_may_appear_in_viewport(character, box_width, sy, box_height) {
+                    let line_vis = rasterizer
+                        .lines
+                        .get(character.line_index)
+                        .map(|line| {
+                            line_band_intersects_doc_viewport(
+                                line.baseline_y,
+                                rasterizer.ascent,
+                                rasterizer.descent,
+                                rasterizer.line_gap,
+                                rasterizer.font_size,
+                                sy,
+                                box_height,
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !line_vis {
                         continue;
                     }
                     if character.char_index >= start_idx && character.char_index < end_idx {

@@ -1,9 +1,7 @@
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
-use crate::rasterizer::text::text_rasterization::{
-    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
-};
+use crate::rasterizer::text::text_rasterization::{line_band_intersects_doc_viewport, TextRasterizer};
 use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -278,6 +276,16 @@ impl TextApp {
         }
     }
 
+    pub(crate) fn clear_trackpad_state_for_python_embed_handoff(&mut self) {
+        self.trackpad_laser_x = None;
+        self.trackpad_laser_y = None;
+        self.trackpad_last_mouse_x = None;
+        self.trackpad_last_mouse_y = None;
+        self.trackpad_active = false;
+        self.trackpad_selecting = false;
+        self.trackpad_moved = false;
+    }
+
     /// Whether (`mx`,`my`) lies inside the rounded Python embed viewport (normalized rect → px).
     pub(crate) fn python_viewport_contains_screen_point(&self, mx: f32, my: f32) -> bool {
         let Some((vx, vy, vw, vh)) = self.python_viewport else {
@@ -511,17 +519,10 @@ impl TextApp {
             use std::collections::HashMap;
             let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
 
+            // Include every selected glyph on a visible line (do not use per-glyph screen culling here:
+            // skipping “off-screen” advance boxes would shrink or empty the line’s min/max span).
             for character in &self.text_rasterizer.characters {
                 if !line_quick_visible(character.line_index) {
-                    continue;
-                }
-                let ch_vis = character_may_appear_in_viewport(
-                    character,
-                    layout_w,
-                    vis_top_doc,
-                    visible_height,
-                );
-                if !ch_vis {
                     continue;
                 }
                 if character.char_index >= start_idx && character.char_index < end_idx {
@@ -684,6 +685,8 @@ impl TextApp {
         }
 
         if is_trackpad_mode && is_keyboard_shown {
+            // One shared laser across Python embed widgets: draw only from the focused editor.
+            if !(self.python_viewport.is_some() && !self.py_input_focused) {
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 self.initialize_laser_at_cursor(content_top);
             }
@@ -709,6 +712,7 @@ impl TextApp {
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -1210,16 +1214,26 @@ impl Application for TextApp {
                     
                     // Move laser 2x with mouse movement (double speed)
                     let new_laser_x = (laser_x + mouse_dx * 2.0).max(0.0).min(width);
-                    
-                    // Constrain laser vertically to the document strip; spill past top/bottom **only while
-                    // actively drag-sliding** converts to scroll instead of proximity “edge hover” scrolling.
+
+                    let embed_py = self.python_viewport.is_some();
                     let safe_region = &state.frame.safe_region_boundaries;
                     let content_top = self.layout_content_top(safe_region.y1, height);
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                     let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
-                    
+
+                    // Python multi-editor: laser roams the full frame above the OSK (not one text sub-rect).
+                    let y_global_min = safe_region.y1 * height;
+                    let keyboard_top_px = keyboard_top_y * height;
+                    let y_global_max = if keyboard_top_px > y_global_min + 2.0 {
+                        keyboard_top_px - 2.0
+                    } else {
+                        keyboard_top_px
+                    };
+
                     let unconstrained_y = laser_y + mouse_dy * 2.0;
-                    let new_laser_y = if self.trackpad_active && state.mouse.is_left_clicking {
+                    let new_laser_y = if embed_py {
+                        unconstrained_y.max(y_global_min).min(y_global_max)
+                    } else if self.trackpad_active && state.mouse.is_left_clicking {
                         let vp = self.viewport_metrics(state);
                         let visible_h = vp.visible_h;
                         let overscroll = visible_h * SCROLL_OVERSCROLL_LIMIT;
@@ -1242,20 +1256,19 @@ impl Application for TextApp {
                     } else {
                         unconstrained_y.max(content_top).min(content_bottom)
                     };
-                    
+
                     self.trackpad_laser_x = Some(new_laser_x);
                     self.trackpad_laser_y = Some(new_laser_y);
-                    
-                    // Update cursor position based on laser
-                    let (text_x, text_y) = self.to_text_xy(state, new_laser_x, new_laser_y);
-                    
-                    let char_index = self.find_nearest_char_index(text_x, text_y);
-                    
-                    // If selecting, update selection end; otherwise just move cursor
-                    if self.trackpad_selecting {
-                        self.selection_end = Some(char_index);
+
+                    // Only move caret/selection while the laser is over this pane (still free elsewhere for future UI taps).
+                    if !embed_py || self.python_viewport_contains_screen_point(new_laser_x, new_laser_y) {
+                        let (text_x, text_y) = self.to_text_xy(state, new_laser_x, new_laser_y);
+                        let char_index = self.find_nearest_char_index(text_x, text_y);
+                        if self.trackpad_selecting {
+                            self.selection_end = Some(char_index);
+                        }
+                        self.cursor_position = char_index;
                     }
-                    self.cursor_position = char_index;
                 }
                 
                 // Update last mouse position
@@ -1545,10 +1558,13 @@ impl Application for TextApp {
             self.pending_cursor_tap_x = Some(state.mouse.x);
             self.pending_cursor_tap_y = Some(state.mouse.y);
             self.initial_scroll_target = self.scroll_target;
-            
-            // Clear any existing selection when starting a new interaction
-            self.selection_start = None;
-            self.selection_end = None;
+
+            // Standalone taps clear prior selection before drag; embedded multi-editor taps keep selections
+            // per pane until an explicit caret placement on that pane (persist across unfocus elsewhere).
+            if self.python_viewport.is_none() {
+                self.selection_start = None;
+                self.selection_end = None;
+            }
         }
         
         // Update tap tracking
@@ -1582,10 +1598,12 @@ impl Application for TextApp {
                 let (text_x, text_y) = self.to_text_xy(state, tap_x, tap_y);
                 let char_index = self.find_nearest_char_index(text_x, text_y);
                 self.cursor_position = char_index;
-                
-                // Clear selection when clicking without drag
-                self.selection_start = None;
-                self.selection_end = None;
+
+                // Embedded widgets: preserve selection across focus; omit tap-to-dismiss here.
+                if self.python_viewport.is_none() {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
             }
             
             // Clear pending cursor position
@@ -1599,12 +1617,15 @@ impl Application for TextApp {
         self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        // Clear selection on tap release if no drag occurred
-        if self.trackpad_active && !self.trackpad_moved && !self.trackpad_selecting {
+        if self.python_viewport.is_none()
+            && self.trackpad_active
+            && !self.trackpad_moved
+            && !self.trackpad_selecting
+        {
             self.selection_start = None;
             self.selection_end = None;
         }
-        
+
         // Clear trackpad tracking (but keep laser visible)
         self.trackpad_active = false;
         self.trackpad_selecting = false;
@@ -1640,11 +1661,12 @@ impl TextApp {
 
     /// Selection + trackpad laser for [`xos.ui._text_render`] (fields stay crate-private otherwise).
     pub fn ui_peek_overlay(&self) -> (Option<usize>, Option<usize>, Option<(f32, f32)>) {
-        (
-            self.selection_start,
-            self.selection_end,
-            self.trackpad_laser_x.zip(self.trackpad_laser_y),
-        )
+        let laser = if self.python_viewport.is_some() && !self.py_input_focused {
+            None
+        } else {
+            self.trackpad_laser_x.zip(self.trackpad_laser_y)
+        };
+        (self.selection_start, self.selection_end, laser)
     }
 
     /// Cursor + selection state used by collaborative wrappers (e.g. text mesh).

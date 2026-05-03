@@ -232,13 +232,24 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     };
     let mx = state.mouse.x;
     let my = state.mouse.y;
+    let ptr_in_osk = pointer_mouse_in_shown_osk_strip(state);
+    let trackpad_global_pointer = state.keyboard.onscreen.is_trackpad_mode() && state.keyboard.onscreen.is_shown();
+
     if t.python_viewport.is_some() {
         let skip = match &kind {
             PyUiEventKind::Key(_) | PyUiEventKind::Shortcut(_) => !t.py_input_focused,
-            PyUiEventKind::Scroll { .. }
-            | PyUiEventKind::MouseDown
-            | PyUiEventKind::MouseUp
-            | PyUiEventKind::MouseMove => !t.python_viewport_contains_screen_point(mx, my),
+            PyUiEventKind::Scroll { .. } => ptr_in_osk || !t.python_viewport_contains_screen_point(mx, my),
+            PyUiEventKind::MouseDown | PyUiEventKind::MouseUp | PyUiEventKind::MouseMove => {
+                // OSK strip: ignore for embed text *except* the focused editor in trackpad mode — the strip
+                // drives laser / selection; typing mode still blocks (ptr_in_osk && !trackpad keeps keys off text).
+                if ptr_in_osk && !(trackpad_global_pointer && t.py_input_focused) {
+                    true
+                } else if trackpad_global_pointer {
+                    !t.py_input_focused
+                } else {
+                    !t.python_viewport_contains_screen_point(mx, my)
+                }
+            }
         };
         if skip {
             return;
@@ -263,6 +274,12 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32, py_
         return;
     };
     t.py_input_focused = py_input_focused;
+
+    // Unfocused embed widgets must not retain a phantom trackpad laser (only the focused pane drives it).
+    if t.python_viewport.is_some() && !py_input_focused {
+        t.clear_trackpad_state_for_python_embed_handoff();
+    }
+
     // Quarter-pixel quantization: stray float noise from Python shouldn't rebuild layout / clear glyphs every tick.
     let fs = (font_size_px * 4.0).round() / 4.0;
     if (t.text_rasterizer.font_size - fs).abs() >= 0.02 {
