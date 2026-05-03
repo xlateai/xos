@@ -864,33 +864,28 @@ xos.print = __custom_print__
     }
     
     fn execute_background_script(&mut self, code: &str) {
-        // Clone what we need for the thread
         let code_str = code.to_string();
-        let output_buffer = Arc::clone(&self.python_output_buffer);
-        let running_flag = Arc::clone(&self.python_thread_running);
-        let generation_counter = Arc::clone(&self.python_thread_generation);
-        
-        // Increment generation (invalidates any previous thread's output)
+
         let current_generation = {
             let mut gen = self.python_thread_generation.lock().unwrap();
             *gen += 1;
             *gen
         };
-        
-        // Mark thread as running
+
         *self.python_thread_running.lock().unwrap() = true;
-        
-        // Spawn background thread to execute Python
-        let handle = thread::spawn(move || {
-            // Create interpreter in this thread
-            let interpreter = Interpreter::with_init(Default::default(), |vm| {
-                vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
-            });
-            
-            // Create print callback that checks generation
+
+        #[cfg(not(target_os = "ios"))]
+        let output_buffer = Arc::clone(&self.python_output_buffer);
+        #[cfg(not(target_os = "ios"))]
+        let running_flag = Arc::clone(&self.python_thread_running);
+        #[cfg(not(target_os = "ios"))]
+        let generation_counter = Arc::clone(&self.python_thread_generation);
+
+        #[cfg(not(target_os = "ios"))]
+        let print_callback: crate::python_api::runtime::PrintCallback = {
             let buffer_for_callback = Arc::clone(&output_buffer);
             let gen_for_callback = Arc::clone(&generation_counter);
-            let print_callback: crate::python_api::runtime::PrintCallback = Arc::new(move |text: &str| {
+            Arc::new(move |text: &str| {
                 if let Ok(current_gen) = gen_for_callback.lock() {
                     if *current_gen == current_generation {
                         if let Ok(mut buffer) = buffer_for_callback.lock() {
@@ -898,45 +893,88 @@ xos.print = __custom_print__
                         }
                     }
                 }
-            });
-            
-            // Execute using unified runtime
-            let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
-                &interpreter,
-                &code_str,
-                "<coder>",
-                None,
-                Some(print_callback),
-                &[],
-            );
-            
-            // Handle errors (only if still current generation)
-            if let Err(error_msg) = result {
-                if let Ok(current_gen) = generation_counter.lock() {
-                    if *current_gen == current_generation {
-                        if let Ok(mut buffer) = output_buffer.lock() {
-                            buffer.push_str("\n");
-                            buffer.push_str(&error_msg);
-                            buffer.push_str("\n");
+            })
+        };
+
+        #[cfg(not(target_os = "ios"))]
+        {
+            let pc = Arc::clone(&print_callback);
+            let handle = thread::spawn(move || {
+                let interpreter = Interpreter::with_init(Default::default(), |vm| {
+                    vm.add_native_module(
+                        "xos".to_owned(),
+                        Box::new(crate::python_api::xos_module::make_module),
+                    );
+                });
+
+                let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
+                    &interpreter,
+                    &code_str,
+                    "<coder>",
+                    None,
+                    Some(pc),
+                    &[],
+                );
+
+                if let Err(error_msg) = result {
+                    if let Ok(current_gen) = generation_counter.lock() {
+                        if *current_gen == current_generation {
+                            if let Ok(mut buffer) = output_buffer.lock() {
+                                buffer.push_str("\n");
+                                buffer.push_str(&error_msg);
+                                buffer.push_str("\n");
+                            }
                         }
                     }
                 }
-            }
-            
-            // Mark thread as no longer running (only if still current generation)
-            if let Ok(current_gen) = generation_counter.lock() {
-                if *current_gen == current_generation {
-                    if let Ok(mut flag) = running_flag.lock() {
-                        *flag = false;
+
+                if let Ok(current_gen) = generation_counter.lock() {
+                    if *current_gen == current_generation {
+                        if let Ok(mut flag) = running_flag.lock() {
+                            *flag = false;
+                        }
                     }
                 }
+            });
+            self.python_thread_handle = Some(handle);
+        }
+
+        #[cfg(target_os = "ios")]
+        {
+            let buffer_for_ios = Arc::clone(&self.python_output_buffer);
+            let gen_for_ios = Arc::clone(&self.python_thread_generation);
+            let print_callback_ios: crate::python_api::runtime::PrintCallback = Arc::new(
+                move |text: &str| {
+                    if let Ok(current_gen) = gen_for_ios.lock() {
+                        if *current_gen == current_generation {
+                            if let Ok(mut buffer) = buffer_for_ios.lock() {
+                                buffer.push_str(text);
+                            }
+                        }
+                    }
+                },
+            );
+
+            // Main/engine thread only: interpreter + AudioSession/player are not reliably used from a spawned thread here.
+            let (result, _, _, _) = crate::python_api::runtime::execute_python_code(
+                &self.interpreter,
+                &code_str,
+                "<coder>",
+                None,
+                Some(print_callback_ios),
+                &[],
+            );
+            if let Err(error_msg) = result {
+                if let Ok(mut buffer) = self.python_output_buffer.lock() {
+                    buffer.push_str("\n");
+                    buffer.push_str(&error_msg);
+                    buffer.push_str("\n");
+                }
             }
-        });
-        
-        // Store the thread handle
-        self.python_thread_handle = Some(handle);
-        
-        // Switch to terminal tab to show output
+            *self.python_thread_running.lock().unwrap() = false;
+            self.python_thread_handle = None;
+        }
+
         if self.active_tab == Tab::Code {
             self.active_tab = Tab::Terminal;
         }
@@ -1217,19 +1255,16 @@ builtins.print = __custom_print__
             return;
         }
 
-        // Stop viewport app if running.
         if is_viewport_running {
             self.viewport_app = None;
             self.viewport_app_setup_done = false;
             self.viewport_ticks_completed = 0;
-            crate::python_api::audio::cleanup_all_audio();
             self.terminal_app
                 .text_rasterizer
                 .text
                 .push_str("\n[xos] Viewport app stopped\n");
         }
 
-        // Stop background thread if running.
         if is_background_running {
             if let Ok(mut gen) = self.python_thread_generation.lock() {
                 *gen += 1;
@@ -1238,10 +1273,13 @@ builtins.print = __custom_print__
                 *flag = false;
             }
             self.python_thread_handle = None;
-            crate::python_api::audio::cleanup_all_audio();
             if let Ok(mut buffer) = self.python_output_buffer.lock() {
                 buffer.push_str("\n[xos] Script stopped by user\n");
             }
+        }
+
+        if is_viewport_running || is_background_running {
+            crate::python_api::audio::cleanup_all_audio();
         }
     }
     

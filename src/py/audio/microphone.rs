@@ -604,14 +604,15 @@ pub fn cleanup_all_microphones(_args: FuncArgs, vm: &VirtualMachine) -> PyResult
     Ok(vm.ctx.none())
 }
 
-/// Rust-side function to cleanup all microphones (called from CoderApp Drop)
-pub fn cleanup_all_microphones_rust() {
+/// Rust-side teardown for all active listeners. Returns count dropped (quiet when zero).
+pub fn cleanup_all_microphones_rust() -> usize {
     let mic_ptrs: Vec<usize> = if let Ok(mut mics) = get_active_microphones().lock() {
         let ptrs: Vec<usize> = mics.drain().collect();
         ptrs
     } else {
         vec![]
     };
+    let n = mic_ptrs.len();
     
     // Immediately destroy at iOS level (instant mic light off)
     #[cfg(target_os = "ios")]
@@ -634,5 +635,6 @@ pub fn cleanup_all_microphones_rust() {
             }
         }
     }
+    n
 }
 
