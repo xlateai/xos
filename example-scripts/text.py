@@ -1,6 +1,9 @@
 import xos
 
 
+DEFAULT_FONT_SIZE = 48.0
+
+
 class TextDemo(xos.Application):
     def __init__(self):
         super().__init__()
@@ -12,7 +15,7 @@ class TextDemo(xos.Application):
             0,  # top left
             1.0,
             1.0,  # bottom right (normalized viewport coordinates)
-            font_size=24.0 * self.scale,  # scaling font size with f3 menu
+            font_size=DEFAULT_FONT_SIZE * self.scale,  # scaling font size with f3 menu
             color=xos.color.WHITE,
             hitboxes=True,
             baselines=True,
@@ -24,6 +27,8 @@ class TextDemo(xos.Application):
 
     def tick(self):
         # color = xos.color.WHITE if self.t % 2 == 0 else xos.color.RED
+
+        self.text.font_size = DEFAULT_FONT_SIZE * self.scale
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
