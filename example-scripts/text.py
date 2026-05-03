@@ -11,7 +11,7 @@ class TextDemo(xos.Application):
         self.keyboard = xos.ui.onscreen_keyboard()
         # Font uses the engine/F3 default family; `scale` applies on each tick () after xos_sync.
         self.text = xos.ui.text(
-            "hello world",
+            "",
             0,
             0,  # top left
             1.0,
@@ -20,8 +20,8 @@ class TextDemo(xos.Application):
             font=None,
             font_size=DEFAULT_FONT_SIZE,
             color=xos.color.WHITE,
-            hitboxes=False,
-            baselines=False,
+            hitboxes=True,
+            baselines=True,
             selectable=True,
             scrollable=True,
             show_cursor=True,
