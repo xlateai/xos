@@ -723,8 +723,9 @@ class Text:
                 yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
                 vw = max(1, xb - xa)
                 vh = max(1, yb - ya)
-                mx = float(app.mouse["x"])
-                my = float(app.mouse["y"])
+                # Prefer routed event coordinates (same frame as native hit-testing); fall back to app.mouse.
+                mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
                 self.is_focused = xa <= mx < xa + vw and ya <= my < ya + vh
         nid = getattr(self, "_native_id", None)
         if nid is None:

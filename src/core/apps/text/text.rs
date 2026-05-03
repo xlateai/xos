@@ -1,3 +1,7 @@
+//! [`TextApp`] — scrollable/editor shell used by standalone panels, [`xos.ui.Text`], Coder buffers, meshes, ….
+//! The interactive **`text`** binary target (`xos app text`) runs Python from [`super::launcher`] + `text.py`, not [`Application`] for [`TextApp`] directly.
+//!
+//! To experiment with legacy Rust-as-app behavior locally, instantiate [`TextApp`] in a scratch `main` / test harness.
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
@@ -448,7 +452,7 @@ impl TextApp {
         let draw_off_y = ctx.draw_off_y;
         let layout_w = ctx.layout_w;
         let visible_height = ctx.visible_height;
-        let content_top = ctx.content_top;
+        let _content_top = ctx.content_top;
         let is_trackpad_mode = ctx.is_trackpad_mode;
         let is_keyboard_shown = ctx.is_keyboard_shown;
         let paint_cursor = ctx.paint_cursor;
@@ -554,8 +558,9 @@ impl TextApp {
             }
 
             for (_line_idx, (min_x, max_x, baseline_y)) in line_selections.iter() {
-                let sel_left = *min_x as i32;
-                let sel_right = *max_x as i32;
+                // Layout-space spans must be offset by the embed viewport origin (same as glyph `px`).
+                let sel_left = (draw_off_x + *min_x).round() as i32;
+                let sel_right = (draw_off_x + *max_x).round() as i32;
                 let sel_top =
                     ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y) as i32;
                 let sel_bottom =
@@ -687,10 +692,6 @@ impl TextApp {
         if is_trackpad_mode && is_keyboard_shown {
             // One shared laser across Python embed widgets: draw only from the focused editor.
             if !(self.python_viewport.is_some() && !self.py_input_focused) {
-            if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
-                self.initialize_laser_at_cursor(content_top);
-            }
-
             if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
                 let dot_radius = 6.0;
                 let dot_x_i = laser_x.round() as i32;
@@ -744,6 +745,12 @@ impl TextApp {
         let is_keyboard_shown = engine.keyboard.onscreen.is_shown();
 
         let vp_m = self.viewport_metrics(engine);
+        if is_trackpad_mode && is_keyboard_shown {
+            // One shared laser across Python embed widgets; ensure coords exist before painting.
+            if !(self.python_viewport.is_some() && !self.py_input_focused) {
+                self.ensure_trackpad_laser_initialized(engine);
+            }
+        }
         let ctx = self.build_viewport_paint_ctx(
             vp_m,
             width,
@@ -1174,10 +1181,8 @@ impl Application for TextApp {
         // Check if temp trackpad mode should be activated (Shift/SymbolToggle drag)
         if let (Some(initial_x), Some(initial_y)) = (self.temp_trackpad_initial_x, self.temp_trackpad_initial_y) {
             if state.keyboard.onscreen.check_temp_trackpad_activation(initial_x, initial_y, state.mouse.x, state.mouse.y) {
-                // Temp trackpad mode was activated - initialize laser at cursor position
-                let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = self.layout_content_top(safe_region.y1, height);
-                self.initialize_laser_at_cursor(content_top);
+                // Temp trackpad mode was activated — bootstrap laser using cursor / anchors.
+                self.ensure_trackpad_laser_initialized(state);
                 
                 // Clear initial position tracking
                 self.temp_trackpad_initial_x = None;
@@ -1192,11 +1197,9 @@ impl Application for TextApp {
         
         // Check if we're in trackpad mode AND actively using it
         if state.keyboard.onscreen.is_trackpad_mode() {
-            // Initialize laser if not set (at current cursor position)
+            // Bootstrap laser if unset (last plain click, strip-proportional fallback, or caret).
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
-                let safe_region = &state.frame.safe_region_boundaries;
-                let content_top = self.layout_content_top(safe_region.y1, height);
-                self.initialize_laser_at_cursor(content_top);
+                self.ensure_trackpad_laser_initialized(state);
             }
             
             // If mouse is in trackpad area and active (dragging), move the laser
@@ -1415,6 +1418,7 @@ impl Application for TextApp {
                 }
             } else {
                 self.touch_started_on_keyboard = false;
+                state.embed_last_plain_click_screen = Some((state.mouse.x, state.mouse.y));
             }
         }
 
@@ -1456,11 +1460,8 @@ impl Application for TextApp {
             if state.mouse.y >= keyboard_region_top {
                 self.trackpad_active = true;
                 
-                // Initialize laser position at current cursor position
                 if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
-                    let safe_region = &state.frame.safe_region_boundaries;
-                    let content_top = self.layout_content_top(safe_region.y1, height);
-                    self.initialize_laser_at_cursor(content_top);
+                    self.ensure_trackpad_laser_initialized(state);
                 }
                 
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
@@ -1599,8 +1600,11 @@ impl Application for TextApp {
                 let char_index = self.find_nearest_char_index(text_x, text_y);
                 self.cursor_position = char_index;
 
-                // Embedded widgets: preserve selection across focus; omit tap-to-dismiss here.
+                // Standalone clears selection on caret taps; embedded clears only when the tap lands in this pane.
                 if self.python_viewport.is_none() {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                } else if self.python_viewport_contains_screen_point(tap_x, tap_y) {
                     self.selection_start = None;
                     self.selection_end = None;
                 }
@@ -1617,13 +1621,13 @@ impl Application for TextApp {
         self.selecting = false;
         // Reset touch tracking
         self.touch_started_on_keyboard = false;
-        if self.python_viewport.is_none()
-            && self.trackpad_active
-            && !self.trackpad_moved
-            && !self.trackpad_selecting
-        {
-            self.selection_start = None;
-            self.selection_end = None;
+        if self.trackpad_active && !self.trackpad_moved && !self.trackpad_selecting {
+            let clear_sel = self.python_viewport.is_none()
+                || (self.python_viewport.is_some() && self.py_input_focused);
+            if clear_sel {
+                self.selection_start = None;
+                self.selection_end = None;
+            }
         }
 
         // Clear trackpad tracking (but keep laser visible)
@@ -1687,13 +1691,60 @@ impl TextApp {
         self.selection_end = selection_end.map(|v| v.min(text_len));
     }
 
-    /// Initialize trackpad laser at current cursor position
-    fn initialize_laser_at_cursor(&mut self, content_top: f32) {
+    /// Cursor / layout → full-frame pixel position (Python embed [`TextViewportMetrics::draw_x`] / `draw_y`).
+    fn initialize_laser_at_cursor(&mut self, state: &EngineState) {
+        let vp = self.viewport_metrics(state);
         let (cursor_x, cursor_baseline_y) = self.get_cursor_screen_position();
-        // Convert text coordinates to screen coordinates
-        let screen_y = cursor_baseline_y - self.scroll_y + content_top;
-        self.trackpad_laser_x = Some(cursor_x);
+        let screen_x = vp.draw_x + cursor_x;
+        let screen_y = cursor_baseline_y - self.scroll_y + vp.draw_y;
+        self.trackpad_laser_x = Some(screen_x);
         self.trackpad_laser_y = Some(screen_y);
+    }
+
+    /// Ensure the red trackpad dot exists: embed prefers last content click, then strip-normalized Y, then caret.
+    fn ensure_trackpad_laser_initialized(&mut self, state: &EngineState) {
+        if self.trackpad_laser_x.is_some() && self.trackpad_laser_y.is_some() {
+            return;
+        }
+        let shape = state.frame.shape();
+        let height = shape[0] as f32;
+        let width = shape[1] as f32;
+        let safe_region = &state.frame.safe_region_boundaries;
+        let (_, keyboard_top_y_n, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+        let y_global_min = safe_region.y1 * height;
+        let keyboard_top_px = keyboard_top_y_n * height;
+        let y_global_max_raw = if keyboard_top_px > y_global_min + 2.0 {
+            keyboard_top_px - 2.0
+        } else {
+            keyboard_top_px
+        };
+        let y_global_max = y_global_max_raw.max(y_global_min);
+
+        if self.python_viewport.is_some() {
+            if let Some((px, py)) = state.embed_last_plain_click_screen {
+                self.trackpad_laser_x = Some(px.clamp(0.0, width));
+                self.trackpad_laser_y = Some(py.clamp(y_global_min, y_global_max));
+                return;
+            }
+            if state.keyboard.onscreen.is_shown() {
+                let my = state.mouse.y;
+                let strip_top = keyboard_top_px;
+                if my >= strip_top {
+                    let strip_bottom = height;
+                    let denom = (strip_bottom - strip_top).max(1.0);
+                    let t_strip = ((my - strip_top) / denom).clamp(0.0, 1.0);
+                    let ly = y_global_min + t_strip * (y_global_max - y_global_min);
+                    let lx = state.mouse.x.clamp(0.0, width);
+                    self.trackpad_laser_x = Some(lx);
+                    self.trackpad_laser_y = Some(ly);
+                    return;
+                }
+            }
+            self.initialize_laser_at_cursor(state);
+            return;
+        }
+
+        self.initialize_laser_at_cursor(state);
     }
     
     /// Auto-scroll to keep cursor visible on screen

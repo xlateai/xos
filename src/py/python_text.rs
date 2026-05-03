@@ -239,9 +239,20 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
         let skip = match &kind {
             PyUiEventKind::Key(_) | PyUiEventKind::Shortcut(_) => !t.py_input_focused,
             PyUiEventKind::Scroll { .. } => ptr_in_osk || !t.python_viewport_contains_screen_point(mx, my),
-            PyUiEventKind::MouseDown | PyUiEventKind::MouseUp | PyUiEventKind::MouseMove => {
-                // OSK strip: ignore for embed text *except* the focused editor in trackpad mode — the strip
-                // drives laser / selection; typing mode still blocks (ptr_in_osk && !trackpad keeps keys off text).
+            // MouseDown/MouseUp: content hits must use viewport routing so an unfocused pane can take focus
+            // even while the OSK is in trackpad mode (otherwise only the focused editor received clicks).
+            PyUiEventKind::MouseDown | PyUiEventKind::MouseUp => {
+                if ptr_in_osk && !(trackpad_global_pointer && t.py_input_focused) {
+                    true
+                } else if trackpad_global_pointer && ptr_in_osk {
+                    !t.py_input_focused
+                } else {
+                    !t.python_viewport_contains_screen_point(mx, my)
+                }
+            }
+            // MouseMove: keep focused-only delivery in trackpad mode so the laser tracks across the full
+            // frame without requiring the pointer to stay inside the editor rect.
+            PyUiEventKind::MouseMove => {
                 if ptr_in_osk && !(trackpad_global_pointer && t.py_input_focused) {
                     true
                 } else if trackpad_global_pointer {

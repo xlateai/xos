@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub mod launcher;
 pub mod readonly_embed;
 pub mod text;
 

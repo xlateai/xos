@@ -702,6 +702,7 @@ impl ApplicationHandler for AppStateWrapper {
                 frame_view_center_x: 0.5,
                 frame_view_center_y: 0.5,
                 f3_fps_label_override: None,
+                embed_last_plain_click_screen: None,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -836,6 +837,7 @@ pub fn start_headless_native(
         frame_view_center_x: 0.5,
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
+        embed_last_plain_click_screen: None,
     };
 
     if let Err(e) = app.setup(&mut engine_state) {

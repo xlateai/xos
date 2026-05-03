@@ -215,6 +215,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         frame_view_center_x: 0.5,
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
+        embed_last_plain_click_screen: None,
     };
 
     // Call setup

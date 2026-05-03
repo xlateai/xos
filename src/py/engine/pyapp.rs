@@ -60,17 +60,62 @@ pub(crate) enum RoutedPyEvent {
     Shortcut(ShortcutAction),
 }
 
-fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent) -> PyResult {
+fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &EngineState) -> PyResult {
     let d = vm.ctx.new_dict();
     match ev {
         RoutedPyEvent::MouseDown => {
             d.set_item("kind", vm.ctx.new_str("mouse_down").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
         }
         RoutedPyEvent::MouseUp => {
             d.set_item("kind", vm.ctx.new_str("mouse_up").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
         }
         RoutedPyEvent::MouseMove => {
             d.set_item("kind", vm.ctx.new_str("mouse_move").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
         }
         RoutedPyEvent::Scroll { dx, dy, unit } => {
             d.set_item("kind", vm.ctx.new_str("scroll").into(), vm)?;
@@ -114,7 +159,7 @@ fn try_dispatch_python_on_events(
     if !cb.is_callable() {
         return;
     }
-    let dict = match build_routed_event_dict(vm, ev) {
+    let dict = match build_routed_event_dict(vm, ev, state) {
         Ok(o) => o,
         Err(e) => {
             eprintln!(
@@ -567,6 +612,8 @@ class Application:
 
     Routed input sets ``self._xos_event`` (a dict with ``kind``, etc.) before ``on_events()`` runs and
     clears it only after your handler returns, so every component sees the same event in one call.
+    Pointer kinds ``mouse_down``, ``mouse_up``, and ``mouse_move`` also include ``x``, ``y`` (frame px),
+    ``button`` (``\"left\"`` / ``\"right\"``), ``is_left``, and ``is_right`` for parity with host events.
     Kinds include mouse, scroll, ``key_char``, and desktop ``shortcut`` (e.g. Cmd/Ctrl+C/V/X/A).
     Conventional order is ``self.keyboard.on_events(self)`` then ``self.text.on_events(self)`` for
     pointer, ``key_char``, and shortcuts alike — no special cases per event type are required.

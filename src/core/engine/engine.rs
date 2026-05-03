@@ -353,6 +353,9 @@ pub struct EngineState {
     /// When set, the F3 overlay shows this value as “FPS” instead of `1 / delta_time_seconds`
     /// (e.g. remote viewer reports actual stream frame rate).
     pub f3_fps_label_override: Option<f32>,
+    /// Python multi-editor hosts: last pointer down in embed **content** (above the visible OSK), screen px.
+    /// Used to bootstrap the trackpad laser when there is no live cursor-mapping yet.
+    pub embed_last_plain_click_screen: Option<(f32, f32)>,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).
