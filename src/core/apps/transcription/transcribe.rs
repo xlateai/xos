@@ -886,15 +886,8 @@ impl TranscribeApp {
 
         let new_font = fonts::default_font();
 
-        let vad_size = self.vad_label.font_size;
-        let vad_text = self.vad_label.text.clone();
-        self.vad_label = TextRasterizer::new(new_font.clone(), vad_size);
-        self.vad_label.set_text(vad_text);
-
-        let state_size = self.state_label.font_size;
-        let state_text = self.state_label.text.clone();
-        self.state_label = TextRasterizer::new(new_font.clone(), state_size);
-        self.state_label.set_text(state_text);
+        self.vad_label.set_font(new_font.clone());
+        self.state_label.set_font(new_font.clone());
 
         self.text_font = new_font.clone();
         self.transcript_view.set_font(new_font);

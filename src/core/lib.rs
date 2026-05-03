@@ -92,19 +92,29 @@ fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Symlink- and `/var`↔`/private/var`-stable root so `target/standard` (and other isolated dirs) do
+/// not split across two paths when the repo is found via [`std::env::current_dir`] vs
+/// [`std::env::current_exe`] (e.g. `cd ~/clone` vs running `target/standard/release/xos`).
+fn normalize_repo_root(p: PathBuf) -> PathBuf {
+    match fs::canonicalize(&p) {
+        Ok(c) => c,
+        Err(_) => p,
+    }
+}
+
 /// Locate the xos repo: the repo containing a `target/.../release|debug` `xos` binary (when that is
 /// what is running), else walk parents of the executable, then compile-time
 /// [`CARGO_MANIFEST_DIR`] (for `cargo install` copies), then walk up from [`std::env::current_dir`].
 pub fn find_xos_project_root() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = project_root_from_target_executable(&exe) {
-            return Ok(root);
+            return Ok(normalize_repo_root(root));
         }
         let mut opt = exe.parent().map(PathBuf::from);
         for _ in 0..16 {
             if let Some(ref dir) = opt {
                 if is_xos_project_root(dir) {
-                    return Ok(dir.clone());
+                    return Ok(normalize_repo_root(dir.clone()));
                 }
                 opt = dir.parent().map(PathBuf::from);
             } else {
@@ -116,7 +126,7 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
     if let Some(dir) = option_env!("CARGO_MANIFEST_DIR") {
         let p = PathBuf::from(dir);
         if is_xos_project_root(&p) {
-            return Ok(p);
+            return Ok(normalize_repo_root(p));
         }
     }
 
@@ -124,11 +134,11 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
         std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
     loop {
         if is_xos_project_root(&current) {
-            return Ok(current);
+            return Ok(normalize_repo_root(current));
         }
         let xos_sub = current.join("xos");
         if is_xos_project_root(&xos_sub) {
-            return Ok(xos_sub);
+            return Ok(normalize_repo_root(xos_sub));
         }
         match current.parent() {
             Some(parent) => current = parent.to_path_buf(),

@@ -2,7 +2,7 @@ use crate::engine::{Application, EngineState};
 use crate::rasterizer::text::fonts;
 use crate::tuneable::write_all_to_source;
 use crate::tuneables;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::rasterizer::text::text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer};
 
 tuneables! {
     left_edge: f32 = 0.15610886;
@@ -31,6 +31,7 @@ enum DragRegion {
 
 pub struct WireframeText {
     pub text_rasterizer: TextRasterizer,
+    default_font_version: u64,
     dragging: DragRegion,
     drag_offset_x: f32,
     drag_offset_y: f32,
@@ -44,6 +45,7 @@ impl WireframeText {
 
         Self {
             text_rasterizer,
+            default_font_version: fonts::default_font_version(),
             dragging: DragRegion::None,
             drag_offset_x: 0.0,
             drag_offset_y: 0.0,
@@ -152,6 +154,10 @@ impl Application for WireframeText {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        let _ = sync_rasterizer_to_default_font(
+            &mut self.text_rasterizer,
+            &mut self.default_font_version,
+        );
         state.frame_buffer_mut().chunks_exact_mut(4).for_each(|p| {
             p[0] = BACKGROUND_COLOR.0;
             p[1] = BACKGROUND_COLOR.1;

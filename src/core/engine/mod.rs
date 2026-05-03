@@ -35,9 +35,12 @@ pub use f3_menu::{
     f3_menu_boost_interaction_fade,
     f3_menu_handle_frame_zoom_scroll,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
-    f3_menu_handle_zoom_scroll, tick_f3_menu,
+    f3_menu_handle_zoom_scroll, tick_f3_menu, tick_overlay_red_pointer,
+    tick_overlay_red_pointer_xy,
     F3Menu,
 };
+#[cfg(target_os = "ios")]
+pub use f3_menu::IosRemoteMeshTransport;
 pub use engine::{
     apply_frame_view_zoom, f3_ui_scale_multiplier, frame_view_pan_by_pixels,
     frame_view_rect_norm, tick_frame_delta, tick_frame_view_zoom, Application,

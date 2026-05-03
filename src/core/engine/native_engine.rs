@@ -424,7 +424,8 @@ impl ApplicationHandler for AppState {
             WindowEvent::Ime(ime) => {
                 match ime {
                     winit::event::Ime::Commit(text) => {
-                        for ch in text.chars() {
+                        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                        for ch in normalized.chars() {
                             let _ = self.app.on_key_char(&mut self.engine_state, ch);
                         }
                     }
@@ -537,14 +538,32 @@ impl ApplicationHandler for AppState {
                         },
                     );
 
+                    // Named keys routed through `Application::on_special_key` already call `on_key_char`;
+                    // winit often also fills `KeyboardInput.event.text` (Enter → `\r` / CRLF). Processing
+                    // both duplicates newlines/backspaces/tabs/arrows/etc.
+                    let synthetic_char_already_from_special_key = matches!(
+                        named_key,
+                        Some(
+                            NamedSpecialKey::Backspace
+                                | NamedSpecialKey::Enter
+                                | NamedSpecialKey::Escape
+                                | NamedSpecialKey::Tab
+                                | NamedSpecialKey::ArrowLeft
+                                | NamedSpecialKey::ArrowRight
+                                | NamedSpecialKey::ArrowUp
+                                | NamedSpecialKey::ArrowDown
+                        )
+                    );
+
                     // Printable text: prefer `event.text`; on macOS it is often populated only on the
                     // first keypress, then omitted while the IME session holds focus — fall back to the
                     // single character from `logical_key` when `text` is missing or empty so typing
                     // keeps working (e.g. ios_remote mesh viewer).
-                    if !suppress_printable_after_shortcut {
+                    if !suppress_printable_after_shortcut && !synthetic_char_already_from_special_key {
                         if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
-                            for ch in text.chars() {
-                                if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
+                            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+                            for ch in normalized.chars() {
+                                if !ch.is_control() || ch == '\n' || ch == '\t' {
                                     let _ = self.app.on_key_char(&mut self.engine_state, ch);
                                 }
                             }
@@ -676,6 +695,8 @@ impl ApplicationHandler for AppStateWrapper {
                 frame_view_center_x: 0.5,
                 frame_view_center_y: 0.5,
                 f3_fps_label_override: None,
+                overlay_red_pointer_enabled: false,
+                overlay_red_pointer_radius: 0.0,
             };
 
             if let Err(e) = self.app.setup(&mut engine_state) {
@@ -810,6 +831,8 @@ pub fn start_headless_native(
         frame_view_center_x: 0.5,
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
+        overlay_red_pointer_enabled: false,
+        overlay_red_pointer_radius: 0.0,
     };
 
     if let Err(e) = app.setup(&mut engine_state) {

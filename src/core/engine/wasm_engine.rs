@@ -87,6 +87,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             frame_view_center_x: 0.5,
             frame_view_center_y: 0.5,
             f3_fps_label_override: None,
+            overlay_red_pointer_enabled: false,
+            overlay_red_pointer_radius: 0.0,
         },
         app,
         command_held: false,

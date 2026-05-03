@@ -1,6 +1,7 @@
 use crate::apps::partitions::partition::{Partition, PartitionData};
 use crate::rasterizer::text::fonts;
 use fontdue::Font;
+use std::cell::{Cell, RefCell};
 use std::time::{Instant, Duration};
 
 const KEYBOARD_BG_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black
@@ -63,7 +64,8 @@ struct Key {
 pub struct OnScreenKeyboard {
     data: PartitionData,
     keys: Vec<Key>,
-    font: Font,
+    font: RefCell<Font>,
+    default_font_version: Cell<u64>,
     minimized: bool,
     shift_pressed: bool,
     symbol_mode: SymbolMode, // Standard, Symbols1, or Symbols2
@@ -105,7 +107,8 @@ impl OnScreenKeyboard {
         let mut keyboard = Self {
             data: PartitionData::new(0.0, 1.0, 0.70, 1.0, KEYBOARD_BG_COLOR),
             keys: Vec::new(),
-            font,
+            font: RefCell::new(font),
+            default_font_version: Cell::new(fonts::default_font_version()),
             minimized: minimized_default,
             shift_pressed: false,
             symbol_mode: SymbolMode::Standard,
@@ -1135,7 +1138,8 @@ impl OnScreenKeyboard {
         let key_size = (key_w as f32).min(key_h as f32);
         // Fraction of key size; no large minimum so tiny windows stay readable (avoids 18px floor dominating small keys).
         let font_size = (key_size * 0.36).clamp(9.0, 43.2);
-        let line_metrics = self.font.horizontal_line_metrics(font_size)
+        let font = self.font.borrow();
+        let line_metrics = font.horizontal_line_metrics(font_size)
             .expect("Font missing horizontal metrics");
         
         // Calculate baseline_y for proper vertical centering
@@ -1147,7 +1151,7 @@ impl OnScreenKeyboard {
         let mut character_data = Vec::new();
         
         for &ch in &label_chars {
-            let (metrics, bitmap) = self.font.rasterize(ch, font_size);
+            let (metrics, bitmap) = font.rasterize(ch, font_size);
             total_width += metrics.advance_width;
             character_data.push((ch, metrics, bitmap));
         }
@@ -1201,6 +1205,12 @@ impl Partition for OnScreenKeyboard {
         if self.minimized {
             // When minimized, don't draw anything (green line is hidden)
             return;
+        }
+
+        let v = fonts::default_font_version();
+        if v != self.default_font_version.get() {
+            self.default_font_version.set(v);
+            *self.font.borrow_mut() = fonts::default_font();
         }
 
         let w = width as f32;

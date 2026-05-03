@@ -8,7 +8,10 @@ use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use crate::engine::audio;
 use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
-use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
+use crate::rasterizer::text::{
+    fonts,
+    text_rasterization::{sync_rasterizer_to_default_font, TextRasterizer},
+};
 #[cfg(not(target_os = "ios"))]
 use dialoguer::Select;
 use std::io::{self, Write};
@@ -318,6 +321,7 @@ pub struct VadApp {
     strip: VadStripCanvas,
     vad_label: TextRasterizer,
     vad_prob_ema: f32,
+    default_font_version: u64,
 }
 
 impl VadApp {
@@ -331,6 +335,7 @@ impl VadApp {
             strip: VadStripCanvas::new(),
             vad_label,
             vad_prob_ema: 0.0,
+            default_font_version: fonts::default_font_version(),
         }
     }
 
@@ -447,6 +452,10 @@ impl Application for VadApp {
     }
 
     fn tick(&mut self, state: &mut EngineState) {
+        let _ = sync_rasterizer_to_default_font(
+            &mut self.vad_label,
+            &mut self.default_font_version,
+        );
         fill(&mut state.frame, BG);
 
         if self.listener.is_none() {

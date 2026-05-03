@@ -110,6 +110,19 @@ impl TextRasterizer {
         self.line_gap = metrics.line_gap;
     }
 
+    /// Swap the active font (same pixel size). Clears glyph cache and refreshes line metrics.
+    pub fn set_font(&mut self, font: Font) {
+        self.font = font;
+        self.glyph_cache.clear();
+        let metrics = self
+            .font
+            .horizontal_line_metrics(self.font_size)
+            .expect("Font missing horizontal metrics");
+        self.ascent = metrics.ascent;
+        self.descent = metrics.descent.abs();
+        self.line_gap = metrics.line_gap;
+    }
+
     pub fn tick(&mut self, window_width: f32, _window_height: f32) {
         // Callers often assign `text` directly (e.g. coder); normalize CRLF here too so `\r`
         // never renders as a trailing glyph on Windows-sourced files.
@@ -184,6 +197,18 @@ impl TextRasterizer {
             end_index: last_index + 1,
         });
     }
+}
+
+/// When the global default font changes (F3 menu), apply it to this rasterizer.
+/// `last_version` must track [`super::fonts::default_font_version`] for this rasterizer.
+pub fn sync_rasterizer_to_default_font(r: &mut TextRasterizer, last_version: &mut u64) -> bool {
+    let v = super::fonts::default_font_version();
+    if v == *last_version {
+        return false;
+    }
+    *last_version = v;
+    r.set_font(super::fonts::default_font());
+    true
 }
 
 

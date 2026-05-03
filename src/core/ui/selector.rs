@@ -1,6 +1,6 @@
 use crate::engine::EngineState;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use crate::rasterizer::text::fonts;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 
 /// A simple, reusable selector component for choosing between options
 pub struct Selector {
@@ -18,6 +18,7 @@ pub struct Selector {
     text_renderers: Vec<TextRasterizer>,
     /// Font size for option text
     _font_size: f32,
+    default_font_version: u64,
 }
 
 impl Selector {
@@ -44,6 +45,7 @@ impl Selector {
             animation_speed: 0.15, // Smooth animation speed
             text_renderers,
             _font_size: font_size,
+            default_font_version: fonts::default_font_version(),
         }
     }
 
@@ -123,6 +125,17 @@ impl Selector {
 
     /// Update the selector (handles animation and text rendering)
     pub fn update(&mut self, _width: f32, height: f32) {
+        let v = fonts::default_font_version();
+        if v != self.default_font_version {
+            self.default_font_version = v;
+            let f = fonts::default_font();
+            for (i, tr) in self.text_renderers.iter_mut().enumerate() {
+                if let Some(opt) = self.options.get(i) {
+                    tr.set_font(f.clone());
+                    tr.set_text(opt.clone());
+                }
+            }
+        }
         if self.is_open {
             // Animate opening
             self.animation_progress = (self.animation_progress + self.animation_speed).min(1.0);
