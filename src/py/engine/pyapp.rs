@@ -1,6 +1,7 @@
 use rustpython_vm::{
     Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
 };
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
 
@@ -52,6 +53,7 @@ pub(crate) enum RoutedPyEvent {
     MouseMove,
     Scroll { dx: f32, dy: f32 },
     KeyChar(char),
+    Shortcut(ShortcutAction),
 }
 
 fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent) -> PyResult {
@@ -74,6 +76,18 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent) -> PyResult {
         RoutedPyEvent::KeyChar(ch) => {
             d.set_item("kind", vm.ctx.new_str("key_char").into(), vm)?;
             d.set_item("char", vm.ctx.new_str(ch.to_string()).into(), vm)?;
+        }
+        RoutedPyEvent::Shortcut(sa) => {
+            d.set_item("kind", vm.ctx.new_str("shortcut").into(), vm)?;
+            let action = match sa {
+                ShortcutAction::Copy => "copy",
+                ShortcutAction::Cut => "cut",
+                ShortcutAction::Paste => "paste",
+                ShortcutAction::SelectAll => "select_all",
+                ShortcutAction::Undo => "undo",
+                ShortcutAction::Redo => "redo",
+            };
+            d.set_item("action", vm.ctx.new_str(action).into(), vm)?;
         }
     }
     Ok(d.into())
@@ -544,8 +558,9 @@ class Application:
 
     Routed input sets ``self._xos_event`` (a dict with ``kind``, etc.) before ``on_events()`` runs and
     clears it only after your handler returns, so every component sees the same event in one call.
+    Kinds include mouse, scroll, ``key_char``, and desktop ``shortcut`` (e.g. Cmd/Ctrl+C/V/X/A).
     Conventional order is ``self.keyboard.on_events(self)`` then ``self.text.on_events(self)`` for
-    pointer and ``key_char`` alike — no special cases per event type are required.
+    pointer, ``key_char``, and shortcuts alike — no special cases per event type are required.
     """
     
     def __init__(self, headless=None):
@@ -969,6 +984,14 @@ Call super().__init__() in your app __init__ before using tick()."
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::KeyChar(ch));
+            });
+        }
+    }
+
+    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
+        if let Some(ref app_instance) = self.app_instance {
+            self.interpreter.enter(|vm| {
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::Shortcut(shortcut));
             });
         }
     }

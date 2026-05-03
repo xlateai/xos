@@ -41,7 +41,9 @@ const DRAG_MOMENTUM_SETTLE_FOR_TAP: f32 = 130.0;
 /// Standalone text only: 30% smaller than the prior default while the F3 slider stays at 50% = 1.0× engine coeff.
 const TEXT_STANDALONE_SIZE_FACTOR: f32 = 0.7;
 
-const MOUSE_WHEEL_LINE_SCALE: f32 = 80.0;
+/// Discrete line-delta wheels only (`dy.abs() <= 3` heuristic). Larger `dy` stays on the trackpad-pixel path (~1×).
+/// 3× prior default — physical wheels felt too slow versus trackpad drag scrolling.
+const MOUSE_WHEEL_LINE_SCALE: f32 = 240.0;
 /// Per wheel event: adds to [`TextApp::wheel_accel_target`] (0..=1). Sustained scrolling stacks toward 3×.
 const WHEEL_CHARGE_PER_NOTCH: f32 = 0.085;
 /// Idle decay of wheel streak per [`SCROLL_REF_DT`] (no momentum after you stop — target eases down).
@@ -1356,10 +1358,15 @@ impl Application for TextApp {
     }
     
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
+        self.apply_keyboard_shortcut(shortcut, state);
+    }
+}
+
+impl TextApp {
+    pub(crate) fn apply_keyboard_shortcut(&mut self, shortcut: ShortcutAction, state: &mut EngineState) {
         if self.python_viewport.is_some() && !self.py_allow_shortcuts {
             return;
         }
-        // Map shortcuts to KeyType actions
         let key_type = match shortcut {
             ShortcutAction::Copy => KeyType::Copy,
             ShortcutAction::Cut => KeyType::Cut,
@@ -1370,9 +1377,7 @@ impl Application for TextApp {
         };
         self.handle_action_key(key_type, state);
     }
-}
 
-impl TextApp {
     /// Selection + trackpad laser for [`xos.ui._text_render`] (fields stay crate-private otherwise).
     pub fn ui_peek_overlay(&self) -> (Option<usize>, Option<usize>, Option<(f32, f32)>) {
         (

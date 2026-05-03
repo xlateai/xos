@@ -8,6 +8,7 @@ use rustpython_vm::builtins::PyDict;
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine};
 
 use crate::apps::text::TextApp;
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState};
 
 /// Monotonic id assignment for [`Text`] handles (Python-visible as `_native_id`).
@@ -69,13 +70,14 @@ pub fn peek_editor_visual_state(id: u64) -> Option<EditorRenderPeek> {
     })
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum PyUiEventKind {
     MouseDown,
     MouseUp,
     MouseMove,
     Scroll { dx: f32, dy: f32 },
     Key(char),
+    Shortcut(ShortcutAction),
 }
 
 pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyResult<Option<PyUiEventKind>> {
@@ -118,6 +120,24 @@ pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyR
             }
             PyUiEventKind::Key(ch)
         }
+        "shortcut" => {
+            let a = dict.get_item("action", vm)?.str(vm)?.to_string();
+            let action = match a.to_ascii_lowercase().as_str() {
+                "copy" => ShortcutAction::Copy,
+                "cut" => ShortcutAction::Cut,
+                "paste" => ShortcutAction::Paste,
+                "select_all" => ShortcutAction::SelectAll,
+                "undo" => ShortcutAction::Undo,
+                "redo" => ShortcutAction::Redo,
+                _ => {
+                    return Err(vm.new_value_error(format!(
+                        "unknown shortcut action '{}' (expect copy | cut | paste | select_all | undo | redo)",
+                        a
+                    )));
+                }
+            };
+            PyUiEventKind::Shortcut(action)
+        }
         _ => return Ok(None),
     }))
 }
@@ -146,6 +166,7 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
         PyUiEventKind::MouseMove => t.on_mouse_move(state),
         PyUiEventKind::Scroll { dx, dy } => t.on_scroll(state, dx, dy),
         PyUiEventKind::Key(ch) => t.on_key_char(state, ch),
+        PyUiEventKind::Shortcut(sa) => t.apply_keyboard_shortcut(sa, state),
     }
 }
 
