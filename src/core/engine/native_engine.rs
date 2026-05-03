@@ -537,6 +537,14 @@ impl ApplicationHandler for AppState {
                         },
                     );
 
+                    // `on_special_key` already maps Named Enter/Tab/Backspace to `on_key_char`. The same
+                    // physical press often repeats as `event.text` (e.g. macOS emits `\r` or `\r\n`),
+                    // which would insert a second newline or duplicate control handling.
+                    let skip_text_controls_from_named_special = matches!(
+                        named_key,
+                        Some(NamedSpecialKey::Enter | NamedSpecialKey::Tab | NamedSpecialKey::Backspace)
+                    );
+
                     // Printable text: prefer `event.text`; on macOS it is often populated only on the
                     // first keypress, then omitted while the IME session holds focus — fall back to the
                     // single character from `logical_key` when `text` is missing or empty so typing
@@ -544,6 +552,21 @@ impl ApplicationHandler for AppState {
                     if !suppress_printable_after_shortcut {
                         if let Some(text) = event.text.as_ref().filter(|t| !t.is_empty()) {
                             for ch in text.chars() {
+                                if skip_text_controls_from_named_special {
+                                    if matches!(named_key, Some(NamedSpecialKey::Enter))
+                                        && matches!(ch, '\r' | '\n')
+                                    {
+                                        continue;
+                                    }
+                                    if matches!(named_key, Some(NamedSpecialKey::Tab)) && ch == '\t' {
+                                        continue;
+                                    }
+                                    if matches!(named_key, Some(NamedSpecialKey::Backspace))
+                                        && ch == '\u{8}'
+                                    {
+                                        continue;
+                                    }
+                                }
                                 if !ch.is_control() || ch == '\n' || ch == '\t' || ch == '\r' {
                                     let _ = self.app.on_key_char(&mut self.engine_state, ch);
                                 }

@@ -1111,14 +1111,41 @@ impl Application for TextApp {
     fn on_mouse_down(&mut self, state: &mut EngineState) {
         let shape = state.frame.shape();
         let height = shape[0] as f32;
-        
+        let width = shape[1] as f32;
+
+        // Embedded Python `xos.ui.Text`: `PyApp` already called [`OnScreenKeyboard::on_mouse_down`] and
+        // queued any character/action. Do not call it again here. If this press landed on a real OSK key,
+        // skip text hit-testing — otherwise taps on Enter / All still move the caret and feel broken.
+        if self.python_viewport.is_some() && state.keyboard.onscreen.is_shown() {
+            if state
+                .keyboard
+                .onscreen
+                .check_key_type_at_position(state.mouse.x, state.mouse.y, width, height)
+                .is_some()
+            {
+                self.touch_started_on_keyboard = true;
+                let held_key = state.keyboard.onscreen.get_held_key_type();
+                if let Some(key_type) = held_key {
+                    match key_type {
+                        KeyType::Shift | KeyType::SymbolToggle => {
+                            self.temp_trackpad_initial_x = Some(state.mouse.x);
+                            self.temp_trackpad_initial_y = Some(state.mouse.y);
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
+            self.touch_started_on_keyboard = false;
+        }
+
         // Check if keyboard handled the event (Python host forwards pointer first when embedded — skip dup)
         let keyboard_claimed =
             self.python_viewport.is_none()
                 && state.keyboard.onscreen.on_mouse_down(
                     state.mouse.x,
                     state.mouse.y,
-                    shape[1] as f32,
+                    width,
                     height,
                 );
         if keyboard_claimed {
