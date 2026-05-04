@@ -1,7 +1,7 @@
 #[cfg(not(target_os = "ios"))]
 use crate::apps::coder::shortcuts::{detect_coder_shortcut, CoderShortcutAction};
 use crate::engine::keyboard::shortcuts::{ShortcutAction, SpecialKeyEvent};
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::apps::coder::explorer::{build_explorer_items, fuzzy_score, split_folder_file, ExplorerItem};
 use crate::apps::text::text::TextApp;
 use crate::rasterizer::{fill, fill_rect_buffer};
@@ -2500,7 +2500,7 @@ impl Application for CoderApp {
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32, unit: ScrollWheelUnit) {
         match self.active_tab {
             Tab::Code => {
                 if self.explorer_popup_open {
@@ -2529,10 +2529,10 @@ impl Application for CoderApp {
                     let max_scroll = self.explorer_max_scroll_for_panel(list_top, pb, scale);
                     self.file_list_scroll_y = self.file_list_scroll_y.max(0.0).min(max_scroll);
                 } else {
-                    self.code_app.on_scroll(state, dx, dy)
+                    self.code_app.on_scroll(state, dx, dy, unit)
                 }
             }
-            Tab::Terminal => self.terminal_app.on_scroll(state, dx, dy),
+            Tab::Terminal => self.terminal_app.on_scroll(state, dx, dy, unit),
             Tab::Viewport => {
                 // No scrolling in viewport
             }

@@ -1,5 +1,9 @@
-use rustpython_vm::{Interpreter, PyObjectRef, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
-use crate::engine::{Application, EngineState};
+use rustpython_vm::{
+    Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
+};
+use crate::engine::keyboard::shortcuts::ShortcutAction;
+use crate::engine::{Application, EngineState, SafeRegionBoundingRectangle, ScrollWheelUnit};
+use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
@@ -40,6 +44,201 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
     }
     
     output
+}
+
+fn sync_app_safe_region(vm: &VirtualMachine, app: &PyObjectRef, safe: &SafeRegionBoundingRectangle) -> PyResult<()> {
+    let cls = vm.builtins.get_attr("__xos_SafeRegion_cls__", vm)?;
+    let x1: PyObjectRef = vm.ctx.new_float(safe.x1 as f64).into();
+    let y1: PyObjectRef = vm.ctx.new_float(safe.y1 as f64).into();
+    let x2: PyObjectRef = vm.ctx.new_float(safe.x2 as f64).into();
+    let y2: PyObjectRef = vm.ctx.new_float(safe.y2 as f64).into();
+    let sr = cls.call((x1, y1, x2, y2), vm)?;
+    app.set_attr("safe_region", sr, vm)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RoutedPyEvent {
+    MouseDown,
+    MouseUp,
+    MouseMove,
+    Scroll {
+        dx: f32,
+        dy: f32,
+        unit: ScrollWheelUnit,
+    },
+    KeyChar(char),
+    Shortcut(ShortcutAction),
+}
+
+fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &EngineState) -> PyResult {
+    let d = vm.ctx.new_dict();
+    match ev {
+        RoutedPyEvent::MouseDown => {
+            d.set_item("kind", vm.ctx.new_str("mouse_down").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+        }
+        RoutedPyEvent::MouseUp => {
+            d.set_item("kind", vm.ctx.new_str("mouse_up").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+        }
+        RoutedPyEvent::MouseMove => {
+            d.set_item("kind", vm.ctx.new_str("mouse_move").into(), vm)?;
+            d.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)?;
+            d.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)?;
+            d.set_item(
+                "button",
+                vm.ctx
+                    .new_str(if state.mouse.is_right_clicking {
+                        "right"
+                    } else {
+                        "left"
+                    })
+                    .into(),
+                vm,
+            )?;
+            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
+            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+        }
+        RoutedPyEvent::Scroll { dx, dy, unit } => {
+            d.set_item("kind", vm.ctx.new_str("scroll").into(), vm)?;
+            d.set_item("dx", vm.ctx.new_float(dx as f64).into(), vm)?;
+            d.set_item("dy", vm.ctx.new_float(dy as f64).into(), vm)?;
+            let u = match unit {
+                ScrollWheelUnit::Line => "line",
+                ScrollWheelUnit::Pixel => "pixel",
+            };
+            d.set_item("unit", vm.ctx.new_str(u).into(), vm)?;
+        }
+        RoutedPyEvent::KeyChar(ch) => {
+            d.set_item("kind", vm.ctx.new_str("key_char").into(), vm)?;
+            d.set_item("char", vm.ctx.new_str(ch.to_string()).into(), vm)?;
+        }
+        RoutedPyEvent::Shortcut(sa) => {
+            d.set_item("kind", vm.ctx.new_str("shortcut").into(), vm)?;
+            let action = match sa {
+                ShortcutAction::Copy => "copy",
+                ShortcutAction::Cut => "cut",
+                ShortcutAction::Paste => "paste",
+                ShortcutAction::SelectAll => "select_all",
+                ShortcutAction::Undo => "undo",
+                ShortcutAction::Redo => "redo",
+            };
+            d.set_item("action", vm.ctx.new_str(action).into(), vm)?;
+        }
+    }
+    Ok(d.into())
+}
+
+#[inline]
+fn sync_app_mouse_from_engine(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &EngineState) {
+    let mouse_dict = vm.ctx.new_dict();
+    let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+    let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+    let _ = mouse_dict.set_item(
+        "is_left_clicking",
+        vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+        vm,
+    );
+    let _ = mouse_dict.set_item(
+        "is_right_clicking",
+        vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+        vm,
+    );
+    let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+}
+
+/// Replay pointer at the trackpad laser so `xos.ui.Text` hit-testing updates focus (`Group` sees both widgets).
+fn drain_embed_synthetic_click(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &mut EngineState) {
+    let Some((sx, sy)) = state.embed_synthetic_click_screen.take() else {
+        return;
+    };
+
+    let ox = state.mouse.x;
+    let oy = state.mouse.y;
+    let ol = state.mouse.is_left_clicking;
+    let or_click = state.mouse.is_right_clicking;
+
+    state.mouse.x = sx;
+    state.mouse.y = sy;
+    state.mouse.is_left_clicking = true;
+    state.mouse.is_right_clicking = false;
+
+    sync_app_mouse_from_engine(vm, app_instance, state);
+    let _ = vm.call_method(app_instance, "on_mouse_down", (sx as f64, sy as f64));
+    try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseDown);
+
+    state.mouse.is_left_clicking = false;
+    sync_app_mouse_from_engine(vm, app_instance, state);
+    let _ = vm.call_method(app_instance, "on_mouse_up", (sx as f64, sy as f64));
+    try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseUp);
+
+    state.mouse.x = ox;
+    state.mouse.y = oy;
+    state.mouse.is_left_clicking = ol;
+    state.mouse.is_right_clicking = or_click;
+    sync_app_mouse_from_engine(vm, app_instance, state);
+}
+
+fn try_dispatch_python_on_events(
+    vm: &VirtualMachine,
+    app_instance: &PyObjectRef,
+    state: &mut EngineState,
+    ev: RoutedPyEvent,
+) {
+    let Ok(Some(cb)) = vm.get_attribute_opt(app_instance.clone(), "on_events") else {
+        return;
+    };
+    if !cb.is_callable() {
+        return;
+    }
+    let dict = match build_routed_event_dict(vm, ev, state) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!(
+                "Failed to build routed _xos_event dict:\n{}",
+                format_python_exception(vm, &e)
+            );
+            return;
+        }
+    };
+    let _evt_store = app_instance.set_attr("_xos_event", dict, vm);
+    let _guard = CallbackEngineStateGuard::install(state);
+    if let Err(e) = vm.call_method(app_instance, "on_events", ()) {
+        eprintln!(
+            "Python on_events error:\n{}",
+            format_python_exception(vm, &e)
+        );
+    }
+    let _clear = app_instance.set_attr("_xos_event", vm.ctx.none(), vm);
 }
 
 pub const APPLICATION_CLASS_CODE: &str = r#"
@@ -400,6 +599,52 @@ class Tensor:
     def __repr__(self):
         return self.__str__()
 
+class EngineState:
+    """Snapshot of engine context for Python ``Application.on_events`` (attributes set each call)."""
+
+class SafeRegion:
+    """Device safe inset in the same normalized space as ``xos.ui.Text`` (viewport 0..1).
+
+    Updated from the engine each tick when ``_xos_engine_bound`` is true. In standalone mode
+    defaults to full viewport (0, 0, 1, 1).
+    """
+
+    __slots__ = ("x1", "y1", "x2", "y2")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+
+    @property
+    def width(self):
+        return float(self.x2 - self.x1)
+
+    @property
+    def height(self):
+        return float(self.y2 - self.y1)
+
+    def renormalize(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        """Map ``(x1,y1,x2,y2)`` in inset-local coords (0..1 within the safe rectangle) onto the
+        same normalized frame space as ``xos.ui.Text``. Returns ``(x1, y1, x2, y2)``.
+        """
+        lx1, ly1, lx2, ly2 = float(x1), float(y1), float(x2), float(y2)
+        w = self.width
+        h = self.height
+        return (
+            self.x1 + lx1 * w,
+            self.y1 + ly1 * h,
+            self.x1 + lx2 * w,
+            self.y1 + ly2 * h,
+        )
+
+    def __repr__(self):
+        return "SafeRegion(x1={!r}, y1={!r}, x2={!r}, y2={!r})".format(
+            self.x1, self.y1, self.x2, self.y2
+        )
+
+
 class Frame:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
@@ -467,7 +712,19 @@ class Frame:
                 xos.frame._end_standalone()
 
 class Application:
-    """Base class for xos applications. Extend this class and implement __init__() and tick()."""
+    """Base class for xos applications. Extend this class and implement __init__() and tick().
+
+    ``self.safe_region`` is an ``xos.SafeRegion`` (``x1,y1,x2,y2`` in the same normalized space as ``xos.ui.Text``)
+    refreshed each engine tick — use ``safe_region.renormalize(lx1, ly1, lx2, ly2)`` for inset-local ``0..1`` rects.
+
+    Routed input sets ``self._xos_event`` (a dict with ``kind``, etc.) before ``on_events()`` runs and
+    clears it only after your handler returns, so every component sees the same event in one call.
+    Pointer kinds ``mouse_down``, ``mouse_up``, and ``mouse_move`` also include ``x``, ``y`` (frame px),
+    ``button`` (``\"left\"`` / ``\"right\"``), ``is_left``, and ``is_right`` for parity with host events.
+    Kinds include mouse, scroll, ``key_char``, and desktop ``shortcut`` (e.g. Cmd/Ctrl+C/V/X/A).
+    Conventional order is ``self.keyboard.on_events(self)`` then ``self.text.on_events(self)`` for
+    pointer, ``key_char``, and shortcuts alike — no special cases per event type are required.
+    """
     
     def __init__(self, headless=None):
         import builtins
@@ -487,6 +744,8 @@ class Application:
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
         self._xos_ticks_completed = 0
+        # Full viewport until the engine replaces this (see Rust ``sync_app_safe_region``).
+        self.safe_region = SafeRegion(0.0, 0.0, 1.0, 1.0)
         if headless is not None:
             self.headless = bool(headless)
 
@@ -699,6 +958,9 @@ impl Application for PyApp {
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
                 app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
                     .map_err(|e| format!("Failed to set xos_scale attribute: {:?}", e))?;
+
+                sync_app_safe_region(vm, app_instance, &state.frame.safe_region_boundaries)
+                    .map_err(|e| format!("Failed to sync safe_region: {:?}", e))?;
                 
                 Ok(())
             })
@@ -754,8 +1016,10 @@ Call super().__init__() in your app __init__ before using tick()."
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                    let _ = sync_app_safe_region(vm, &app_instance, &state.frame.safe_region_boundaries);
                     
-                    // Call tick
+                    // Call tick (xos.ui may call into Rust with `TickEngineStateGuard` active)
+                    let _tls_guard = TickEngineStateGuard::install(state);
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
                         eprintln!("Python tick error:\n{}", error_msg);
@@ -780,6 +1044,13 @@ Call super().__init__() in your app __init__ before using tick()."
     }
 
     fn on_mouse_down(&mut self, state: &mut EngineState) {
+        let shape = state.frame.shape();
+        let _keyboard_hit = state.keyboard.onscreen.on_mouse_down(
+            state.mouse.x,
+            state.mouse.y,
+            shape[1] as f32,
+            shape[0] as f32,
+        );
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
@@ -799,11 +1070,13 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_down", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseDown);
             });
         }
     }
 
     fn on_mouse_up(&mut self, state: &mut EngineState) {
+        state.keyboard.onscreen.on_mouse_up();
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let x = state.mouse.x;
@@ -823,6 +1096,8 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseUp);
+                drain_embed_synthetic_click(vm, app_instance, state);
             });
         }
     }
@@ -847,11 +1122,12 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_move", (x, y));
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseMove);
             });
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, state: &mut EngineState, dx: f32, dy: f32, unit: ScrollWheelUnit) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 let mouse_dict = vm.ctx.new_dict();
@@ -869,6 +1145,28 @@ Call super().__init__() in your app __init__ before using tick()."
                 );
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_scroll", (dx, dy));
+                try_dispatch_python_on_events(
+                    vm,
+                    app_instance,
+                    state,
+                    RoutedPyEvent::Scroll { dx, dy, unit },
+                );
+            });
+        }
+    }
+
+    fn on_key_char(&mut self, state: &mut EngineState, ch: char) {
+        if let Some(ref app_instance) = self.app_instance {
+            self.interpreter.enter(|vm| {
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::KeyChar(ch));
+            });
+        }
+    }
+
+    fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
+        if let Some(ref app_instance) = self.app_instance {
+            self.interpreter.enter(|vm| {
+                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::Shortcut(shortcut));
             });
         }
     }

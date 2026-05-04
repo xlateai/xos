@@ -16,7 +16,7 @@ use super::{
 };
 use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    KeyboardState, MouseState, SafeRegionBoundingRectangle, ScrollWheelUnit,
 };
 
 
@@ -87,6 +87,8 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             frame_view_center_x: 0.5,
             frame_view_center_y: 0.5,
             f3_fps_label_override: None,
+            embed_last_plain_click_screen: None,
+            embed_synthetic_click_screen: None,
         },
         app,
         command_held: false,
@@ -196,7 +198,13 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 if event.ctrl_key() || event.meta_key() {
                     event.prevent_default();
                 }
-                state.app.on_scroll(&mut state.engine_state, dx, dy);
+                // DOM_DELTA_LINE = 1, DOM_DELTA_PIXEL = 0 (default)
+                let unit = if event.delta_mode() == 1 {
+                    ScrollWheelUnit::Line
+                } else {
+                    ScrollWheelUnit::Pixel
+                };
+                state.app.on_scroll(&mut state.engine_state, dx, dy, unit);
             }
         }) as Box<dyn FnMut(_)>);
     
@@ -299,7 +307,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     let dx = state.engine_state.mouse.x - prev_x;
                     let dy = state.engine_state.mouse.y - prev_y;
                     if state.engine_state.mouse.is_left_clicking && !f3 {
-                        state.app.on_scroll(&mut state.engine_state, -dx, -dy);
+                        state.app.on_scroll(&mut state.engine_state, -dx, -dy, ScrollWheelUnit::Pixel);
                     }
                 }
                 event.prevent_default();

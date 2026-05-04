@@ -136,6 +136,8 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             frame_view_center_x: 0.5,
             frame_view_center_y: 0.5,
             f3_fps_label_override: None,
+            embed_last_plain_click_screen: None,
+            embed_synthetic_click_screen: None,
         };
 
         let mut app: Box<dyn Application> = Box::new(CoderApp::new());
@@ -441,7 +443,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_onScroll(
             return;
         };
 
-        host.app.on_scroll(&mut host.engine, dx, dy);
+        host.app.on_scroll(&mut host.engine, dx, dy, xos::engine::ScrollWheelUnit::Pixel);
     });
 }
 

@@ -63,6 +63,29 @@ impl SafeRegionBoundingRectangle {
             y2: 0.95,  // Bottom edge ends above home indicator
         }
     }
+
+    /// Build from UI corners in normalized `[0,1]` frame space (`x2`/`y2` are right/bottom edges).
+    /// Clamps components and guarantees a positive-area rectangle (fallback until host sends real insets).
+    pub fn from_clamped_normalized_corners(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        let mut x1 = x1.clamp(0.0, 1.0);
+        let mut y1 = y1.clamp(0.0, 1.0);
+        let mut x2 = x2.clamp(0.0, 1.0);
+        let mut y2 = y2.clamp(0.0, 1.0);
+        const EPS: f32 = 1e-4;
+        if x2 <= x1 {
+            x2 = (x1 + EPS).min(1.0);
+            if x2 <= x1 {
+                x1 = (x2 - EPS).max(0.0);
+            }
+        }
+        if y2 <= y1 {
+            y2 = (y1 + EPS).min(1.0);
+            if y2 <= y1 {
+                y1 = (y2 - EPS).max(0.0);
+            }
+        }
+        Self { x1, y1, x2, y2 }
+    }
 }
 
 /// Frame state: GPU RGBA [`BurnTensor`] `[height, width, 4]` plus CPU staging / mirror, and safe region.
@@ -224,6 +247,11 @@ impl FrameState {
         *self = Self::new(width, height, self.safe_region_boundaries.clone());
     }
 
+    /// Replace the inset used for layout / Python `safe_region` (e.g. host-driven safe area).
+    pub fn set_safe_region_boundaries(&mut self, safe: SafeRegionBoundingRectangle) {
+        self.safe_region_boundaries = safe;
+    }
+
     /// Clear to opaque black (GPU + CPU).
     pub fn clear(&mut self) {
         let len = (self.width * self.height * 4) as usize;
@@ -353,6 +381,12 @@ pub struct EngineState {
     /// When set, the F3 overlay shows this value as “FPS” instead of `1 / delta_time_seconds`
     /// (e.g. remote viewer reports actual stream frame rate).
     pub f3_fps_label_override: Option<f32>,
+    /// Python multi-editor hosts: last pointer down in embed **content** (above the visible OSK), screen px.
+    /// Used to bootstrap the trackpad laser when there is no live cursor-mapping yet.
+    pub embed_last_plain_click_screen: Option<(f32, f32)>,
+    /// After a tap on the OSK trackpad strip, run a synthetic down/up at this screen point (laser) so
+    /// Python can retarget focus (`xos.ui.Text`) without dragging the finger into the text area.
+    pub embed_synthetic_click_screen: Option<(f32, f32)>,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).
@@ -392,6 +426,11 @@ impl EngineState {
     /// Resize the frame to new dimensions
     pub fn resize_frame(&mut self, width: u32, height: u32) {
         self.frame.resize(width, height);
+    }
+
+    #[inline]
+    pub fn set_safe_region_boundaries(&mut self, safe: SafeRegionBoundingRectangle) {
+        self.frame.set_safe_region_boundaries(safe);
     }
 }
 
@@ -504,6 +543,16 @@ pub fn frame_view_pan_by_pixels(
     engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
 }
 
+/// How [`Application::on_scroll`] reported vertical deltas should be interpreted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ScrollWheelUnit {
+    /// Discrete line steps (mouse wheel notch): deltas are multiplied to pixel-like distances.
+    Line,
+    /// High-resolution delta (touchpad / smooth scrolling): deltas are logical pixels (~1∶1).
+    #[default]
+    Pixel,
+}
+
 pub trait Application {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String>;
     fn tick(&mut self, state: &mut EngineState);
@@ -511,7 +560,14 @@ pub trait Application {
     fn on_mouse_down(&mut self, _state: &mut EngineState) {}
     fn on_mouse_up(&mut self, _state: &mut EngineState) {}
     fn on_mouse_move(&mut self, _state: &mut EngineState) {}
-    fn on_scroll(&mut self, _state: &mut EngineState, _delta_x: f32, _delta_y: f32) {}
+    fn on_scroll(
+        &mut self,
+        _state: &mut EngineState,
+        _delta_x: f32,
+        _delta_y: f32,
+        _unit: ScrollWheelUnit,
+    ) {
+    }
     fn on_key_char(&mut self, _state: &mut EngineState, _ch: char) {}
     fn on_special_key(
         &mut self,

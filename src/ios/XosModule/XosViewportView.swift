@@ -152,6 +152,22 @@ public class XosViewportView: UIView {
         // Engine will be initialized when setAppName is called and view has valid bounds
     }
     
+    /// Maps this view's `safeAreaInsets` to Rust normalized `[0,1]²` (matches touches / framebuffer aspect).
+    private func syncEngineSafeRegionFromInsets() {
+        guard isEngineInitialized else { return }
+        let bw = bounds.width
+        let bh = bounds.height
+        guard bw > 0, bh > 0 else { return }
+        let inset = safeAreaInsets
+        let x1 = Float(inset.left / bw)
+        let y1 = Float(inset.top / bh)
+        let x2 = Float(1.0 - inset.right / bw)
+        let y2 = Float(1.0 - inset.bottom / bh)
+        if !xosEngineSetSafeRegion(x1: x1, y1: y1, x2: x2, y2: y2) {
+            ConsoleManager.shared.addLog("WARNING: xos_engine_set_safe_region failed")
+        }
+    }
+    
     @objc private func handleSwiftCrashNotification(_ notification: Notification) {
         // Show crash overlay in this view (isolated application frame)
         showCrashOverlay(crashType: "Swift crash", appName: nil)
@@ -180,6 +196,7 @@ public class XosViewportView: UIView {
             hasCrashed = false // Reset crash state on successful init
             hideCrashOverlay() // Hide any crash overlay on successful init
             ConsoleManager.shared.addLog("Engine initialized: \(appName) (\(width)x\(height))")
+            syncEngineSafeRegionFromInsets()
             startAnimation()
         } catch {
             let errorMsg = "Failed to initialize XOS engine: \(error.localizedDescription)"
@@ -273,6 +290,7 @@ public class XosViewportView: UIView {
                 if !xosEngineResize(width: width, height: height) {
                     ConsoleManager.shared.addLog("WARNING: Engine resize failed (\(width)x\(height))")
                 }
+                syncEngineSafeRegionFromInsets()
             }
         }
     }

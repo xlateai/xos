@@ -1,4 +1,4 @@
-use crate::engine::{Application, EngineState};
+use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::fill;
 use delaunator::{triangulate, Point};
 use std::collections::HashMap;
@@ -178,7 +178,7 @@ impl Application for TrianglesApp {
         let _ = crate::rasterizer::triangles(&mut state.frame, &flat, &tri_colors);
     }
 
-    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32) {
+    fn on_scroll(&mut self, _state: &mut EngineState, dx: f32, dy: f32, _unit: ScrollWheelUnit) {
         self.scroll_x += dx as f64;
         self.scroll_y += dy as f64;
     }
