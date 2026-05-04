@@ -1224,10 +1224,11 @@ impl Application for TextApp {
                     let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
                     let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y);
 
-                    // Python multi-editor: laser roams the full frame above the OSK (not one text sub-rect).
-                    let y_global_min = safe_region.y1 * height;
+                    // Python multi-editor: laser may use the full frame from the top (notch/status)
+                    // down to just above the OSK; caret updates only while the laser is inside a text rect.
+                    let laser_y_global_min = if embed_py { 0.0 } else { safe_region.y1 * height };
                     let keyboard_top_px = keyboard_top_y * height;
-                    let y_global_max = if keyboard_top_px > y_global_min + 2.0 {
+                    let y_global_max = if keyboard_top_px > laser_y_global_min + 2.0 {
                         keyboard_top_px - 2.0
                     } else {
                         keyboard_top_px
@@ -1235,7 +1236,7 @@ impl Application for TextApp {
 
                     let unconstrained_y = laser_y + mouse_dy * 2.0;
                     let new_laser_y = if embed_py {
-                        unconstrained_y.max(y_global_min).min(y_global_max)
+                        unconstrained_y.max(laser_y_global_min).min(y_global_max)
                     } else if self.trackpad_active && state.mouse.is_left_clicking {
                         let vp = self.viewport_metrics(state);
                         let visible_h = vp.visible_h;
@@ -1271,6 +1272,8 @@ impl Application for TextApp {
                             self.selection_end = Some(char_index);
                         }
                         self.cursor_position = char_index;
+                        let vh_sel = self.viewport_metrics(state).visible_h;
+                        self.ensure_cursor_visible(vh_sel);
                     }
                 }
                 
@@ -1359,6 +1362,8 @@ impl Application for TextApp {
             let char_index = self.find_nearest_char_index(text_x, text_y);
             self.selection_end = Some(char_index);
             self.cursor_position = char_index;
+            let vh_drag = self.viewport_metrics(state).visible_h;
+            self.ensure_cursor_visible(vh_drag);
         }
         
         // Scroll drag: 1:1 tracking + EMA of finger speed for release momentum.
@@ -1630,6 +1635,21 @@ impl Application for TextApp {
             }
         }
 
+        // Tap on OSK trackpad strip (no drag / not word-selection): synthesize pointer at laser so Python
+        // `Text` widgets can swap focus without moving into the upper frame.
+        if self.python_viewport.is_some()
+            && self.py_input_focused
+            && state.keyboard.onscreen.is_trackpad_mode()
+            && self.trackpad_active
+            && !self.trackpad_moved
+            && !self.trackpad_selecting
+        {
+            if let (Some(lx), Some(ly)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                state.embed_synthetic_click_screen = Some((lx, ly));
+                state.embed_last_plain_click_screen = Some((lx, ly));
+            }
+        }
+
         // Clear trackpad tracking (but keep laser visible)
         self.trackpad_active = false;
         self.trackpad_selecting = false;
@@ -1709,21 +1729,21 @@ impl TextApp {
         let shape = state.frame.shape();
         let height = shape[0] as f32;
         let width = shape[1] as f32;
-        let safe_region = &state.frame.safe_region_boundaries;
-        let (_, keyboard_top_y_n, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-        let y_global_min = safe_region.y1 * height;
-        let keyboard_top_px = keyboard_top_y_n * height;
-        let y_global_max_raw = if keyboard_top_px > y_global_min + 2.0 {
-            keyboard_top_px - 2.0
-        } else {
-            keyboard_top_px
-        };
-        let y_global_max = y_global_max_raw.max(y_global_min);
 
         if self.python_viewport.is_some() {
+            let laser_y_global_min = 0.0_f32;
+            let (_, keyboard_top_y_n, _, _) = state.keyboard.onscreen.top_edge_coordinates();
+            let keyboard_top_px = keyboard_top_y_n * height;
+            let y_global_max_raw = if keyboard_top_px > laser_y_global_min + 2.0 {
+                keyboard_top_px - 2.0
+            } else {
+                keyboard_top_px
+            };
+            let y_global_max = y_global_max_raw.max(laser_y_global_min);
+
             if let Some((px, py)) = state.embed_last_plain_click_screen {
                 self.trackpad_laser_x = Some(px.clamp(0.0, width));
-                self.trackpad_laser_y = Some(py.clamp(y_global_min, y_global_max));
+                self.trackpad_laser_y = Some(py.clamp(laser_y_global_min, y_global_max));
                 return;
             }
             if state.keyboard.onscreen.is_shown() {
@@ -1733,7 +1753,7 @@ impl TextApp {
                     let strip_bottom = height;
                     let denom = (strip_bottom - strip_top).max(1.0);
                     let t_strip = ((my - strip_top) / denom).clamp(0.0, 1.0);
-                    let ly = y_global_min + t_strip * (y_global_max - y_global_min);
+                    let ly = laser_y_global_min + t_strip * (y_global_max - laser_y_global_min);
                     let lx = state.mouse.x.clamp(0.0, width);
                     self.trackpad_laser_x = Some(lx);
                     self.trackpad_laser_y = Some(ly);

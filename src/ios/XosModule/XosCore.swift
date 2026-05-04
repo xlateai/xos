@@ -31,6 +31,10 @@ func xos_engine_mouse_up() -> Int32
 @_silgen_name("xos_engine_resize")
 func xos_engine_resize(_ width: UInt32, _ height: UInt32) -> Int32
 
+/// Normalized safe rect (`x2`/`y2` = right/bottom), same convention as Rust `SafeRegionBoundingRectangle`.
+@_silgen_name("xos_engine_set_safe_region")
+func xos_engine_set_safe_region(_ x1: Float, _ y1: Float, _ x2: Float, _ y2: Float) -> Int32
+
 @_silgen_name("xos_engine_cleanup")
 func xos_engine_cleanup()
 
@@ -134,6 +138,12 @@ public func xosEngineMouseUp() -> Bool {
 @discardableResult
 public func xosEngineResize(width: UInt32, height: UInt32) -> Bool {
     return xos_engine_resize(width, height) == 0
+}
+
+/// Pushes `UIView.safeAreaInsets` into the engine so layout / Python `safe_region` match the device.
+@discardableResult
+public func xosEngineSetSafeRegion(x1: Float, y1: Float, x2: Float, y2: Float) -> Bool {
+    return xos_engine_set_safe_region(x1, y1, x2, y2) == 0
 }
 
 /// Swift wrapper for cleanup

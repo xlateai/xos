@@ -63,6 +63,29 @@ impl SafeRegionBoundingRectangle {
             y2: 0.95,  // Bottom edge ends above home indicator
         }
     }
+
+    /// Build from UI corners in normalized `[0,1]` frame space (`x2`/`y2` are right/bottom edges).
+    /// Clamps components and guarantees a positive-area rectangle (fallback until host sends real insets).
+    pub fn from_clamped_normalized_corners(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        let mut x1 = x1.clamp(0.0, 1.0);
+        let mut y1 = y1.clamp(0.0, 1.0);
+        let mut x2 = x2.clamp(0.0, 1.0);
+        let mut y2 = y2.clamp(0.0, 1.0);
+        const EPS: f32 = 1e-4;
+        if x2 <= x1 {
+            x2 = (x1 + EPS).min(1.0);
+            if x2 <= x1 {
+                x1 = (x2 - EPS).max(0.0);
+            }
+        }
+        if y2 <= y1 {
+            y2 = (y1 + EPS).min(1.0);
+            if y2 <= y1 {
+                y1 = (y2 - EPS).max(0.0);
+            }
+        }
+        Self { x1, y1, x2, y2 }
+    }
 }
 
 /// Frame state: GPU RGBA [`BurnTensor`] `[height, width, 4]` plus CPU staging / mirror, and safe region.
@@ -224,6 +247,11 @@ impl FrameState {
         *self = Self::new(width, height, self.safe_region_boundaries.clone());
     }
 
+    /// Replace the inset used for layout / Python `safe_region` (e.g. host-driven safe area).
+    pub fn set_safe_region_boundaries(&mut self, safe: SafeRegionBoundingRectangle) {
+        self.safe_region_boundaries = safe;
+    }
+
     /// Clear to opaque black (GPU + CPU).
     pub fn clear(&mut self) {
         let len = (self.width * self.height * 4) as usize;
@@ -356,6 +384,9 @@ pub struct EngineState {
     /// Python multi-editor hosts: last pointer down in embed **content** (above the visible OSK), screen px.
     /// Used to bootstrap the trackpad laser when there is no live cursor-mapping yet.
     pub embed_last_plain_click_screen: Option<(f32, f32)>,
+    /// After a tap on the OSK trackpad strip, run a synthetic down/up at this screen point (laser) so
+    /// Python can retarget focus (`xos.ui.Text`) without dragging the finger into the text area.
+    pub embed_synthetic_click_screen: Option<(f32, f32)>,
 }
 
 /// F3 scale bar range (slider maps linearly to multiplier `percent / 100`).
@@ -395,6 +426,11 @@ impl EngineState {
     /// Resize the frame to new dimensions
     pub fn resize_frame(&mut self, width: u32, height: u32) {
         self.frame.resize(width, height);
+    }
+
+    #[inline]
+    pub fn set_safe_region_boundaries(&mut self, safe: SafeRegionBoundingRectangle) {
+        self.frame.set_safe_region_boundaries(safe);
     }
 }
 

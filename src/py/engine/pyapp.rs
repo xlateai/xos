@@ -2,7 +2,7 @@ use rustpython_vm::{
     Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
 };
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use crate::engine::{Application, EngineState, ScrollWheelUnit};
+use crate::engine::{Application, EngineState, SafeRegionBoundingRectangle, ScrollWheelUnit};
 use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
 
 /// Format a Python exception with traceback info
@@ -44,6 +44,17 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
     }
     
     output
+}
+
+fn sync_app_safe_region(vm: &VirtualMachine, app: &PyObjectRef, safe: &SafeRegionBoundingRectangle) -> PyResult<()> {
+    let cls = vm.builtins.get_attr("__xos_SafeRegion_cls__", vm)?;
+    let x1: PyObjectRef = vm.ctx.new_float(safe.x1 as f64).into();
+    let y1: PyObjectRef = vm.ctx.new_float(safe.y1 as f64).into();
+    let x2: PyObjectRef = vm.ctx.new_float(safe.x2 as f64).into();
+    let y2: PyObjectRef = vm.ctx.new_float(safe.y2 as f64).into();
+    let sr = cls.call((x1, y1, x2, y2), vm)?;
+    app.set_attr("safe_region", sr, vm)?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +156,56 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &Engin
         }
     }
     Ok(d.into())
+}
+
+#[inline]
+fn sync_app_mouse_from_engine(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &EngineState) {
+    let mouse_dict = vm.ctx.new_dict();
+    let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
+    let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
+    let _ = mouse_dict.set_item(
+        "is_left_clicking",
+        vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+        vm,
+    );
+    let _ = mouse_dict.set_item(
+        "is_right_clicking",
+        vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+        vm,
+    );
+    let _ = app_instance.set_attr("mouse", mouse_dict, vm);
+}
+
+/// Replay pointer at the trackpad laser so `xos.ui.Text` hit-testing updates focus (`Group` sees both widgets).
+fn drain_embed_synthetic_click(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &mut EngineState) {
+    let Some((sx, sy)) = state.embed_synthetic_click_screen.take() else {
+        return;
+    };
+
+    let ox = state.mouse.x;
+    let oy = state.mouse.y;
+    let ol = state.mouse.is_left_clicking;
+    let or_click = state.mouse.is_right_clicking;
+
+    state.mouse.x = sx;
+    state.mouse.y = sy;
+    state.mouse.is_left_clicking = true;
+    state.mouse.is_right_clicking = false;
+
+    sync_app_mouse_from_engine(vm, app_instance, state);
+    let _ = vm.call_method(app_instance, "on_mouse_down", (sx as f64, sy as f64));
+    try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseDown);
+
+    state.mouse.is_left_clicking = false;
+    sync_app_mouse_from_engine(vm, app_instance, state);
+    let _ = vm.call_method(app_instance, "on_mouse_up", (sx as f64, sy as f64));
+    try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseUp);
+
+    state.mouse.x = ox;
+    state.mouse.y = oy;
+    state.mouse.is_left_clicking = ol;
+    state.mouse.is_right_clicking = or_click;
+    sync_app_mouse_from_engine(vm, app_instance, state);
 }
 
 fn try_dispatch_python_on_events(
@@ -541,6 +602,49 @@ class Tensor:
 class EngineState:
     """Snapshot of engine context for Python ``Application.on_events`` (attributes set each call)."""
 
+class SafeRegion:
+    """Device safe inset in the same normalized space as ``xos.ui.Text`` (viewport 0..1).
+
+    Updated from the engine each tick when ``_xos_engine_bound`` is true. In standalone mode
+    defaults to full viewport (0, 0, 1, 1).
+    """
+
+    __slots__ = ("x1", "y1", "x2", "y2")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+
+    @property
+    def width(self):
+        return float(self.x2 - self.x1)
+
+    @property
+    def height(self):
+        return float(self.y2 - self.y1)
+
+    def renormalize(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        """Map ``(x1,y1,x2,y2)`` in inset-local coords (0..1 within the safe rectangle) onto the
+        same normalized frame space as ``xos.ui.Text``. Returns ``(x1, y1, x2, y2)``.
+        """
+        lx1, ly1, lx2, ly2 = float(x1), float(y1), float(x2), float(y2)
+        w = self.width
+        h = self.height
+        return (
+            self.x1 + lx1 * w,
+            self.y1 + ly1 * h,
+            self.x1 + lx2 * w,
+            self.y1 + ly2 * h,
+        )
+
+    def __repr__(self):
+        return "SafeRegion(x1={!r}, y1={!r}, x2={!r}, y2={!r})".format(
+            self.x1, self.y1, self.x2, self.y2
+        )
+
+
 class Frame:
     """Wrapper to make frame dict behave like an object with methods"""
     def __init__(self, data):
@@ -610,6 +714,9 @@ class Frame:
 class Application:
     """Base class for xos applications. Extend this class and implement __init__() and tick().
 
+    ``self.safe_region`` is an ``xos.SafeRegion`` (``x1,y1,x2,y2`` in the same normalized space as ``xos.ui.Text``)
+    refreshed each engine tick — use ``safe_region.renormalize(lx1, ly1, lx2, ly2)`` for inset-local ``0..1`` rects.
+
     Routed input sets ``self._xos_event`` (a dict with ``kind``, etc.) before ``on_events()`` runs and
     clears it only after your handler returns, so every component sees the same event in one call.
     Pointer kinds ``mouse_down``, ``mouse_up``, and ``mouse_move`` also include ``x``, ``y`` (frame px),
@@ -637,6 +744,8 @@ class Application:
         self._xos_standalone_height = 600
         self._xos_last_tick_time = None
         self._xos_ticks_completed = 0
+        # Full viewport until the engine replaces this (see Rust ``sync_app_safe_region``).
+        self.safe_region = SafeRegion(0.0, 0.0, 1.0, 1.0)
         if headless is not None:
             self.headless = bool(headless)
 
@@ -849,6 +958,9 @@ impl Application for PyApp {
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
                 app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
                     .map_err(|e| format!("Failed to set xos_scale attribute: {:?}", e))?;
+
+                sync_app_safe_region(vm, app_instance, &state.frame.safe_region_boundaries)
+                    .map_err(|e| format!("Failed to sync safe_region: {:?}", e))?;
                 
                 Ok(())
             })
@@ -904,6 +1016,7 @@ Call super().__init__() in your app __init__ before using tick()."
                     // Tick counter: value during tick() is N ticks completed so far (0 on first tick).
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
+                    let _ = sync_app_safe_region(vm, &app_instance, &state.frame.safe_region_boundaries);
                     
                     // Call tick (xos.ui may call into Rust with `TickEngineStateGuard` active)
                     let _tls_guard = TickEngineStateGuard::install(state);
@@ -984,6 +1097,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 let _ = app_instance.set_attr("mouse", mouse_dict, vm);
                 let _ = vm.call_method(app_instance, "on_mouse_up", (x, y));
                 try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::MouseUp);
+                drain_embed_synthetic_click(vm, app_instance, state);
             });
         }
     }

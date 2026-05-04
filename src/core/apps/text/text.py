@@ -6,12 +6,13 @@ DEFAULT_FONT_SIZE = 48.0
 
 
 def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+    x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
     return xos.ui.text(
         "",
-        x1,
-        y1,
-        x2,
-        y2,
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
         editable=True,
         font=None,
         font_size=DEFAULT_FONT_SIZE,

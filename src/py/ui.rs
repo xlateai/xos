@@ -645,11 +645,11 @@ class OnScreenKeyboard:
 class Text:
     def __init__(
         self,
-        text,
-        x1,
-        y1,
-        x2,
-        y2,
+        text="",
+        x1=0.0,
+        y1=0.0,
+        x2=1.0,
+        y2=1.0,
         color=(255, 255, 255),
         hitboxes=False,
         baselines=False,
@@ -829,13 +829,13 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text, x1, y1, x2, y2, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, font=None, **kwargs):
+def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, font=None, **kwargs):
     return Text(
         text,
-        x1,
-        y1,
-        x2,
-        y2,
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
         color=color,
         hitboxes=hitboxes,
         baselines=baselines,

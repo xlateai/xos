@@ -165,6 +165,7 @@ impl StandalonePreviewApp {
                     frame_view_center_y: 0.5,
                     f3_fps_label_override: None,
                     embed_last_plain_click_screen: None,
+                    embed_synthetic_click_screen: None,
                 },
             );
             self.last_tick_instant.insert(viewport_id, None);
@@ -1229,6 +1230,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     if let Ok(frame_cls) = scope.globals.get_item("Frame", vm) {
         module.set_attr("Frame", frame_cls.clone(), vm).unwrap();
         let _ = vm.builtins.set_attr("Frame", frame_cls, vm);
+    }
+    if let Ok(sr_cls) = scope.globals.get_item("SafeRegion", vm) {
+        module.set_attr("SafeRegion", sr_cls.clone(), vm).ok();
+        let _ = vm.builtins.set_attr("__xos_SafeRegion_cls__", sr_cls, vm);
     }
 
     crate::python_api::mesh::register_mesh(&module, vm);

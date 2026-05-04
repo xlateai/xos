@@ -216,6 +216,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         frame_view_center_y: 0.5,
         f3_fps_label_override: None,
         embed_last_plain_click_screen: None,
+        embed_synthetic_click_screen: None,
     };
 
     // Call setup
@@ -682,6 +683,26 @@ pub extern "C" fn xos_engine_mouse_up() -> i32 {
         if !f3_menu_handle_mouse_up(&mut ios_state.engine_state) {
             ios_state.app.on_mouse_up(&mut ios_state.engine_state);
         }
+        0
+    } else {
+        1
+    }
+}
+
+/// Host-driven safe rectangle in normalized `[0,1]` frame space (`x2`/`y2` right/bottom), e.g. from
+/// `UIView.safeAreaInsets` / bounds. Used by layout, OSK placement, Python `Application.safe_region`.
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn xos_engine_set_safe_region(x1: f32, y1: f32, x2: f32, y2: f32) -> i32 {
+    let mut state = match ENGINE_STATE.lock() {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+
+    if let Some(ref mut ios_state) = *state {
+        let safe =
+            crate::engine::SafeRegionBoundingRectangle::from_clamped_normalized_corners(x1, y1, x2, y2);
+        ios_state.engine_state.set_safe_region_boundaries(safe);
         0
     } else {
         1
