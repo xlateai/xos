@@ -35,9 +35,9 @@ class TextDemo(xos.Application):
 
         self.keyboard = xos.ui.onscreen_keyboard()
 
-        self.text1 = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="display", fontsize=55.0, alignment=(0.5, 0.5))
-        self.text2 = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="summary", fontsize=32.0, alignment=(0.5, 0.0))
-        self.text = xos.ui.group(self.text1, self.text2)
+        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="display", fontsize=55.0, alignment=(0.5, 0.5))
+        self.description = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="description", fontsize=32.0, alignment=(0.5, 0.0))
+        self.text = xos.ui.group(self.vocab_display, self.description)
 
     def tick(self):
         # self.text.font_size = DEFAULT_FONT_SIZE * self.scale
@@ -46,8 +46,8 @@ class TextDemo(xos.Application):
         self.frame.clear(xos.color.BLACK)
         ts = self.text.tick(self)
 
-        # self.text1.y2 = self.keyboard.y1
-        self.text2.y2 = self.keyboard.y1
+        # self.vocab_display.y2 = self.keyboard.y1
+        self.description.y2 = self.keyboard.y1
 
         if self.t % 300 == 0:
             print("fps:", self.fps)
