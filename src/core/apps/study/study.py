@@ -20,7 +20,7 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: fl
         font=None,
         font_size=DEFAULT_FONT_SIZE * fontsize,
         color=xos.color.WHITE,
-        show_hitboxes=True,
+        show_hitboxes=False,
         show_baselines=False,
         selectable=True,
         scrollable=True,
