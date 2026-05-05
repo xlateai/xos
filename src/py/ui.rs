@@ -237,6 +237,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
 
     let mut text = text;
+    let mut should_render = true;
     let mut show_cursor = false;
     let mut cursor_position = 0usize;
 
@@ -260,6 +261,9 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     if let Some(v) = args.kwargs.get("show_cursor") {
         show_cursor = v.clone().try_into_value(vm)?;
+    }
+    if let Some(v) = args.kwargs.get("render") {
+        should_render = v.clone().try_into_value(vm)?;
     }
 
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
@@ -305,19 +309,42 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 let ya = ((y1 as f32).clamp(0.0, 1.0) * ch as f32).round() as i32;
                 let xb = ((x2 as f32).clamp(0.0, 1.0) * cw as f32).round() as i32;
                 let yb = ((y2 as f32).clamp(0.0, 1.0) * ch as f32).round() as i32;
-                if let Some(true) = with_tick_engine_state_mut(|engine| {
-                    paint_native_embed_text_from_engine(
+                if should_render {
+                    if let Some(true) = with_tick_engine_state_mut(|engine| {
+                        paint_native_embed_text_from_engine(
+                            nid,
+                            engine,
+                            buffer,
+                            cw,
+                            ch,
+                            glyph_rgba,
+                            show_cursor,
+                        )
+                    }) {
+                        render_state_opt = collect_native_text_widget_render_state(
+                            nid,
+                            xa,
+                            ya,
+                            xb,
+                            yb,
+                            viewport_scroll_y,
+                            cw,
+                            ch,
+                            hitboxes,
+                        );
+                    }
+                } else {
+                    render_state_opt = collect_native_text_widget_render_state(
                         nid,
-                        engine,
-                        buffer,
+                        xa,
+                        ya,
+                        xb,
+                        yb,
+                        viewport_scroll_y,
                         cw,
                         ch,
-                        glyph_rgba,
-                        show_cursor,
-                    )
-                }) {
-                    render_state_opt =
-                        collect_native_text_widget_render_state(nid, xa, ya, xb, yb, viewport_scroll_y, cw, ch, hitboxes);
+                        hitboxes,
+                    );
                 }
             }
         }
@@ -343,9 +370,17 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
         };
-        text_ui
-            .render(buffer, canvas_width, canvas_height)
-            .map_err(|e| vm.new_runtime_error(e))?
+        if should_render {
+            text_ui
+                .render(buffer, canvas_width, canvas_height)
+                .map_err(|e| vm.new_runtime_error(e))?
+        } else {
+            // Compute layout/render state without touching the live frame buffer.
+            let mut scratch = vec![0_u8; canvas_width.saturating_mul(canvas_height).saturating_mul(4)];
+            text_ui
+                .render(scratch.as_mut_slice(), canvas_width, canvas_height)
+                .map_err(|e| vm.new_runtime_error(e))?
+        }
     };
 
     let lines_py = vm.ctx.new_list(
@@ -740,6 +775,7 @@ class Text:
         self.baselines = self.show_baselines
         self.font_size = float(font_size)
         self._native_id = None
+        self._last_tick_state = None
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -794,8 +830,10 @@ class Text:
             font_size=self.font_size,
             native_widget_id=int(self._native_id),
             show_cursor=caret,
+            render=False,
         )
-        return TextRenderState(state)
+        self._last_tick_state = TextRenderState(state)
+        return self._last_tick_state
 
     def on_events(self, app):
         import xos
@@ -857,7 +895,9 @@ class Text:
                 resolved_font_size,
                 **extra,
             )
-            return TextRenderState(state)
+            rendered_state = TextRenderState(state)
+            self._last_tick_state = rendered_state
+            return rendered_state
         finally:
             if bound:
                 xos.frame._end_standalone()
@@ -893,6 +933,13 @@ class Group:
         for c in self._children:
             if hasattr(c, "on_events"):
                 c.on_events(app)
+
+    def render(self, app=None):
+        out = []
+        for c in self._children:
+            if hasattr(c, "render"):
+                out.append(c.render())
+        return tuple(out)
 
 
 def group(*children):
