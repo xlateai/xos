@@ -28,6 +28,7 @@ jobs:
       changed: ${{ steps.check.outputs.changed }}
       bumped: ${{ steps.check.outputs.bumped }}
       current_version: ${{ steps.check.outputs.current_version }}
+      is_pre_release: ${{ steps.check.outputs.is_pre_release }}
       crate_name: ${{ steps.check.outputs.crate_name }}
       tag: ${{ steps.check.outputs.tag }}
       release_exists: ${{ steps.check.outputs.release_exists }}
@@ -48,6 +49,10 @@ jobs:
           crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
           current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
           tag="v${current_version}"
+          is_pre_release=false
+          if [[ "${current_version}" == *-pre ]]; then
+            is_pre_release=true
+          fi
 
           changed=false
           bumped=false
@@ -91,6 +96,7 @@ jobs:
 
           echo "crate_name=${crate_name}" >> "$GITHUB_OUTPUT"
           echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
+          echo "is_pre_release=${is_pre_release}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${release_exists}" >> "$GITHUB_OUTPUT"
           echo "docker_tag_exists=${docker_tag_exists}" >> "$GITHUB_OUTPUT"
@@ -104,7 +110,10 @@ jobs:
     name: 🐳 Push image
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.docker_tag_exists != 'true'
+    if: |
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.is_pre_release != 'true' &&
+      needs.detect-version-bump.outputs.docker_tag_exists != 'true'
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -142,6 +151,7 @@ jobs:
     if: |
       always() &&
       needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.is_pre_release != 'true' &&
       needs.detect-version-bump.outputs.wasm_artifact_exists != 'true' &&
       (needs.publish-docker-image.result == 'success' || needs.publish-docker-image.result == 'skipped')
     uses: ./.github/workflows/wasm.yml
@@ -154,7 +164,10 @@ jobs:
     name: ♻️ Reuse wasm artifact
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.bumped == 'true' && needs.detect-version-bump.outputs.wasm_artifact_exists == 'true'
+    if: |
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.is_pre_release != 'true' &&
+      needs.detect-version-bump.outputs.wasm_artifact_exists == 'true'
     steps:
       - name: ⬇️ Download prior wasm artifact
         env:
@@ -185,7 +198,9 @@ jobs:
     name: 📦 crates.io
     runs-on: ubuntu-latest
     needs: [detect-version-bump]
-    if: needs.detect-version-bump.outputs.bumped == 'true'
+    if: |
+      needs.detect-version-bump.outputs.bumped == 'true' &&
+      needs.detect-version-bump.outputs.is_pre_release != 'true'
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -225,12 +240,14 @@ jobs:
           fetch-depth: 0
 
       - name: ⬇️ Fetch wasm
+        if: needs.detect-version-bump.outputs.is_pre_release != 'true'
         uses: actions/download-artifact@v4
         with:
           name: xos-wasm-zip-v${{ needs.detect-version-bump.outputs.current_version }}
           path: wasm-artifact
 
       - name: ✅ Verify zip
+        if: needs.detect-version-bump.outputs.is_pre_release != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -268,13 +285,19 @@ jobs:
           if gh release view "${tag}" >/dev/null 2>&1; then
             echo "Release ${tag} already exists."
           else
+            prerelease_args=""
+            if [ "${{ needs.detect-version-bump.outputs.is_pre_release }}" = "true" ]; then
+              prerelease_args="--prerelease"
+            fi
             gh release create "${tag}" \
               --target "${GITHUB_SHA}" \
               --title "${tag}" \
-              --generate-notes
+              --generate-notes \
+              ${prerelease_args}
           fi
 
       - name: 📎 Upload asset
+        if: needs.detect-version-bump.outputs.is_pre_release != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
