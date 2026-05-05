@@ -449,6 +449,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let show_cursor = read_bool_prop(vm, text_py.clone(), "show_cursor", true)?;
     let shortcuts = read_bool_prop(vm, text_py.clone(), "shortcuts", true)?;
     let copypaste = read_bool_prop(vm, text_py.clone(), "copypaste", true)?;
+    let x_centered = read_bool_prop(vm, text_py.clone(), "x_centered", false)?;
+    let y_centered = read_bool_prop(vm, text_py.clone(), "y_centered", false)?;
 
     let mut t = TextApp::new();
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
@@ -469,6 +471,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.embed_fast_glyph_paint = true;
     t.follow_engine_default_font = true;
     t.engine_font_family_version_seen = fonts::default_font_version();
+    t.py_x_centered = x_centered;
+    t.py_y_centered = y_centered;
 
     let id = alloc_widget_id();
     insert_widget(id, t);
@@ -477,9 +481,9 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
-    if av.len() < 2 || av.len() > 3 {
+    if av.len() < 2 || av.len() > 5 {
         return Err(vm.new_type_error(
-            "_text_tick requires (native_id, font_size[, py_input_focused]) — focused bool synced from Text.is_focused"
+            "_text_tick requires (native_id, font_size[, py_input_focused[, x_centered[, y_centered]]]) — booleans from Text.is_focused / Text.x_centered / Text.y_centered"
                 .to_string(),
         ));
     }
@@ -490,7 +494,26 @@ fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|o| o.clone().try_into_value::<bool>(vm))
         .transpose()?
         .unwrap_or(false);
-    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state, fs, focused));
+    let x_centered = av
+        .get(3)
+        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .transpose()?
+        .unwrap_or(false);
+    let y_centered = av
+        .get(4)
+        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .transpose()?
+        .unwrap_or(false);
+    let ran = with_tick_engine_state_mut(|state| {
+        tick_text_widget(
+            id as u64,
+            state,
+            fs,
+            focused,
+            x_centered,
+            y_centered,
+        )
+    });
     if ran.is_none() {
         return Err(vm.new_runtime_error(
             "_text_tick must run during Application.tick (engine TLS not set)".to_string(),
@@ -678,6 +701,8 @@ class Text:
         self.show_cursor = kwargs.get("show_cursor", True)
         self.shortcuts = kwargs.get("shortcuts", True)
         self.copypaste = kwargs.get("copypaste", True)
+        self.x_centered = kwargs.get("x_centered", False)
+        self.y_centered = kwargs.get("y_centered", False)
         self.is_focused = False
 
     def tick(self, app):
@@ -692,7 +717,13 @@ class Text:
             float(self.y2),
         )
         caret = bool(self.show_cursor and self.is_focused)
-        xos.ui._text_tick(int(self._native_id), float(self.font_size), bool(self.is_focused))
+        xos.ui._text_tick(
+            int(self._native_id),
+            float(self.font_size),
+            bool(self.is_focused),
+            bool(self.x_centered),
+            bool(self.y_centered),
+        )
         state = xos.ui._text_render(
             self.text,
             self.x1,

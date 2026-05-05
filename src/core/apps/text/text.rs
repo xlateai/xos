@@ -5,7 +5,9 @@
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
-use crate::rasterizer::text::text_rasterization::{line_band_intersects_doc_viewport, TextRasterizer};
+use crate::rasterizer::text::text_rasterization::{
+    line_band_intersects_doc_viewport, TextLayoutAlign, TextRasterizer,
+};
 use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -190,6 +192,10 @@ pub struct TextApp {
     paint_line_visible_scratch: Vec<bool>,
     /// Python embedded: synced from [`xos.ui.Text.is_focused`] each [`tick`]; gates character keys, shortcuts, and pointer hit-testing.
     pub py_input_focused: bool,
+    /// Python `xos.ui.Text`: horizontally center each wrapped line in the widget.
+    pub py_x_centered: bool,
+    /// Python `xos.ui.Text`: vertically center the block when it fits in the viewport height.
+    pub py_y_centered: bool,
 }
 
 
@@ -277,6 +283,8 @@ impl TextApp {
             embed_fast_glyph_paint: false,
             paint_line_visible_scratch: Vec::new(),
             py_input_focused: false,
+            py_x_centered: false,
+            py_y_centered: false,
         }
     }
 
@@ -939,7 +947,16 @@ impl Application for TextApp {
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
 
         // Reflow/Wrap FIRST: scroll limits MUST use lines from *this* frame's wrap width (`layout_w`).
-        self.text_rasterizer.tick(layout_w, visible_height);
+        let align = if self.python_viewport.is_some() {
+            TextLayoutAlign {
+                x_centered: self.py_x_centered,
+                y_centered: self.py_y_centered,
+            }
+        } else {
+            TextLayoutAlign::default()
+        };
+        self.text_rasterizer
+            .tick_aligned(layout_w, visible_height, align);
 
         // Mouse wheel streak decay: only while the user is not actively emitting wheel events (FPS-stable).
         let wheel_idle_for_decay = match self.wheel_last_activity {
@@ -2025,13 +2042,19 @@ impl TextApp {
                 .collect();
             
             if chars_in_line.is_empty() {
-                // Empty line - cursor at start
-                (0.0, line.baseline_y)
+                // Empty line — X from layout (e.g. horizontal centering).
+                (
+                    self.text_rasterizer.line_leading_caret_x(line_idx),
+                    line.baseline_y,
+                )
             } else {
                 // Line has characters - find the appropriate x position
                 // Check if cursor is at the start of the line
                 if self.cursor_position == line.start_index {
-                    (0.0, line.baseline_y)
+                    (
+                        self.text_rasterizer.line_leading_caret_x(line_idx),
+                        line.baseline_y,
+                    )
                 } else {
                     // Find character at or before cursor position
                     let mut found_char = None;
@@ -2058,7 +2081,10 @@ impl TextApp {
                         if let Some(last_in_line) = chars_in_line.last() {
                             (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
                         } else {
-                            (0.0, line.baseline_y)
+                            (
+                                self.text_rasterizer.line_leading_caret_x(line_idx),
+                                line.baseline_y,
+                            )
                         }
                     }
                 }
@@ -2066,7 +2092,7 @@ impl TextApp {
         } else if self.cursor_position == 0 {
             // Cursor at very start (before any lines)
             if let Some(first_line) = self.text_rasterizer.lines.first() {
-                (0.0, first_line.baseline_y)
+                (self.text_rasterizer.line_leading_caret_x(0), first_line.baseline_y)
             } else {
                 (0.0, self.text_rasterizer.ascent)
             }
@@ -2081,11 +2107,17 @@ impl TextApp {
                     .collect();
                 
                 if chars_in_last_line.is_empty() {
-                    (0.0, last_line.baseline_y)
+                    (
+                        self.text_rasterizer.line_leading_caret_x(last_line_idx),
+                        last_line.baseline_y,
+                    )
                 } else if let Some(last_char) = chars_in_last_line.last() {
                     (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
                 } else {
-                    (0.0, last_line.baseline_y)
+                    (
+                        self.text_rasterizer.line_leading_caret_x(last_line_idx),
+                        last_line.baseline_y,
+                    )
                 }
             } else if let Some(last) = self.text_rasterizer.characters.last() {
                 (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))

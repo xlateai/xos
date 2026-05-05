@@ -4,18 +4,21 @@ use crate::engine::Application;
 pub mod transcription;
 /// Text editor engine ([`text::TextApp`]) + Python UI entry (`text::launcher`, `text.py`).
 pub mod text;
+/// Python UI entry (`study::launcher`, `study.py`) for `xos app study`.
+pub mod study;
 
-/// `xos app text` / iOS `text`: Python UI (`src/core/apps/text/text.py`) instead of a Rust-only shell.
+/// `xos app text` / `xos app study` — Python windowed apps (`text.py`, `study.py`).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn maybe_python_text_demo(name: &str) -> Option<Box<dyn Application>> {
-    if name != "text" {
-        return None;
+pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
+    match name {
+        "text" => text::launcher::boxed_text_demo_app(),
+        "study" => study::launcher::boxed_study_app(),
+        _ => None,
     }
-    text::launcher::boxed_text_demo_app()
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn maybe_python_text_demo(_name: &str) -> Option<Box<dyn Application>> {
+pub(crate) fn maybe_python_cli_app(_name: &str) -> Option<Box<dyn Application>> {
     None
 }
 
@@ -42,9 +45,18 @@ macro_rules! define_apps {
                     ios: bool,
                 },
             )*
-            // Python windowed UI: `src/core/apps/text/text.py` via [`maybe_python_text_demo`] (`get_app("text")`).
+            // Python windowed UI: `src/core/apps/text/text.py` via [`maybe_python_cli_app`] (`get_app("text")`).
             #[command(name = "text", about = "")]
             TextCli {
+                #[arg(long)]
+                web: bool,
+                #[arg(long = "react-native")]
+                react_native: bool,
+                #[arg(long)]
+                ios: bool,
+            },
+            #[command(name = "study", about = "")]
+            StudyCli {
                 #[arg(long)]
                 web: bool,
                 #[arg(long = "react-native")]
@@ -72,11 +84,18 @@ macro_rules! define_apps {
                         $crate::run_game("text", web, react_native);
                     }
                 }
+                AppCommands::StudyCli { web, react_native, ios } => {
+                    if ios {
+                        $crate::launch_ios_app("study");
+                    } else {
+                        $crate::run_game("study", web, react_native);
+                    }
+                }
             }
         }
 
         pub fn get_app(name: &str) -> Option<Box<dyn Application>> {
-            if let Some(app) = $crate::apps::maybe_python_text_demo(name) {
+            if let Some(app) = $crate::apps::maybe_python_cli_app(name) {
                 return Some(app);
             }
             match name {
@@ -94,8 +113,10 @@ macro_rules! define_apps {
                     stringify!($file),
                 )*
             ];
-            if !names.iter().any(|n| *n == "text") {
-                names.push("text");
+            for extra in ["text", "study"] {
+                if !names.iter().any(|n| *n == extra) {
+                    names.push(extra);
+                }
             }
             names
         }

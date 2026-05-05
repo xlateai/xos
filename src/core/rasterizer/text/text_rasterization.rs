@@ -106,6 +106,22 @@ pub fn character_may_appear_in_viewport(
     !(g_right < 0.0 || g_left > layout_w)
 }
 
+/// Optional alignment for [`TextRasterizer::tick_aligned`] (Python `xos.ui.Text` `x_centered` / `y_centered`).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct TextLayoutAlign {
+    /// Each wrapped line is horizontally centered when shorter than the wrap width.
+    pub x_centered: bool,
+    /// The laid-out block is vertically centered when shorter than the viewport height (no scroll).
+    pub y_centered: bool,
+}
+
+impl TextLayoutAlign {
+    #[inline]
+    pub fn any(self) -> bool {
+        self.x_centered || self.y_centered
+    }
+}
+
 pub struct TextRasterizer {
     pub text: String,
     pub characters: Vec<Character>,
@@ -118,6 +134,8 @@ pub struct TextRasterizer {
     glyph_cache: GlyphCache,
     /// When fingerprint matches [`Self::tick`] inputs unchanged, reuse [`Self::characters`]/[`Self::lines`].
     last_layout_quick_fp: Option<u64>,
+    /// After [`Self::tick_aligned`], X for a caret at the **start** of each line (empty lines, centered layout).
+    pub line_caret_start_x: Vec<f32>,
 }
 
 impl TextRasterizer {
@@ -137,6 +155,7 @@ impl TextRasterizer {
             font,
             glyph_cache: GlyphCache::new(),
             last_layout_quick_fp: None,
+            line_caret_start_x: Vec::new(),
         }
     }
 
@@ -203,7 +222,24 @@ impl TextRasterizer {
         self.line_gap = metrics.line_gap;
     }
 
-    pub fn tick(&mut self, window_width: f32, _window_height: f32) {
+    pub fn tick(&mut self, window_width: f32, window_height: f32) {
+        self.tick_aligned(window_width, window_height, TextLayoutAlign::default());
+    }
+
+    #[inline]
+    fn mix_align_into_fp(base_fp: u64, window_height: f32, align: TextLayoutAlign) -> u64 {
+        if !align.any() {
+            return base_fp;
+        }
+        let mut h = Self::mix_fp(base_fp, window_height.to_bits() as u64);
+        h = Self::mix_fp(h, align.x_centered as u64);
+        h = Self::mix_fp(h, align.y_centered as u64);
+        h
+    }
+
+    /// Word-wrap in `window_width`, optional per-line horizontal centering and vertical centering
+    /// when the laid-out block is shorter than `window_height`.
+    pub fn tick_aligned(&mut self, window_width: f32, window_height: f32, align: TextLayoutAlign) {
         // Callers often assign `text` directly (e.g. coder); normalize CRLF here too so `\r`
         // never renders as a trailing glyph on Windows-sourced files.
         if self.text.contains('\r') {
@@ -211,11 +247,12 @@ impl TextRasterizer {
             self.last_layout_quick_fp = None;
         }
 
-        let fp = if self.text.is_empty() {
+        let base_fp = if self.text.is_empty() {
             Self::empty_layout_fp(window_width, self.font_size)
         } else {
             self.quick_layout_stable_fp(window_width)
         };
+        let fp = Self::mix_align_into_fp(base_fp, window_height, align);
         if self.last_layout_quick_fp == Some(fp) {
             return;
         }
@@ -287,7 +324,94 @@ impl TextRasterizer {
             end_index: last_index + 1,
         });
 
+        // --- Horizontal centering (per wrapped line) ---
+        if align.x_centered {
+            let n_lines = self.lines.len().max(1);
+            let mut line_dx = vec![0.0f32; n_lines];
+            for li in 0..self.lines.len() {
+                let mut line_right = 0.0f32;
+                let mut any = false;
+                for c in &self.characters {
+                    if c.line_index == li {
+                        any = true;
+                        line_right = line_right.max(c.x + c.metrics.advance_width);
+                    }
+                }
+                line_dx[li] = if any {
+                    ((window_width - line_right) * 0.5).max(0.0)
+                } else {
+                    (window_width * 0.5).max(0.0)
+                };
+            }
+            for c in &mut self.characters {
+                let li = c.line_index;
+                if li < line_dx.len() {
+                    c.x += line_dx[li];
+                }
+            }
+        }
+
+        // --- Vertical centering when content is shorter than the viewport ---
+        if align.y_centered {
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for c in &self.characters {
+                min_y = min_y.min(c.y);
+                max_y = max_y.max(c.y + c.height);
+            }
+            if self.characters.is_empty() {
+                if let Some(ln) = self.lines.first() {
+                    let top = ln.baseline_y - self.ascent;
+                    let bottom = ln.baseline_y + self.descent;
+                    min_y = top;
+                    max_y = bottom;
+                } else {
+                    min_y = 0.0;
+                    max_y = self.ascent + self.descent;
+                }
+            }
+            let content_h = (max_y - min_y).max(1.0);
+            if content_h < window_height {
+                let target_top = (window_height - content_h) * 0.5;
+                let shift_y = target_top - min_y;
+                if shift_y.abs() > 1e-4 {
+                    for c in &mut self.characters {
+                        c.y += shift_y;
+                    }
+                    for ln in &mut self.lines {
+                        ln.baseline_y += shift_y;
+                    }
+                }
+            }
+        }
+
+        // Caret X at logical line start (handles empty lines + horizontal centering).
+        self.line_caret_start_x.clear();
+        for li in 0..self.lines.len() {
+            let mut min_x = f32::INFINITY;
+            let mut any = false;
+            for c in &self.characters {
+                if c.line_index == li {
+                    any = true;
+                    min_x = min_x.min(c.x);
+                }
+            }
+            let cx = if any {
+                min_x
+            } else if align.x_centered {
+                window_width * 0.5
+            } else {
+                0.0
+            };
+            self.line_caret_start_x.push(cx);
+        }
+
         self.last_layout_quick_fp = Some(fp);
+    }
+
+    #[inline]
+    pub fn line_leading_caret_x(&self, line_idx: usize) -> f32 {
+        self.line_caret_start_x.get(line_idx).copied().unwrap_or(0.0)
     }
 
     /// When the engine default font family changes (e.g. F3 menu), replace [`Self::font`] and line metrics.
