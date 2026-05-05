@@ -1,7 +1,7 @@
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::{
-    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
+    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextLayoutAlign, TextRasterizer,
 };
 use fontdue::Font;
 use std::collections::HashMap;
@@ -57,6 +57,10 @@ pub struct UiText {
     pub trackpad_pointer_px: Option<(f32, f32)>,
     /// Document-space vertical scroll copied from embedded [`crate::apps::text::TextApp::scroll_y`].
     pub viewport_scroll_y: f32,
+    /// Horizontal/vertical normalized alignment (`0..1`) for non-native rendering.
+    pub alignment: (f32, f32),
+    /// Character/line spacing multipliers.
+    pub spacing: (f32, f32),
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -256,7 +260,15 @@ impl UiText {
         let font = shared_font()?;
         let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
-        rasterizer.tick(box_width, box_height);
+        rasterizer.set_spacing(self.spacing.0.max(0.0), self.spacing.1.max(0.0));
+        rasterizer.tick_aligned(
+            box_width,
+            box_height,
+            TextLayoutAlign {
+                x: self.alignment.0.clamp(0.0, 1.0),
+                y: self.alignment.1.clamp(0.0, 1.0),
+            },
+        );
 
         let baseline_color = (100, 100, 100, 255);
         for line in &rasterizer.lines {
@@ -387,7 +399,7 @@ impl UiText {
             let gx2 = px + character.metrics.width as i32;
             let gy2 = py + character.metrics.height as i32;
 
-            if self.hitboxes && in_viewport {
+            if in_viewport {
                 state.hitboxes.push([
                     [
                         (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),

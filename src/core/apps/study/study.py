@@ -5,7 +5,7 @@ import xos
 
 # Canonical `xos app text` / iOS app name `text` — lives beside the native TextApp Rust module.
 
-DEFAULT_FONT_SIZE = 48.0
+DEFAULT_FONT_SIZE = 55.0
 
 
 def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
@@ -16,15 +16,15 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: fl
         y1=y1,
         x2=x2,
         y2=y2,
-        editable=False,
+        editable=True,
         font=None,
         font_size=DEFAULT_FONT_SIZE * fontsize,
         color=xos.color.WHITE,
         show_hitboxes=False,
         show_baselines=False,
         selectable=True,
-        scrollable=True,
-        show_cursor=False,
+        scrollable=False,
+        show_cursor=True,
         alignment=alignment,
         spacing=spacing,
     )
@@ -37,7 +37,7 @@ class TextDemo(xos.Application):
         self.keyboard = xos.ui.onscreen_keyboard()
 
         self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.33, text="図書館", fontsize=1.8, alignment=(0.5, 1.0), spacing=(1.5, 1.5))
-        self.description = make_text(self, x1=0.0, y1=0.33, x2=1.0, y2=1.0, text="toshokann (library)", fontsize=1.0, alignment=(0.5, 0.0))
+        self.description = make_text(self, x1=0.0, y1=0.4, x2=1.0, y2=1.0, text=f"Type the Vocabulary!\n[Double tap anywhere to open the on screen keyboard.](font_size=24, color=GRAY)", fontsize=1.0, alignment=(0.5, 0.0))
         self.text = xos.ui.group(self.vocab_display, self.description)
 
     def tick(self):

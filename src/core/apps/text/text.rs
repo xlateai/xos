@@ -1204,6 +1204,7 @@ impl Application for TextApp {
         let width = shape[1] as f32;
         let height = shape[0] as f32;
         let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
+        let allow_scroll = !(self.python_viewport.is_some() && !self.py_scrollable);
 
         // Check if temp trackpad mode should be activated (Shift/SymbolToggle drag)
         if let (Some(initial_x), Some(initial_y)) = (self.temp_trackpad_initial_x, self.temp_trackpad_initial_y) {
@@ -1272,15 +1273,19 @@ impl Application for TextApp {
                         let scroll_upper = self.max_scroll_y_for_viewport(state) + overscroll;
 
                         let mut y = unconstrained_y;
-                        if unconstrained_y < content_top {
+                        if allow_scroll && unconstrained_y < content_top {
                             let spill = content_top - unconstrained_y;
                             self.scroll_target = (self.scroll_target - spill).max(scroll_min);
                             self.scroll_y = self.scroll_target;
                             y = content_top;
-                        } else if unconstrained_y > content_bottom {
+                        } else if allow_scroll && unconstrained_y > content_bottom {
                             let spill = unconstrained_y - content_bottom;
                             self.scroll_target = (self.scroll_target + spill).min(scroll_upper);
                             self.scroll_y = self.scroll_target;
+                            y = content_bottom;
+                        } else if unconstrained_y < content_top {
+                            y = content_top;
+                        } else if unconstrained_y > content_bottom {
                             y = content_bottom;
                         }
                         y
@@ -1346,7 +1351,7 @@ impl Application for TextApp {
                     // When keyboard is hidden (desktop mode): horizontal is selection, vertical is scroll
                     if state.keyboard.onscreen.is_shown() {
                         // Mobile mode (keyboard visible): vertical drag scrolls, horizontal drag selects
-                        if dy > dx {
+                        if dy > dx && allow_scroll {
                             // Vertical movement dominates - scroll
                             self.dragging = true;
                             self.last_mouse_y = state.mouse.y;
@@ -1371,7 +1376,7 @@ impl Application for TextApp {
                             self.selection_start = Some(start_char_idx);
                             self.selection_end = Some(start_char_idx);
                             self.cursor_position = start_char_idx;
-                        } else {
+                        } else if allow_scroll {
                             self.dragging = true;
                             self.last_mouse_y = state.mouse.y;
                         }
@@ -1394,7 +1399,7 @@ impl Application for TextApp {
         }
         
         // Scroll drag: 1:1 tracking + EMA of finger speed for release momentum.
-        if self.dragging {
+        if self.dragging && allow_scroll {
             if self.last_drag_sample_time.is_none() {
                 self.wheel_accel_target = 0.0;
                 self.wheel_last_activity = None;

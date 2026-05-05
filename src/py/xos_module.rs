@@ -1098,6 +1098,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add geometry helpers (rect kernels, etc.)
     let geom_module = crate::python_api::geom::make_geom_module(vm);
     module.set_attr("geom", geom_module, vm).unwrap();
+
+    // Add lightweight regex helpers (`xos.regex.compile`, `RegularExpression.match`).
+    let regex_module = crate::python_api::regex::make_regex_module(vm);
+    module.set_attr("regex", regex_module, vm).unwrap();
     
     // Add the sensors submodule
     let sensors_module = crate::python_api::sensors::make_sensors_module(vm);

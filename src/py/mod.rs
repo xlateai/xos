@@ -25,6 +25,7 @@ pub mod manager;
 pub mod auth;
 pub mod ai;
 pub mod geom;
+pub mod regex;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 

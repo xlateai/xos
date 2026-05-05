@@ -2,6 +2,7 @@ pub mod selector;
 pub mod button;
 pub mod onscreen_keyboard;
 pub mod text;
+pub mod styled_text;
 pub mod audio_selector;
 pub mod transcribe_lang;
 

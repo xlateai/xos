@@ -245,6 +245,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut selection_end_opt: Option<usize> = None;
     let mut trackpad_pointer: Option<(f32, f32)> = None;
     let mut viewport_scroll_y = 0.0_f32;
+    let mut alignment = (0.0_f32, 0.0_f32);
+    let mut spacing = (1.0_f32, 1.0_f32);
 
     if let Some(nid_obj) = args.kwargs.get("native_widget_id") {
         let nid: u64 = nid_obj.clone().try_into_value(vm)?;
@@ -261,6 +263,26 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     if let Some(v) = args.kwargs.get("show_cursor") {
         show_cursor = v.clone().try_into_value(vm)?;
+    }
+    if let Some(v) = args.kwargs.get("alignment") {
+        if let Some(t) = v.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+            let items = t.as_slice();
+            if items.len() >= 2 {
+                let ax = py_number_to_f64(items[0].clone(), vm, "alignment[0]")? as f32;
+                let ay = py_number_to_f64(items[1].clone(), vm, "alignment[1]")? as f32;
+                alignment = (ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
+            }
+        }
+    }
+    if let Some(v) = args.kwargs.get("spacing") {
+        if let Some(t) = v.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
+            let items = t.as_slice();
+            if items.len() >= 2 {
+                let sx = py_number_to_f64(items[0].clone(), vm, "spacing[0]")? as f32;
+                let sy = py_number_to_f64(items[1].clone(), vm, "spacing[1]")? as f32;
+                spacing = (sx.max(0.0), sy.max(0.0));
+            }
+        }
     }
     if let Some(v) = args.kwargs.get("render") {
         should_render = v.clone().try_into_value(vm)?;
@@ -369,6 +391,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             selection_end: selection_end_opt,
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
+            alignment,
+            spacing,
         };
         if should_render {
             text_ui
@@ -609,6 +633,25 @@ fn text_widget_dispatch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// Peek native text widget state (for Python-side sync of latest edited text).
+fn text_widget_peek(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error("_text_peek requires (native_id)".to_string()));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let Some(peek) = peek_editor_visual_state(id as u64) else {
+        return Ok(vm.ctx.none());
+    };
+    let out = vm.ctx.new_dict();
+    out.set_item("text", vm.ctx.new_str(peek.text).into(), vm)?;
+    out.set_item("cursor_position", vm.ctx.new_int(peek.cursor_position).into(), vm)?;
+    out.set_item("show_cursor", vm.ctx.new_bool(peek.show_cursor).into(), vm)?;
+    out.set_item("font_size", vm.ctx.new_float(peek.font_size_px as f64).into(), vm)?;
+    out.set_item("scroll_y", vm.ctx.new_float(peek.scroll_y as f64).into(), vm)?;
+    Ok(out.into())
+}
+
 fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _ = args;
     let ran = with_tick_engine_state_mut(|state| {
@@ -720,6 +763,9 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr("_text_dispatch", vm.new_function("_text_dispatch", text_widget_dispatch), vm)
         .unwrap();
+    module
+        .set_attr("_text_peek", vm.new_function("_text_peek", text_widget_peek), vm)
+        .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let text_render_fn = module.get_attr("_text_render", vm).unwrap();
@@ -795,8 +841,112 @@ class Text:
             self.spacing = (1.0, 1.0)
         self.is_focused = False
 
+    def _sync_text_from_native(self):
+        import xos
+        nid = getattr(self, "_native_id", None)
+        if nid is None:
+            return
+        try:
+            peek = xos.ui._text_peek(int(nid))
+        except Exception:
+            return
+        if isinstance(peek, dict) and "text" in peek:
+            self.text = str(peek["text"])
+
+    def _style_eval_env(self, app=None):
+        import xos
+        env = {}
+        env.update(globals())
+        try:
+            env.update(vars(self))
+        except Exception:
+            pass
+        if app is not None:
+            try:
+                env.update(vars(app))
+            except Exception:
+                pass
+        env["xos"] = xos
+        for _name in dir(xos.color):
+            if _name.startswith("_"):
+                continue
+            try:
+                env[_name] = getattr(xos.color, _name)
+            except Exception:
+                pass
+
+        def _arg_extractor(*args, **kwargs):
+            out = dict(kwargs)
+            out["_args"] = args
+            return out
+
+        env["_arg_extractor"] = _arg_extractor
+        return env
+
+    def _extract_style_dict(self, arg_src, app=None):
+        env = self._style_eval_env(app)
+        try:
+            parsed = eval(f"_arg_extractor({arg_src})", env, env)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        return {}
+
+    def _styled_runs(self, app=None):
+        import xos
+        # Keep raw markdown visible while focused for direct editing.
+        if bool(self.editable) and bool(self.is_focused):
+            return None
+        raw = str(self.text)
+        pattern = xos.regex.compile(r"^\[(.*)\]\((.*)\)$")
+        has_style = False
+        out = []
+        for line in raw.split("\n"):
+            m = pattern.match(line)
+            if m is None:
+                out.append({"text": line, "color": self.color})
+                continue
+            has_style = True
+            styled_text = m.group(1) or ""
+            style_dict = self._extract_style_dict(m.group(2) or "", app=app)
+            out.append({"text": styled_text, "color": style_dict.get("color", self.color)})
+        return out if has_style else None
+
+    def _render_styled_runs(self, style_lines, render=True, extra=None):
+        import xos
+        extra = {} if extra is None else dict(extra)
+        out = {"lines": [], "hitboxes": [], "baselines": []}
+        for i, run in enumerate(style_lines):
+            draw_text = ("\n" * i) + str(run["text"])
+            st = xos.ui._text_render(
+                draw_text,
+                self.x1,
+                self.y1,
+                self.x2,
+                self.y2,
+                run["color"],
+                hitboxes=False,
+                baselines=False,
+                font_size=self.font_size,
+                alignment=self.alignment,
+                spacing=self.spacing,
+                render=bool(render),
+                **extra,
+            )
+            out["lines"].extend(st.get("lines", []))
+            out["hitboxes"].extend(st.get("hitboxes", []))
+            out["baselines"].extend(st.get("baselines", []))
+        return out
+
     def tick(self, app):
         import xos
+        self._sync_text_from_native()
+        styled_runs = self._styled_runs(app=app)
+        if styled_runs is not None:
+            state = self._render_styled_runs(styled_runs, render=False, extra={})
+            self._last_tick_state = TextRenderState(state)
+            return self._last_tick_state
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
         xos.ui._text_sync_norm_rect(
@@ -862,6 +1012,27 @@ class Text:
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
         import xos
+        self._sync_text_from_native()
+        styled_runs = self._styled_runs(app=None)
+        if styled_runs is not None:
+            bound = False
+            if frame is not None:
+                fd = getattr(frame, "_data", None)
+                if fd is not None and fd.get("_xos_viewport_id") is not None:
+                    if not xos.frame._has_context():
+                        vid = int(fd["_xos_viewport_id"])
+                        w = int(fd["width"])
+                        h = int(fd["height"])
+                        xos.frame._begin_standalone(vid, w, h)
+                        bound = True
+            try:
+                state = self._render_styled_runs(styled_runs, render=True, extra={})
+                rendered_state = TextRenderState(state)
+                self._last_tick_state = rendered_state
+                return rendered_state
+            finally:
+                if bound:
+                    xos.frame._end_standalone()
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.show_hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.show_baselines if baselines is None else baselines
