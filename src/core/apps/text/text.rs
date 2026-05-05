@@ -676,7 +676,14 @@ impl TextApp {
         if paint_cursor {
             let (target_x, baseline_y) = self.get_cursor_screen_position();
 
-            self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.2;
+            let dx = (target_x - self.smooth_cursor_x).abs();
+            // Keep small anti-jitter smoothing, but snap quickly on real movement
+            // so caret/pointer feedback feels immediate on iOS and desktop.
+            if dx > 24.0 {
+                self.smooth_cursor_x = target_x;
+            } else {
+                self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.65;
+            }
 
             let cursor_top =
                 ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y).round() as i32;
@@ -1502,10 +1509,18 @@ impl Application for TextApp {
                 };
                 
                 if is_double_tap {
-                    // Start selection mode
+                    // Start selection mode immediately, even on first interaction:
+                    // anchor selection at current laser hit instead of stale cursor/focus.
+                    let (anchor_x, anchor_y) = self
+                        .trackpad_laser_x
+                        .zip(self.trackpad_laser_y)
+                        .unwrap_or((state.mouse.x, state.mouse.y));
+                    let (text_x, text_y) = self.to_text_xy(state, anchor_x, anchor_y);
+                    let anchor_idx = self.find_nearest_char_index(text_x, text_y);
+                    self.cursor_position = anchor_idx;
                     self.trackpad_selecting = true;
-                    self.selection_start = Some(self.cursor_position);
-                    self.selection_end = Some(self.cursor_position);
+                    self.selection_start = Some(anchor_idx);
+                    self.selection_end = Some(anchor_idx);
                     self.trackpad_last_tap_time = None; // Reset to prevent triple-tap
                 } else {
                     // Record tap time (selection will be cleared on release if no drag)
@@ -1658,7 +1673,6 @@ impl Application for TextApp {
         // Tap on OSK trackpad strip (no drag / not word-selection): synthesize pointer at laser so Python
         // `Text` widgets can swap focus without moving into the upper frame.
         if self.python_viewport.is_some()
-            && self.py_input_focused
             && state.keyboard.onscreen.is_trackpad_mode()
             && self.trackpad_active
             && !self.trackpad_moved
