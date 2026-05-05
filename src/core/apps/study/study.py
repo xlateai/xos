@@ -43,7 +43,7 @@ class TextDemo(xos.Application):
             y1=0.33,
             x2=1.0,
             y2=1.0,
-            text="toshokann (library) [Double tap anywhere to open the on screen keyboard.](color=GRAY size=24) Type the vocabulary!",
+            text="toshokann (library)\n[Double tap anywhere to open the on screen keyboard.](color=GRAY size=24)\nType the vocabulary!",
             normsize=1.0,
             alignment=(0.5, 0.0),
         )

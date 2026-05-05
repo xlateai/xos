@@ -339,17 +339,24 @@ impl TextRasterizer {
         let sy = self.spacing.1.max(0.0);
         let default_line_stride = (self.ascent + self.descent + self.line_gap) * sy;
         let scales = &self.glyph_scale_spans;
+        let line_gap_f = self.line_gap;
+        // Lines set entirely in a small `size=` span used to get a tiny stride and the next baseline
+        // sat too high, so following (normal-size) text overlapped. Never advance less than one body line.
+        let next_baseline_step = |a: f32, d: f32| -> f32 {
+            let raw = if a > 1e-6 || d > 1e-6 {
+                a + d + line_gap_f * sy
+            } else {
+                default_line_stride
+            };
+            raw.max(default_line_stride)
+        };
 
         let mut line_ascent = 0.0f32;
         let mut line_descent = 0.0f32;
 
         for (i, ch) in self.text.chars().enumerate() {
             if ch == '\n' {
-                let step = if line_ascent > 1e-6 || line_descent > 1e-6 {
-                    line_ascent + line_descent + self.line_gap * sy
-                } else {
-                    default_line_stride
-                };
+                let step = next_baseline_step(line_ascent, line_descent);
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
@@ -371,11 +378,7 @@ impl TextRasterizer {
             let advance_step = advance * sx;
 
             if x + advance_step > window_width {
-                let step = if line_ascent > 1e-6 || line_descent > 1e-6 {
-                    line_ascent + line_descent + self.line_gap * sy
-                } else {
-                    default_line_stride
-                };
+                let step = next_baseline_step(line_ascent, line_descent);
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
