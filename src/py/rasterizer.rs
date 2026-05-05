@@ -11,6 +11,16 @@ use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 
+fn py_number_to_f32(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f32> {
+    if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
+        return Ok(v as f32);
+    }
+    if let Ok(v) = value.clone().try_into_value::<i64>(vm) {
+        return Ok(v as f32);
+    }
+    Err(vm.new_type_error(format!("{name} must be int or float")))
+}
+
 // Thread-safe wrapper for raw pointer
 pub(crate) struct FrameBufferPtr(pub(crate) *mut u8);
 unsafe impl Send for FrameBufferPtr {}
@@ -776,16 +786,112 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let row_end = (y * width + x_end) * 4;
             let mut idx = row_start;
             while idx < row_end && idx + 3 < buffer.len() {
-                buffer[idx] = r as u8;
-                buffer[idx + 1] = g as u8;
-                buffer[idx + 2] = b as u8;
+                let src_a = (a.clamp(0, 255) as f32) / 255.0;
+                let inv_a = 1.0 - src_a;
+                let rr = r.clamp(0, 255) as f32;
+                let gg = g.clamp(0, 255) as f32;
+                let bb = b.clamp(0, 255) as f32;
+                buffer[idx] = (rr * src_a + buffer[idx] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
+                buffer[idx + 1] = (gg * src_a + buffer[idx + 1] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
+                buffer[idx + 2] = (bb * src_a + buffer[idx + 2] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
                 buffer[idx + 3] = a as u8;
                 idx += 4;
             }
         }
+    } else if args_vec.len() >= 2 && args_vec.len() <= 3 {
+        // TENSOR RECT MODE: (frame, rects[, color]) with optional kwargs:
+        // - color=(r,g,b) or (r,g,b,a_float_or_u8)
+        // - alpha=0.25 (float in [0,1], used when color has no alpha)
+        let rects_obj = &args_vec[1];
+        let color_obj = if args_vec.len() == 3 {
+            Some(args_vec[2].clone())
+        } else {
+            args.kwargs.get("color").cloned()
+        };
+        let alpha_obj = args.kwargs.get("alpha").cloned();
+
+        let default_color = vm.ctx.new_tuple(vec![
+            vm.ctx.new_int(128).into(),
+            vm.ctx.new_int(199).into(),
+            vm.ctx.new_int(31).into(),
+            vm.ctx.new_float(0.25).into(),
+        ]);
+        let color_obj = color_obj.unwrap_or_else(|| default_color.into());
+        let color_tuple = color_obj
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+            .ok_or_else(|| vm.new_type_error("color must be a tuple".to_string()))?;
+        let color_vec = color_tuple.as_slice();
+        if color_vec.len() != 3 && color_vec.len() != 4 {
+            return Err(vm.new_type_error("color must be (r, g, b) or (r, g, b, a)".to_string()));
+        }
+        let r: f32 = py_number_to_f32(color_vec[0].clone(), vm, "color[0]")?;
+        let g: f32 = py_number_to_f32(color_vec[1].clone(), vm, "color[1]")?;
+        let b: f32 = py_number_to_f32(color_vec[2].clone(), vm, "color[2]")?;
+        let mut alpha = if color_vec.len() == 4 {
+            py_number_to_f32(color_vec[3].clone(), vm, "color[3]")?
+        } else {
+            0.25_f32
+        };
+        if let Some(alpha_override) = alpha_obj {
+            alpha = py_number_to_f32(alpha_override, vm, "alpha")?;
+        }
+        if alpha > 1.0 {
+            alpha = (alpha / 255.0).clamp(0.0, 1.0);
+        } else {
+            alpha = alpha.clamp(0.0, 1.0);
+        }
+        let rr = r.clamp(0.0, 255.0);
+        let gg = g.clamp(0.0, 255.0);
+        let bb = b.clamp(0.0, 255.0);
+
+        let flat = tensor_flat_data_list(rects_obj, vm)?;
+        let shape = tensor_shape_tuple(rects_obj, vm).unwrap_or_default();
+
+        let mut draw_rect_norm = |x1n: f32, y1n: f32, x2n: f32, y2n: f32| {
+            let xa = (x1n.min(x2n).clamp(0.0, 1.0) * width as f32).floor().max(0.0) as usize;
+            let xb = (x1n.max(x2n).clamp(0.0, 1.0) * width as f32).ceil().min(width as f32) as usize;
+            let ya = (y1n.min(y2n).clamp(0.0, 1.0) * height as f32).floor().max(0.0) as usize;
+            let yb = (y1n.max(y2n).clamp(0.0, 1.0) * height as f32).ceil().min(height as f32) as usize;
+            if xa >= xb || ya >= yb {
+                return;
+            }
+            let inv_a = 1.0 - alpha;
+            for y in ya..yb {
+                let row_start = (y * width + xa) * 4;
+                let row_end = (y * width + xb) * 4;
+                let mut idx = row_start;
+                while idx < row_end && idx + 3 < buffer.len() {
+                    buffer[idx] = (rr * alpha + buffer[idx] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
+                    buffer[idx + 1] = (gg * alpha + buffer[idx + 1] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
+                    buffer[idx + 2] = (bb * alpha + buffer[idx + 2] as f32 * inv_a).round().clamp(0.0, 255.0) as u8;
+                    buffer[idx + 3] = 255;
+                    idx += 4;
+                }
+            }
+        };
+
+        if shape == vec![2, 2] && flat.len() >= 4 {
+            draw_rect_norm(flat[0], flat[1], flat[2], flat[3]);
+        } else if shape.len() == 3 && shape[1] == 2 && shape[2] == 2 {
+            for i in 0..shape[0] {
+                let base = i * 4;
+                if base + 3 >= flat.len() {
+                    break;
+                }
+                draw_rect_norm(flat[base], flat[base + 1], flat[base + 2], flat[base + 3]);
+            }
+        } else if flat.len() >= 4 && flat.len() % 4 == 0 {
+            for chunk in flat.chunks_exact(4) {
+                draw_rect_norm(chunk[0], chunk[1], chunk[2], chunk[3]);
+            }
+        } else {
+            return Err(vm.new_type_error(
+                "rects tensor must be shape (2,2), (N,2,2), or flat length multiple of 4".to_string(),
+            ));
+        }
     } else {
         return Err(vm.new_type_error(format!(
-            "rects_filled() takes 6 arguments (waterfall: frame, color_rows, num_bins, pixel_width, pixel_height, num_rows) or (single rect: frame, x1, y1, x2, y2, color), got {}",
+            "rects_filled() supports: waterfall(6 args), single rect(6 args), or tensor rects(frame, rects[, color]); got {} args",
             args_vec.len()
         )));
     }

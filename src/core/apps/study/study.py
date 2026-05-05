@@ -52,6 +52,12 @@ class TextDemo(xos.Application):
         # self.vocab_display.y2 = self.keyboard.y1
         self.description.y2 = self.keyboard.y1
 
+        vocab_rect = xos.geom.rect.containing(ts.hitboxes)  # write the min and max reduction of ts.hitboxes into this singular rect. should return shape (2, 2) for the containing rectangle (the rect that contains all the input rectangles/hitboxes).
+        # rasterize the rectangle into the frame over the text but as a slight highlight/transparent overlay
+        # also, add a buffer so that the rectangle is slightly larger
+        vocab_rect = xos.geom.rect.buffer(vocab_rect, 1.2)  # gives a 1.2x multiply on the area of the rectangel(s) supports (k, 2, 2) or (2, 2) for batch and non-batch
+        xos.rasterizer.rects_filled(self.frame, vocab_rect, color=(*xos.color.LIME, 0.25))
+
         if self.t % 300 == 0:
             print("fps:", self.fps)
             print("lines:", ts.lines.shape)
