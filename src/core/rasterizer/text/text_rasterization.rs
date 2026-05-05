@@ -362,20 +362,26 @@ impl TextRasterizer {
         });
 
         // --- Horizontal centering (per wrapped line) ---
+        // Important: compute centering from the *actual rendered glyph bounds*,
+        // not trailing pen advance. With spacing_x > 1.0, using trailing advance
+        // introduces an extra right-side phantom gap and visually shifts text left.
         if align.x > 0.0 {
             let n_lines = self.lines.len().max(1);
             let mut line_dx = vec![0.0f32; n_lines];
             for li in 0..self.lines.len() {
-                let mut line_right = 0.0f32;
+                let mut line_left = f32::INFINITY;
+                let mut line_right = f32::NEG_INFINITY;
                 let mut any = false;
                 for c in &self.characters {
                     if c.line_index == li {
                         any = true;
-                        line_right = line_right.max(c.x + (c.metrics.advance_width * sx));
+                        line_left = line_left.min(c.x);
+                        line_right = line_right.max(c.x + c.width);
                     }
                 }
                 line_dx[li] = if any {
-                    ((window_width - line_right).max(0.0)) * align.x
+                    let line_w = (line_right - line_left).max(0.0);
+                    ((window_width - line_w).max(0.0)) * align.x - line_left
                 } else {
                     window_width * align.x
                 };
