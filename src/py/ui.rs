@@ -449,6 +449,30 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let show_cursor = read_bool_prop(vm, text_py.clone(), "show_cursor", true)?;
     let shortcuts = read_bool_prop(vm, text_py.clone(), "shortcuts", true)?;
     let copypaste = read_bool_prop(vm, text_py.clone(), "copypaste", true)?;
+    let alignment_obj = getattr_required(vm, text_py.clone(), "alignment")?;
+    let alignment_tuple = alignment_obj
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("Text.alignment must be a tuple (x, y)".to_string()))?;
+    let alignment_items = alignment_tuple.as_slice();
+    if alignment_items.len() != 2 {
+        return Err(vm.new_type_error(
+            "Text.alignment must have exactly 2 values: (x, y)".to_string(),
+        ));
+    }
+    let align_x = py_number_to_f64(alignment_items[0].clone(), vm, "alignment[0]")? as f32;
+    let align_y = py_number_to_f64(alignment_items[1].clone(), vm, "alignment[1]")? as f32;
+    let spacing_obj = getattr_required(vm, text_py.clone(), "spacing")?;
+    let spacing_tuple = spacing_obj
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("Text.spacing must be a tuple (x, y)".to_string()))?;
+    let spacing_items = spacing_tuple.as_slice();
+    if spacing_items.len() != 2 {
+        return Err(vm.new_type_error(
+            "Text.spacing must have exactly 2 values: (x, y)".to_string(),
+        ));
+    }
+    let spacing_x = py_number_to_f64(spacing_items[0].clone(), vm, "spacing[0]")? as f32;
+    let spacing_y = py_number_to_f64(spacing_items[1].clone(), vm, "spacing[1]")? as f32;
 
     let mut t = TextApp::new();
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
@@ -469,6 +493,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.embed_fast_glyph_paint = true;
     t.follow_engine_default_font = true;
     t.engine_font_family_version_seen = fonts::default_font_version();
+    t.py_alignment = (align_x.clamp(0.0, 1.0), align_y.clamp(0.0, 1.0));
+    t.py_spacing = (spacing_x.max(0.0), spacing_y.max(0.0));
 
     let id = alloc_widget_id();
     insert_widget(id, t);
@@ -477,9 +503,9 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
-    if av.len() < 2 || av.len() > 3 {
+    if av.len() < 2 || av.len() > 7 {
         return Err(vm.new_type_error(
-            "_text_tick requires (native_id, font_size[, py_input_focused]) — focused bool synced from Text.is_focused"
+            "_text_tick requires (native_id, font_size[, py_input_focused[, alignment_x[, alignment_y[, spacing_x[, spacing_y]]]]])"
                 .to_string(),
         ));
     }
@@ -490,7 +516,38 @@ fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|o| o.clone().try_into_value::<bool>(vm))
         .transpose()?
         .unwrap_or(false);
-    let ran = with_tick_engine_state_mut(|state| tick_text_widget(id as u64, state, fs, focused));
+    let alignment_x = av
+        .get(3)
+        .map(|o| py_number_to_f64(o.clone(), vm, "alignment_x").map(|v| v as f32))
+        .transpose()?
+        .unwrap_or(0.0);
+    let alignment_y = av
+        .get(4)
+        .map(|o| py_number_to_f64(o.clone(), vm, "alignment_y").map(|v| v as f32))
+        .transpose()?
+        .unwrap_or(0.0);
+    let spacing_x = av
+        .get(5)
+        .map(|o| py_number_to_f64(o.clone(), vm, "spacing_x").map(|v| v as f32))
+        .transpose()?
+        .unwrap_or(1.0);
+    let spacing_y = av
+        .get(6)
+        .map(|o| py_number_to_f64(o.clone(), vm, "spacing_y").map(|v| v as f32))
+        .transpose()?
+        .unwrap_or(1.0);
+    let ran = with_tick_engine_state_mut(|state| {
+        tick_text_widget(
+            id as u64,
+            state,
+            fs,
+            focused,
+            alignment_x,
+            alignment_y,
+            spacing_x,
+            spacing_y,
+        )
+    });
     if ran.is_none() {
         return Err(vm.new_runtime_error(
             "_text_tick must run during Application.tick (engine TLS not set)".to_string(),
@@ -678,6 +735,16 @@ class Text:
         self.show_cursor = kwargs.get("show_cursor", True)
         self.shortcuts = kwargs.get("shortcuts", True)
         self.copypaste = kwargs.get("copypaste", True)
+        raw_alignment = kwargs.get("alignment", (0.0, 0.0))
+        if isinstance(raw_alignment, (tuple, list)) and len(raw_alignment) >= 2:
+            self.alignment = (float(raw_alignment[0]), float(raw_alignment[1]))
+        else:
+            self.alignment = (0.0, 0.0)
+        raw_spacing = kwargs.get("spacing", (1.0, 1.0))
+        if isinstance(raw_spacing, (tuple, list)) and len(raw_spacing) >= 2:
+            self.spacing = (max(0.0, float(raw_spacing[0])), max(0.0, float(raw_spacing[1])))
+        else:
+            self.spacing = (1.0, 1.0)
         self.is_focused = False
 
     def tick(self, app):
@@ -692,7 +759,15 @@ class Text:
             float(self.y2),
         )
         caret = bool(self.show_cursor and self.is_focused)
-        xos.ui._text_tick(int(self._native_id), float(self.font_size), bool(self.is_focused))
+        xos.ui._text_tick(
+            int(self._native_id),
+            float(self.font_size),
+            bool(self.is_focused),
+            float(self.alignment[0]),
+            float(self.alignment[1]),
+            float(self.spacing[0]),
+            float(self.spacing[1]),
+        )
         state = xos.ui._text_render(
             self.text,
             self.x1,

@@ -16,6 +16,9 @@ use crate::ui::text::{collect_ui_text_render_state, UiTextRenderState};
 static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
 
 static REGISTRY: Mutex<Option<HashMap<u64, TextApp>>> = Mutex::new(None);
+/// Active embedded text widget that owns the current pointer gesture (mouse/touch drag).
+/// Set on `MouseDown`, released on `MouseUp`.
+static ACTIVE_POINTER_WIDGET_ID: Mutex<Option<u64>> = Mutex::new(None);
 
 fn registry_mut() -> std::sync::MutexGuard<'static, Option<HashMap<u64, TextApp>>> {
     REGISTRY.lock().expect("python Text registry mutex poisoned")
@@ -223,6 +226,23 @@ pub fn dispatch_text_widget_from_app(vm: &VirtualMachine, widget_id: u64, app: P
 }
 
 pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineState) {
+    let captured_id = ACTIVE_POINTER_WIDGET_ID
+        .lock()
+        .ok()
+        .and_then(|g| *g);
+    // Pointer gesture capture: once a widget receives mouse down, subsequent move/scroll/up
+    // must route only to that same widget until release.
+    match kind {
+        PyUiEventKind::MouseMove | PyUiEventKind::MouseUp | PyUiEventKind::Scroll { .. } => {
+            if let Some(owner) = captured_id {
+                if owner != id {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+
     let mut g = registry_mut();
     let Some(map) = g.as_mut() else {
         return;
@@ -238,7 +258,13 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     if t.python_viewport.is_some() {
         let skip = match &kind {
             PyUiEventKind::Key(_) | PyUiEventKind::Shortcut(_) => !t.py_input_focused,
-            PyUiEventKind::Scroll { .. } => ptr_in_osk || !t.python_viewport_contains_screen_point(mx, my),
+            PyUiEventKind::Scroll { .. } => {
+                if captured_id == Some(id) {
+                    ptr_in_osk
+                } else {
+                    ptr_in_osk || !t.python_viewport_contains_screen_point(mx, my)
+                }
+            }
             // MouseDown/MouseUp: content hits must use viewport routing so an unfocused pane can take focus
             // even while the OSK is in trackpad mode (otherwise only the focused editor received clicks).
             PyUiEventKind::MouseDown | PyUiEventKind::MouseUp => {
@@ -246,6 +272,8 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
                     true
                 } else if trackpad_global_pointer && ptr_in_osk {
                     !t.py_input_focused
+                } else if captured_id == Some(id) {
+                    false
                 } else {
                     !t.python_viewport_contains_screen_point(mx, my)
                 }
@@ -257,6 +285,8 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
                     true
                 } else if trackpad_global_pointer {
                     !t.py_input_focused
+                } else if captured_id == Some(id) {
+                    false
                 } else {
                     !t.python_viewport_contains_screen_point(mx, my)
                 }
@@ -267,8 +297,22 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
         }
     }
     match kind {
-        PyUiEventKind::MouseDown => t.on_mouse_down(state),
-        PyUiEventKind::MouseUp => t.on_mouse_up(state),
+        PyUiEventKind::MouseDown => {
+            t.on_mouse_down(state);
+            if t.python_viewport.is_some() {
+                if let Ok(mut cap) = ACTIVE_POINTER_WIDGET_ID.lock() {
+                    *cap = Some(id);
+                }
+            }
+        }
+        PyUiEventKind::MouseUp => {
+            t.on_mouse_up(state);
+            if let Ok(mut cap) = ACTIVE_POINTER_WIDGET_ID.lock() {
+                if *cap == Some(id) {
+                    *cap = None;
+                }
+            }
+        }
         PyUiEventKind::MouseMove => t.on_mouse_move(state),
         PyUiEventKind::Scroll { dx, dy, unit } => t.on_scroll(state, dx, dy, unit),
         PyUiEventKind::Key(ch) => t.on_key_char(state, ch),
@@ -276,7 +320,16 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     }
 }
 
-pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32, py_input_focused: bool) {
+pub fn tick_text_widget(
+    id: u64,
+    state: &mut EngineState,
+    font_size_px: f32,
+    py_input_focused: bool,
+    py_alignment_x: f32,
+    py_alignment_y: f32,
+    py_spacing_x: f32,
+    py_spacing_y: f32,
+) {
     let mut g = registry_mut();
     let Some(map) = g.as_mut() else {
         return;
@@ -285,6 +338,8 @@ pub fn tick_text_widget(id: u64, state: &mut EngineState, font_size_px: f32, py_
         return;
     };
     t.py_input_focused = py_input_focused;
+    t.py_alignment = (py_alignment_x.clamp(0.0, 1.0), py_alignment_y.clamp(0.0, 1.0));
+    t.py_spacing = (py_spacing_x.max(0.0), py_spacing_y.max(0.0));
 
     // Unfocused embed widgets must not retain a phantom trackpad laser (only the focused pane drives it).
     if t.python_viewport.is_some() && !py_input_focused {

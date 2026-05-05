@@ -73,8 +73,7 @@ impl F3Menu {
         for family in &font_option_families {
             let option_font = match family {
                 FontFamily::JetBrainsMono => fonts::jetbrains_mono(),
-                FontFamily::NotoSansMedium => fonts::noto_sans_medium(),
-                FontFamily::NotoSansJp => fonts::noto_sans_jp(),
+                FontFamily::Mplus1 => fonts::mplus1(),
                 FontFamily::DotGothic16 => fonts::dot_gothic_16(),
             };
             let mut rasterizer = TextRasterizer::new(option_font, FONT_OPTION_BASE_SIZE);

@@ -5,24 +5,21 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FontFamily {
     JetBrainsMono = 0,
-    NotoSansMedium = 1,
-    NotoSansJp = 2,
+    Mplus1 = 1,
     DotGothic16 = 3,
 }
 
 impl FontFamily {
-    pub const ALL: [FontFamily; 4] = [
+    pub const ALL: [FontFamily; 3] = [
         FontFamily::JetBrainsMono,
-        FontFamily::NotoSansMedium,
-        FontFamily::NotoSansJp,
+        FontFamily::Mplus1,
         FontFamily::DotGothic16,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             FontFamily::JetBrainsMono => "JetBrains Mono",
-            FontFamily::NotoSansMedium => "Noto Sans Medium",
-            FontFamily::NotoSansJp => "Noto Sans JP",
+            FontFamily::Mplus1 => "MPLUS1",
             FontFamily::DotGothic16 => "DotGothic16",
         }
     }
@@ -31,19 +28,19 @@ impl FontFamily {
 impl From<u8> for FontFamily {
     fn from(value: u8) -> Self {
         match value {
-            1 => FontFamily::NotoSansMedium,
-            2 => FontFamily::NotoSansJp,
+            1 => FontFamily::Mplus1,
+            // Back-compat: old persisted NotoSansJp value maps to MPLUS1.
+            2 => FontFamily::Mplus1,
             3 => FontFamily::DotGothic16,
             _ => FontFamily::JetBrainsMono,
         }
     }
 }
 
-static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::DotGothic16 as u8);
+static DEFAULT_FONT_FAMILY: AtomicU8 = AtomicU8::new(FontFamily::Mplus1 as u8);
 static DEFAULT_FONT_VERSION: AtomicU64 = AtomicU64::new(1);
 static FONT_CACHE_JETBRAINS_MONO: OnceLock<Font> = OnceLock::new();
-static FONT_CACHE_NOTO_SANS_JP: OnceLock<Font> = OnceLock::new();
-static FONT_CACHE_NOTO_SANS_MEDIUM: OnceLock<Font> = OnceLock::new();
+static FONT_CACHE_MPLUS1: OnceLock<Font> = OnceLock::new();
 static FONT_CACHE_DOT_GOTHIC_16: OnceLock<Font> = OnceLock::new();
 
 fn load_font_from_bytes(font_bytes: &'static [u8]) -> Font {
@@ -59,19 +56,10 @@ pub fn jetbrains_mono() -> Font {
         .clone()
 }
 
-pub fn noto_sans_jp() -> Font {
-    FONT_CACHE_NOTO_SANS_JP
+pub fn mplus1() -> Font {
+    FONT_CACHE_MPLUS1
         .get_or_init(|| {
-            let font_bytes = include_bytes!("../../assets/NotoSansJP-Regular.ttf") as &[u8];
-            load_font_from_bytes(font_bytes)
-        })
-        .clone()
-}
-
-pub fn noto_sans_medium() -> Font {
-    FONT_CACHE_NOTO_SANS_MEDIUM
-        .get_or_init(|| {
-            let font_bytes = include_bytes!("../../assets/NotoSans-Medium.ttf") as &[u8];
+            let font_bytes = include_bytes!("../../assets/MPLUS1.ttf") as &[u8];
             load_font_from_bytes(font_bytes)
         })
         .clone()
@@ -109,8 +97,7 @@ pub fn default_font_version() -> u64 {
 pub fn default_font() -> Font {
     match default_font_family() {
         FontFamily::JetBrainsMono => jetbrains_mono(),
-        FontFamily::NotoSansMedium => noto_sans_medium(),
-        FontFamily::NotoSansJp => noto_sans_jp(),
+        FontFamily::Mplus1 => mplus1(),
         FontFamily::DotGothic16 => dot_gothic_16(),
     }
 }
