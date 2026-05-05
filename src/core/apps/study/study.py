@@ -36,7 +36,7 @@ class TextDemo(xos.Application):
         self.keyboard = xos.ui.onscreen_keyboard()
 
         self.text1 = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="display", fontsize=55.0, alignment=(0.5, 0.5))
-        self.text2 = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="summary", fontsize=32.0, alignment=(0.0, 0.0))
+        self.text2 = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="summary", fontsize=32.0, alignment=(0.5, 0.0))
         self.text = xos.ui.group(self.text1, self.text2)
 
     def tick(self):
