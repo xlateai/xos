@@ -140,6 +140,8 @@ pub struct TextRasterizer {
     last_layout_quick_fp: Option<u64>,
     /// After [`Self::tick_aligned`], X for a caret at the **start** of each line (empty lines, centered layout).
     pub line_caret_start_x: Vec<f32>,
+    /// Multipliers for start-to-start spacing: `(x, y)` where `1.0` is default behavior.
+    spacing: (f32, f32),
 }
 
 impl TextRasterizer {
@@ -160,6 +162,7 @@ impl TextRasterizer {
             glyph_cache: GlyphCache::new(),
             last_layout_quick_fp: None,
             line_caret_start_x: Vec::new(),
+            spacing: (1.0, 1.0),
         }
     }
 
@@ -226,15 +229,43 @@ impl TextRasterizer {
         self.line_gap = metrics.line_gap;
     }
 
+    /// Set spacing multipliers for character/line start distances (`(1,1)` = default).
+    pub fn set_spacing(&mut self, spacing_x: f32, spacing_y: f32) {
+        let sx = spacing_x.max(0.0);
+        let sy = spacing_y.max(0.0);
+        if (self.spacing.0 - sx).abs() < 1e-4 && (self.spacing.1 - sy).abs() < 1e-4 {
+            return;
+        }
+        self.spacing = (sx, sy);
+        self.last_layout_quick_fp = None;
+    }
+
+    #[inline]
+    pub fn spacing(&self) -> (f32, f32) {
+        self.spacing
+    }
+
+    #[inline]
+    pub fn advance_with_spacing(&self, advance_width: f32) -> f32 {
+        advance_width * self.spacing.0.max(0.0)
+    }
+
     pub fn tick(&mut self, window_width: f32, window_height: f32) {
         self.tick_aligned(window_width, window_height, TextLayoutAlign::default());
     }
 
     #[inline]
-    fn mix_align_into_fp(base_fp: u64, window_height: f32, align: TextLayoutAlign) -> u64 {
+    fn mix_align_into_fp(
+        base_fp: u64,
+        window_height: f32,
+        align: TextLayoutAlign,
+        spacing: (f32, f32),
+    ) -> u64 {
         let mut h = Self::mix_fp(base_fp, window_height.to_bits() as u64);
         h = Self::mix_fp(h, align.x.to_bits() as u64);
         h = Self::mix_fp(h, align.y.to_bits() as u64);
+        h = Self::mix_fp(h, spacing.0.to_bits() as u64);
+        h = Self::mix_fp(h, spacing.1.to_bits() as u64);
         h
     }
 
@@ -254,7 +285,7 @@ impl TextRasterizer {
         } else {
             self.quick_layout_stable_fp(window_width)
         };
-        let fp = Self::mix_align_into_fp(base_fp, window_height, align);
+        let fp = Self::mix_align_into_fp(base_fp, window_height, align, self.spacing);
         if self.last_layout_quick_fp == Some(fp) {
             return;
         }
@@ -270,6 +301,9 @@ impl TextRasterizer {
         let mut last_index = 0;
         let font = &self.font;
         let fs = self.font_size;
+        let sx = self.spacing.0.max(0.0);
+        let sy = self.spacing.1.max(0.0);
+        let line_step = (self.ascent + self.descent + self.line_gap) * sy;
 
         for (i, ch) in self.text.chars().enumerate() {
             if ch == '\n' {
@@ -280,7 +314,7 @@ impl TextRasterizer {
                 });
 
                 x = 0.0;
-                baseline_y += self.ascent + self.descent + self.line_gap;
+                baseline_y += line_step;
                 line_start = i + 1;
                 line_index += 1;
                 continue;
@@ -288,8 +322,9 @@ impl TextRasterizer {
 
             let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs);
             let advance = metrics.advance_width;
+            let advance_step = advance * sx;
 
-            if x + advance > window_width {
+            if x + advance_step > window_width {
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
@@ -297,7 +332,7 @@ impl TextRasterizer {
                 });
 
                 x = 0.0;
-                baseline_y += self.ascent + self.descent + self.line_gap;
+                baseline_y += line_step;
                 line_start = i;
                 line_index += 1;
             }
@@ -316,7 +351,7 @@ impl TextRasterizer {
                 bitmap,
             });
 
-            x += advance;
+            x += advance_step;
             last_index = i;
         }
 
@@ -336,7 +371,7 @@ impl TextRasterizer {
                 for c in &self.characters {
                     if c.line_index == li {
                         any = true;
-                        line_right = line_right.max(c.x + c.metrics.advance_width);
+                        line_right = line_right.max(c.x + (c.metrics.advance_width * sx));
                     }
                 }
                 line_dx[li] = if any {

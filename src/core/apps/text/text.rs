@@ -194,6 +194,8 @@ pub struct TextApp {
     pub py_input_focused: bool,
     /// Python `xos.ui.Text` normalized alignment (`0,0` top-left; `1,1` bottom-right).
     pub py_alignment: (f32, f32),
+    /// Python `xos.ui.Text` start-to-start spacing multipliers `(x, y)`.
+    pub py_spacing: (f32, f32),
 }
 
 
@@ -282,6 +284,7 @@ impl TextApp {
             paint_line_visible_scratch: Vec::new(),
             py_input_focused: false,
             py_alignment: (0.0, 0.0),
+            py_spacing: (1.0, 1.0),
         }
     }
 
@@ -945,11 +948,14 @@ impl Application for TextApp {
 
         // Reflow/Wrap FIRST: scroll limits MUST use lines from *this* frame's wrap width (`layout_w`).
         let align = if self.python_viewport.is_some() {
+            self.text_rasterizer
+                .set_spacing(self.py_spacing.0, self.py_spacing.1);
             TextLayoutAlign {
                 x: self.py_alignment.0,
                 y: self.py_alignment.1,
             }
         } else {
+            self.text_rasterizer.set_spacing(1.0, 1.0);
             TextLayoutAlign::default()
         };
         self.text_rasterizer
@@ -1857,7 +1863,10 @@ impl TextApp {
                 } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx)
                     .last() {
-                    last_in_line.x + last_in_line.metrics.advance_width
+                    last_in_line.x
+                        + self
+                            .text_rasterizer
+                            .advance_with_spacing(last_in_line.metrics.advance_width)
                 } else {
                     0.0
                 };
@@ -1874,7 +1883,12 @@ impl TextApp {
                         best_char_index = character.char_index;
                     }
                     // Also check position after this character
-                    let after_distance = (character.x + character.metrics.advance_width - current_x).abs();
+                    let after_distance = (character.x
+                        + self
+                            .text_rasterizer
+                            .advance_with_spacing(character.metrics.advance_width)
+                        - current_x)
+                        .abs();
                     if after_distance < min_distance {
                         min_distance = after_distance;
                         best_char_index = character.char_index + 1;
@@ -1910,7 +1924,10 @@ impl TextApp {
                 } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
                     .filter(|c| c.line_index == line_idx)
                     .last() {
-                    last_in_line.x + last_in_line.metrics.advance_width
+                    last_in_line.x
+                        + self
+                            .text_rasterizer
+                            .advance_with_spacing(last_in_line.metrics.advance_width)
                 } else {
                     0.0
                 };
@@ -1927,7 +1944,12 @@ impl TextApp {
                         best_char_index = character.char_index;
                     }
                     // Also check position after this character
-                    let after_distance = (character.x + character.metrics.advance_width - current_x).abs();
+                    let after_distance = (character.x
+                        + self
+                            .text_rasterizer
+                            .advance_with_spacing(character.metrics.advance_width)
+                        - current_x)
+                        .abs();
                     if after_distance < min_distance {
                         min_distance = after_distance;
                         best_char_index = character.char_index + 1;
@@ -1971,7 +1993,10 @@ impl TextApp {
             
             // Find the rightmost character on this line
             if let Some(last_char) = chars_on_line.last() {
-                let line_end_x = last_char.x + last_char.metrics.advance_width;
+                let line_end_x = last_char.x
+                    + self
+                        .text_rasterizer
+                        .advance_with_spacing(last_char.metrics.advance_width);
                 
                 // If tap is to the right of the last character, place cursor at end of line
                 if text_x >= line_end_x {
@@ -2076,7 +2101,13 @@ impl TextApp {
                     } else {
                         // Cursor is at end of line - find last character's end position
                         if let Some(last_in_line) = chars_in_line.last() {
-                            (last_in_line.x + last_in_line.metrics.advance_width, line.baseline_y)
+                            (
+                                last_in_line.x
+                                    + self
+                                        .text_rasterizer
+                                        .advance_with_spacing(last_in_line.metrics.advance_width),
+                                line.baseline_y,
+                            )
                         } else {
                             (
                                 self.text_rasterizer.line_leading_caret_x(line_idx),
@@ -2109,7 +2140,13 @@ impl TextApp {
                         last_line.baseline_y,
                     )
                 } else if let Some(last_char) = chars_in_last_line.last() {
-                    (last_char.x + last_char.metrics.advance_width, last_line.baseline_y)
+                    (
+                        last_char.x
+                            + self
+                                .text_rasterizer
+                                .advance_with_spacing(last_char.metrics.advance_width),
+                        last_line.baseline_y,
+                    )
                 } else {
                     (
                         self.text_rasterizer.line_leading_caret_x(last_line_idx),
@@ -2117,7 +2154,13 @@ impl TextApp {
                     )
                 }
             } else if let Some(last) = self.text_rasterizer.characters.last() {
-                (last.x + last.metrics.advance_width, self.text_rasterizer.lines.last().map_or(self.text_rasterizer.ascent, |line| line.baseline_y))
+                (
+                    last.x + self.text_rasterizer.advance_with_spacing(last.metrics.advance_width),
+                    self.text_rasterizer
+                        .lines
+                        .last()
+                        .map_or(self.text_rasterizer.ascent, |line| line.baseline_y),
+                )
             } else {
                 (0.0, self.text_rasterizer.ascent)
             }
