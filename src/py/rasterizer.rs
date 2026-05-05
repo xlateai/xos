@@ -846,6 +846,10 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
         let flat = tensor_flat_data_list(rects_obj, vm)?;
         let shape = tensor_shape_tuple(rects_obj, vm).unwrap_or_default();
+        if flat.is_empty() {
+            // Nothing to draw (e.g. no visible hitboxes this frame).
+            return Ok(vm.ctx.none());
+        }
 
         let mut draw_rect_norm = |x1n: f32, y1n: f32, x2n: f32, y2n: f32| {
             let xa = (x1n.min(x2n).clamp(0.0, 1.0) * width as f32).floor().max(0.0) as usize;

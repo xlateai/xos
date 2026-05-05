@@ -32,8 +32,15 @@ fn containing(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let flat = tensor_flat_data_list(&args_vec[0], vm)?;
     let shape = tensor_shape_tuple(&args_vec[0], vm).unwrap_or_default();
+    if flat.is_empty() {
+        // Graceful empty-case for callers that may have no visible hitboxes.
+        let py_tensor = Tensor::new(vec![0.0, 0.0, 0.0, 0.0], vec![2, 2]);
+        return wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?.into(), vm);
+    }
     if flat.len() < 4 {
-        return Err(vm.new_value_error("containing(): expected at least one rectangle".to_string()));
+        return Err(vm.new_type_error(
+            "containing(): invalid rect tensor size; expected multiples of 4 values".to_string(),
+        ));
     }
     if !(shape == vec![2, 2] || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2) || flat.len() % 4 == 0) {
         return Err(vm.new_type_error(
@@ -77,6 +84,17 @@ fn buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let flat = tensor_flat_data_list(&args_vec[0], vm)?;
     let shape = tensor_shape_tuple(&args_vec[0], vm).unwrap_or_default();
+    if flat.is_empty() {
+        let out_shape = if shape == vec![2, 2] {
+            vec![2, 2]
+        } else if shape.len() == 3 && shape[1] == 2 && shape[2] == 2 {
+            vec![shape[0], 2, 2]
+        } else {
+            vec![0, 2, 2]
+        };
+        let py_tensor = Tensor::new(Vec::new(), out_shape);
+        return wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?.into(), vm);
+    }
     if !(shape == vec![2, 2] || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2) || flat.len() % 4 == 0) {
         return Err(vm.new_type_error(
             "buffer(): expected shape (2,2), (N,2,2), or flat length multiple of 4".to_string(),
