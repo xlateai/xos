@@ -11,7 +11,7 @@ class TextDemo(xos.Application):
             0, 0,  # top left
             1.0, 1.0,  # bottom right (normalized viweport coordinates)
             font=None,  # default font
-            font_size=24.0 * self.scale,  # scaling font size with f3 menu
+            size=24.0 * self.scale,  # scaling text size with F3 menu
             color=xos.color.WHITE,
             hitboxes=True,
             baselines=True,

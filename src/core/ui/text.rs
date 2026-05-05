@@ -48,7 +48,7 @@ pub struct UiText {
     pub color: (u8, u8, u8, u8),
     pub hitboxes: bool,
     pub baselines: bool,
-    pub font_size_px: f32,
+    pub size_px: f32,
     /// When true (and layout succeeded), draws a caret at [`Self::cursor_position`] (Unicode scalar index).
     pub show_cursor: bool,
     pub cursor_position: usize,
@@ -60,6 +60,8 @@ pub struct UiText {
     pub viewport_scroll_y: f32,
     /// Per-glyph RGB overrides keyed by Unicode-scalar indices into [`Self::text`] (from `[label](color=NAME)`).
     pub color_spans: Vec<(usize, usize, (u8, u8, u8))>,
+    /// Relative scale spans from `[label](size=…)` (same indices as [`Self::text`]).
+    pub scale_spans: Vec<(usize, usize, f32)>,
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -257,8 +259,9 @@ impl UiText {
         let sy = self.viewport_scroll_y;
 
         let font = shared_font()?;
-        let mut rasterizer = TextRasterizer::new(font, self.font_size_px.max(1.0));
+        let mut rasterizer = TextRasterizer::new(font, self.size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
+        rasterizer.glyph_scale_spans.clone_from(&self.scale_spans);
         rasterizer.tick(box_width, box_height);
 
         let baseline_color = (100, 100, 100, 255);

@@ -292,11 +292,21 @@ impl TextApp {
         }
     }
 
-    /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=NAME)` spans).
+    /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=… size=…)` markup).
     pub(crate) fn set_document_text_py_ui(&mut self, raw: String) {
-        let (display, spans) = ui_markup::strip_inline_color_links(&raw);
-        self.glyph_color_spans = spans;
+        let base_px = self.text_rasterizer.font_size.max(1.0);
+        let (display, color_spans, scale_spans) = ui_markup::strip_inline_ui_markup(&raw, base_px);
+        self.glyph_color_spans = color_spans;
         self.text_rasterizer.set_text(display);
+        self.text_rasterizer.glyph_scale_spans = scale_spans;
+    }
+
+    /// Inline markup spans are only valid for the parsed document; clear them after any user edit.
+    #[inline]
+    fn clear_inline_markup_after_user_edit(&mut self) {
+        self.glyph_color_spans.clear();
+        self.text_rasterizer.glyph_scale_spans.clear();
+        self.text_rasterizer.invalidate_layout_cache();
     }
 
     pub(crate) fn clear_trackpad_state_for_python_embed_handoff(&mut self) {
@@ -1142,6 +1152,7 @@ impl Application for TextApp {
                 if self.cursor_position >= text_chars.len() {
                     new_text.push_str("    ");
                 }
+                self.clear_inline_markup_after_user_edit();
                 self.text_rasterizer.text = new_text;
                 self.cursor_position += 4;
                 self.ensure_cursor_visible(content_height);
@@ -1162,6 +1173,7 @@ impl Application for TextApp {
                 if self.cursor_position >= text_chars.len() {
                     new_text.push('\n');
                 }
+                self.clear_inline_markup_after_user_edit();
                 self.text_rasterizer.text = new_text;
                 self.cursor_position += 1;
                 self.ensure_cursor_visible(content_height);
@@ -1169,19 +1181,19 @@ impl Application for TextApp {
             '\u{8}' => {
                 // Backspace - delete selection if present, otherwise delete character before cursor
                 self.save_undo_state();
-                if !self.delete_selection() {
-                    // No selection, delete character before cursor
-                    if self.cursor_position > 0 {
-                        let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-                        let mut new_text = String::new();
-                        for (i, &c) in text_chars.iter().enumerate() {
-                            if i != self.cursor_position - 1 {
-                                new_text.push(c);
-                            }
+                if self.delete_selection() {
+                    self.clear_inline_markup_after_user_edit();
+                } else if self.cursor_position > 0 {
+                    let text_chars: Vec<char> = self.text_rasterizer.text.chars().collect();
+                    let mut new_text = String::new();
+                    for (i, &c) in text_chars.iter().enumerate() {
+                        if i != self.cursor_position - 1 {
+                            new_text.push(c);
                         }
-                        self.text_rasterizer.text = new_text;
-                        self.cursor_position -= 1;
                     }
+                    self.clear_inline_markup_after_user_edit();
+                    self.text_rasterizer.text = new_text;
+                    self.cursor_position -= 1;
                 }
                 self.ensure_cursor_visible(content_height);
             }
@@ -1202,6 +1214,7 @@ impl Application for TextApp {
                     if self.cursor_position >= text_chars.len() {
                         new_text.push(ch);
                     }
+                    self.clear_inline_markup_after_user_edit();
                     self.text_rasterizer.text = new_text;
                     self.cursor_position += 1;
                     self.ensure_cursor_visible(content_height);
@@ -2245,6 +2258,7 @@ impl TextApp {
                         &mut self.selection_start,
                         &mut self.selection_end,
                     );
+                    self.clear_inline_markup_after_user_edit();
                     self.ensure_cursor_visible(content_height);
                 }
             }
@@ -2262,6 +2276,7 @@ impl TextApp {
                 )
                 .is_some()
                 {
+                    self.clear_inline_markup_after_user_edit();
                     self.ensure_cursor_visible(content_height);
                 }
             }
@@ -2286,6 +2301,7 @@ impl TextApp {
                     // Restore previous state
                     self.text_rasterizer.text = text;
                     self.cursor_position = cursor;
+                    self.clear_inline_markup_after_user_edit();
                     // Clear selection
                     self.selection_start = None;
                     self.selection_end = None;
@@ -2302,6 +2318,7 @@ impl TextApp {
                     // Restore redone state
                     self.text_rasterizer.text = text;
                     self.cursor_position = cursor;
+                    self.clear_inline_markup_after_user_edit();
                     // Clear selection
                     self.selection_start = None;
                     self.selection_end = None;

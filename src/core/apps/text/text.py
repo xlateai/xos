@@ -15,7 +15,7 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
         y2=y2,
         editable=True,
         font=None,
-        font_size=DEFAULT_FONT_SIZE,
+        size=DEFAULT_FONT_SIZE,
         color=xos.color.WHITE,
         hitboxes=True,
         baselines=True,
@@ -36,7 +36,7 @@ class TextDemo(xos.Application):
         self.text = xos.ui.group(self.text1, self.text2)
 
     def tick(self):
-        self.text.font_size = DEFAULT_FONT_SIZE * self.scale
+        self.text.size = DEFAULT_FONT_SIZE * self.scale
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
