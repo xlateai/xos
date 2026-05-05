@@ -192,10 +192,8 @@ pub struct TextApp {
     paint_line_visible_scratch: Vec<bool>,
     /// Python embedded: synced from [`xos.ui.Text.is_focused`] each [`tick`]; gates character keys, shortcuts, and pointer hit-testing.
     pub py_input_focused: bool,
-    /// Python `xos.ui.Text`: horizontally center each wrapped line in the widget.
-    pub py_x_centered: bool,
-    /// Python `xos.ui.Text`: vertically center the block when it fits in the viewport height.
-    pub py_y_centered: bool,
+    /// Python `xos.ui.Text` normalized alignment (`0,0` top-left; `1,1` bottom-right).
+    pub py_alignment: (f32, f32),
 }
 
 
@@ -283,8 +281,7 @@ impl TextApp {
             embed_fast_glyph_paint: false,
             paint_line_visible_scratch: Vec::new(),
             py_input_focused: false,
-            py_x_centered: false,
-            py_y_centered: false,
+            py_alignment: (0.0, 0.0),
         }
     }
 
@@ -949,8 +946,8 @@ impl Application for TextApp {
         // Reflow/Wrap FIRST: scroll limits MUST use lines from *this* frame's wrap width (`layout_w`).
         let align = if self.python_viewport.is_some() {
             TextLayoutAlign {
-                x_centered: self.py_x_centered,
-                y_centered: self.py_y_centered,
+                x: self.py_alignment.0,
+                y: self.py_alignment.1,
             }
         } else {
             TextLayoutAlign::default()

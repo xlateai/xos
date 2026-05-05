@@ -106,19 +106,23 @@ pub fn character_may_appear_in_viewport(
     !(g_right < 0.0 || g_left > layout_w)
 }
 
-/// Optional alignment for [`TextRasterizer::tick_aligned`] (Python `xos.ui.Text` `x_centered` / `y_centered`).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+/// Optional normalized alignment for [`TextRasterizer::tick_aligned`]:
+/// `(0,0)=top-left`, `(0.5,0.5)=center`, `(1,1)=bottom-right`.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct TextLayoutAlign {
-    /// Each wrapped line is horizontally centered when shorter than the wrap width.
-    pub x_centered: bool,
-    /// The laid-out block is vertically centered when shorter than the viewport height (no scroll).
-    pub y_centered: bool,
+    /// Horizontal alignment within each wrapped line's free space (`0..=1`).
+    pub x: f32,
+    /// Vertical alignment within block free space (`0..=1`), supports bottom-origin typing behavior.
+    pub y: f32,
 }
 
 impl TextLayoutAlign {
     #[inline]
-    pub fn any(self) -> bool {
-        self.x_centered || self.y_centered
+    pub fn normalized(self) -> Self {
+        Self {
+            x: self.x.clamp(0.0, 1.0),
+            y: self.y.clamp(0.0, 1.0),
+        }
     }
 }
 
@@ -228,12 +232,9 @@ impl TextRasterizer {
 
     #[inline]
     fn mix_align_into_fp(base_fp: u64, window_height: f32, align: TextLayoutAlign) -> u64 {
-        if !align.any() {
-            return base_fp;
-        }
         let mut h = Self::mix_fp(base_fp, window_height.to_bits() as u64);
-        h = Self::mix_fp(h, align.x_centered as u64);
-        h = Self::mix_fp(h, align.y_centered as u64);
+        h = Self::mix_fp(h, align.x.to_bits() as u64);
+        h = Self::mix_fp(h, align.y.to_bits() as u64);
         h
     }
 
@@ -247,6 +248,7 @@ impl TextRasterizer {
             self.last_layout_quick_fp = None;
         }
 
+        let align = align.normalized();
         let base_fp = if self.text.is_empty() {
             Self::empty_layout_fp(window_width, self.font_size)
         } else {
@@ -325,7 +327,7 @@ impl TextRasterizer {
         });
 
         // --- Horizontal centering (per wrapped line) ---
-        if align.x_centered {
+        if align.x > 0.0 {
             let n_lines = self.lines.len().max(1);
             let mut line_dx = vec![0.0f32; n_lines];
             for li in 0..self.lines.len() {
@@ -338,9 +340,9 @@ impl TextRasterizer {
                     }
                 }
                 line_dx[li] = if any {
-                    ((window_width - line_right) * 0.5).max(0.0)
+                    ((window_width - line_right).max(0.0)) * align.x
                 } else {
-                    (window_width * 0.5).max(0.0)
+                    window_width * align.x
                 };
             }
             for c in &mut self.characters {
@@ -352,7 +354,7 @@ impl TextRasterizer {
         }
 
         // --- Vertical centering when content is shorter than the viewport ---
-        if align.y_centered {
+        if align.y > 0.0 {
             let mut min_y = f32::INFINITY;
             let mut max_y = f32::NEG_INFINITY;
             for c in &self.characters {
@@ -371,16 +373,14 @@ impl TextRasterizer {
                 }
             }
             let content_h = (max_y - min_y).max(1.0);
-            if content_h < window_height {
-                let target_top = (window_height - content_h) * 0.5;
-                let shift_y = target_top - min_y;
-                if shift_y.abs() > 1e-4 {
-                    for c in &mut self.characters {
-                        c.y += shift_y;
-                    }
-                    for ln in &mut self.lines {
-                        ln.baseline_y += shift_y;
-                    }
+            let target_top = (window_height - content_h) * align.y;
+            let shift_y = target_top - min_y;
+            if shift_y.abs() > 1e-4 {
+                for c in &mut self.characters {
+                    c.y += shift_y;
+                }
+                for ln in &mut self.lines {
+                    ln.baseline_y += shift_y;
                 }
             }
         }
@@ -398,8 +398,8 @@ impl TextRasterizer {
             }
             let cx = if any {
                 min_x
-            } else if align.x_centered {
-                window_width * 0.5
+            } else if align.x > 0.0 {
+                window_width * align.x
             } else {
                 0.0
             };

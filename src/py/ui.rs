@@ -449,8 +449,18 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let show_cursor = read_bool_prop(vm, text_py.clone(), "show_cursor", true)?;
     let shortcuts = read_bool_prop(vm, text_py.clone(), "shortcuts", true)?;
     let copypaste = read_bool_prop(vm, text_py.clone(), "copypaste", true)?;
-    let x_centered = read_bool_prop(vm, text_py.clone(), "x_centered", false)?;
-    let y_centered = read_bool_prop(vm, text_py.clone(), "y_centered", false)?;
+    let alignment_obj = getattr_required(vm, text_py.clone(), "alignment")?;
+    let alignment_tuple = alignment_obj
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error("Text.alignment must be a tuple (x, y)".to_string()))?;
+    let alignment_items = alignment_tuple.as_slice();
+    if alignment_items.len() != 2 {
+        return Err(vm.new_type_error(
+            "Text.alignment must have exactly 2 values: (x, y)".to_string(),
+        ));
+    }
+    let align_x = py_number_to_f64(alignment_items[0].clone(), vm, "alignment[0]")? as f32;
+    let align_y = py_number_to_f64(alignment_items[1].clone(), vm, "alignment[1]")? as f32;
 
     let mut t = TextApp::new();
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
@@ -471,8 +481,7 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.embed_fast_glyph_paint = true;
     t.follow_engine_default_font = true;
     t.engine_font_family_version_seen = fonts::default_font_version();
-    t.py_x_centered = x_centered;
-    t.py_y_centered = y_centered;
+    t.py_alignment = (align_x.clamp(0.0, 1.0), align_y.clamp(0.0, 1.0));
 
     let id = alloc_widget_id();
     insert_widget(id, t);
@@ -483,7 +492,7 @@ fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() < 2 || av.len() > 5 {
         return Err(vm.new_type_error(
-            "_text_tick requires (native_id, font_size[, py_input_focused[, x_centered[, y_centered]]]) — booleans from Text.is_focused / Text.x_centered / Text.y_centered"
+            "_text_tick requires (native_id, font_size[, py_input_focused[, alignment_x[, alignment_y]]]) — alignment values should be normalized in [0,1]"
                 .to_string(),
         ));
     }
@@ -494,24 +503,24 @@ fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|o| o.clone().try_into_value::<bool>(vm))
         .transpose()?
         .unwrap_or(false);
-    let x_centered = av
+    let alignment_x = av
         .get(3)
-        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .map(|o| py_number_to_f64(o.clone(), vm, "alignment_x").map(|v| v as f32))
         .transpose()?
-        .unwrap_or(false);
-    let y_centered = av
+        .unwrap_or(0.0);
+    let alignment_y = av
         .get(4)
-        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .map(|o| py_number_to_f64(o.clone(), vm, "alignment_y").map(|v| v as f32))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(0.0);
     let ran = with_tick_engine_state_mut(|state| {
         tick_text_widget(
             id as u64,
             state,
             fs,
             focused,
-            x_centered,
-            y_centered,
+            alignment_x,
+            alignment_y,
         )
     });
     if ran.is_none() {
@@ -701,8 +710,11 @@ class Text:
         self.show_cursor = kwargs.get("show_cursor", True)
         self.shortcuts = kwargs.get("shortcuts", True)
         self.copypaste = kwargs.get("copypaste", True)
-        self.x_centered = kwargs.get("x_centered", False)
-        self.y_centered = kwargs.get("y_centered", False)
+        raw_alignment = kwargs.get("alignment", (0.0, 0.0))
+        if isinstance(raw_alignment, (tuple, list)) and len(raw_alignment) >= 2:
+            self.alignment = (float(raw_alignment[0]), float(raw_alignment[1]))
+        else:
+            self.alignment = (0.0, 0.0)
         self.is_focused = False
 
     def tick(self, app):
@@ -721,8 +733,8 @@ class Text:
             int(self._native_id),
             float(self.font_size),
             bool(self.is_focused),
-            bool(self.x_centered),
-            bool(self.y_centered),
+            float(self.alignment[0]),
+            float(self.alignment[1]),
         )
         state = xos.ui._text_render(
             self.text,

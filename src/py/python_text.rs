@@ -281,8 +281,8 @@ pub fn tick_text_widget(
     state: &mut EngineState,
     font_size_px: f32,
     py_input_focused: bool,
-    py_x_centered: bool,
-    py_y_centered: bool,
+    py_alignment_x: f32,
+    py_alignment_y: f32,
 ) {
     let mut g = registry_mut();
     let Some(map) = g.as_mut() else {
@@ -292,8 +292,7 @@ pub fn tick_text_widget(
         return;
     };
     t.py_input_focused = py_input_focused;
-    t.py_x_centered = py_x_centered;
-    t.py_y_centered = py_y_centered;
+    t.py_alignment = (py_alignment_x.clamp(0.0, 1.0), py_alignment_y.clamp(0.0, 1.0));
 
     // Unfocused embed widgets must not retain a phantom trackpad laser (only the focused pane drives it).
     if t.python_viewport.is_some() && !py_input_focused {

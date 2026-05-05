@@ -8,7 +8,7 @@ import xos
 DEFAULT_FONT_SIZE = 48.0
 
 
-def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=DEFAULT_FONT_SIZE, centered_x: bool = False, centered_y: bool = False):
+def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=DEFAULT_FONT_SIZE, alignment=(0.0, 0.0)):
     x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
     return xos.ui.text(
         text,
@@ -25,8 +25,7 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: fl
         selectable=True,
         scrollable=True,
         show_cursor=True,
-        x_centered=centered_x,
-        y_centered=centered_y,
+        alignment=alignment,
     )
 
 
@@ -36,8 +35,8 @@ class TextDemo(xos.Application):
 
         self.keyboard = xos.ui.onscreen_keyboard()
 
-        self.text1 = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="display", fontsize=55.0, centered_x=True, centered_y=True)
-        self.text2 = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="summary", fontsize=32.0, centered_x=True, centered_y=False)
+        self.text1 = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="display", fontsize=55.0, alignment=(0.5, 0.5))
+        self.text2 = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="summary", fontsize=32.0, alignment=(0.0, 0.0))
         self.text = xos.ui.group(self.text1, self.text2)
 
     def tick(self):
