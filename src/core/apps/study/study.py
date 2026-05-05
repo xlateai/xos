@@ -8,7 +8,7 @@ import xos
 DEFAULT_FONT_SIZE = 48.0
 
 
-def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=DEFAULT_FONT_SIZE, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
+def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
     x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
     return xos.ui.text(
         text,
@@ -16,15 +16,15 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: fl
         y1=y1,
         x2=x2,
         y2=y2,
-        editable=True,
+        editable=False,
         font=None,
-        font_size=fontsize,
+        font_size=DEFAULT_FONT_SIZE * fontsize,
         color=xos.color.WHITE,
-        hitboxes=False,
-        baselines=False,
+        show_hitboxes=True,
+        show_baselines=False,
         selectable=True,
         scrollable=True,
-        show_cursor=True,
+        show_cursor=False,
         alignment=alignment,
         spacing=spacing,
     )
@@ -36,8 +36,8 @@ class TextDemo(xos.Application):
 
         self.keyboard = xos.ui.onscreen_keyboard()
 
-        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="図書館", fontsize=55.0, alignment=(0.5, 0.5), spacing=(1.5, 1.5))
-        self.description = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="toshokann (library)", fontsize=32.0, alignment=(0.5, 0.0))
+        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.2, text="図書館", fontsize=1.8, alignment=(0.5, 0.5), spacing=(1.5, 1.5))
+        self.description = make_text(self, x1=0.0, y1=0.2, x2=1.0, y2=1.0, text="toshokann (library)", fontsize=1.0, alignment=(0.5, 0.0))
         self.text = xos.ui.group(self.vocab_display, self.description)
 
     def tick(self):
@@ -45,7 +45,9 @@ class TextDemo(xos.Application):
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
-        ts = self.text.tick(self)
+        # ts = self.text.tick(self)
+
+        ts = self.text.tick(self)[0]
 
         # self.vocab_display.y2 = self.keyboard.y1
         self.description.y2 = self.keyboard.y1

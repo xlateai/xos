@@ -440,8 +440,15 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let fs_raw = py_number_to_f64(getattr_required(vm, text_py.clone(), "font_size")?, vm, "font_size")?;
     let fs = fs_raw as f32;
-    let hitboxes = read_bool_prop(vm, text_py.clone(), "hitboxes", false)?;
-    let baselines = read_bool_prop(vm, text_py.clone(), "baselines", false)?;
+    // Support both new show_* names and legacy names.
+    let show_hitboxes = match vm.get_attribute_opt(text_py.clone(), "show_hitboxes")? {
+        Some(v) => v.clone().try_into_value(vm)?,
+        None => read_bool_prop(vm, text_py.clone(), "hitboxes", false)?,
+    };
+    let show_baselines = match vm.get_attribute_opt(text_py.clone(), "show_baselines")? {
+        Some(v) => v.clone().try_into_value(vm)?,
+        None => read_bool_prop(vm, text_py.clone(), "baselines", false)?,
+    };
 
     let selectable = read_bool_prop(vm, text_py.clone(), "selectable", true)?;
     let scrollable = read_bool_prop(vm, text_py.clone(), "scrollable", true)?;
@@ -481,7 +488,7 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.set_font_size(fs);
     t.read_only = !editable;
     t.show_cursor = show_cursor;
-    t.show_debug_visuals = hitboxes || baselines;
+    t.show_debug_visuals = show_hitboxes || show_baselines;
     t.py_selectable = selectable;
     t.py_scrollable = scrollable;
     t.py_allow_shortcuts = shortcuts;
@@ -708,8 +715,8 @@ class Text:
         x2=1.0,
         y2=1.0,
         color=(255, 255, 255),
-        hitboxes=False,
-        baselines=False,
+        show_hitboxes=False,
+        show_baselines=False,
         font_size=24.0,
         font=None,
         **kwargs,
@@ -724,8 +731,13 @@ class Text:
         self.x2 = x2
         self.y2 = y2
         self.color = color
-        self.hitboxes = hitboxes
-        self.baselines = baselines
+        legacy_hitboxes = kwargs.get("hitboxes", False)
+        legacy_baselines = kwargs.get("baselines", False)
+        self.show_hitboxes = bool(kwargs.get("show_hitboxes", show_hitboxes) or legacy_hitboxes)
+        self.show_baselines = bool(kwargs.get("show_baselines", show_baselines) or legacy_baselines)
+        # Backward-compatible aliases.
+        self.hitboxes = self.show_hitboxes
+        self.baselines = self.show_baselines
         self.font_size = float(font_size)
         self._native_id = None
         self._kwargs = kwargs
@@ -775,8 +787,10 @@ class Text:
             self.x2,
             self.y2,
             self.color,
-            hitboxes=self.hitboxes,
-            baselines=self.baselines,
+            # Always compute and return hitboxes/baselines in render state.
+            # Visibility is controlled separately via show_* flags.
+            hitboxes=True,
+            baselines=True,
             font_size=self.font_size,
             native_widget_id=int(self._native_id),
             show_cursor=caret,
@@ -811,8 +825,8 @@ class Text:
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
         import xos
         resolved_color = self.color if color is None else color
-        resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
-        resolved_baselines = self.baselines if baselines is None else baselines
+        resolved_hitboxes = self.show_hitboxes if hitboxes is None else hitboxes
+        resolved_baselines = self.show_baselines if baselines is None else baselines
         resolved_font_size = self.font_size if font_size is None else font_size
         bound = False
         if frame is not None:
@@ -837,8 +851,9 @@ class Text:
                 self.x2,
                 self.y2,
                 resolved_color,
-                resolved_hitboxes,
-                resolved_baselines,
+                # Always compute and return full render geometry.
+                True,
+                True,
                 resolved_font_size,
                 **extra,
             )
@@ -870,19 +885,9 @@ class Group:
                 c.font_size = v
 
     def tick(self, app):
-        lines_acc = []
-        hb_acc = []
-        bl_acc = []
-        for c in self._children:
-            r = c.tick(app)
-            if not isinstance(r, TextRenderState):
-                continue
-            lines_acc.extend(list(r.lines))
-            hb_acc.extend(r.hitboxes.list())
-            bl_acc.extend(r.baselines.list())
-        return TextRenderState(
-            {"lines": lines_acc, "hitboxes": hb_acc, "baselines": bl_acc},
-        )
+        # Preserve each child's return object in-order instead of
+        # collapsing into a single vectorized TextRenderState.
+        return tuple(c.tick(app) for c in self._children)
 
     def on_events(self, app):
         for c in self._children:
@@ -904,7 +909,7 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxes=False, baselines=False, font_size=24.0, font=None, **kwargs):
+def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hitboxes=False, show_baselines=False, font_size=24.0, font=None, **kwargs):
     return Text(
         text,
         x1=x1,
@@ -912,8 +917,8 @@ def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxe
         x2=x2,
         y2=y2,
         color=color,
-        hitboxes=hitboxes,
-        baselines=baselines,
+        show_hitboxes=show_hitboxes,
+        show_baselines=show_baselines,
         font_size=font_size,
         font=font,
         **kwargs
