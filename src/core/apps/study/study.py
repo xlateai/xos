@@ -40,12 +40,13 @@ class TextDemo(xos.Application):
         self.description = make_text(
             self,
             x1=0.0,
-            y1=0.33,
+            y1=0.35,
             x2=1.0,
             y2=1.0,
-            text="toshokann (library)[Double tap anywhere to open the on screen keyboard.](color=GRAY size=24)\nType the vocabulary!",
+            text="Type the vocabulary!\n[Double tap anywhere to open the on screen keyboard.](color=GRAY size=24)",
             normsize=1.0,
             alignment=(0.5, 0.0),
+            spacing=(1.0, 1.5),
         )
         self.text = xos.ui.group(self.vocab_display, self.description)
 

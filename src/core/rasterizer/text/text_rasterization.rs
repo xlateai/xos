@@ -333,7 +333,7 @@ impl TextRasterizer {
         let sy = self.spacing.1.max(0.0);
         let default_line_stride = (self.ascent + self.descent + self.line_gap) * sy;
         let scales = &self.glyph_scale_spans;
-        let body_line_gap_sy = self.line_gap * sy;
+        let body_line_gap = self.line_gap;
         let chars: Vec<char> = self.text.chars().collect();
 
         /// One wrapped / newline-delimited row: glyph index range plus ink extents vs baseline (`y` untouched).
@@ -346,12 +346,14 @@ impl TextRasterizer {
             max_scale: f32,
         }
 
-        let line_gap_scaled = |max_scale_on_line: f32| -> f32 {
+        // Unscaled gap from the font at this line's em-size; multiply the full stride by `sy` below so Y spacing
+        // matches X (where `advance * sx` scales the entire advance), not just the metric `line_gap` sliver.
+        let line_gap_unscaled = |max_scale_on_line: f32| -> f32 {
             let px = (fs * max_scale_on_line).max(0.5);
             font
                 .horizontal_line_metrics(px)
-                .map(|m| m.line_gap * sy)
-                .unwrap_or(body_line_gap_sy)
+                .map(|m| m.line_gap)
+                .unwrap_or(body_line_gap)
         };
 
         let mut proto_lines: Vec<ProtoLine> = Vec::new();
@@ -440,16 +442,11 @@ impl TextRasterizer {
             let prev_empty = prev.ascent <= Z && prev.descent <= Z;
             let next_empty = next.ascent <= Z && next.descent <= Z;
 
-            let gap_after_prev = if prev_empty {
-                body_line_gap_sy
-            } else {
-                line_gap_scaled(prev.max_scale)
-            };
-
             let mut step = if prev_empty {
                 default_line_stride
             } else {
-                prev.descent + gap_after_prev + next.ascent
+                let gap_u = line_gap_unscaled(prev.max_scale);
+                (prev.descent + gap_u + next.ascent) * sy
             };
 
             if next_empty {
