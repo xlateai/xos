@@ -3,6 +3,7 @@ use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::{
     character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
 };
+use crate::rasterizer::text::ui_markup;
 use fontdue::Font;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -57,6 +58,8 @@ pub struct UiText {
     pub trackpad_pointer_px: Option<(f32, f32)>,
     /// Document-space vertical scroll copied from embedded [`crate::apps::text::TextApp::scroll_y`].
     pub viewport_scroll_y: f32,
+    /// Per-glyph RGB overrides keyed by Unicode-scalar indices into [`Self::text`] (from `[label](color=NAME)`).
+    pub color_spans: Vec<(usize, usize, (u8, u8, u8))>,
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -421,9 +424,13 @@ impl UiText {
                     let alpha = (glyph_alpha as f32 / 255.0) * (self.color.3 as f32 / 255.0);
                     let inv_alpha = 1.0 - alpha;
 
-                    buffer[idx] = (self.color.0 as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
-                    buffer[idx + 1] = (self.color.1 as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
-                    buffer[idx + 2] = (self.color.2 as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
+                    let base_rgb = (self.color.0, self.color.1, self.color.2);
+                    let (cr, cg, cb) =
+                        ui_markup::glyph_rgb_with_spans(character.char_index, base_rgb, &self.color_spans);
+
+                    buffer[idx] = (cr as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
+                    buffer[idx + 1] = (cg as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
+                    buffer[idx + 2] = (cb as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
                     buffer[idx + 3] = 0xff;
                 }
             }

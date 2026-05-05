@@ -37,7 +37,7 @@ class TextDemo(xos.Application):
         self.keyboard = xos.ui.onscreen_keyboard()
 
         self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.33, text="図書館", fontsize=1.8, alignment=(0.5, 1.0), spacing=(1.5, 1.5))
-        self.description = make_text(self, x1=0.0, y1=0.33, x2=1.0, y2=1.0, text="toshokann (library)", fontsize=1.0, alignment=(0.5, 0.0))
+        self.description = make_text(self, x1=0.0, y1=0.33, x2=1.0, y2=1.0, text="toshokann (library) [Double tap anywhere to open the on screen keyboard.](color=GRAY) Type the vocabulary!", fontsize=1.0, alignment=(0.5, 0.0))
         self.text = xos.ui.group(self.vocab_display, self.description)
 
     def tick(self):

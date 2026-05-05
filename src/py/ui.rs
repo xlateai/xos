@@ -3,6 +3,7 @@ use rustpython_vm::{
 };
 use crate::apps::text::TextApp;
 use crate::rasterizer::text::fonts;
+use crate::rasterizer::text::ui_markup;
 use crate::python_api::engine::py_engine_tls::{with_callback_engine_state_mut, with_tick_engine_state_mut};
 use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
@@ -296,6 +297,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         a.clamp(0, 255) as u8,
     );
 
+    let (viz_text, ui_color_spans) = ui_markup::strip_inline_color_links(&text);
+
     let buffer =
         unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
 
@@ -354,7 +357,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         rs
     } else {
         let text_ui = UiText {
-            text,
+            text: viz_text,
             x1_norm: x1 as f32,
             y1_norm: y1 as f32,
             x2_norm: x2 as f32,
@@ -369,6 +372,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             selection_end: selection_end_opt,
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
+            color_spans: ui_color_spans,
         };
         if should_render {
             text_ui
@@ -519,7 +523,7 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut t = TextApp::new();
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
     t.python_viewport = Some((vx, vy, vw, vh));
-    t.text_rasterizer.set_text(s);
+    t.set_document_text_py_ui(s);
     t.set_font_size(fs);
     t.read_only = !editable;
     t.show_cursor = show_cursor;

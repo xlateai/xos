@@ -8,6 +8,7 @@ use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::{
     line_band_intersects_doc_viewport, TextLayoutAlign, TextRasterizer,
 };
+use crate::rasterizer::text::ui_markup;
 use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
@@ -190,6 +191,8 @@ pub struct TextApp {
     pub(crate) embed_fast_glyph_paint: bool,
     /// Per-frame reuse for [`Self::paint_viewport`] line-vs-viewport overlap (avoids `Vec::collect` each paint).
     paint_line_visible_scratch: Vec<bool>,
+    /// Half-open Unicode-scalar spans over [`TextRasterizer::text`] painting with palette RGB (from `[label](color=NAME)` stripped at ingest).
+    pub(crate) glyph_color_spans: Vec<(usize, usize, (u8, u8, u8))>,
     /// Python embedded: synced from [`xos.ui.Text.is_focused`] each [`tick`]; gates character keys, shortcuts, and pointer hit-testing.
     pub py_input_focused: bool,
     /// Python `xos.ui.Text` normalized alignment (`0,0` top-left; `1,1` bottom-right).
@@ -282,10 +285,18 @@ impl TextApp {
             engine_font_family_version_seen: fonts::default_font_version(),
             embed_fast_glyph_paint: false,
             paint_line_visible_scratch: Vec::new(),
+            glyph_color_spans: Vec::new(),
             py_input_focused: false,
             py_alignment: (0.0, 0.0),
             py_spacing: (1.0, 1.0),
         }
+    }
+
+    /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=NAME)` spans).
+    pub(crate) fn set_document_text_py_ui(&mut self, raw: String) {
+        let (display, spans) = ui_markup::strip_inline_color_links(&raw);
+        self.glyph_color_spans = spans;
+        self.text_rasterizer.set_text(display);
     }
 
     pub(crate) fn clear_trackpad_state_for_python_embed_handoff(&mut self) {
@@ -465,12 +476,7 @@ impl TextApp {
         let is_keyboard_shown = ctx.is_keyboard_shown;
         let paint_cursor = ctx.paint_cursor;
 
-        let (gr, gg, gb, ga) = (
-            glyph_rgba.0 as u32,
-            glyph_rgba.1 as u32,
-            glyph_rgba.2 as u32,
-            glyph_rgba.3 as u32,
-        );
+        let ga = glyph_rgba.3 as u32;
 
         let vis_top_doc = self.scroll_y;
         let vis_bottom_doc = self.scroll_y + visible_height;
@@ -594,6 +600,7 @@ impl TextApp {
 
         let fast_paint = self.embed_fast_glyph_paint;
         let ga_f = ga as f32 / 255.0;
+        let base_rgb = (glyph_rgba.0, glyph_rgba.1, glyph_rgba.2);
 
         for character in &self.text_rasterizer.characters {
             if !line_quick_visible(character.line_index) {
@@ -629,6 +636,10 @@ impl TextApp {
             let ph = character.height as u32;
 
             let fade_f = fade_alpha_byte as f32 / 255.0;
+
+            let (gr, gg, gb) =
+                ui_markup::glyph_rgb_with_spans(character.char_index, base_rgb, &self.glyph_color_spans);
+            let (gr, gg, gb) = (gr as u32, gg as u32, gb as u32);
 
             for y in 0..character.metrics.height {
                 for x in 0..character.metrics.width {
