@@ -142,6 +142,8 @@ pub struct TextRasterizer {
     pub line_caret_start_x: Vec<f32>,
     /// Multipliers for start-to-start spacing: `(x, y)` where `1.0` is default behavior.
     spacing: (f32, f32),
+    /// Half-open char-index spans × relative font scale (`1.0` outside spans). Cleared by [`Self::set_text`].
+    pub glyph_scale_spans: Vec<(usize, usize, f32)>,
 }
 
 impl TextRasterizer {
@@ -163,12 +165,14 @@ impl TextRasterizer {
             last_layout_quick_fp: None,
             line_caret_start_x: Vec::new(),
             spacing: (1.0, 1.0),
+            glyph_scale_spans: Vec::new(),
         }
     }
 
     pub fn set_text(&mut self, text: String) {
         // Normalize Windows-style CRLF to LF so '\r' doesn't render as a visible trailing glyph.
         self.last_layout_quick_fp = None;
+        self.glyph_scale_spans.clear();
         self.text = text.replace("\r\n", "\n").replace('\r', "\n");
     }
 
@@ -210,6 +214,28 @@ impl TextRasterizer {
             }
         }
         h
+    }
+
+    #[inline(always)]
+    fn mix_scale_spans_fp(spans: &[(usize, usize, f32)]) -> u64 {
+        let mut h = Self::mix_fp(0xd15ca5e_u64, spans.len() as u64);
+        for (s, e, m) in spans {
+            h = Self::mix_fp(h, *s as u64);
+            h = Self::mix_fp(h, *e as u64);
+            h = Self::mix_fp(h, m.to_bits() as u64);
+        }
+        h
+    }
+
+    #[inline]
+    fn scale_at_char(spans: &[(usize, usize, f32)], char_index: usize) -> f32 {
+        spans
+            .iter()
+            .rev()
+            .find(|(s, e, _)| char_index >= *s && char_index < *e)
+            .map(|(_, _, m)| *m)
+            .unwrap_or(1.0)
+            .clamp(0.125, 16.0)
     }
 
     /// Updates metrics for a new font size (call before [`tick`](Self::tick) to relayout).
@@ -285,7 +311,10 @@ impl TextRasterizer {
         } else {
             self.quick_layout_stable_fp(window_width)
         };
-        let fp = Self::mix_align_into_fp(base_fp, window_height, align, self.spacing);
+        let fp = Self::mix_fp(
+            Self::mix_align_into_fp(base_fp, window_height, align, self.spacing),
+            Self::mix_scale_spans_fp(&self.glyph_scale_spans),
+        );
         if self.last_layout_quick_fp == Some(fp) {
             return;
         }
@@ -303,41 +332,63 @@ impl TextRasterizer {
         let fs = self.font_size;
         let sx = self.spacing.0.max(0.0);
         let sy = self.spacing.1.max(0.0);
-        let line_step = (self.ascent + self.descent + self.line_gap) * sy;
+        let default_line_stride = (self.ascent + self.descent + self.line_gap) * sy;
+        let scales = &self.glyph_scale_spans;
+
+        let mut line_ascent = 0.0f32;
+        let mut line_descent = 0.0f32;
 
         for (i, ch) in self.text.chars().enumerate() {
             if ch == '\n' {
+                let step = if line_ascent > 1e-6 || line_descent > 1e-6 {
+                    line_ascent + line_descent + self.line_gap * sy
+                } else {
+                    default_line_stride
+                };
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
                     end_index: i,
                 });
 
+                baseline_y += step;
+                line_ascent = 0.0;
+                line_descent = 0.0;
                 x = 0.0;
-                baseline_y += line_step;
                 line_start = i + 1;
                 line_index += 1;
                 continue;
             }
 
-            let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs);
+            let fs_i = fs * Self::scale_at_char(scales, i);
+            let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs_i);
             let advance = metrics.advance_width;
             let advance_step = advance * sx;
 
             if x + advance_step > window_width {
+                let step = if line_ascent > 1e-6 || line_descent > 1e-6 {
+                    line_ascent + line_descent + self.line_gap * sy
+                } else {
+                    default_line_stride
+                };
                 self.lines.push(LineInfo {
                     baseline_y,
                     start_index: line_start,
                     end_index: i,
                 });
 
+                baseline_y += step;
+                line_ascent = 0.0;
+                line_descent = 0.0;
                 x = 0.0;
-                baseline_y += line_step;
                 line_start = i;
                 line_index += 1;
             }
 
             let y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+            let glyph_bottom = y + metrics.height as f32;
+            line_ascent = line_ascent.max(baseline_y - y);
+            line_descent = line_descent.max(glyph_bottom - baseline_y);
 
             self.characters.push(Character {
                 ch,

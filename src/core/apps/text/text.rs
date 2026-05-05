@@ -292,11 +292,12 @@ impl TextApp {
         }
     }
 
-    /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=NAME)` spans).
+    /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=… size=…)` markup).
     pub(crate) fn set_document_text_py_ui(&mut self, raw: String) {
-        let (display, spans) = ui_markup::strip_inline_color_links(&raw);
-        self.glyph_color_spans = spans;
+        let (display, color_spans, scale_spans) = ui_markup::strip_inline_ui_markup(&raw);
+        self.glyph_color_spans = color_spans;
         self.text_rasterizer.set_text(display);
+        self.text_rasterizer.glyph_scale_spans = scale_spans;
     }
 
     pub(crate) fn clear_trackpad_state_for_python_embed_handoff(&mut self) {

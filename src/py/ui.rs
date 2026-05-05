@@ -179,7 +179,7 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// Internal render hook for xos.ui.Text.render(...)
-/// Usage: `_text_render(...)` with optional kwargs `native_widget_id`, `show_cursor` (caret uses native layout when id is set).
+/// Usage: `_text_render(...)` with optional kwargs `native_widget_id`, `show_cursor`, `size` (`font_size` accepted for compatibility).
 fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 {
@@ -227,12 +227,12 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         false
     };
 
-    let mut font_size_px: f32 = if args_vec.len() > 8 {
-        let fs = py_number_to_f64(args_vec[8].clone(), vm, "font_size")?;
-        fs as f32
+    let mut size_px: f32 = if args_vec.len() > 8 {
+        py_number_to_f64(args_vec[8].clone(), vm, "size")? as f32
+    } else if let Some(v) = args.kwargs.get("size") {
+        py_number_to_f64(v.clone(), vm, "size")? as f32
     } else if let Some(v) = args.kwargs.get("font_size") {
-        let fs = py_number_to_f64(v.clone(), vm, "font_size")?;
-        fs as f32
+        py_number_to_f64(v.clone(), vm, "font_size")? as f32
     } else {
         24.0
     };
@@ -253,7 +253,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             text = peek.text;
             cursor_position = peek.cursor_position;
             show_cursor = peek.show_cursor;
-            font_size_px = peek.font_size_px;
+            size_px = peek.size_px;
             viewport_scroll_y = peek.scroll_y;
             selection_start_opt = peek.selection_start;
             selection_end_opt = peek.selection_end;
@@ -297,7 +297,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         a.clamp(0, 255) as u8,
     );
 
-    let (viz_text, ui_color_spans) = ui_markup::strip_inline_color_links(&text);
+    let (viz_text, ui_color_spans, ui_scale_spans) = ui_markup::strip_inline_ui_markup(&text);
 
     let buffer =
         unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
@@ -365,7 +365,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             color: glyph_rgba,
             hitboxes,
             baselines,
-            font_size_px,
+            size_px,
             show_cursor,
             cursor_position,
             selection_start: selection_start_opt,
@@ -373,6 +373,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
             color_spans: ui_color_spans,
+            scale_spans: ui_scale_spans,
         };
         if should_render {
             text_ui
@@ -477,7 +478,15 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         fh_u.max(1) as f32,
     );
 
-    let fs_raw = py_number_to_f64(getattr_required(vm, text_py.clone(), "font_size")?, vm, "font_size")?;
+    let fs_raw = if let Some(v) = vm.get_attribute_opt(text_py.clone(), "size")? {
+        py_number_to_f64(v, vm, "size")?
+    } else if let Some(v) = vm.get_attribute_opt(text_py.clone(), "font_size")? {
+        py_number_to_f64(v, vm, "font_size")?
+    } else {
+        return Err(vm.new_attribute_error(
+            "Text requires attribute 'size' (pixels)".to_string(),
+        ));
+    };
     let fs = fs_raw as f32;
     // Support both new show_* names and legacy names.
     let show_hitboxes = match vm.get_attribute_opt(text_py.clone(), "show_hitboxes")? {
@@ -523,8 +532,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mut t = TextApp::new();
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
     t.python_viewport = Some((vx, vy, vw, vh));
-    t.set_document_text_py_ui(s);
     t.set_font_size(fs);
+    t.set_document_text_py_ui(s);
     t.read_only = !editable;
     t.show_cursor = show_cursor;
     t.show_debug_visuals = show_hitboxes || show_baselines;
@@ -551,12 +560,12 @@ fn text_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() < 2 || av.len() > 7 {
         return Err(vm.new_type_error(
-            "_text_tick requires (native_id, font_size[, py_input_focused[, alignment_x[, alignment_y[, spacing_x[, spacing_y]]]]])"
+            "_text_tick requires (native_id, size[, py_input_focused[, alignment_x[, alignment_y[, spacing_x[, spacing_y]]]]])"
                 .to_string(),
         ));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
-    let fs = py_number_to_f64(av[1].clone(), vm, "font_size")? as f32;
+    let fs = py_number_to_f64(av[1].clone(), vm, "size")? as f32;
     let focused = av
         .get(2)
         .map(|o| o.clone().try_into_value::<bool>(vm))
@@ -756,7 +765,7 @@ class Text:
         color=(255, 255, 255),
         show_hitboxes=False,
         show_baselines=False,
-        font_size=24.0,
+        size=24.0,
         font=None,
         **kwargs,
     ):
@@ -764,6 +773,12 @@ class Text:
             raise TypeError(
                 "xos.ui.Text does not support custom fonts yet; omit font or pass None to use the F3 / engine default."
             )
+        lv = kwargs.pop("font_size", None)
+        if lv is not None:
+            size = lv
+        lv = kwargs.pop("fontsize", None)
+        if lv is not None:
+            size = lv
         self.text = text
         self.x1 = x1
         self.y1 = y1
@@ -777,7 +792,7 @@ class Text:
         # Backward-compatible aliases.
         self.hitboxes = self.show_hitboxes
         self.baselines = self.show_baselines
-        self.font_size = float(font_size)
+        self.size = float(size)
         self._native_id = None
         self._last_tick_state = None
         self._kwargs = kwargs
@@ -799,6 +814,14 @@ class Text:
             self.spacing = (1.0, 1.0)
         self.is_focused = False
 
+    @property
+    def font_size(self):
+        return float(self.size)
+
+    @font_size.setter
+    def font_size(self, value):
+        self.size = float(value)
+
     def tick(self, app):
         import xos
         if self._native_id is None:
@@ -813,7 +836,7 @@ class Text:
         caret = bool(self.show_cursor and self.is_focused)
         xos.ui._text_tick(
             int(self._native_id),
-            float(self.font_size),
+            float(self.size),
             bool(self.is_focused),
             float(self.alignment[0]),
             float(self.alignment[1]),
@@ -831,7 +854,7 @@ class Text:
             # Visibility is controlled separately via show_* flags.
             hitboxes=True,
             baselines=True,
-            font_size=self.font_size,
+            size=self.size,
             native_widget_id=int(self._native_id),
             show_cursor=caret,
             render=False,
@@ -864,12 +887,17 @@ class Text:
             nid = self._native_id
         xos.ui._text_dispatch(int(nid), app)
 
-    def render(self, frame=None, color=None, hitboxes=None, baselines=None, font_size=None):
+    def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
         resolved_color = self.color if color is None else color
         resolved_hitboxes = self.show_hitboxes if hitboxes is None else hitboxes
         resolved_baselines = self.show_baselines if baselines is None else baselines
-        resolved_font_size = self.font_size if font_size is None else font_size
+        if font_size is not None:
+            resolved_size = float(font_size)
+        elif size is not None:
+            resolved_size = float(size)
+        else:
+            resolved_size = float(self.size)
         bound = False
         if frame is not None:
             fd = getattr(frame, "_data", None)
@@ -896,7 +924,7 @@ class Text:
                 # Always compute and return full render geometry.
                 True,
                 True,
-                resolved_font_size,
+                resolved_size,
                 **extra,
             )
             rendered_state = TextRenderState(state)
@@ -915,18 +943,29 @@ class Group:
         self._children = tuple(children)
 
     @property
-    def font_size(self):
+    def size(self):
         cs = self._children
         if not cs:
             return 24.0
-        return float(getattr(cs[0], "font_size", 24.0))
+        c0 = cs[0]
+        return float(getattr(c0, "size", getattr(c0, "font_size", 24.0)))
+
+    @size.setter
+    def size(self, value):
+        v = float(value)
+        for c in self._children:
+            if hasattr(c, "size"):
+                c.size = v
+            elif hasattr(c, "font_size"):
+                c.font_size = v
+
+    @property
+    def font_size(self):
+        return float(self.size)
 
     @font_size.setter
     def font_size(self, value):
-        v = float(value)
-        for c in self._children:
-            if hasattr(c, "font_size"):
-                c.font_size = v
+        self.size = float(value)
 
     def tick(self, app):
         # Preserve each child's return object in-order instead of
@@ -960,7 +999,11 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hitboxes=False, show_baselines=False, font_size=24.0, font=None, **kwargs):
+def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hitboxes=False, show_baselines=False, size=24.0, font=None, **kwargs):
+    if "font_size" in kwargs:
+        size = kwargs.pop("font_size")
+    if "fontsize" in kwargs:
+        size = kwargs.pop("fontsize")
     return Text(
         text,
         x1=x1,
@@ -970,7 +1013,7 @@ def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hi
         color=color,
         show_hitboxes=show_hitboxes,
         show_baselines=show_baselines,
-        font_size=font_size,
+        size=size,
         font=font,
         **kwargs
     )

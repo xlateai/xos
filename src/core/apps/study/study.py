@@ -8,7 +8,7 @@ import xos
 DEFAULT_FONT_SIZE = 48.0
 
 
-def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
+def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", normsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
     x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
     return xos.ui.text(
         text,
@@ -16,9 +16,9 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", fontsize: fl
         y1=y1,
         x2=x2,
         y2=y2,
-        editable=False,
+        editable=True,
         font=None,
-        font_size=DEFAULT_FONT_SIZE * fontsize,
+        size=DEFAULT_FONT_SIZE * normsize,
         color=xos.color.WHITE,
         show_hitboxes=False,
         show_baselines=False,
@@ -36,12 +36,12 @@ class TextDemo(xos.Application):
 
         self.keyboard = xos.ui.onscreen_keyboard()
 
-        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.33, text="図書館", fontsize=1.8, alignment=(0.5, 1.0), spacing=(1.5, 1.5))
-        self.description = make_text(self, x1=0.0, y1=0.33, x2=1.0, y2=1.0, text="toshokann (library) [Double tap anywhere to open the on screen keyboard.](color=GRAY) Type the vocabulary!", fontsize=1.0, alignment=(0.5, 0.0))
+        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.33, text="図書館", normsize=1.8, alignment=(0.5, 1.0), spacing=(1.5, 1.5))
+        self.description = make_text(self, x1=0.0, y1=0.33, x2=1.0, y2=1.0, text="toshokann (library) [Double tap anywhere to open the on screen keyboard.](color=GRAY) Type the vocabulary!", normsize=1.0, alignment=(0.5, 0.0))
         self.text = xos.ui.group(self.vocab_display, self.description)
 
     def tick(self):
-        # self.text.font_size = DEFAULT_FONT_SIZE * self.scale
+        # self.text.size = DEFAULT_FONT_SIZE * self.scale
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
