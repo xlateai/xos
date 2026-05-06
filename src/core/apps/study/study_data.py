@@ -19,6 +19,192 @@ DEFAULT_JLPT_DASHBOARD_LEVEL = 5  # N5
 # Avoid ``unicodedata`` / stdlib ``re``: compare after lowercasing and dropping common spaces only.
 _WS_SKIP = frozenset(" \t\n\r\f\v\u3000")
 
+# --- Transcription helpers (aligned with ``xlate/dashboards/utils.py`` + ``guessing_game.py``) ---
+# CSV ``Vocab-kana`` is often katakana (e.g. loanwords); users type hiragana. We must normalize
+# like ``katakana_to_hiragana(Vocab-kana)`` before comparing. Romaji typing uses the same strict
+# ``nn`` → ん rule and sokuon doubling as the terminal game.
+
+hiragana_map = {
+    "-": "ー",
+    "aa": "ああ",
+    "a": "あ",
+    "i": "い",
+    "u": "う",
+    "e": "え",
+    "o": "お",
+    "oo": "おお",
+    "ka": "か",
+    "ki": "き",
+    "ku": "く",
+    "ke": "け",
+    "ko": "こ",
+    "sa": "さ",
+    "shi": "し",
+    "su": "す",
+    "se": "せ",
+    "so": "そ",
+    "ta": "た",
+    "chi": "ち",
+    "tsu": "つ",
+    "te": "て",
+    "to": "と",
+    "ti": "てぃ",
+    "fi": "ふぃ",
+    "na": "な",
+    "ni": "に",
+    "nu": "ぬ",
+    "ne": "ね",
+    "no": "の",
+    "ha": "は",
+    "hi": "ひ",
+    "fu": "ふ",
+    "he": "へ",
+    "ho": "ほ",
+    "ma": "ま",
+    "mi": "み",
+    "mu": "む",
+    "me": "め",
+    "mo": "も",
+    "ya": "や",
+    "yu": "ゆ",
+    "yo": "よ",
+    "ra": "ら",
+    "ri": "り",
+    "ru": "る",
+    "re": "れ",
+    "ro": "ろ",
+    "wa": "わ",
+    "wo": "を",
+    "n": "ん",
+    "ga": "が",
+    "gi": "ぎ",
+    "gu": "ぐ",
+    "ge": "げ",
+    "go": "ご",
+    "za": "ざ",
+    "ji": "じ",
+    "zu": "ず",
+    "ze": "ぜ",
+    "zo": "ぞ",
+    "da": "だ",
+    "ji_d": "ぢ",
+    "zu_d": "づ",
+    "de": "で",
+    "do": "ど",
+    "ba": "ば",
+    "bi": "び",
+    "bu": "ぶ",
+    "be": "べ",
+    "bo": "ぼ",
+    "pa": "ぱ",
+    "pi": "ぴ",
+    "pu": "ぷ",
+    "pe": "ぺ",
+    "po": "ぽ",
+    "kya": "きゃ",
+    "kyu": "きゅ",
+    "kyo": "きょ",
+    "sha": "しゃ",
+    "shu": "しゅ",
+    "sho": "しょ",
+    "cha": "ちゃ",
+    "chu": "ちゅ",
+    "cho": "ちょ",
+    "nya": "にゃ",
+    "nyu": "にゅ",
+    "nyo": "にょ",
+    "hya": "ひゃ",
+    "hyu": "ひゅ",
+    "hyo": "ひょ",
+    "mya": "みゃ",
+    "myu": "みゅ",
+    "myo": "みょ",
+    "rya": "りゃ",
+    "ryu": "りゅ",
+    "ryo": "りょ",
+    "gya": "ぎゃ",
+    "gyu": "ぎゅ",
+    "gyo": "ぎょ",
+    "ja": "じゃ",
+    "ju": "じゅ",
+    "jo": "じょ",
+    "bya": "びゃ",
+    "byu": "びゅ",
+    "byo": "びょ",
+    "pya": "ぴゃ",
+    "pyu": "ぴゅ",
+    "pyo": "ぴょ",
+    "fui": "ふぃ",
+    "fa": "ふぁ",
+    "fe": "ふぇ",
+    "fo": "ふぉ",
+}
+
+
+def _katakana_to_hiragana(s: str) -> str:
+    out = []
+    for char in str(s):
+        o = ord(char)
+        if 0x30A0 <= o <= 0x30FF:
+            if char == "ー":
+                out.append(char)
+            else:
+                out.append(chr(o - 0x60))
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _romaji_to_hiragana(romaji: str) -> str:
+    romaji = romaji.lower()
+    sorted_keys = sorted(hiragana_map.keys(), key=lambda x: len(x), reverse=True)
+    h = ""
+    i = 0
+    n = len(romaji)
+    while i < n:
+        if romaji[i] == "n":
+            if i + 1 < n and romaji[i + 1] == "n":
+                h += "ん"
+                i += 2
+                continue
+            if i + 1 < n and romaji[i + 1] in ["a", "i", "u", "e", "o", "y"]:
+                pass
+            else:
+                h += "n"
+                i += 1
+                continue
+        if i < n - 1 and romaji[i] == romaji[i + 1] and romaji[i] not in ["a", "i", "u", "e", "o", "n"]:
+            h += "っ"
+            i += 1
+            continue
+        matched = False
+        for key in sorted_keys:
+            if romaji[i:].startswith(key):
+                if key == "ji" and romaji[i - 1 : i] in ["d"]:
+                    h += hiragana_map["ji_d"]
+                else:
+                    h += hiragana_map[key]
+                i += len(key)
+                matched = True
+                break
+        if not matched:
+            h += romaji[i]
+            i += 1
+    return h
+
+
+def _unicode_has_kana(s: str) -> bool:
+    for c in s:
+        o = ord(c)
+        if 0x3040 <= o <= 0x309F or 0x30A0 <= o <= 0x30FF:
+            return True
+    return False
+
+
+def _normalize_romaji_guess(s: str) -> str:
+    t = str(s).strip().lower()
+    return xos.regex.sub(r"\s+", "", t)
+
 
 def _strip_html(s: str) -> str:
     return xos.regex.sub(r"<[^>]+>", "", str(s))
@@ -27,6 +213,11 @@ def _strip_html(s: str) -> str:
 def _norm_typing(s: str) -> str:
     t = str(s).strip().lower()
     return "".join(c for c in t if c not in _WS_SKIP)
+
+
+def _canonical_kana_key(s: str) -> str:
+    """Single string form for equality checks (loanword katakana vs IME hiragana)."""
+    return _norm_typing(_katakana_to_hiragana(str(s)))
 
 
 def _col(row: dict, *names: str) -> str:
@@ -56,7 +247,7 @@ def _filtered_vocab_rows(csv_table, jlpt_dashboard_level):
 
 
 class StudyData:
-    """Holds the loaded CSV, current row, and a light kana equality check (no NFKC dependency)."""
+    """Loads filtered vocab rows and checks guesses like ``guessing_game`` (katakana key + IME / romaji)."""
 
     def __init__(self, jlpt_dashboard_level=None) -> None:
         study_data_folder.makedirs(exists_ok=True)
@@ -86,7 +277,9 @@ class StudyData:
 
     def check_answer(self, guess: str) -> tuple:
         """
-        Compare ``guess`` to the reading (``Vocab-kana``) after normalization.
+        Compare ``guess`` to ``Vocab-kana``: answer key as hiragana (``katakana_to_hiragana`` CSV),
+        guess as IME kana **or** ASCII romaji (``nn`` → ん, doubled consonants → っ), matching
+        ``xlate/dashboards/guessing_game.py``.
         Returns ``(ok, short_message)``.
         """
         row = self.current
@@ -95,7 +288,19 @@ class StudyData:
         target = _col(row, "Vocab-kana")
         if not target:
             return False, "Missing answer in data row."
-        ok = _norm_typing(guess) == _norm_typing(target)
+
+        answer_key = _canonical_kana_key(target)
+        g = str(guess).strip()
+        hiragana_candidates = []
+        if _unicode_has_kana(g):
+            hiragana_candidates.append(_canonical_kana_key(g))
+        else:
+            rj = _normalize_romaji_guess(g)
+            if rj != "":
+                hiragana_candidates.append(_canonical_kana_key(_romaji_to_hiragana(rj)))
+
+        ok = any(h == answer_key for h in hiragana_candidates)
+
         kanji = _col(row, "Vocab-expression")
         meaning = _col(row, "Vocab-meaning")
         if ok:
