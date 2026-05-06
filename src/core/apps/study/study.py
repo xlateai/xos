@@ -122,11 +122,9 @@ class TextDemo(xos.Application):
         raw = getattr(self.guess_area, "text", "")
         if "\n" in raw or "\r" in raw:
             line = _first_line(raw).strip()
-            if self._awaiting_guess:
-                if line:
-                    self._submit_guess(line)
-                else:
-                    self._clear_guess_native()
+            # Non-empty Enter submits while waiting; empty Enter always skips to next word (same as after feedback).
+            if self._awaiting_guess and line:
+                self._submit_guess(line)
             else:
                 self._bootstrap_round()
                 self._clear_guess_native()

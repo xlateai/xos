@@ -10,6 +10,12 @@ HF_VOCAB_CSV = "https://huggingface.co/datasets/nollied/Japanese-Vocab-6k/resolv
 study_data_folder = xos.path.dotxos / "data" / "study"
 csv_path = study_data_folder / "japanese_vocabs_6000.csv"
 
+# JLPT column and level mapping match ``xlate/dashboards/utils.py`` / ``LEVEL_COL``.
+# CSV cells look like ``JLPT4``; ``int(first_digit) + 1`` yields dashboard level. Level ``5``
+# is the N5-tier slice (``shared_kanji_graph.py`` uses ``LEVEL_COL == 5`` as N5-only).
+JLPT_COL_CANDIDATES = ("jlpt", "jlpt ")
+DEFAULT_JLPT_DASHBOARD_LEVEL = 5  # N5
+
 # Avoid ``unicodedata`` / stdlib ``re``: compare after lowercasing and dropping common spaces only.
 _WS_SKIP = frozenset(" \t\n\r\f\v\u3000")
 
@@ -30,24 +36,52 @@ def _col(row: dict, *names: str) -> str:
     return ""
 
 
+def _jlpt_dashboard_level(cell: str):
+    """First digit in the cell ``+ 1``, same as Polars expr in ``get_vocab_data``."""
+    for ch in str(cell).strip():
+        if ch.isdigit():
+            return int(ch) + 1
+    return None
+
+
+def _filtered_vocab_rows(csv_table, jlpt_dashboard_level):
+    rows = []
+    n = len(csv_table)
+    for i in range(n):
+        row = dict(csv_table[i])
+        lv = _jlpt_dashboard_level(_col(row, *JLPT_COL_CANDIDATES))
+        if lv == jlpt_dashboard_level:
+            rows.append(row)
+    return rows
+
+
 class StudyData:
     """Holds the loaded CSV, current row, and a light kana equality check (no NFKC dependency)."""
 
-    def __init__(self) -> None:
+    def __init__(self, jlpt_dashboard_level=None) -> None:
         study_data_folder.makedirs(exists_ok=True)
         dest = str(csv_path)
         if not csv_path.exists():
             xos.data.download(HF_VOCAB_CSV, dest)
-        self._csv = xos.csv.load(dest)
-        self._n = len(self._csv)
+        full = xos.csv.load(dest)
+        target = (
+            jlpt_dashboard_level
+            if jlpt_dashboard_level is not None
+            else DEFAULT_JLPT_DASHBOARD_LEVEL
+        )
+        self._rows = _filtered_vocab_rows(full, int(target))
+        self._n = len(self._rows)
         if self._n < 1:
-            raise RuntimeError("study: vocabulary CSV is empty")
+            raise RuntimeError(
+                "study: no vocabulary rows for JLPT filter (dashboard level {}). "
+                "Try a different jlpt_dashboard_level or check CSV column 'jlpt'.".format(target)
+            )
         self.current = None
 
     def next_example(self) -> dict:
         """Pick a random row and store it as ``self.current``."""
         i = xos.random.randint(0, self._n - 1)
-        self.current = self._csv[i]
+        self.current = self._rows[i]
         return self.current
 
     def check_answer(self, guess: str) -> tuple:
