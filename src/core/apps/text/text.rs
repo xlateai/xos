@@ -301,6 +301,19 @@ impl TextApp {
         self.text_rasterizer.glyph_scale_spans = scale_spans;
     }
 
+    /// Replace embed document from Python (`xos.ui._text_set_document`); clears selection.
+    ///
+    /// `cursor_at_end`: `True` after pushing read-only captions (caret hidden anyway); `False` when resetting an editor.
+    pub(crate) fn python_embed_replace_document_py_ui(&mut self, raw: String, cursor_at_end: bool) {
+        self.set_document_text_py_ui(raw);
+        self.selection_start = None;
+        self.selection_end = None;
+        let len = self.text_rasterizer.text.chars().count();
+        self.cursor_position = if cursor_at_end { len } else { 0 };
+        self.smooth_cursor_x = 0.0;
+        self.fade_map.clear();
+    }
+
     /// Inline markup spans are only valid for the parsed document; clear them after any user edit.
     #[inline]
     fn clear_inline_markup_after_user_edit(&mut self) {
