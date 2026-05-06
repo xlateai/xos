@@ -1,5 +1,19 @@
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 
+/// Resolve a palette name as exposed on `xos.color` (e.g. `WHITE`, `light_blue`, `gray`) to RGB.
+pub fn lookup_xos_named_color_rgb(name: &str) -> Option<(u8, u8, u8)> {
+    let key = name.trim();
+    if key.is_empty() {
+        return None;
+    }
+    for (snake, upper, rgb) in XOS_COLORS {
+        if key.eq_ignore_ascii_case(snake) || key.eq_ignore_ascii_case(upper) {
+            return Some(rgb);
+        }
+    }
+    None
+}
+
 pub const XOS_COLORS: [(&str, &str, (u8, u8, u8)); 16] = [
     ("white", "WHITE", (255, 255, 255)),
     ("orange", "ORANGE", (249, 128, 29)),

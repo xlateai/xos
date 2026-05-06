@@ -15,7 +15,7 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
         y2=y2,
         editable=True,
         font=None,
-        font_size=DEFAULT_FONT_SIZE,
+        size=DEFAULT_FONT_SIZE,
         color=xos.color.WHITE,
         hitboxes=True,
         baselines=True,
@@ -36,14 +36,17 @@ class TextDemo(xos.Application):
         self.text = xos.ui.group(self.text1, self.text2)
 
     def tick(self):
-        self.text.font_size = DEFAULT_FONT_SIZE * self.scale
+        self.text.size = DEFAULT_FONT_SIZE * self.scale
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
-        ts = self.text.tick(self)
+        # `xos.ui.group(...).tick()` returns one state per child widget.
+        ts = self.text.tick(self)[0]
 
         self.text1.y2 = self.keyboard.y1
         self.text2.y2 = self.keyboard.y1
+
+        self.text.render(self)
 
         if self.t % 300 == 0:
             print("fps:", self.fps)

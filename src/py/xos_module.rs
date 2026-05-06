@@ -1094,6 +1094,10 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add color palette submodule (single source of truth in py/colors.rs)
     let color_module = crate::python_api::colors::make_color_module(vm);
     module.set_attr("color", color_module, vm).unwrap();
+
+    // Add geometry helpers (rect kernels, etc.)
+    let geom_module = crate::python_api::geom::make_geom_module(vm);
+    module.set_attr("geom", geom_module, vm).unwrap();
     
     // Add the sensors submodule
     let sensors_module = crate::python_api::sensors::make_sensors_module(vm);

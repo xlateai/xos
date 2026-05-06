@@ -24,6 +24,7 @@ pub mod terminal;
 pub mod manager;
 pub mod auth;
 pub mod ai;
+pub mod geom;
 
 use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
 

@@ -142,6 +142,8 @@ pub struct TextRasterizer {
     pub line_caret_start_x: Vec<f32>,
     /// Multipliers for start-to-start spacing: `(x, y)` where `1.0` is default behavior.
     spacing: (f32, f32),
+    /// Half-open char-index spans × relative font scale (`1.0` outside spans). Cleared by [`Self::set_text`].
+    pub glyph_scale_spans: Vec<(usize, usize, f32)>,
 }
 
 impl TextRasterizer {
@@ -163,13 +165,20 @@ impl TextRasterizer {
             last_layout_quick_fp: None,
             line_caret_start_x: Vec::new(),
             spacing: (1.0, 1.0),
+            glyph_scale_spans: Vec::new(),
         }
     }
 
     pub fn set_text(&mut self, text: String) {
         // Normalize Windows-style CRLF to LF so '\r' doesn't render as a visible trailing glyph.
-        self.last_layout_quick_fp = None;
+        self.invalidate_layout_cache();
+        self.glyph_scale_spans.clear();
         self.text = text.replace("\r\n", "\n").replace('\r', "\n");
+    }
+
+    #[inline]
+    pub fn invalidate_layout_cache(&mut self) {
+        self.last_layout_quick_fp = None;
     }
 
     #[inline(always)]
@@ -210,6 +219,28 @@ impl TextRasterizer {
             }
         }
         h
+    }
+
+    #[inline(always)]
+    fn mix_scale_spans_fp(spans: &[(usize, usize, f32)]) -> u64 {
+        let mut h = Self::mix_fp(0xd15ca5e_u64, spans.len() as u64);
+        for (s, e, m) in spans {
+            h = Self::mix_fp(h, *s as u64);
+            h = Self::mix_fp(h, *e as u64);
+            h = Self::mix_fp(h, m.to_bits() as u64);
+        }
+        h
+    }
+
+    #[inline]
+    fn scale_at_char(spans: &[(usize, usize, f32)], char_index: usize) -> f32 {
+        spans
+            .iter()
+            .rev()
+            .find(|(s, e, _)| char_index >= *s && char_index < *e)
+            .map(|(_, _, m)| *m)
+            .unwrap_or(1.0)
+            .clamp(0.125, 16.0)
     }
 
     /// Updates metrics for a new font size (call before [`tick`](Self::tick) to relayout).
@@ -285,7 +316,10 @@ impl TextRasterizer {
         } else {
             self.quick_layout_stable_fp(window_width)
         };
-        let fp = Self::mix_align_into_fp(base_fp, window_height, align, self.spacing);
+        let fp = Self::mix_fp(
+            Self::mix_align_into_fp(base_fp, window_height, align, self.spacing),
+            Self::mix_scale_spans_fp(&self.glyph_scale_spans),
+        );
         if self.last_layout_quick_fp == Some(fp) {
             return;
         }
@@ -293,89 +327,191 @@ impl TextRasterizer {
         self.characters.clear();
         self.lines.clear();
 
-        let mut x = 0.0;
-        let mut baseline_y = self.ascent;
-        let mut line_start = 0;
-        let mut line_index = 0;
-
-        let mut last_index = 0;
         let font = &self.font;
         let fs = self.font_size;
         let sx = self.spacing.0.max(0.0);
         let sy = self.spacing.1.max(0.0);
-        let line_step = (self.ascent + self.descent + self.line_gap) * sy;
+        let default_line_stride = (self.ascent + self.descent + self.line_gap) * sy;
+        let scales = &self.glyph_scale_spans;
+        let body_line_gap = self.line_gap;
+        let chars: Vec<char> = self.text.chars().collect();
 
-        for (i, ch) in self.text.chars().enumerate() {
-            if ch == '\n' {
-                self.lines.push(LineInfo {
-                    baseline_y,
-                    start_index: line_start,
-                    end_index: i,
-                });
-
-                x = 0.0;
-                baseline_y += line_step;
-                line_start = i + 1;
-                line_index += 1;
-                continue;
-            }
-
-            let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs);
-            let advance = metrics.advance_width;
-            let advance_step = advance * sx;
-
-            if x + advance_step > window_width {
-                self.lines.push(LineInfo {
-                    baseline_y,
-                    start_index: line_start,
-                    end_index: i,
-                });
-
-                x = 0.0;
-                baseline_y += line_step;
-                line_start = i;
-                line_index += 1;
-            }
-
-            let y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
-
-            self.characters.push(Character {
-                ch,
-                x,
-                y,
-                width: metrics.width as f32,
-                height: metrics.height as f32,
-                line_index,
-                char_index: i,
-                metrics,
-                bitmap,
-            });
-
-            x += advance_step;
-            last_index = i;
+        /// One wrapped / newline-delimited row: glyph index range plus ink extents vs baseline (`y` untouched).
+        #[derive(Clone, Copy)]
+        struct ProtoLine {
+            start: usize,
+            end_excl: usize,
+            ascent: f32,
+            descent: f32,
+            max_scale: f32,
         }
 
-        self.lines.push(LineInfo {
-            baseline_y,
-            start_index: line_start,
-            end_index: last_index + 1,
-        });
+        // Unscaled gap from the font at this line's em-size; multiply the full stride by `sy` below so Y spacing
+        // matches X (where `advance * sx` scales the entire advance), not just the metric `line_gap` sliver.
+        let line_gap_unscaled = |max_scale_on_line: f32| -> f32 {
+            let px = (fs * max_scale_on_line).max(0.5);
+            font
+                .horizontal_line_metrics(px)
+                .map(|m| m.line_gap)
+                .unwrap_or(body_line_gap)
+        };
+
+        let mut proto_lines: Vec<ProtoLine> = Vec::new();
+        let mut line_start = 0usize;
+        let mut x = 0.0f32;
+        let mut line_ascent = 0.0f32;
+        let mut line_descent = 0.0f32;
+        let mut line_max_scale = 1.0f32;
+
+        if chars.is_empty() {
+            proto_lines.push(ProtoLine {
+                start: 0,
+                end_excl: 0,
+                ascent: 0.0,
+                descent: 0.0,
+                max_scale: 1.0,
+            });
+        } else {
+            let mut i = 0usize;
+            while i < chars.len() {
+                let ch = chars[i];
+                if ch == '\n' {
+                    proto_lines.push(ProtoLine {
+                        start: line_start,
+                        end_excl: i,
+                        ascent: line_ascent,
+                        descent: line_descent,
+                        max_scale: line_max_scale,
+                    });
+                    line_start = i + 1;
+                    line_ascent = 0.0;
+                    line_descent = 0.0;
+                    line_max_scale = 1.0;
+                    x = 0.0;
+                    i += 1;
+                    continue;
+                }
+
+                let scale_i = Self::scale_at_char(scales, i);
+                let fs_i = fs * scale_i;
+                let (metrics, _) = self.glyph_cache.get_or_insert(font, ch, fs_i);
+                let advance_step = metrics.advance_width * sx;
+
+                if x + advance_step > window_width {
+                    proto_lines.push(ProtoLine {
+                        start: line_start,
+                        end_excl: i,
+                        ascent: line_ascent,
+                        descent: line_descent,
+                        max_scale: line_max_scale,
+                    });
+                    line_start = i;
+                    line_ascent = 0.0;
+                    line_descent = 0.0;
+                    line_max_scale = 1.0;
+                    x = 0.0;
+                }
+
+                let ink_above = metrics.height as f32 + metrics.ymin as f32;
+                let ink_below = (-metrics.ymin as f32).max(0.0);
+                line_ascent = line_ascent.max(ink_above);
+                line_descent = line_descent.max(ink_below);
+                line_max_scale = line_max_scale.max(scale_i);
+
+                x += advance_step;
+                i += 1;
+            }
+
+            proto_lines.push(ProtoLine {
+                start: line_start,
+                end_excl: chars.len(),
+                ascent: line_ascent,
+                descent: line_descent,
+                max_scale: line_max_scale,
+            });
+        }
+
+        let n_proto = proto_lines.len().max(1);
+        let mut baselines = vec![0.0f32; n_proto];
+        baselines[0] = self.ascent;
+
+        const Z: f32 = 1e-6;
+        for k in 0..proto_lines.len().saturating_sub(1) {
+            let prev = proto_lines[k];
+            let next = proto_lines[k + 1];
+            let prev_empty = prev.ascent <= Z && prev.descent <= Z;
+            let next_empty = next.ascent <= Z && next.descent <= Z;
+
+            let mut step = if prev_empty {
+                default_line_stride
+            } else {
+                let gap_u = line_gap_unscaled(prev.max_scale);
+                (prev.descent + gap_u + next.ascent) * sy
+            };
+
+            if next_empty {
+                step = step.max(default_line_stride);
+            }
+
+            baselines[k + 1] = baselines[k] + step;
+        }
+
+        self.lines.reserve(proto_lines.len());
+        for (li, proto) in proto_lines.iter().enumerate() {
+            let baseline_y = baselines[li];
+            let line_index = li;
+            self.lines.push(LineInfo {
+                baseline_y,
+                start_index: proto.start,
+                end_index: proto.end_excl,
+            });
+
+            let mut line_x = 0.0f32;
+            for i in proto.start..proto.end_excl {
+                let ch = chars[i];
+                let scale_i = Self::scale_at_char(scales, i);
+                let fs_i = fs * scale_i;
+                let (metrics, bitmap) = self.glyph_cache.get_or_insert(font, ch, fs_i);
+                let advance_step = metrics.advance_width * sx;
+
+                let y = baseline_y - metrics.height as f32 - metrics.ymin as f32;
+                self.characters.push(Character {
+                    ch,
+                    x: line_x,
+                    y,
+                    width: metrics.width as f32,
+                    height: metrics.height as f32,
+                    line_index,
+                    char_index: i,
+                    metrics,
+                    bitmap,
+                });
+
+                line_x += advance_step;
+            }
+        }
 
         // --- Horizontal centering (per wrapped line) ---
+        // Important: compute centering from the *actual rendered glyph bounds*,
+        // not trailing pen advance. With spacing_x > 1.0, using trailing advance
+        // introduces an extra right-side phantom gap and visually shifts text left.
         if align.x > 0.0 {
             let n_lines = self.lines.len().max(1);
             let mut line_dx = vec![0.0f32; n_lines];
             for li in 0..self.lines.len() {
-                let mut line_right = 0.0f32;
+                let mut line_left = f32::INFINITY;
+                let mut line_right = f32::NEG_INFINITY;
                 let mut any = false;
                 for c in &self.characters {
                     if c.line_index == li {
                         any = true;
-                        line_right = line_right.max(c.x + (c.metrics.advance_width * sx));
+                        line_left = line_left.min(c.x);
+                        line_right = line_right.max(c.x + c.width);
                     }
                 }
                 line_dx[li] = if any {
-                    ((window_width - line_right).max(0.0)) * align.x
+                    let line_w = (line_right - line_left).max(0.0);
+                    ((window_width - line_w).max(0.0)) * align.x - line_left
                 } else {
                     window_width * align.x
                 };

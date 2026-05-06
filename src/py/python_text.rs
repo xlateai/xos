@@ -103,7 +103,7 @@ pub struct EditorRenderPeek {
     pub text: String,
     pub cursor_position: usize,
     pub show_cursor: bool,
-    pub font_size_px: f32,
+    pub size_px: f32,
     /// Vertical document scroll (must match `_text_render` layout offset).
     pub scroll_y: f32,
     pub selection_start: Option<usize>,
@@ -121,7 +121,7 @@ pub fn peek_editor_visual_state(id: u64) -> Option<EditorRenderPeek> {
         text: t.text_rasterizer.text.clone(),
         cursor_position: t.cursor_position,
         show_cursor: t.show_cursor,
-        font_size_px: t.text_rasterizer.font_size,
+        size_px: t.text_rasterizer.font_size,
         scroll_y: t.scroll_y,
         selection_start,
         selection_end,
@@ -323,7 +323,7 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
 pub fn tick_text_widget(
     id: u64,
     state: &mut EngineState,
-    font_size_px: f32,
+    size_px: f32,
     py_input_focused: bool,
     py_alignment_x: f32,
     py_alignment_y: f32,
@@ -347,7 +347,7 @@ pub fn tick_text_widget(
     }
 
     // Quarter-pixel quantization: stray float noise from Python shouldn't rebuild layout / clear glyphs every tick.
-    let fs = (font_size_px * 4.0).round() / 4.0;
+    let fs = (size_px * 4.0).round() / 4.0;
     if (t.text_rasterizer.font_size - fs).abs() >= 0.02 {
         t.set_font_size(fs);
     }
