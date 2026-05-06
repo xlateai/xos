@@ -869,6 +869,26 @@ class Text:
         else:
             self.spacing = (1.0, 1.0)
         self.is_focused = False
+        # Sticky keyboard / pointer focus: ``.focused = True`` keeps this editor receiving keys
+        # even after clicks on other panes (until ``.focused = False``).
+        sf = kwargs.pop("sticky_focus", False)
+        fd = kwargs.pop("focused", False)
+        self._sticky_focus = bool(sf or fd)
+        if self._sticky_focus:
+            self.is_focused = True
+
+    def _effective_input_focus(self):
+        return bool(getattr(self, "_sticky_focus", False) or self.is_focused)
+
+    @property
+    def focused(self):
+        return self._effective_input_focus()
+
+    @focused.setter
+    def focused(self, value):
+        v = bool(value)
+        self._sticky_focus = v
+        self.is_focused = v
 
     @property
     def font_size(self):
@@ -901,11 +921,12 @@ class Text:
             float(self.x2),
             float(self.y2),
         )
-        caret = bool(self.show_cursor and self.is_focused)
+        eff = self._effective_input_focus()
+        caret = bool(self.show_cursor and eff)
         xos.ui._text_tick(
             nid,
             float(self.size),
-            bool(self.is_focused),
+            bool(eff),
             float(self.alignment[0]),
             float(self.alignment[1]),
             float(self.spacing[0]),
@@ -953,7 +974,11 @@ class Text:
                 # Prefer routed event coordinates (same frame as native hit-testing); fall back to app.mouse.
                 mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
                 my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
-                self.is_focused = xa <= mx < xa + vw and ya <= my < ya + vh
+                hit = xa <= mx < xa + vw and ya <= my < ya + vh
+                if getattr(self, "_sticky_focus", False):
+                    self.is_focused = True
+                else:
+                    self.is_focused = hit
         nid = getattr(self, "_native_id", None)
         if nid is None:
             self._native_id = int(xos.ui._text_register(self, app))
@@ -986,7 +1011,8 @@ class Text:
             nid = getattr(self, "_native_id", None)
             if nid is not None:
                 extra["native_widget_id"] = int(nid)
-                extra["show_cursor"] = bool(self.show_cursor and self.is_focused)
+                eff = self._effective_input_focus()
+                extra["show_cursor"] = bool(self.show_cursor and eff)
             state = _text_render(
                 self.text,
                 self.x1,

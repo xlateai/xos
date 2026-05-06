@@ -106,6 +106,9 @@ class TextDemo(xos.Application):
         self._clear_guess_native()
 
     def tick(self):
+        # Sticky input focus: keep accepting keys even when tapping scrollable panes.
+        self.guess_area.focused = True
+
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
 
