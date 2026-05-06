@@ -100,8 +100,15 @@ class TextDemo(xos.Application):
         self.guess_area.text = ""
 
     def _submit_guess(self, raw: str):
-        ok, msg = self.data.check_answer(raw)
-        self.description.text = self.data.breakdown_markup(ok) + "\n\n[" + msg + "](color=GRAY size=30)"
+        line = str(raw).strip()
+        empty = line == ""
+        ok, msg = self.data.check_answer(line)
+        self.description.text = (
+            self.data.breakdown_markup(ok, empty_guess=empty)
+            + "\n\n["
+            + msg
+            + "](color=GRAY size=30)"
+        )
         self._awaiting_guess = False
         self._clear_guess_native()
 
@@ -122,8 +129,8 @@ class TextDemo(xos.Application):
         raw = getattr(self.guess_area, "text", "")
         if "\n" in raw or "\r" in raw:
             line = _first_line(raw).strip()
-            # Non-empty Enter submits while waiting; empty Enter always skips to next word (same as after feedback).
-            if self._awaiting_guess and line:
+            if self._awaiting_guess:
+                # Enter always submits and shows the breakdown + reading (empty = reveal only).
                 self._submit_guess(line)
             else:
                 self._bootstrap_round()

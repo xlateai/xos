@@ -305,6 +305,8 @@ class StudyData:
         meaning = _col(row, "Vocab-meaning")
         if ok:
             return True, f"Correct! 「{target}」 — {kanji} ({meaning})"
+        if g == "":
+            return False, f"Reading: 「{target}」 — {kanji} ({meaning})"
         return False, f"Not quite. Reading: 「{target}」 — {kanji} ({meaning})"
 
     def prompt_markup(self) -> str:
@@ -314,10 +316,15 @@ class StudyData:
             "[Press Enter / return when done.](color=GRAY size=28)"
         )
 
-    def breakdown_markup(self, ok: bool) -> str:
+    def breakdown_markup(self, ok: bool, empty_guess: bool = False) -> str:
         """Colored sentence + meaning like the terminal guessing game, without HTML tags."""
         row = self.current or {}
-        verdict = "[Correct!](color=LIME size=40)" if ok else "[Try again](color=ORANGE size=40)"
+        if ok:
+            verdict = "[Correct!](color=LIME size=40)"
+        elif empty_guess:
+            verdict = "[Answer](color=CYAN size=40)"
+        else:
+            verdict = "[Try again](color=ORANGE size=40)"
         w = _col(row, "Vocab-expression")
         k = _col(row, "Vocab-kana")
         m = _col(row, "Vocab-meaning")
