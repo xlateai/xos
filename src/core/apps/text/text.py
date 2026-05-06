@@ -40,10 +40,13 @@ class TextDemo(xos.Application):
 
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
-        ts = self.text.tick(self)
+        # `xos.ui.group(...).tick()` returns one state per child widget.
+        ts = self.text.tick(self)[0]
 
         self.text1.y2 = self.keyboard.y1
         self.text2.y2 = self.keyboard.y1
+
+        self.text.render(self)
 
         if self.t % 300 == 0:
             print("fps:", self.fps)

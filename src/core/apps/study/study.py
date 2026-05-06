@@ -5,7 +5,7 @@ import xos
 
 # Canonical `xos app text` / iOS app name `text` — lives beside the native TextApp Rust module.
 
-DEFAULT_FONT_SIZE = 48.0
+DEFAULT_FONT_SIZE = 64.0
 
 
 def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", normsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
@@ -16,7 +16,7 @@ def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", normsize: fl
         y1=y1,
         x2=x2,
         y2=y2,
-        editable=True,
+        editable=False,
         font=None,
         size=DEFAULT_FONT_SIZE * normsize,
         color=xos.color.WHITE,
@@ -43,7 +43,7 @@ class TextDemo(xos.Application):
             y1=0.35,
             x2=1.0,
             y2=1.0,
-            text="Type the vocabulary!\n[Double tap anywhere to open the on screen keyboard.](color=GRAY size=24)",
+            text="Type the vocabulary!\n[Double tap anywhere to open the on screen keyboard.](color=GRAY size=32)\n[toshokann](size=48, color=CYAN)",
             normsize=1.0,
             alignment=(0.5, 0.0),
             spacing=(1.0, 1.5),
