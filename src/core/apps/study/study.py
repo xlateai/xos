@@ -130,6 +130,10 @@ class TextDemo(xos.Application):
 
         self.text.render(self)
 
+    def on_events(self):
+        self.text.on_events(self)
+        self.keyboard.on_events(self)
+
 
 def _first_line(s: str) -> str:
     s = str(s).replace("\r\n", "\n").replace("\r", "\n")

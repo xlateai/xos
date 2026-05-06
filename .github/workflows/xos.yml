@@ -50,7 +50,9 @@ jobs:
           current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
           tag="v${current_version}"
           is_pre_release=false
-          if [[ "${current_version}" == *-pre ]]; then
+          # Prerelease tags: -pre, -pre0, -pre1, -pre.rc1, … (anything containing "-pre";
+          # not only a strict "-pre" suffix, so Cargo versions like 0.3.18-pre1 still mark GitHub prerelease).
+          if [[ "${current_version}" == *-pre* ]]; then
             is_pre_release=true
           fi
 

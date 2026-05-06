@@ -53,6 +53,9 @@ fn path_fs_makedirs(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 const DATAPATH_BODY: &str = r#"
+# Avoid ``__native_*`` inside ``_DataPath`` methods — Python would mangle to ``_DataPath__native_*``.
+_native_path_exists = __native_path_exists
+_native_path_makedirs = __native_path_makedirs
 class _DataPath:
     __slots__ = ("_s",)
     def __init__(self, s):
@@ -69,9 +72,9 @@ class _DataPath:
     def __fspath__(self):
         return self._s
     def exists(self):
-        return bool(__native_path_exists(str(self)))
+        return bool(_native_path_exists(str(self)))
     def makedirs(self, exists_ok=False):
-        __native_path_makedirs(str(self), bool(exists_ok))
+        _native_path_makedirs(str(self), bool(exists_ok))
 "#;
 
 fn inject_dotxos(
@@ -109,7 +112,7 @@ fn inject_dotxos(
         .map_err(|_| "path globals makedirs")?;
 
     let full = format!("{}\n{}", DATAPATH_BODY, init_call);
-    vm.run_code_string(scope.clone(), full, "<xos.path/dotxos>".to_string())
+    vm.run_code_string(scope.clone(), full.as_str(), "<xos.path/dotxos>".to_string())
         .map_err(|_| "xos.path/dotxos exec")?;
     if let Ok(d) = scope.globals.get_item("dotxos", vm) {
         m.set_attr("dotxos", d, vm).map_err(|_| "set dotxos")?;
