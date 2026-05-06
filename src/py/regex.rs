@@ -48,6 +48,22 @@ fn match_regex(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+/// Global substitute: `repl` is a literal replacement string (`$`-expansion intentionally not supported yet).
+fn regex_substitute(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 3 {
+        return Err(vm.new_type_error(
+            "_substitute(pattern, replacement, text) takes exactly 3 arguments".into(),
+        ));
+    }
+    let pattern: String = av[0].clone().try_into_value(vm)?;
+    let replacement: String = av[1].clone().try_into_value(vm)?;
+    let text: String = av[2].clone().try_into_value(vm)?;
+    let re = Regex::new(&pattern).map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
+    let out = re.replace_all(&text, replacement.as_str());
+    Ok(vm.ctx.new_str(out.as_ref()).into())
+}
+
 pub fn make_regex_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.regex", vm.ctx.new_dict(), None);
     module
@@ -56,12 +72,17 @@ pub fn make_regex_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr("_match", vm.new_function("_match", match_regex), vm)
         .unwrap();
+    module
+        .set_attr("_substitute", vm.new_function("_substitute", regex_substitute), vm)
+        .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let compile_fn = module.get_attr("_compile", vm).unwrap();
     scope.globals.set_item("_compile", compile_fn, vm).unwrap();
     let match_fn = module.get_attr("_match", vm).unwrap();
     scope.globals.set_item("_match", match_fn, vm).unwrap();
+    let subst_fn = module.get_attr("_substitute", vm).unwrap();
+    scope.globals.set_item("_substitute", subst_fn, vm).unwrap();
 
     let py_regex_code = r#"
 class MatchResult:
@@ -87,6 +108,10 @@ class RegularExpression:
 
 def compile(pattern):
     return RegularExpression(pattern)
+
+def sub(pattern, repl, text):
+    """Globally replace ``pattern`` (regex) by literal string ``repl`` in ``text``."""
+    return _substitute(str(pattern), str(repl), str(text))
 "#;
     let _ = vm.run_code_string(scope.clone(), py_regex_code, "<xos_regex>".to_string());
     if let Ok(cls) = scope.globals.get_item("RegularExpression", vm) {
@@ -97,6 +122,9 @@ def compile(pattern):
     }
     if let Ok(fn_obj) = scope.globals.get_item("compile", vm) {
         module.set_attr("compile", fn_obj, vm).unwrap();
+    }
+    if let Ok(fn_obj) = scope.globals.get_item("sub", vm) {
+        module.set_attr("sub", fn_obj, vm).unwrap();
     }
     module
 }

@@ -1,84 +1,139 @@
 import xos
 
+import study_data
 
-import xos
-
-# Canonical `xos app text` / iOS app name `text` — lives beside the native TextApp Rust module.
-
-DEFAULT_FONT_SIZE = 64.0
+DEFAULT_FONT_SIZE = 52.0
 
 
-def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, text: str = "", normsize: float=1.0, alignment=(0.0, 0.0), spacing=(1.0, 1.0)):
-    x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
-    return xos.ui.text(
-        text,
-        x1=x1,
-        y1=y1,
-        x2=x2,
-        y2=y2,
-        editable=False,
+def _boxed_text(app, text, x1, y1, x2, y2, **kwargs):
+    x1, y1, x2, y2 = app.safe_region.renormalize(x1, y1, x2, y2)
+    base = dict(
         font=None,
-        size=DEFAULT_FONT_SIZE * normsize,
         color=xos.color.WHITE,
         show_hitboxes=False,
         show_baselines=False,
-        selectable=True,
-        scrollable=True,
-        show_cursor=False,
-        alignment=alignment,
-        spacing=spacing,
     )
+    base.update(kwargs)
+    return xos.ui.text(text, x1=x1, y1=y1, x2=x2, y2=y2, **base)
 
 
 class TextDemo(xos.Application):
     def __init__(self):
         super().__init__()
 
+        self.data = study_data.StudyData()
+        self._awaiting_guess = True
+
         self.keyboard = xos.ui.onscreen_keyboard()
 
-        self.vocab_display = make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=0.33, text="図書館", normsize=1.8, alignment=(0.5, 1.0), spacing=(1.5, 1.5))
-        self.description = make_text(
+        self.vocab_display = _boxed_text(
             self,
-            x1=0.0,
-            y1=0.35,
-            x2=1.0,
-            y2=1.0,
-            text="Type the vocabulary!\n[Double tap anywhere to open the on screen keyboard.](color=GRAY size=32)\n[toshokann](size=48, color=CYAN)",
-            normsize=1.0,
-            alignment=(0.5, 0.0),
-            spacing=(1.0, 1.5),
+            "…",
+            0.0,
+            0.0,
+            1.0,
+            0.26,
+            editable=False,
+            selectable=True,
+            scrollable=True,
+            show_cursor=False,
+            size=DEFAULT_FONT_SIZE * 1.85,
+            alignment=(0.5, 1.0),
+            spacing=(1.5, 1.45),
         )
-        self.text = xos.ui.group(self.vocab_display, self.description)
+
+        self.guess_area = _boxed_text(
+            self,
+            "",
+            0.0,
+            0.26,
+            1.0,
+            0.40,
+            editable=True,
+            selectable=True,
+            scrollable=False,
+            show_cursor=True,
+            size=DEFAULT_FONT_SIZE,
+            alignment=(0.5, 0.5),
+            spacing=(1.0, 1.05),
+            shortcuts=False,
+        )
+
+        self.description = _boxed_text(
+            self,
+            self.data.prompt_markup(),
+            0.0,
+            0.40,
+            1.0,
+            1.0,
+            editable=False,
+            selectable=True,
+            scrollable=True,
+            show_cursor=False,
+            size=DEFAULT_FONT_SIZE * 0.88,
+            alignment=(0.5, 0.0),
+            spacing=(1.0, 1.45),
+        )
+
+        self.text = xos.ui.group(self.vocab_display, self.guess_area, self.description)
+        self._bootstrap_round()
+
+    def _headline(self, row):
+        if not row:
+            return "?"
+        w = str(row.get("Vocab-expression", "") or "").strip()
+        return w or str(row.get("Vocab-kana", "") or "").strip() or "?"
+
+    def _bootstrap_round(self):
+        row = self.data.next_example()
+        self.vocab_display.text = self._headline(row)
+        self._awaiting_guess = True
+        self.description.text = self.data.prompt_markup()
+
+    def _clear_guess_native(self):
+        nid = getattr(self.guess_area, "_native_id", None)
+        if nid is not None:
+            try:
+                xos.ui._text_set_document(int(nid), "", False)
+            except (ValueError, RuntimeError, OSError):
+                pass
+        self.guess_area.text = ""
+
+    def _submit_guess(self, raw: str):
+        ok, msg = self.data.check_answer(raw)
+        self.description.text = self.data.breakdown_markup(ok) + "\n\n[" + msg + "](color=GRAY size=30)"
+        self._awaiting_guess = False
+        self._clear_guess_native()
 
     def tick(self):
-        # self.text.size = DEFAULT_FONT_SIZE * self.scale
-
         self.keyboard.tick(self)
         self.frame.clear(xos.color.BLACK)
-        # ts = self.text.tick(self)
 
-        ts = self.text.tick(self)[0]
-
-        # self.vocab_display.y2 = self.keyboard.y1
+        ts_vocab, _, _ = self.text.tick(self)
         self.description.y2 = self.keyboard.y1
 
-        # calculate highlighter
-        vocab_rect = xos.geom.rect.containing(ts.hitboxes)  # write the min and max reduction of ts.hitboxes into this singular rect. should return shape (2, 2) for the containing rectangle (the rect that contains all the input rectangles/hitboxes).
-        vocab_rect = xos.geom.rect.buffer(vocab_rect, 1.2)  # gives a 1.2x multiply on the area of the rectangel(s) supports (k, 2, 2) or (2, 2) for batch and non-batch
-        xos.rasterizer.rects_filled(self.frame, vocab_rect, color=(*xos.color.LIME, 0.8))
+        vocab_rect = xos.geom.rect.containing(ts_vocab.hitboxes)
+        vocab_rect = xos.geom.rect.buffer(vocab_rect, 1.2)
+        xos.rasterizer.rects_filled(self.frame, vocab_rect, color=(*xos.color.LIME, 0.78))
 
-        # rendering the text AFTER the highlighter application allows us to have the text sit on top of it.
+        raw = getattr(self.guess_area, "text", "")
+        if "\n" in raw or "\r" in raw:
+            line = _first_line(raw).strip()
+            if self._awaiting_guess:
+                if line:
+                    self._submit_guess(line)
+                else:
+                    self._clear_guess_native()
+            else:
+                self._bootstrap_round()
+                self._clear_guess_native()
+
         self.text.render(self)
 
-        if self.t % 300 == 0:
-            print("fps:", self.fps)
-            print("lines:", ts.lines.shape)
-            print("hitboxes:", ts.hitboxes.shape)
-            print("baselines:", ts.baselines.shape)
 
-    def on_events(self):
-        self.keyboard.on_events(self)
-        self.text.on_events(self)
+def _first_line(s: str) -> str:
+    s = str(s).replace("\r\n", "\n").replace("\r", "\n")
+    return s.split("\n", 1)[0]
 
 
 if __name__ == "__main__":

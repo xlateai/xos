@@ -31,8 +31,10 @@ delaunator = "1.0"
 rustpython-vm = "0.3.0"
 ringbuf = "0.3"
 include_dir = "0.7"
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+csv = "1.3"
 uuid = { version = "1", features = ["v4"] }
 # Keep these in the workspace graph; MSVC release `strip` on proc-macro crates can cause E0463
 # (`can't find crate for ...`) for Burn/CubeCL — see profile.release.package.* below.

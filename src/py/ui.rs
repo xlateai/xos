@@ -8,8 +8,8 @@ use crate::python_api::engine::py_engine_tls::{with_callback_engine_state_mut, w
 use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
     insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
-    peek_editor_visual_state, pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect,
-    tick_text_widget,
+    peek_editor_visual_state, peek_embed_document_string, python_embed_set_document,
+    pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect, tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
 use crate::ui::{Button, UiText};
@@ -623,6 +623,47 @@ fn text_widget_dispatch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+fn text_peek_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_document requires (native_id,)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    match peek_embed_document_string(id as u64) {
+        Some(s) => Ok(vm.ctx.new_str(s.as_str()).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_document: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
+fn text_set_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() < 2 || av.len() > 3 {
+        return Err(vm.new_type_error(
+            "_text_set_document requires (native_id, text[, cursor_end])".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let s: String = av[1].clone().try_into_value(vm)?;
+    let cursor_end = av
+        .get(2)
+        .map(|o| o.clone().try_into_value::<bool>(vm))
+        .transpose()?
+        .unwrap_or(true);
+    let ok = python_embed_set_document(id as u64, s, cursor_end);
+    if !ok {
+        return Err(vm.new_value_error(format!(
+            "_text_set_document: unknown or non-embedded widget id {}",
+            id
+        )));
+    }
+    Ok(vm.ctx.none())
+}
+
 fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _ = args;
     let ran = with_tick_engine_state_mut(|state| {
@@ -734,6 +775,20 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr("_text_dispatch", vm.new_function("_text_dispatch", text_widget_dispatch), vm)
         .unwrap();
+    module
+        .set_attr(
+            "_text_peek_document",
+            vm.new_function("_text_peek_document", text_peek_document),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_set_document",
+            vm.new_function("_text_set_document", text_set_document),
+            vm,
+        )
+        .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let text_render_fn = module.get_attr("_text_render", vm).unwrap();
@@ -827,8 +882,20 @@ class Text:
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
+        nid = int(self._native_id)
+        peek_s = ""
+        try:
+            peek_s = str(xos.ui._text_peek_document(nid))
+        except (ValueError, RuntimeError, OSError):
+            peek_s = ""
+        if not self.editable:
+            if self.text != peek_s:
+                try:
+                    xos.ui._text_set_document(nid, str(self.text), True)
+                except (ValueError, RuntimeError, OSError):
+                    pass
         xos.ui._text_sync_norm_rect(
-            int(self._native_id),
+            nid,
             float(self.x1),
             float(self.y1),
             float(self.x2),
@@ -836,7 +903,7 @@ class Text:
         )
         caret = bool(self.show_cursor and self.is_focused)
         xos.ui._text_tick(
-            int(self._native_id),
+            nid,
             float(self.size),
             bool(self.is_focused),
             float(self.alignment[0]),
@@ -861,6 +928,11 @@ class Text:
             render=False,
         )
         self._last_tick_state = TextRenderState(state)
+        if self.editable:
+            try:
+                self.text = str(xos.ui._text_peek_document(nid))
+            except (ValueError, RuntimeError, OSError):
+                pass
         return self._last_tick_state
 
     def on_events(self, app):

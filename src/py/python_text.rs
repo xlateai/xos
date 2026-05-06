@@ -129,6 +129,26 @@ pub fn peek_editor_visual_state(id: u64) -> Option<EditorRenderPeek> {
     })
 }
 
+/// Snapshot of native document UTF-8 (after markup strip), for syncing `Text.text`.
+pub fn peek_embed_document_string(id: u64) -> Option<String> {
+    peek_editor_visual_state(id).map(|p| p.text)
+}
+
+pub fn python_embed_set_document(id: u64, raw: String, cursor_at_end: bool) -> bool {
+    let mut g = registry_mut();
+    let Some(map) = g.as_mut() else {
+        return false;
+    };
+    let Some(t) = map.get_mut(&id) else {
+        return false;
+    };
+    if t.python_viewport.is_none() {
+        return false;
+    }
+    t.python_embed_replace_document_py_ui(raw, cursor_at_end);
+    true
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PyUiEventKind {
     MouseDown,

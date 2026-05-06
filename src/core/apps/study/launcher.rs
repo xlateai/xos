@@ -3,6 +3,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,12 +14,35 @@ use crate::python_api::engine::pyapp::PyApp;
 use crate::python_api::runtime::execute_python_code;
 
 const STUDY_APP_PY_EMBED: &str = include_str!("study.py");
+const STUDY_DATA_PY_EMBED: &str = include_str!("study_data.py");
 
 fn study_app_source_and_logical_path() -> (String, String) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/study/study.py");
+    let study_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/study");
+    let path = study_dir.join("study.py");
+
+    let study_data = std::fs::read_to_string(study_dir.join("study_data.py"))
+        .unwrap_or_else(|_| STUDY_DATA_PY_EMBED.to_string());
+
+    let prelude = format!(
+        r#"import base64, sys, types
+__study_data_src = base64.b64decode("{}").decode("utf-8")
+__study_data_mod = types.ModuleType("study_data")
+exec(compile(__study_data_src, "study_data.py", "exec"), __study_data_mod.__dict__)
+sys.modules["study_data"] = __study_data_mod
+
+"#,
+        B64.encode(study_data.as_bytes()),
+    );
+
     match std::fs::read_to_string(&path) {
-        Ok(s) => (s, path.to_string_lossy().to_string()),
-        Err(_) => (STUDY_APP_PY_EMBED.to_string(), "study/study.py".to_string()),
+        Ok(main) => (
+            format!("{prelude}{main}"),
+            path.to_string_lossy().to_string(),
+        ),
+        Err(_) => (
+            format!("{prelude}{}", STUDY_APP_PY_EMBED),
+            "study/study.py".to_string(),
+        ),
     }
 }
 
