@@ -5,7 +5,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const WASM_TARGET_DIR_NAME: &str = "wasm";
 const WASM_MAIN_OUTPUT_DIR_NAME: &str = "main";
@@ -447,6 +447,74 @@ fn zip_wasm_output(output_dir: &Path) -> bool {
     }
 }
 
+fn unique_wasm_staging_dir(wasm_target_dir: &Path) -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    wasm_target_dir.join(format!(
+        ".{}.staging-{}-{millis}",
+        WASM_MAIN_OUTPUT_DIR_NAME,
+        std::process::id()
+    ))
+}
+
+fn publish_wasm_output(staging_dir: &Path, output_dir: &Path) -> bool {
+    let backup_dir = output_dir.with_file_name(format!(
+        ".{}.previous-{}",
+        WASM_MAIN_OUTPUT_DIR_NAME,
+        std::process::id()
+    ));
+
+    if backup_dir.exists() {
+        if let Err(e) = fs::remove_dir_all(&backup_dir) {
+            eprintln!(
+                "❌ failed to remove old wasm backup {}: {e}",
+                backup_dir.display()
+            );
+            return false;
+        }
+    }
+
+    let had_previous = output_dir.exists();
+    if had_previous {
+        if let Err(e) = fs::rename(output_dir, &backup_dir) {
+            eprintln!(
+                "❌ failed to move previous wasm output {} aside: {e}",
+                output_dir.display()
+            );
+            return false;
+        }
+    }
+
+    if let Err(e) = fs::rename(staging_dir, output_dir) {
+        eprintln!(
+            "❌ failed to publish wasm output {}: {e}",
+            output_dir.display()
+        );
+        if had_previous {
+            if let Err(restore_err) = fs::rename(&backup_dir, output_dir) {
+                eprintln!(
+                    "❌ failed to restore previous wasm output {}: {restore_err}",
+                    output_dir.display()
+                );
+            }
+        }
+        return false;
+    }
+
+    if had_previous {
+        if let Err(e) = fs::remove_dir_all(&backup_dir) {
+            eprintln!(
+                "⚠️  published wasm output, but failed to remove backup {}: {e}",
+                backup_dir.display()
+            );
+        }
+    }
+
+    true
+}
+
 /// Build WebAssembly output into `target/wasm/main/` and package it.
 pub fn compile_wasm(clean: bool) -> bool {
     let project_root = find_project_root();
@@ -480,21 +548,22 @@ pub fn compile_wasm(clean: bool) -> bool {
     );
 
     let output_dir = wasm_target_dir.join(WASM_MAIN_OUTPUT_DIR_NAME);
-    let pkg_dir = output_dir.join("pkg");
+    let staging_dir = unique_wasm_staging_dir(&wasm_target_dir);
+    let pkg_dir = staging_dir.join("pkg");
 
-    if output_dir.exists() {
-        if let Err(e) = fs::remove_dir_all(&output_dir) {
+    if staging_dir.exists() {
+        if let Err(e) = fs::remove_dir_all(&staging_dir) {
             eprintln!(
-                "❌ failed to clear output directory {}: {e}",
-                output_dir.display()
+                "❌ failed to clear staging directory {}: {e}",
+                staging_dir.display()
             );
             return false;
         }
     }
-    if let Err(e) = fs::create_dir_all(&output_dir) {
+    if let Err(e) = fs::create_dir_all(&staging_dir) {
         eprintln!(
-            "❌ failed to create output directory {}: {e}",
-            output_dir.display()
+            "❌ failed to create staging directory {}: {e}",
+            staging_dir.display()
         );
         return false;
     }
@@ -518,24 +587,34 @@ pub fn compile_wasm(clean: bool) -> bool {
         Ok(s) if s.success() => {}
         Ok(s) => {
             eprintln!("❌ wasm build failed ({s}).");
+            let _ = fs::remove_dir_all(&staging_dir);
             return false;
         }
         Err(e) => {
             eprintln!("❌ failed to run wasm-pack: {e}");
+            let _ = fs::remove_dir_all(&staging_dir);
             return false;
         }
     }
 
-    if let Err(e) = write_wasm_index_html(&output_dir) {
+    if let Err(e) = write_wasm_index_html(&staging_dir) {
         eprintln!("❌ failed to write index.html: {e}");
+        let _ = fs::remove_dir_all(&staging_dir);
         return false;
     }
-    if let Err(e) = write_wasm_readme(&output_dir) {
+    if let Err(e) = write_wasm_readme(&staging_dir) {
         eprintln!("❌ failed to write README.txt: {e}");
+        let _ = fs::remove_dir_all(&staging_dir);
         return false;
     }
 
-    if !zip_wasm_output(&output_dir) {
+    if !zip_wasm_output(&staging_dir) {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return false;
+    }
+
+    if !publish_wasm_output(&staging_dir, &output_dir) {
+        let _ = fs::remove_dir_all(&staging_dir);
         return false;
     }
 
