@@ -18,16 +18,58 @@ fn query_param(name: &str) -> Option<String> {
     for pair in search.trim_start_matches('?').split('&') {
         if let Some((key, value)) = pair.split_once('=') {
             if key == name && !value.is_empty() {
-                return Some(value.to_string());
+                return Some(percent_decode(value));
             }
         }
     }
     None
 }
 
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push(((hi << 4) | lo) as u8);
+                    i += 3;
+                    continue;
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn xpy_source_and_flags() -> Result<(String, String, Vec<String>), String> {
+    if let Some(code) = query_param("code") {
+        let filename = query_param("filename").unwrap_or_else(|| "<xpy-url>".to_string());
+        let flags = query_param("xpy_flags")
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        return Ok((code, filename, flags));
+    }
+
     let id = query_param("xpy_id").ok_or_else(|| {
-        "xpy wasm: missing `xpy_id`; launch with `xpy <file.py> --wasm`".to_string()
+        "xpy wasm: missing `code` or `xpy_id`; launch with `xpy <file.py> --wasm`".to_string()
     })?;
     let base = format!(".xos/xpy/{id}");
     let filename = format!("{base}/main.py");
