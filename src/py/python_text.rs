@@ -387,6 +387,28 @@ pub fn set_text_widget_cursor(id: u64, cursor_position: usize) -> Result<(), &'s
     Ok(())
 }
 
+pub fn set_text_widget_selection(
+    id: u64,
+    cursor_position: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> Result<(), &'static str> {
+    let mut g = registry_mut();
+    let Some(map) = g.as_mut() else {
+        return Err("text widget registry unavailable");
+    };
+    let Some(t) = map.get_mut(&id) else {
+        return Err("unknown native text widget id");
+    };
+    let len = t.text_rasterizer.text.chars().count();
+    t.apply_shared_selection_state(
+        cursor_position.min(len),
+        Some(selection_start.min(len)),
+        Some(selection_end.min(len)),
+    );
+    Ok(())
+}
+
 /// Copy Python [`xos.ui.Text`] `x1..y2` into the native [`TextApp`] before [`tick_text_widget`].
 /// Call every frame if coordinates may change (matches `_text_render` / hit-testing).
 pub fn sync_embed_text_norm_rect(

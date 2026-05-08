@@ -9,6 +9,7 @@ use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
     insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
     peek_editor_visual_state, peek_embed_document_string, python_embed_set_document,
+    set_text_widget_selection,
     set_text_widget_cursor,
     pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect, tick_text_widget,
 };
@@ -287,6 +288,18 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("cursor_position") {
         cursor_position = v.clone().try_into_value(vm)?;
     }
+    if let Some(v) = args.kwargs.get("selection_start") {
+        let s: i64 = v.clone().try_into_value(vm)?;
+        if s >= 0 {
+            selection_start_opt = Some(s as usize);
+        }
+    }
+    if let Some(v) = args.kwargs.get("selection_end") {
+        let e: i64 = v.clone().try_into_value(vm)?;
+        if e >= 0 {
+            selection_end_opt = Some(e as usize);
+        }
+    }
     if let Some(v) = args.kwargs.get("render") {
         should_render = v.clone().try_into_value(vm)?;
     }
@@ -359,6 +372,24 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         cursor_position,
         keep_directive_only_rows,
     );
+    let viz_selection_start = selection_start_opt.map(|s| {
+        ui_markup::map_raw_cursor_to_visual_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            s,
+            keep_directive_only_rows,
+        )
+    });
+    let viz_selection_end = selection_end_opt.map(|e| {
+        ui_markup::map_raw_cursor_to_visual_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            e,
+            keep_directive_only_rows,
+        )
+    });
 
     let buffer =
         unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
@@ -429,8 +460,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             size_px,
             show_cursor,
             cursor_position: viz_cursor_position,
-            selection_start: selection_start_opt,
-            selection_end: selection_end_opt,
+            selection_start: viz_selection_start,
+            selection_end: viz_selection_end,
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
             color_spans: ui_color_spans,
@@ -729,6 +760,46 @@ fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn text_peek_selection_start(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_selection_start requires (native_id,)".to_string(),
+        ));
+    }
+    let id: i64 = av[0].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.selection_start.map(|v| v as i64).unwrap_or(-1)).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_selection_start: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
+fn text_peek_selection_end(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_selection_end requires (native_id,)".to_string(),
+        ));
+    }
+    let id: i64 = av[0].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.selection_end.map(|v| v as i64).unwrap_or(-1)).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_selection_end: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
 fn text_peek_scroll(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
@@ -817,6 +888,26 @@ fn text_set_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_value_error("native_id must be non-negative".to_string()));
     }
     match set_text_widget_cursor(id as u64, cursor_position) {
+        Ok(()) => Ok(vm.ctx.none()),
+        Err(e) => Err(vm.new_runtime_error(e.to_string())),
+    }
+}
+
+fn text_set_selection(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 4 {
+        return Err(vm.new_type_error(
+            "_text_set_selection requires (native_id, cursor_position, selection_start, selection_end)".to_string(),
+        ));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let cursor_position: usize = args_vec[1].clone().try_into_value(vm)?;
+    let selection_start: usize = args_vec[2].clone().try_into_value(vm)?;
+    let selection_end: usize = args_vec[3].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match set_text_widget_selection(id as u64, cursor_position, selection_start, selection_end) {
         Ok(()) => Ok(vm.ctx.none()),
         Err(e) => Err(vm.new_runtime_error(e.to_string())),
     }
@@ -915,6 +1006,20 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_text_peek_selection_start",
+            vm.new_function("_text_peek_selection_start", text_peek_selection_start),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_peek_selection_end",
+            vm.new_function("_text_peek_selection_end", text_peek_selection_end),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_text_set_document",
             vm.new_function("_text_set_document", text_set_document),
             vm,
@@ -924,6 +1029,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr(
             "_text_set_cursor",
             vm.new_function("_text_set_cursor", text_set_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_set_selection",
+            vm.new_function("_text_set_selection", text_set_selection),
             vm,
         )
         .unwrap();
@@ -1005,6 +1117,7 @@ class Text:
         self._last_native_cursor = None
         self._pointer_down_xy = None
         self._pointer_dragged = False
+        self._drag_select_anchor_raw = None
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -1097,31 +1210,6 @@ class Text:
                     i += 1
                     vis += 1
                     continue
-            if i + 3 < n and s[i] == "!" and s[i + 1] == "[":
-                rb = s.find("](", i + 2)
-                rp = s.find(")", rb + 2) if rb != -1 else -1
-                if rb != -1 and rp != -1:
-                    dest = s[rb + 2:rp]
-                    if self._is_style_link_dest(dest):
-                        ls = s.rfind("\n", 0, i) + 1
-                        rs = s.find("\n", rp + 1)
-                        if rs == -1:
-                            rs = n
-                        left_has = any((not c.isspace()) for c in s[ls:i])
-                        right_has = any((not c.isspace()) for c in s[rp + 1:rs])
-                        line_empty_except_directive = not (left_has or right_has)
-                        token_end = rp + 1
-                        if line_empty_except_directive and (not keep_directive_only_rows):
-                            i = token_end
-                            if i < n and s[i] == "\n":
-                                i += 1
-                            continue
-                        token_len = token_end - i
-                        if vc <= vis + token_len:
-                            return i + (vc - vis)
-                        vis += token_len
-                        i = token_end
-                        continue
             if s[i] == "[":
                 rb = s.find("](", i + 1)
                 rp = s.find(")", rb + 2) if rb != -1 else -1
@@ -1300,6 +1388,7 @@ class Text:
             my0 = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
             self._pointer_down_xy = (mx0, my0)
             self._pointer_dragged = False
+            self._drag_select_anchor_raw = None
         elif isinstance(ev, dict) and ev.get("kind") == "mouse_move":
             if self._pointer_down_xy is not None:
                 mxm = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
@@ -1313,6 +1402,108 @@ class Text:
             self._native_id = int(xos.ui._text_register(self, app))
             nid = self._native_id
         xos.ui._text_dispatch(int(nid), app)
+        if (
+            isinstance(ev, dict)
+            and ev.get("kind") == "mouse_move"
+            and bool(self.editable)
+            and bool(self._effective_input_focus())
+            and self._pointer_down_xy is not None
+            and self._pointer_dragged
+        ):
+            state = getattr(self, "_last_tick_state_dict", None)
+            hitboxes = state.get("hitboxes") if isinstance(state, dict) else None
+            hitbox_char_indices = state.get("hitbox_char_indices") if isinstance(state, dict) else None
+            if (
+                isinstance(hitboxes, list)
+                and isinstance(hitbox_char_indices, list)
+                and hitboxes
+                and len(hitboxes) == len(hitbox_char_indices)
+            ):
+                fd = getattr(app.frame, "_data", app.frame)
+                fw = float(fd["width"])
+                fh = float(fd["height"])
+                mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+                if xa <= mx < xb and ya <= my < yb:
+                    best_i = 0
+                    best_d = 1e30
+                    best_l = 0.0
+                    best_r = 0.0
+                    for i, hb in enumerate(hitboxes):
+                        try:
+                            x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                            x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                        except Exception:
+                            continue
+                        x1p, y1p = x1n * fw, y1n * fh
+                        x2p, y2p = x2n * fw, y2n * fh
+                        d = self._rect_dist_sq(mx, my, x1p, y1p, x2p, y2p)
+                        if d < best_d:
+                            best_d = d
+                            best_i = i
+                            best_l = x1p
+                            best_r = x2p
+                    try:
+                        visual_cursor = int(hitbox_char_indices[best_i])
+                    except Exception:
+                        visual_cursor = int(best_i)
+                    if abs(mx - best_r) < abs(mx - best_l):
+                        visual_cursor += 1
+                    exclusion = None
+                    if self._active_markup_range is not None:
+                        lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                        exclusion = (int(lb), int(rp))
+                    raw_cursor = self._map_visual_cursor_to_raw(
+                        self.text,
+                        visual_cursor,
+                        exclusion,
+                        bool(self.editable and self._effective_input_focus()),
+                    )
+                    if self._drag_select_anchor_raw is None:
+                        down_x, down_y = self._pointer_down_xy
+                        anchor_i = best_i
+                        anchor_d = 1e30
+                        anchor_l = 0.0
+                        anchor_r = 0.0
+                        for i, hb in enumerate(hitboxes):
+                            try:
+                                x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                                x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                            except Exception:
+                                continue
+                            x1p, y1p = x1n * fw, y1n * fh
+                            x2p, y2p = x2n * fw, y2n * fh
+                            d = self._rect_dist_sq(float(down_x), float(down_y), x1p, y1p, x2p, y2p)
+                            if d < anchor_d:
+                                anchor_d = d
+                                anchor_i = i
+                                anchor_l = x1p
+                                anchor_r = x2p
+                        try:
+                            anchor_visual = int(hitbox_char_indices[anchor_i])
+                        except Exception:
+                            anchor_visual = int(anchor_i)
+                        if abs(float(down_x) - anchor_r) < abs(float(down_x) - anchor_l):
+                            anchor_visual += 1
+                        self._drag_select_anchor_raw = int(
+                            self._map_visual_cursor_to_raw(
+                                self.text,
+                                anchor_visual,
+                                exclusion,
+                                bool(self.editable and self._effective_input_focus()),
+                            )
+                        )
+                    anchor = int(self._drag_select_anchor_raw)
+                    try:
+                        xos.ui._text_set_selection(int(nid), int(raw_cursor), int(anchor), int(raw_cursor))
+                        self._last_native_cursor = int(raw_cursor)
+                        self._reset_blink()
+                    except (ValueError, RuntimeError, OSError):
+                        pass
         if (
             isinstance(ev, dict)
             and ev.get("kind") == "mouse_up"
@@ -1389,8 +1580,10 @@ class Text:
                         self._show_markup_source = active is not None
                     except (ValueError, RuntimeError, OSError):
                         pass
+        if isinstance(ev, dict) and ev.get("kind") == "mouse_up":
             self._pointer_down_xy = None
             self._pointer_dragged = False
+            self._drag_select_anchor_raw = None
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
@@ -1430,6 +1623,15 @@ class Text:
                     extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
                 except (ValueError, RuntimeError, OSError):
                     extra["cursor_position"] = 0
+                if nid is not None:
+                    try:
+                        s0 = int(xos.ui._text_peek_selection_start(int(nid)))
+                        s1 = int(xos.ui._text_peek_selection_end(int(nid)))
+                        if s0 >= 0 and s1 >= 0:
+                            extra["selection_start"] = s0
+                            extra["selection_end"] = s1
+                    except (ValueError, RuntimeError, OSError):
+                        pass
                 extra["show_cursor"] = bool(self.show_cursor and eff and self._blink_on)
             if self.editable and (not use_native_visual) and nid is not None:
                 try:
