@@ -289,6 +289,14 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("render") {
         should_render = v.clone().try_into_value(vm)?;
     }
+    if let Some(v) = args.kwargs.get("viewport_scroll_y") {
+        viewport_scroll_y = py_number_to_f64(v.clone(), vm, "viewport_scroll_y")? as f32;
+    }
+    let keep_directive_only_rows = if let Some(v) = args.kwargs.get("keep_directive_only_rows") {
+        v.clone().try_into_value(vm)?
+    } else {
+        false
+    };
     let active_markup_start = if let Some(v) = args.kwargs.get("active_markup_start") {
         Some(v.clone().try_into_value::<usize>(vm)?)
     } else {
@@ -341,12 +349,14 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             exclusion,
             hitboxes,
             baselines,
+            keep_directive_only_rows,
         );
     let viz_cursor_position = ui_markup::map_raw_cursor_to_visual_with_exclusion(
         &text,
         size_px.max(1.0),
         exclusion,
         cursor_position,
+        keep_directive_only_rows,
     );
 
     let buffer =
@@ -710,6 +720,23 @@ fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn text_peek_scroll(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_scroll requires (native_id,)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_float(peek.scroll_y as f64).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_scroll: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
 fn text_set_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() < 2 || av.len() > 3 {
@@ -866,6 +893,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
             vm,
         )
         .unwrap();
+    module
+        .set_attr(
+            "_text_peek_scroll",
+            vm.new_function("_text_peek_scroll", text_peek_scroll),
+            vm,
+        )
+        .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let text_render_fn = module.get_attr("_text_render", vm).unwrap();
@@ -896,8 +930,8 @@ class Text:
         x2=1.0,
         y2=1.0,
         color=(255, 255, 255),
-        show_hitboxes=False,
-        show_baselines=False,
+        hitboxes=False,
+        baselines=False,
         size=24.0,
         font=None,
         **kwargs,
@@ -918,13 +952,13 @@ class Text:
         self.x2 = x2
         self.y2 = y2
         self.color = color
-        legacy_hitboxes = kwargs.get("hitboxes", False)
-        legacy_baselines = kwargs.get("baselines", False)
-        self.show_hitboxes = bool(kwargs.get("show_hitboxes", show_hitboxes) or legacy_hitboxes)
-        self.show_baselines = bool(kwargs.get("show_baselines", show_baselines) or legacy_baselines)
+        legacy_show_hitboxes = kwargs.get("show_hitboxes", False)
+        legacy_show_baselines = kwargs.get("show_baselines", False)
+        self.hitboxes = bool(kwargs.get("hitboxes", hitboxes) or legacy_show_hitboxes)
+        self.baselines = bool(kwargs.get("baselines", baselines) or legacy_show_baselines)
         # Backward-compatible aliases.
-        self.hitboxes = self.show_hitboxes
-        self.baselines = self.show_baselines
+        self.show_hitboxes = self.hitboxes
+        self.show_baselines = self.baselines
         self.size = float(size)
         self._native_id = None
         self._last_tick_state = None
@@ -1071,10 +1105,8 @@ class Text:
             self.x2,
             self.y2,
             self.color,
-            # Always compute and return hitboxes/baselines in render state.
-            # Visibility is controlled separately via show_* flags.
-            hitboxes=True,
-            baselines=True,
+            hitboxes=bool(self.hitboxes),
+            baselines=bool(self.baselines),
             size=self.size,
             alignment_x=float(self.alignment[0]),
             alignment_y=float(self.alignment[1]),
@@ -1143,8 +1175,8 @@ class Text:
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
         resolved_color = self.color if color is None else color
-        resolved_hitboxes = self.show_hitboxes if hitboxes is None else hitboxes
-        resolved_baselines = self.show_baselines if baselines is None else baselines
+        resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
+        resolved_baselines = self.baselines if baselines is None else baselines
         if font_size is not None:
             resolved_size = float(font_size)
         elif size is not None:
@@ -1165,8 +1197,8 @@ class Text:
             extra = {}
             nid = getattr(self, "_native_id", None)
             eff = self._effective_input_focus()
-            # Editable widgets always render via markup parser path so non-active tokens remain styled.
-            # Non-editable keeps native fast path.
+            # Editable widgets use styled parser path both focused and unfocused so
+            # cascaded directives (`![]()`) and inline styles apply live while editing.
             use_native_visual = bool(not self.editable)
             text_for_render = self.text
             if nid is not None and use_native_visual:
@@ -1179,10 +1211,17 @@ class Text:
                 except (ValueError, RuntimeError, OSError):
                     extra["cursor_position"] = 0
                 extra["show_cursor"] = bool(self.show_cursor and eff)
+            if self.editable and (not use_native_visual) and nid is not None:
+                try:
+                    extra["viewport_scroll_y"] = float(xos.ui._text_peek_scroll(int(nid)))
+                except (ValueError, RuntimeError, OSError):
+                    pass
             if self.editable and eff and self._active_markup_range is not None:
                 lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
                 extra["active_markup_start"] = int(lb)
                 extra["active_markup_end"] = int(rp)
+            if self.editable:
+                extra["keep_directive_only_rows"] = bool(eff)
             state = _text_render(
                 text_for_render,
                 self.x1,
@@ -1272,7 +1311,7 @@ class TextRenderState:
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hitboxes=False, show_baselines=False, size=24.0, font=None, **kwargs):
+def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxes=False, baselines=False, size=24.0, font=None, **kwargs):
     if "font_size" in kwargs:
         size = kwargs.pop("font_size")
     if "fontsize" in kwargs:
@@ -1284,8 +1323,8 @@ def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hi
         x2=x2,
         y2=y2,
         color=color,
-        show_hitboxes=show_hitboxes,
-        show_baselines=show_baselines,
+        hitboxes=hitboxes,
+        baselines=baselines,
         size=size,
         font=font,
         **kwargs

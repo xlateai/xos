@@ -127,6 +127,7 @@ pub fn strip_inline_ui_markup_with_exclusion(
     exclude_raw_range: Option<(usize, usize)>,
     default_hitboxes: bool,
     default_baselines: bool,
+    keep_directive_only_rows: bool,
 ) -> (
     String,
     Vec<UiTextColorSpan>,
@@ -140,8 +141,12 @@ pub fn strip_inline_ui_markup_with_exclusion(
     let mut scale_spans = Vec::<UiTextScaleSpan>::new();
     let mut hitbox_per_char = Vec::<bool>::with_capacity(chars.len());
     let mut baseline_per_char = Vec::<bool>::with_capacity(chars.len());
+    let mut color_per_char = Vec::<Option<(u8, u8, u8)>>::with_capacity(chars.len());
+    let mut scale_per_char = Vec::<Option<f32>>::with_capacity(chars.len());
     let mut curr_hitboxes = default_hitboxes;
     let mut curr_baselines = default_baselines;
+    let mut curr_color: Option<(u8, u8, u8)> = None;
+    let mut curr_scale: Option<f32> = None;
     let mut i = 0usize;
     while i < chars.len() {
         if let Some((xs, xe)) = exclude_raw_range {
@@ -149,6 +154,8 @@ pub fn strip_inline_ui_markup_with_exclusion(
                 out.push(chars[i]);
                 hitbox_per_char.push(curr_hitboxes);
                 baseline_per_char.push(curr_baselines);
+                color_per_char.push(curr_color);
+                scale_per_char.push(curr_scale);
                 i += 1;
                 continue;
             }
@@ -172,6 +179,12 @@ pub fn strip_inline_ui_markup_with_exclusion(
                     if let Some(v) = parsed_baselines {
                         curr_baselines = v;
                     }
+                    if let Some(v) = parsed_color {
+                        curr_color = Some(v);
+                    }
+                    if let Some(v) = parsed_size {
+                        curr_scale = Some(v);
+                    }
                     let line_empty_except_directive = {
                         let mut ls = i;
                         while ls > 0 && chars[ls - 1] != '\n' {
@@ -187,9 +200,39 @@ pub fn strip_inline_ui_markup_with_exclusion(
                             .any(|c| !c.is_whitespace());
                         !(left_has || right_has)
                     };
+                    let dir_start = i;
                     i = close_paren_idx + 1;
-                    if line_empty_except_directive && chars.get(i) == Some(&'\n') {
+                    if line_empty_except_directive && !keep_directive_only_rows {
+                        // Remove any already-emitted leading whitespace on this logical line so the
+                        // directive row fully disappears (no blank spacer line from indentation).
+                        while let Some(last) = out.last() {
+                            if *last == '\n' {
+                                break;
+                            }
+                            if last.is_whitespace() {
+                                out.pop();
+                                hitbox_per_char.pop();
+                                baseline_per_char.pop();
+                                color_per_char.pop();
+                                scale_per_char.pop();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if line_empty_except_directive && !keep_directive_only_rows && chars.get(i) == Some(&'\n') {
                         i += 1;
+                    } else if line_empty_except_directive && keep_directive_only_rows {
+                        // Keep directive token visible while focused/editing.
+                        let rs = dir_start;
+                        let re = close_paren_idx;
+                        for ch in &chars[rs..=re] {
+                            out.push(*ch);
+                            hitbox_per_char.push(curr_hitboxes);
+                            baseline_per_char.push(curr_baselines);
+                            color_per_char.push(curr_color);
+                            scale_per_char.push(curr_scale);
+                        }
                     }
                     let _ = (inner_start, inner_end);
                     continue;
@@ -209,18 +252,12 @@ pub fn strip_inline_ui_markup_with_exclusion(
                     || parsed_hitboxes.is_some()
                     || parsed_baselines.is_some()
                 {
-                    let span_start = out.len();
                     for ch in &chars[inner_start..inner_end] {
                         out.push(*ch);
                         hitbox_per_char.push(parsed_hitboxes.unwrap_or(curr_hitboxes));
                         baseline_per_char.push(parsed_baselines.unwrap_or(curr_baselines));
-                    }
-                    let span_end = out.len();
-                    if let Some(rgb) = parsed_color {
-                        color_spans.push((span_start, span_end, rgb));
-                    }
-                    if let Some(m) = parsed_size {
-                        scale_spans.push((span_start, span_end, m));
+                        color_per_char.push(parsed_color.or(curr_color));
+                        scale_per_char.push(parsed_size.or(curr_scale));
                     }
                     i = close_paren_idx + 1;
                     continue;
@@ -230,6 +267,8 @@ pub fn strip_inline_ui_markup_with_exclusion(
         out.push(chars[i]);
         hitbox_per_char.push(curr_hitboxes);
         baseline_per_char.push(curr_baselines);
+        color_per_char.push(curr_color);
+        scale_per_char.push(curr_scale);
         i += 1;
     }
     let mut hitbox_spans = Vec::<UiTextBoolSpan>::new();
@@ -258,6 +297,38 @@ pub fn strip_inline_ui_markup_with_exclusion(
         }
         baseline_spans.push((s, baseline_per_char.len(), v));
     }
+    if !color_per_char.is_empty() {
+        let mut s = 0usize;
+        let mut v = color_per_char[0];
+        for (idx, cur) in color_per_char.iter().enumerate().skip(1) {
+            if *cur != v {
+                if let Some(rgb) = v {
+                    color_spans.push((s, idx, rgb));
+                }
+                s = idx;
+                v = *cur;
+            }
+        }
+        if let Some(rgb) = v {
+            color_spans.push((s, color_per_char.len(), rgb));
+        }
+    }
+    if !scale_per_char.is_empty() {
+        let mut s = 0usize;
+        let mut v = scale_per_char[0];
+        for (idx, cur) in scale_per_char.iter().enumerate().skip(1) {
+            if *cur != v {
+                if let Some(m) = v {
+                    scale_spans.push((s, idx, m));
+                }
+                s = idx;
+                v = *cur;
+            }
+        }
+        if let Some(m) = v {
+            scale_spans.push((s, scale_per_char.len(), m));
+        }
+    }
     (
         out.into_iter().collect(),
         color_spans,
@@ -274,6 +345,7 @@ pub fn map_raw_cursor_to_visual_with_exclusion(
     base_font_px: f32,
     exclude_raw_range: Option<(usize, usize)>,
     raw_cursor: usize,
+    keep_directive_only_rows: bool,
 ) -> usize {
     let chars: Vec<char> = input.chars().collect();
     let n = chars.len();
@@ -292,15 +364,67 @@ pub fn map_raw_cursor_to_visual_with_exclusion(
                 continue;
             }
         }
+        if chars[i] == '!' && chars.get(i + 1) == Some(&'[') {
+            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i + 1) {
+                let dest_start = close_bracket_idx + 2;
+                let dest: String = chars[dest_start..close_paren_idx].iter().collect();
+                let (parsed_color, parsed_size, parsed_hitboxes, parsed_baselines) =
+                    parse_link_dest(&dest, base_font_px);
+                if parsed_color.is_some()
+                    || parsed_size.is_some()
+                    || parsed_hitboxes.is_some()
+                    || parsed_baselines.is_some()
+                {
+                    let dir_start = i;
+                    let token_end_excl = close_paren_idx + 1;
+                    let line_empty_except_directive = {
+                        let mut ls = dir_start;
+                        while ls > 0 && chars[ls - 1] != '\n' {
+                            ls -= 1;
+                        }
+                        let mut rs = close_paren_idx + 1;
+                        while rs < chars.len() && chars[rs] != '\n' {
+                            rs += 1;
+                        }
+                        let left_has = chars[ls..dir_start].iter().any(|c| !c.is_whitespace());
+                        let right_has = chars[(close_paren_idx + 1)..rs]
+                            .iter()
+                            .any(|c| !c.is_whitespace());
+                        !(left_has || right_has)
+                    };
+                    if line_empty_except_directive && !keep_directive_only_rows {
+                        if rc < token_end_excl {
+                            return out_len;
+                        }
+                        i = token_end_excl;
+                        if chars.get(i) == Some(&'\n') {
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    // Kept directive rows: token contributes 1:1 to output.
+                    if rc < token_end_excl {
+                        return out_len + (rc.saturating_sub(dir_start));
+                    }
+                    out_len += token_end_excl.saturating_sub(dir_start);
+                    i = token_end_excl;
+                    continue;
+                }
+            }
+        }
         if chars[i] == '[' {
             if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i) {
                 let inner_start = i + 1;
                 let inner_end = close_bracket_idx;
                 let dest_start = close_bracket_idx + 2;
                 let dest: String = chars[dest_start..close_paren_idx].iter().collect();
-                let (parsed_color, parsed_size, _parsed_hitboxes, _parsed_baselines) =
+                let (parsed_color, parsed_size, parsed_hitboxes, parsed_baselines) =
                     parse_link_dest(&dest, base_font_px);
-                if parsed_color.is_some() || parsed_size.is_some() {
+                if parsed_color.is_some()
+                    || parsed_size.is_some()
+                    || parsed_hitboxes.is_some()
+                    || parsed_baselines.is_some()
+                {
                     let token_end_excl = close_paren_idx + 1;
                     let inner_len = inner_end.saturating_sub(inner_start);
                     if rc < token_end_excl {
@@ -329,6 +453,6 @@ pub fn strip_inline_ui_markup(
     base_font_px: f32,
 ) -> (String, Vec<UiTextColorSpan>, Vec<UiTextScaleSpan>) {
     let (t, c, s, _, _) =
-        strip_inline_ui_markup_with_exclusion(input, base_font_px, None, false, false);
+        strip_inline_ui_markup_with_exclusion(input, base_font_px, None, false, false, false);
     (t, c, s)
 }
