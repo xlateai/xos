@@ -363,6 +363,8 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
       margin: 0;
       height: 100%;
       background: #000;
+      user-select: none;
+      -webkit-user-select: none;
     }
     canvas {
       display: block;

@@ -606,11 +606,24 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             }
         }) as Box<dyn FnMut(_)>);
 
-        window.add_event_listener_with_callback(
+        window.add_event_listener_with_callback_and_bool(
             "keydown",
             keydown_callback.as_ref().unchecked_ref(),
+            true,
         )?;
         keydown_callback.forget();
+    }
+
+    // DOM selection is not useful for the canvas app and can steal Cmd/Ctrl+A.
+    {
+        let selectstart_callback = Closure::wrap(Box::new(move |event: web_sys::Event| {
+            event.prevent_default();
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback(
+            "selectstart",
+            selectstart_callback.as_ref().unchecked_ref(),
+        )?;
+        selectstart_callback.forget();
     }
 
     // Browser paste carries clipboard text synchronously through the event. Seed the XOS
