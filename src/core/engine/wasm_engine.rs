@@ -16,7 +16,7 @@ use super::{
 };
 use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle, ScrollWheelUnit,
+    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle, ScrollWheelUnit,
 };
 
 
@@ -75,6 +75,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             },
             keyboard: KeyboardState {
                 onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                modifiers: KeyboardModifiers::default(),
             },
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,
@@ -372,6 +373,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let key = event.key();
+                state.engine_state.keyboard.modifiers.shift = event.shift_key();
+                state.engine_state.keyboard.modifiers.command =
+                    event.ctrl_key() || event.meta_key();
+                state.engine_state.keyboard.modifiers.alt = event.alt_key();
         
                 match key.as_str() {
                     "Control" | "Meta" => {
@@ -445,6 +450,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     "Shift" => state.shift_held = false,
                     _ => {}
                 }
+                state.engine_state.keyboard.modifiers.shift = event.shift_key();
+                state.engine_state.keyboard.modifiers.command =
+                    event.ctrl_key() || event.meta_key();
+                state.engine_state.keyboard.modifiers.alt = event.alt_key();
                 if !(state.command_held && state.shift_held) {
                     state.frame_pan_dragging = false;
                 }

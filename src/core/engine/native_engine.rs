@@ -27,7 +27,7 @@ use super::{
 };
 use super::engine::{
     tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 use crate::engine::keyboard::shortcuts::{
     detect_shortcut, NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
@@ -129,6 +129,13 @@ struct AppState {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl AppState {
+    #[inline]
+    fn sync_modifiers_to_engine(&mut self) {
+        self.engine_state.keyboard.modifiers.shift = self.shift_held;
+        self.engine_state.keyboard.modifiers.command = self.command_held;
+        self.engine_state.keyboard.modifiers.alt = self.alt_held;
+    }
+
     fn restore_paused_base_frame(&mut self) {
         if self.paused_base_frame.is_empty() || self.paused_base_w == 0 || self.paused_base_h == 0 {
             return;
@@ -427,6 +434,7 @@ impl ApplicationHandler for AppState {
             WindowEvent::Ime(ime) => {
                 match ime {
                     winit::event::Ime::Commit(text) => {
+                        self.sync_modifiers_to_engine();
                         for ch in text.chars() {
                             let _ = self.app.on_key_char(&mut self.engine_state, ch);
                         }
@@ -452,12 +460,14 @@ impl ApplicationHandler for AppState {
                 
                 self.shift_held = modifiers.state().shift_key();
                 self.alt_held = modifiers.state().alt_key();
+                self.sync_modifiers_to_engine();
                 if !(self.command_held && self.shift_held) {
                     self.frame_pan_dragging = false;
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed {
+                    self.sync_modifiers_to_engine();
                     if matches!(event.logical_key, Key::Named(NamedKey::F3)) {
                         self.engine_state.f3_menu.toggle_visible();
                         if self.engine_state.paused {
@@ -690,6 +700,7 @@ impl ApplicationHandler for AppStateWrapper {
                 },
                 keyboard: KeyboardState {
                     onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                    modifiers: KeyboardModifiers::default(),
                 },
                 f3_menu: F3Menu::new(),
                 ui_scale_percent: 100,
@@ -826,6 +837,7 @@ pub fn start_headless_native(
         },
         keyboard: KeyboardState {
             onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+            modifiers: KeyboardModifiers::default(),
         },
         f3_menu: F3Menu::new(),
         ui_scale_percent: 100,

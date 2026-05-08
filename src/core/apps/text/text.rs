@@ -1185,27 +1185,67 @@ impl Application for TextApp {
         
         match ch {
             ARROW_LEFT => {
-                self.selection_start = None;
-                self.selection_end = None;
+                let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
+                let shift = allow_sel && state.keyboard.modifiers.shift;
+                let prev = self.cursor_position;
                 self.move_cursor_left();
+                if shift {
+                    if self.selection_start.is_none() {
+                        self.selection_start = Some(prev);
+                    }
+                    self.selection_end = Some(self.cursor_position);
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_RIGHT => {
-                self.selection_start = None;
-                self.selection_end = None;
+                let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
+                let shift = allow_sel && state.keyboard.modifiers.shift;
+                let prev = self.cursor_position;
                 self.move_cursor_right();
+                if shift {
+                    if self.selection_start.is_none() {
+                        self.selection_start = Some(prev);
+                    }
+                    self.selection_end = Some(self.cursor_position);
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_UP => {
-                self.selection_start = None;
-                self.selection_end = None;
+                let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
+                let shift = allow_sel && state.keyboard.modifiers.shift;
+                let prev = self.cursor_position;
                 self.move_cursor_up();
+                if shift {
+                    if self.selection_start.is_none() {
+                        self.selection_start = Some(prev);
+                    }
+                    self.selection_end = Some(self.cursor_position);
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_DOWN => {
-                self.selection_start = None;
-                self.selection_end = None;
+                let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
+                let shift = allow_sel && state.keyboard.modifiers.shift;
+                let prev = self.cursor_position;
                 self.move_cursor_down();
+                if shift {
+                    if self.selection_start.is_none() {
+                        self.selection_start = Some(prev);
+                    }
+                    self.selection_end = Some(self.cursor_position);
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
                 self.ensure_cursor_visible(content_height);
             }
             '\t' => {

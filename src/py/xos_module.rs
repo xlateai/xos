@@ -152,6 +152,7 @@ impl StandalonePreviewApp {
                     },
                     keyboard: crate::engine::KeyboardState {
                         onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                        modifiers: crate::engine::KeyboardModifiers::default(),
                     },
                     f3_menu: crate::engine::F3Menu::new(),
                     ui_scale_percent: 100,
@@ -484,8 +485,13 @@ impl ApplicationHandler for StandalonePreviewApp {
                 }
                 self.shift_held
                     .insert(viewport_id, modifiers.state().shift_key());
-                if !(*self.command_held.get(&viewport_id).unwrap_or(&false)
-                    && *self.shift_held.get(&viewport_id).unwrap_or(&false))
+                let cmd_k = *self.command_held.get(&viewport_id).unwrap_or(&false);
+                let shift_k = *self.shift_held.get(&viewport_id).unwrap_or(&false);
+                if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
+                    es.keyboard.modifiers.command = cmd_k;
+                    es.keyboard.modifiers.shift = shift_k;
+                }
+                if !(cmd_k && shift_k)
                 {
                     self.frame_pan_dragging.insert(viewport_id, false);
                 }
