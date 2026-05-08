@@ -10,11 +10,7 @@ TEXT = """
 [Or here](size=32, color=CYAN)
 [Or here](size=64, color=CYAN)
 [HITBOXES](size=64, hitboxes=True)
-![](color=GREEN)
 global styling here 
-on all lines until next ![]()
-![](color=RED)
-global styling part 2
 """
 
 

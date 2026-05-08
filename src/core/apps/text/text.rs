@@ -1175,18 +1175,26 @@ impl Application for TextApp {
         
         match ch {
             ARROW_LEFT => {
+                self.selection_start = None;
+                self.selection_end = None;
                 self.move_cursor_left();
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_RIGHT => {
+                self.selection_start = None;
+                self.selection_end = None;
                 self.move_cursor_right();
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_UP => {
+                self.selection_start = None;
+                self.selection_end = None;
                 self.move_cursor_up();
                 self.ensure_cursor_visible(content_height);
             }
             ARROW_DOWN => {
+                self.selection_start = None;
+                self.selection_end = None;
                 self.move_cursor_down();
                 self.ensure_cursor_visible(content_height);
             }
@@ -1779,6 +1787,50 @@ impl Application for TextApp {
     
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
         self.apply_keyboard_shortcut(shortcut, state);
+    }
+
+    fn on_special_key(
+        &mut self,
+        state: &mut EngineState,
+        special_key: crate::engine::keyboard::shortcuts::SpecialKeyEvent,
+    ) {
+        if let Some(named) = special_key.named_key {
+            use crate::engine::keyboard::shortcuts::NamedSpecialKey;
+            let content_height = self.viewport_metrics(state).visible_h;
+            let prev = self.cursor_position;
+            let handled = match named {
+                NamedSpecialKey::ArrowLeft => {
+                    self.move_cursor_left();
+                    true
+                }
+                NamedSpecialKey::ArrowRight => {
+                    self.move_cursor_right();
+                    true
+                }
+                NamedSpecialKey::ArrowUp => {
+                    self.move_cursor_up();
+                    true
+                }
+                NamedSpecialKey::ArrowDown => {
+                    self.move_cursor_down();
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                if special_key.shift_held {
+                    if self.selection_start.is_none() {
+                        self.selection_start = Some(prev);
+                    }
+                    self.selection_end = Some(self.cursor_position);
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                }
+                self.ensure_cursor_visible(content_height);
+                return;
+            }
+        }
     }
 }
 

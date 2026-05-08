@@ -1342,15 +1342,37 @@ class Text:
                     cp = int(xos.ui._text_peek_cursor(nid))
                 except (ValueError, RuntimeError, OSError):
                     cp = 0
+                sel_a = -1
+                sel_b = -1
+                try:
+                    sel_a = int(xos.ui._text_peek_selection_start(nid))
+                    sel_b = int(xos.ui._text_peek_selection_end(nid))
+                except (ValueError, RuntimeError, OSError):
+                    sel_a = -1
+                    sel_b = -1
                 if self._last_native_cursor is None or int(self._last_native_cursor) != int(cp):
                     self._reset_blink()
                 self._last_native_cursor = int(cp)
+                ranges = self._markup_ranges(self.text)
                 active = None
-                for r in self._markup_ranges(self.text):
-                    lb, _rb, _lp, rp, inner_start, inner_end = r
-                    if inner_start >= inner_end or ((lb - 1) <= cp <= (rp + 1)):
-                        active = r
-                        break
+                if sel_a >= 0 and sel_b >= 0 and sel_a != sel_b:
+                    s0 = min(sel_a, sel_b)
+                    s1 = max(sel_a, sel_b)
+                    touched = []
+                    for r in ranges:
+                        lb, _rb, _lp, rp, _inner_start, _inner_end = r
+                        if max(s0, lb) <= min(s1, rp):
+                            touched.append(r)
+                    if touched:
+                        min_lb = min(r[0] for r in touched)
+                        max_rp = max(r[3] for r in touched)
+                        active = (min_lb, min_lb, min_lb, max_rp, min_lb + 1, min_lb + 1)
+                if active is None:
+                    for r in ranges:
+                        lb, _rb, _lp, rp, inner_start, inner_end = r
+                        if inner_start >= inner_end or ((lb - 1) <= cp <= (rp + 1)):
+                            active = r
+                            break
                 self._active_markup_range = active
                 self._show_markup_source = active is not None
             else:
