@@ -105,9 +105,9 @@ fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32)
             .collect();
 
         if chars_in_line.is_empty() {
-            (0.0, line.baseline_y)
+            (r.line_leading_caret_x(line_idx), line.baseline_y)
         } else if cursor_position == line.start_index {
-            (0.0, line.baseline_y)
+            (r.line_leading_caret_x(line_idx), line.baseline_y)
         } else {
             let mut found_char = None;
             let mut char_after = None;
@@ -132,12 +132,12 @@ fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32)
                     line.baseline_y,
                 )
             } else {
-                (0.0, line.baseline_y)
+                (r.line_leading_caret_x(line_idx), line.baseline_y)
             }
         }
     } else if cursor_position == 0 {
         if let Some(first_line) = r.lines.first() {
-            (0.0, first_line.baseline_y)
+            (r.line_leading_caret_x(0), first_line.baseline_y)
         } else {
             (0.0, r.ascent)
         }
@@ -151,14 +151,14 @@ fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32)
                 .collect();
 
             if chars_in_last_line.is_empty() {
-                (0.0, last_line.baseline_y)
+                (r.line_leading_caret_x(last_line_idx), last_line.baseline_y)
             } else if let Some(last_char) = chars_in_last_line.last() {
                 (
                     last_char.x + last_char.metrics.advance_width,
                     last_line.baseline_y,
                 )
             } else {
-                (0.0, last_line.baseline_y)
+                (r.line_leading_caret_x(last_line_idx), last_line.baseline_y)
             }
         } else if let Some(last) = r.characters.last() {
             (
