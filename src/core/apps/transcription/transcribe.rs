@@ -731,7 +731,6 @@ impl VisualCanvas {
         }
 
         let intensity_hit = (int_stack_r.0, int_stack_r.1 - 6.0, int_stack_r.2, int_stack_r.3 + 5.0);
-        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))

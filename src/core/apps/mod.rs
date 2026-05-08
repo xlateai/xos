@@ -100,7 +100,19 @@ macro_rules! define_apps {
             }
             #[cfg(target_arch = "wasm32")]
             if name == "text" {
-                return Some(Box::new($crate::apps::text::TextApp::new()));
+                let mut app = $crate::apps::text::TextApp::new();
+                let text = "xos text wasm runtime\n\ncompiled with `xos compile --wasm`\nlaunched with `xos app text --wasm`";
+                app.text_rasterizer.set_text(text.to_string());
+                app.cursor_position = text.chars().count();
+                return Some(Box::new(app));
+            }
+            #[cfg(target_arch = "wasm32")]
+            if name == "study" {
+                let mut app = $crate::apps::text::TextApp::new();
+                let text = "xos study wasm runtime\n\nThe native study app is Python/data-backed today, so this browser build is a placeholder until Python app launching is wired for wasm.\n\nTry `xos app text --wasm` or any Rust app name to exercise the wasm renderer.";
+                app.text_rasterizer.set_text(text.to_string());
+                app.cursor_position = text.chars().count();
+                return Some(Box::new(app));
             }
             match name {
                 $(

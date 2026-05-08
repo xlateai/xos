@@ -208,6 +208,7 @@ use wasm_bindgen::JsValue;
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     let game = selected_wasm_app_name();
+    crate::print(&format!("xos wasm: starting app '{game}'"));
     let app = apps::get_app(&game).ok_or_else(|| JsValue::from_str("App not found"))?;
     engine::run_web(app)
 }
@@ -424,19 +425,24 @@ pub fn version() -> &'static str {
 // Python bindings are now handled via rustpython-vm in py_engine module
 // No extension module needed - we embed the Python interpreter instead
 
-/// Print a message (works on all platforms)
-/// On iOS, forwards to Swift's console; otherwise uses standard println!
+/// Print a message (works on all platforms).
+/// On iOS, forwards to Swift's console; on wasm, forwards to browser console.
 /// Also logs to the coder terminal if enabled
 pub fn print(message: &str) {
     // Log to coder terminal first (if enabled)
     crate::apps::coder::logging::log_to_coder(message);
     
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(message));
+    }
+
     #[cfg(target_os = "ios")]
     {
         crate::engine::ios_ffi::log_to_ios(message);
     }
     
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
         std::println!("{}", message);
     }

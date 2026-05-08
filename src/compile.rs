@@ -372,7 +372,14 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
   <canvas id="xos-canvas" width="256" height="256"></canvas>
   <script type="module">
     import init from "./pkg/xos.js";
-    init();
+    init()
+      .then(() => console.log("xos wasm: initialized"))
+      .catch((error) => console.error("xos wasm: failed to initialize", error));
+    window.addEventListener("resize", () => {
+      const canvas = document.getElementById("xos-canvas");
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
     window.addEventListener("contextmenu", (event) => event.preventDefault());
   </script>
 </body>
