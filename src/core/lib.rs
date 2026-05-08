@@ -256,14 +256,15 @@ fn launch_browser() {
     });
 }
 
-fn mime_type(path: &str) -> &'static str {
-    if path.ends_with(".html") {
+fn mime_type(path: &Path) -> &'static str {
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    if extension == Some("html") {
         "text/html"
-    } else if path.ends_with(".js") {
+    } else if extension == Some("js") {
         "application/javascript"
-    } else if path.ends_with(".wasm") {
+    } else if extension == Some("wasm") {
         "application/wasm"
-    } else if path.ends_with(".css") {
+    } else if extension == Some("css") {
         "text/css"
     } else {
         "application/octet-stream"
