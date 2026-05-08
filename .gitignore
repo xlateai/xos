@@ -50,5 +50,4 @@ perf.data.old
 # Web slop
 node_modules/**
 
-# wasm compilation target is in root `./wasm-compiled-xos-output`
-wasm-compiled-xos-output/**
+# wasm compilation artifacts live under /target/wasm/

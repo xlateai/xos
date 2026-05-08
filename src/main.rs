@@ -144,7 +144,7 @@ enum Commands {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
-        /// Build WebAssembly output into `wasm-compiled-xos-output/` and create `xos-wasm.zip`.
+        /// Build WebAssembly output into `target/wasm/main/` and create `xos-wasm.zip`.
         #[arg(long)]
         wasm: bool,
         /// Run `cargo clean` in the project root before building (full rebuild).

@@ -287,7 +287,7 @@ fn xos_project_root_or_exit() -> PathBuf {
 }
 
 fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
-    project_root.join("wasm-compiled-xos-output")
+    project_root.join("target").join("wasm").join("main")
 }
 
 fn react_native_static_dir(project_root: &Path) -> PathBuf {
