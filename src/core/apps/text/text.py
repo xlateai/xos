@@ -5,10 +5,23 @@ import xos
 DEFAULT_FONT_SIZE = 48.0
 
 
+TEXT = """
+[Type here!](color=GRAY size=16)
+[Or here](size=32, color=CYAN)
+[Or here](size=64, color=CYAN)
+[HITBOXES](size=64, hitboxes=True)
+![](color=GREEN)
+global styling here 
+on all lines until next ![]()
+![](color=RED)
+global styling part 2
+"""
+
+
 def make_text(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
     x1, y1, x2, y2 = self.safe_region.renormalize(x1, y1, x2, y2)
     return xos.ui.text(
-        "",
+        TEXT,
         x1=x1,
         y1=y1,
         x2=x2,
