@@ -283,9 +283,22 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("show_cursor") {
         show_cursor = v.clone().try_into_value(vm)?;
     }
+    if let Some(v) = args.kwargs.get("cursor_position") {
+        cursor_position = v.clone().try_into_value(vm)?;
+    }
     if let Some(v) = args.kwargs.get("render") {
         should_render = v.clone().try_into_value(vm)?;
     }
+    let active_markup_start = if let Some(v) = args.kwargs.get("active_markup_start") {
+        Some(v.clone().try_into_value::<usize>(vm)?)
+    } else {
+        None
+    };
+    let active_markup_end = if let Some(v) = args.kwargs.get("active_markup_end") {
+        Some(v.clone().try_into_value::<usize>(vm)?)
+    } else {
+        None
+    };
 
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
@@ -317,8 +330,18 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         a.clamp(0, 255) as u8,
     );
 
+    let exclusion = match (active_markup_start, active_markup_end) {
+        (Some(s), Some(e)) if s <= e => Some((s, e)),
+        _ => None,
+    };
     let (viz_text, ui_color_spans, ui_scale_spans) =
-        ui_markup::strip_inline_ui_markup(&text, size_px.max(1.0));
+        ui_markup::strip_inline_ui_markup_with_exclusion(&text, size_px.max(1.0), exclusion);
+    let viz_cursor_position = ui_markup::map_raw_cursor_to_visual_with_exclusion(
+        &text,
+        size_px.max(1.0),
+        exclusion,
+        cursor_position,
+    );
 
     let buffer =
         unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
@@ -388,7 +411,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             baselines,
             size_px,
             show_cursor,
-            cursor_position,
+            cursor_position: viz_cursor_position,
             selection_start: selection_start_opt,
             selection_end: selection_end_opt,
             trackpad_pointer_px: trackpad_pointer,
@@ -662,6 +685,23 @@ fn text_peek_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_cursor requires (native_id,)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.cursor_position).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_cursor: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
 fn text_set_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() < 2 || av.len() > 3 {
@@ -806,6 +846,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_text_peek_cursor",
+            vm.new_function("_text_peek_cursor", text_peek_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_text_set_document",
             vm.new_function("_text_set_document", text_set_document),
             vm,
@@ -873,6 +920,8 @@ class Text:
         self.size = float(size)
         self._native_id = None
         self._last_tick_state = None
+        self._active_markup_range = None
+        self._show_markup_source = True
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -902,6 +951,43 @@ class Text:
     def _effective_input_focus(self):
         return bool(getattr(self, "_sticky_focus", False) or self.is_focused)
 
+    @staticmethod
+    def _markup_ranges(s):
+        # Returns tuples: (open[,], close], open(, close), inner_start, inner_end)
+        text = str(s)
+        out = []
+        n = len(text)
+        i = 0
+        while i < n:
+            if text[i] != "[":
+                i += 1
+                continue
+            rb = text.find("](", i + 1)
+            if rb == -1:
+                i += 1
+                continue
+            rp = text.find(")", rb + 2)
+            if rp == -1:
+                i += 1
+                continue
+            out.append((i, rb, rb + 1, rp, i + 1, rb))
+            i = rp + 1
+        return out
+
+    @classmethod
+    def _should_show_markup_source(cls, text, cursor_pos):
+        # Show source while editing near a markup token, or when label is empty.
+        ranges = cls._markup_ranges(text)
+        if not ranges:
+            return False
+        cp = int(max(0, cursor_pos))
+        for lb, rb, lp, rp, inner_start, inner_end in ranges:
+            if inner_start >= inner_end:
+                return True
+            if (lb - 1) <= cp <= (rp + 1):
+                return True
+        return False
+
     @property
     def focused(self):
         return self._effective_input_focus()
@@ -925,12 +1011,23 @@ class Text:
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
         nid = int(self._native_id)
+        eff = self._effective_input_focus()
         peek_s = ""
         try:
             peek_s = str(xos.ui._text_peek_document(nid))
         except (ValueError, RuntimeError, OSError):
             peek_s = ""
-        if not self.editable:
+        if self.editable:
+            # Allow fast app-driven swaps for editable regions (e.g. verdict/prompt text):
+            # if Python-side text changed while this widget is not actively focused, push it
+            # into the native editor before collecting render state.
+            if (not eff) and (str(self.text) != peek_s):
+                try:
+                    xos.ui._text_set_document(nid, str(self.text), True)
+                    peek_s = str(self.text)
+                except (ValueError, RuntimeError, OSError):
+                    pass
+        else:
             if self.text != peek_s:
                 try:
                     xos.ui._text_set_document(nid, str(self.text), True)
@@ -943,7 +1040,6 @@ class Text:
             float(self.x2),
             float(self.y2),
         )
-        eff = self._effective_input_focus()
         caret = bool(self.show_cursor and eff)
         xos.ui._text_tick(
             nid,
@@ -985,6 +1081,26 @@ class Text:
                 self.text = str(xos.ui._text_peek_document(nid))
             except (ValueError, RuntimeError, OSError):
                 pass
+        # Focused editable text: only show raw markup source when cursor is in/near a token,
+        # or when a token has an empty [] label (so it stays editable).
+        self._show_markup_source = True
+        if self.editable:
+            if eff:
+                try:
+                    cp = int(xos.ui._text_peek_cursor(nid))
+                except (ValueError, RuntimeError, OSError):
+                    cp = 0
+                active = None
+                for r in self._markup_ranges(self.text):
+                    lb, _rb, _lp, rp, inner_start, inner_end = r
+                    if inner_start >= inner_end or ((lb - 1) <= cp <= (rp + 1)):
+                        active = r
+                        break
+                self._active_markup_range = active
+                self._show_markup_source = active is not None
+            else:
+                self._active_markup_range = None
+                self._show_markup_source = False
         return self._last_tick_state
 
     def on_events(self, app):
@@ -1041,12 +1157,26 @@ class Text:
             extra = {}
             nid = getattr(self, "_native_id", None)
             eff = self._effective_input_focus()
-            use_native_visual = bool((not self.editable) or eff)
+            # Editable widgets always render via markup parser path so non-active tokens remain styled.
+            # Non-editable keeps native fast path.
+            use_native_visual = bool(not self.editable)
+            text_for_render = self.text
             if nid is not None and use_native_visual:
                 extra["native_widget_id"] = int(nid)
                 extra["show_cursor"] = bool(self.show_cursor and eff)
+            elif eff:
+                # Fallback renderer: preserve caret visibility while editing.
+                try:
+                    extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
+                except (ValueError, RuntimeError, OSError):
+                    extra["cursor_position"] = 0
+                extra["show_cursor"] = bool(self.show_cursor and eff)
+            if self.editable and eff and self._active_markup_range is not None:
+                lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                extra["active_markup_start"] = int(lb)
+                extra["active_markup_end"] = int(rp)
             state = _text_render(
-                self.text,
+                text_for_render,
                 self.x1,
                 self.y1,
                 self.x2,

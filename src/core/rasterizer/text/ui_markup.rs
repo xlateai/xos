@@ -99,9 +99,10 @@ fn parse_link_dest(dest: &str, base_font_px: f32) -> (Option<(u8, u8, u8)>, Opti
 
 /// Strips `[inner](…)` when `…` parses to at least one valid `color` and/or `size`.
 /// `base_font_px` is the widget body size (`xos.ui.Text.size`) used to interpret numeric `size=`.
-pub fn strip_inline_ui_markup(
+pub fn strip_inline_ui_markup_with_exclusion(
     input: &str,
     base_font_px: f32,
+    exclude_raw_range: Option<(usize, usize)>,
 ) -> (String, Vec<UiTextColorSpan>, Vec<UiTextScaleSpan>) {
     let chars: Vec<char> = input.chars().collect();
     let mut out: Vec<char> = Vec::with_capacity(chars.len());
@@ -109,6 +110,13 @@ pub fn strip_inline_ui_markup(
     let mut scale_spans = Vec::<UiTextScaleSpan>::new();
     let mut i = 0usize;
     while i < chars.len() {
+        if let Some((xs, xe)) = exclude_raw_range {
+            if i >= xs && i <= xe {
+                out.push(chars[i]);
+                i += 1;
+                continue;
+            }
+        }
         if chars[i] == '[' {
             if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i) {
                 let inner_start = i + 1;
@@ -135,4 +143,67 @@ pub fn strip_inline_ui_markup(
         i += 1;
     }
     (out.into_iter().collect(), color_spans, scale_spans)
+}
+
+/// Map a cursor position in the raw source text to the corresponding position in the
+/// visual text produced by [`strip_inline_ui_markup_with_exclusion`].
+pub fn map_raw_cursor_to_visual_with_exclusion(
+    input: &str,
+    base_font_px: f32,
+    exclude_raw_range: Option<(usize, usize)>,
+    raw_cursor: usize,
+) -> usize {
+    let chars: Vec<char> = input.chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut out_len = 0usize;
+    let rc = raw_cursor.min(n);
+
+    while i < n {
+        if rc <= i {
+            return out_len;
+        }
+        if let Some((xs, xe)) = exclude_raw_range {
+            if i >= xs && i <= xe {
+                i += 1;
+                out_len += 1;
+                continue;
+            }
+        }
+        if chars[i] == '[' {
+            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i) {
+                let inner_start = i + 1;
+                let inner_end = close_bracket_idx;
+                let dest_start = close_bracket_idx + 2;
+                let dest: String = chars[dest_start..close_paren_idx].iter().collect();
+                let (parsed_color, parsed_size) = parse_link_dest(&dest, base_font_px);
+                if parsed_color.is_some() || parsed_size.is_some() {
+                    let token_end_excl = close_paren_idx + 1;
+                    let inner_len = inner_end.saturating_sub(inner_start);
+                    if rc < token_end_excl {
+                        if rc <= inner_start {
+                            return out_len;
+                        }
+                        if rc <= inner_end {
+                            return out_len + (rc - inner_start);
+                        }
+                        return out_len + inner_len;
+                    }
+                    out_len += inner_len;
+                    i = token_end_excl;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+        out_len += 1;
+    }
+    out_len
+}
+
+pub fn strip_inline_ui_markup(
+    input: &str,
+    base_font_px: f32,
+) -> (String, Vec<UiTextColorSpan>, Vec<UiTextScaleSpan>) {
+    strip_inline_ui_markup_with_exclusion(input, base_font_px, None)
 }
