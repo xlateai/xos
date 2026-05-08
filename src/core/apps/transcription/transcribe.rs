@@ -9,9 +9,10 @@ use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
 use crate::ui::{
-    AudioInputMenuDown, AudioInputSelector, TranscribeLangMenuDown,
-    TranscribeLanguageSelector,
+    AudioInputMenuDown, AudioInputSelector, TranscribeLanguageSelector,
 };
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+use crate::ui::TranscribeLangMenuDown;
 use crate::ui::onscreen_keyboard::KeyType;
 use fontdue::Font;
 use std::collections::VecDeque;
@@ -129,8 +130,6 @@ struct UiBounds {
     slider: Option<(f32, f32, f32, f32)>,
     /// Full-width “wave intensity” (gain) control below the green capture button.
     intensity: Option<(f32, f32, f32, f32)>,
-    /// **lang** button to the right of capture (transcription language; whisper builds only).
-    lang: Option<(f32, f32, f32, f32)>,
     /// Dedicated **device** button (left of center mic) that opens the input selector menu.
     device: Option<(f32, f32, f32, f32)>,
     /// Center mic button (tap: toggle live; hold: record-and-run full-clip inference).
@@ -308,7 +307,7 @@ impl VisualCanvas {
         wave_rect: (f32, f32, f32, f32),
         safe_layout: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
-        lang_selector: &mut TranscribeLanguageSelector,
+        _lang_selector: &mut TranscribeLanguageSelector,
         live_toggle_on: bool,
         ptt_hold_active: bool,
         ptt_hold_seconds: f32,
@@ -353,7 +352,7 @@ impl VisualCanvas {
             capture_btn_r.0 - side_gap,
             capture_btn_r.3,
         );
-        let mut lang_btn_r = (
+        let mut _lang_btn_r = (
             capture_btn_r.2 + side_gap,
             capture_btn_r.1,
             capture_btn_r.2 + side_gap + side_w,
@@ -364,16 +363,16 @@ impl VisualCanvas {
             let shift = wl - device_btn_r.0;
             device_btn_r.0 += shift;
             device_btn_r.2 += shift;
-            lang_btn_r.0 += shift;
-            lang_btn_r.2 += shift;
+            _lang_btn_r.0 += shift;
+            _lang_btn_r.2 += shift;
         }
         let layout_right_edge = if use_full_width_fill { full_w } else { safe_right };
-        if lang_btn_r.2 > layout_right_edge {
-            let shift = lang_btn_r.2 - layout_right_edge;
+        if _lang_btn_r.2 > layout_right_edge {
+            let shift = _lang_btn_r.2 - layout_right_edge;
             device_btn_r.0 -= shift;
             device_btn_r.2 -= shift;
-            lang_btn_r.0 -= shift;
-            lang_btn_r.2 -= shift;
+            _lang_btn_r.0 -= shift;
+            _lang_btn_r.2 -= shift;
         }
 
         let line_top = wave_rect.1;
@@ -513,11 +512,11 @@ impl VisualCanvas {
         audio_selector.last_button_rect = device_btn_r;
 
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        if lang_btn_r.2 > lang_btn_r.0 && lang_btn_r.3 > lang_btn_r.1 {
-            lang_selector.draw(
+        if _lang_btn_r.2 > _lang_btn_r.0 && _lang_btn_r.3 > _lang_btn_r.1 {
+            _lang_selector.draw(
                 state,
                 font,
-                lang_btn_r,
+                _lang_btn_r,
                 width as usize,
                 height as usize,
                 safe_layout,
@@ -733,7 +732,6 @@ impl VisualCanvas {
 
         let intensity_hit = (int_stack_r.0, int_stack_r.1 - 6.0, int_stack_r.2, int_stack_r.3 + 5.0);
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        let lang_hit = (lang_btn_r.0, lang_btn_r.1 - 4.0, lang_btn_r.2, lang_btn_r.3 + 4.0);
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
@@ -749,20 +747,6 @@ impl VisualCanvas {
                 Some(intensity_hit)
             } else {
                 None
-            },
-            lang: {
-                #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-                {
-                    if lang_btn_r.2 > lang_btn_r.0 {
-                        Some(lang_hit)
-                    } else {
-                        None
-                    }
-                }
-                #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
-                {
-                    None
-                }
             },
             device: if device_btn_r.2 > device_btn_r.0 {
                 Some(device_btn_r)
@@ -1001,11 +985,16 @@ impl TranscribeApp {
 
     fn handle_transcript_action_key(&mut self, action: KeyType) {
         if let Some(copied) = self.transcript_view.on_action_key(action) {
-            if let Err(e) = clipboard::set_contents(&copied) {
-                #[cfg(not(target_arch = "wasm32"))]
-                eprintln!(
-                    "transcript: failed to write clipboard ({e}). On Linux install wl-clipboard or xclip."
-                );
+            match clipboard::set_contents(&copied) {
+                Ok(()) => {}
+                Err(e) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    eprintln!(
+                        "transcript: failed to write clipboard ({e}). On Linux install wl-clipboard or xclip."
+                    );
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = e;
+                }
             }
         }
     }

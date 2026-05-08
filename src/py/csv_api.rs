@@ -4,8 +4,10 @@ use rustpython_vm::{
     builtins::PyModule,
     PyRef, PyResult, VirtualMachine, function::FuncArgs,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_csv_file(path: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let buf =
         std::fs::read(PathBuf::from(path)).map_err(|e| format!("cannot read {:?}: {}", path, e))?;

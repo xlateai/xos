@@ -139,13 +139,16 @@ struct PanelGeom {
     slider_top: f32,
     slider_bottom: f32,
     font_header_top: f32,
-    font_header_bottom: f32,
     font_options_top: f32,
     font_option_height: f32,
     font_option_gap: f32,
+    #[cfg(target_os = "ios")]
     toggle_left: f32,
+    #[cfg(target_os = "ios")]
     toggle_right: f32,
+    #[cfg(target_os = "ios")]
     toggle_top: f32,
+    #[cfg(target_os = "ios")]
     toggle_bottom: f32,
     font_option_count: usize,
     button_left: f32,
@@ -184,8 +187,6 @@ fn panel_geom(
     let font_option_gap = (4.0 * us).max(2.0);
     #[cfg(target_os = "ios")]
     let toggle_h = (28.0 * us).max(18.0);
-    #[cfg(not(target_os = "ios"))]
-    let toggle_h = 0.0_f32;
     let font_options_h = if font_option_count == 0 {
         0.0
     } else {
@@ -234,6 +235,7 @@ fn panel_geom(
         slider_bottom + line_gap
     };
     let minimap_bottom = minimap_top + mini_h;
+    #[cfg(target_os = "ios")]
     let toggle_top = if show_minimap {
         minimap_bottom + line_gap
     } else if font_option_count > 0 {
@@ -241,6 +243,7 @@ fn panel_geom(
     } else {
         slider_bottom + line_gap
     };
+    #[cfg(target_os = "ios")]
     let toggle_bottom = toggle_top + toggle_h;
     PanelGeom {
         panel_left,
@@ -252,13 +255,16 @@ fn panel_geom(
         slider_top,
         slider_bottom,
         font_header_top,
-        font_header_bottom,
         font_options_top,
         font_option_height: font_option_h,
         font_option_gap,
+        #[cfg(target_os = "ios")]
         toggle_left: slider_left,
+        #[cfg(target_os = "ios")]
         toggle_right: slider_right,
+        #[cfg(target_os = "ios")]
         toggle_top,
+        #[cfg(target_os = "ios")]
         toggle_bottom,
         font_option_count,
         button_left,

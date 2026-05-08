@@ -1,8 +1,8 @@
 //! `xos.path` — data directory and optional repo root (for bundled dev assets).
 
-use rustpython_vm::{
-    PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs,
-};
+#[cfg(not(target_arch = "wasm32"))]
+use rustpython_vm::PyObjectRef;
+use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn path_fs_exists(args: FuncArgs, vm: &VirtualMachine) -> PyResult {

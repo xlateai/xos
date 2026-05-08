@@ -1,10 +1,13 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 #[cfg(not(target_arch = "wasm32"))]
 use burn::tensor::DType;
 #[cfg(not(target_arch = "wasm32"))]
 use burn_store::{BurnpackStore, ModuleStore};
-use rustpython_vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+#[cfg(not(target_arch = "wasm32"))]
+use rustpython_vm::AsObject;
+use rustpython_vm::{PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
 
 use crate::tensor::tensor::tensor_flat_data_list;
 
@@ -25,6 +28,7 @@ fn to_py_err(vm: &VirtualMachine, msg: impl Into<String>) -> rustpython_vm::buil
     vm.new_runtime_error(msg.into())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_bool_flag(obj: Option<&PyObjectRef>, vm: &VirtualMachine) -> PyResult<bool> {
     match obj {
         Some(v) => v.clone().try_into_value(vm),
@@ -32,6 +36,7 @@ fn parse_bool_flag(obj: Option<&PyObjectRef>, vm: &VirtualMachine) -> PyResult<b
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_usize_flag(obj: Option<&PyObjectRef>, default: usize, vm: &VirtualMachine) -> PyResult<usize> {
     match obj {
         Some(v) => {
@@ -53,6 +58,7 @@ fn parse_string_arg(obj: Option<&PyObjectRef>, default: &str, vm: &VirtualMachin
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn summarize(values: &[f32]) -> (usize, usize, usize, f32, f32, f32) {
     let mut finite = 0usize;
     let mut nan = 0usize;
@@ -140,16 +146,6 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
         legacy_root.display(),
         f32.display(),
         f16.display()
-    ))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<PathBuf, String> {
-    if let Some(p) = override_path {
-        return Ok(PathBuf::from(p));
-    }
-    Err(format!(
-        "whisper weights path for model '{model}' requires override_path on wasm builds"
     ))
 }
 

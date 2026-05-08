@@ -71,8 +71,6 @@ use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TextViewportMetrics {
-    frame_w: f32,
-    frame_h: f32,
     pub(crate) layout_w: f32,
     pub(crate) visible_h: f32,
     pub(crate) draw_x: f32,
@@ -441,8 +439,6 @@ impl TextApp {
             // Match [`UiText::render`] clip rect height (no keyboard clip — render draws the same box).
             let vh = vh_u.max(1) as f32;
             TextViewportMetrics {
-                frame_w,
-                frame_h,
                 layout_w: vw,
                 visible_h: vh,
                 draw_x: vx,
@@ -451,8 +447,6 @@ impl TextApp {
             }
         } else {
             TextViewportMetrics {
-                frame_w,
-                frame_h,
                 layout_w: frame_w,
                 visible_h: (content_bottom - content_top).max(1.0),
                 draw_x: 0.0,
