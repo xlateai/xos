@@ -17,9 +17,12 @@ use super::{
 
 #[cfg(target_arch = "wasm32")]
 fn viewport_metrics(window: &web_sys::Window) -> Result<(f64, f64, f32, u32, u32), JsValue> {
+    const MAX_BACKING_PIXELS: f64 = 16_000_000.0;
     let css_width = window.inner_width()?.as_f64().unwrap_or(1.0).max(1.0);
     let css_height = window.inner_height()?.as_f64().unwrap_or(1.0).max(1.0);
-    let dpr = window.device_pixel_ratio().max(1.0) as f32;
+    let css_pixels = (css_width * css_height).max(1.0);
+    let max_dpr = (MAX_BACKING_PIXELS / css_pixels).sqrt().max(1.0);
+    let dpr = window.device_pixel_ratio().max(1.0).min(max_dpr) as f32;
     let width = (css_width * f64::from(dpr)).round().max(1.0) as u32;
     let height = (css_height * f64::from(dpr)).round().max(1.0) as u32;
     Ok((css_width, css_height, dpr, width, height))
@@ -253,6 +256,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let state_ptr_clone = state_ptr;
         let canvas_clone = canvas.clone();
         let down_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
+            event.prevent_default();
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let scale = canvas_backing_scale(&canvas_clone);
@@ -295,6 +299,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let state_ptr_clone = state_ptr;
         let canvas_clone = canvas.clone();
         let up_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
+            event.prevent_default();
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let scale = canvas_backing_scale(&canvas_clone);
@@ -575,6 +580,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 let shape = state.engine_state.frame.shape();
                 if shape[1] as u32 != width || shape[0] as u32 != height {
                     state.engine_state.resize_frame(width, height);
+                    anim_state.last_tick_instant = Some(crate::time::Instant::now());
                     // Notify app of screen size change
                     state
                         .app
@@ -656,16 +662,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
 
                 tick_f3_menu(&mut state.engine_state);
 
-                // Render to canvas
+                // Render to canvas. During live browser resizes, the browser can briefly reject a
+                // transient backing store; keep RAF alive and try again next frame.
                 let buffer = state.engine_state.frame_buffer_mut();
                 let data = wasm_bindgen::Clamped(&buffer[..]);
-                let image_data = ImageData::new_with_u8_clamped_array_and_sh(data, width, height)
-                    .expect("Failed to create ImageData");
-
-                anim_state
-                    .context
-                    .put_image_data(&image_data, 0.0, 0.0)
-                    .expect("put_image_data failed");
+                match ImageData::new_with_u8_clamped_array_and_sh(data, width, height) {
+                    Ok(image_data) => {
+                        if let Err(err) = anim_state.context.put_image_data(&image_data, 0.0, 0.0) {
+                            crate::print(&format!("xos wasm: put_image_data failed: {:?}", err));
+                        }
+                    }
+                    Err(err) => {
+                        crate::print(&format!("xos wasm: ImageData failed: {:?}", err));
+                    }
+                }
 
                 // Request next animation frame
                 web_sys::window()

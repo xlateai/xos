@@ -47,6 +47,13 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
     output
 }
 
+fn log_py_runtime_error(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::print(message);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{message}");
+}
+
 fn sync_app_safe_region(
     vm: &VirtualMachine,
     app: &PyObjectRef,
@@ -264,20 +271,20 @@ fn try_dispatch_python_on_events(
     let dict = match build_routed_event_dict(vm, ev, state) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!(
+            log_py_runtime_error(&format!(
                 "Failed to build routed _xos_event dict:\n{}",
                 format_python_exception(vm, &e)
-            );
+            ));
             return;
         }
     };
     let _evt_store = app_instance.set_attr("_xos_event", dict, vm);
     let _guard = CallbackEngineStateGuard::install(state);
     if let Err(e) = vm.call_method(app_instance, "on_events", ()) {
-        eprintln!(
+        log_py_runtime_error(&format!(
             "Python on_events error:\n{}",
             format_python_exception(vm, &e)
-        );
+        ));
     }
     let _clear = app_instance.set_attr("_xos_event", vm.ctx.none(), vm);
 }
@@ -1057,9 +1064,9 @@ impl Application for PyApp {
                     Ok(None) | Err(_) => false,
                 };
                 if !initialized_ok {
-                    eprintln!(
+                    log_py_runtime_error(
                         "Python app init error:\nRuntimeError: xos.Application.__init__() was not called. \
-Call super().__init__() in your app __init__ before using tick()."
+Call super().__init__() in your app __init__ before using tick().",
                     );
                     tick_failed = true;
                     return;
@@ -1068,7 +1075,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 // Update frame data before calling tick
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
                     let _ = crate::python_api::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
-                    
+
                     // Update mouse data
                     let mouse_dict = vm.ctx.new_dict();
                     let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
@@ -1086,23 +1093,26 @@ Call super().__init__() in your app __init__ before using tick()."
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     let _ = sync_app_safe_region(vm, &app_instance, &state.frame.safe_region_boundaries);
-                    
+
                     // Call tick (xos.ui may call into Rust with `TickEngineStateGuard` active)
                     let _tls_guard = TickEngineStateGuard::install(state);
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
-                        eprintln!("Python tick error:\n{}", error_msg);
+                        log_py_runtime_error(&format!("Python tick error:\n{}", error_msg));
                         tick_failed = true;
                     }
                 }
             });
 
             if tick_failed {
-                // Stop ticking this Python app after the first runtime error.
-                self.app_instance = None;
+                // Stop ticking this Python app after the first runtime error on native. In the browser,
+                // keep the RAF loop recoverable and surface the error in the console.
                 #[cfg(not(target_arch = "wasm32"))]
-                crate::engine::native_engine::request_exit();
-                eprintln!("Python app execution stopped after tick error.");
+                {
+                    self.app_instance = None;
+                    crate::engine::native_engine::request_exit();
+                    log_py_runtime_error("Python app execution stopped after tick error.");
+                }
             } else {
                 self.ticks_completed = self.ticks_completed.saturating_add(1);
             }
@@ -1268,7 +1278,14 @@ Call super().__init__() in your app __init__ before using tick()."
                     );
                 }
                 // Call the Python handler
-                let _ = vm.call_method(app_instance, "on_screen_size_change", (width, height));
+                if let Err(e) =
+                    vm.call_method(app_instance, "on_screen_size_change", (width, height))
+                {
+                    log_py_runtime_error(&format!(
+                        "Python on_screen_size_change error:\n{}",
+                        format_python_exception(vm, &e)
+                    ));
+                }
             });
 
             // Clear the frame buffer context after handler completes
