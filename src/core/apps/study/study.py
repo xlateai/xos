@@ -57,7 +57,7 @@ class TextDemo(xos.Application):
             size=DEFAULT_FONT_SIZE,
             alignment=(0.5, 0.5),
             spacing=(1.0, 1.05),
-            shortcuts=False,
+            shortcuts=True,
         )
 
         self.description = _boxed_text(
