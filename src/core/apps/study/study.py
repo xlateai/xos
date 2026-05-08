@@ -66,7 +66,7 @@ class TextDemo(xos.Application):
             0.40,
             1.0,
             1.0,
-            editable=False,
+            editable=True,
             selectable=True,
             scrollable=True,
             show_cursor=False,

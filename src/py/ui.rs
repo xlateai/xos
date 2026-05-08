@@ -236,6 +236,26 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         24.0
     };
+    let alignment_x = if let Some(v) = args.kwargs.get("alignment_x") {
+        py_number_to_f64(v.clone(), vm, "alignment_x")? as f32
+    } else {
+        0.0
+    };
+    let alignment_y = if let Some(v) = args.kwargs.get("alignment_y") {
+        py_number_to_f64(v.clone(), vm, "alignment_y")? as f32
+    } else {
+        0.0
+    };
+    let spacing_x = if let Some(v) = args.kwargs.get("spacing_x") {
+        py_number_to_f64(v.clone(), vm, "spacing_x")? as f32
+    } else {
+        1.0
+    };
+    let spacing_y = if let Some(v) = args.kwargs.get("spacing_y") {
+        py_number_to_f64(v.clone(), vm, "spacing_y")? as f32
+    } else {
+        1.0
+    };
 
     let mut text = text;
     let mut should_render = true;
@@ -375,6 +395,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             viewport_scroll_y,
             color_spans: ui_color_spans,
             scale_spans: ui_scale_spans,
+            alignment: (alignment_x, alignment_y),
+            spacing: (spacing_x, spacing_y),
         };
         if should_render {
             text_ui
@@ -534,8 +556,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
     t.python_viewport = Some((vx, vy, vw, vh));
     t.set_font_size(fs);
-    t.set_document_text_py_ui(s);
     t.read_only = !editable;
+    t.set_document_text_py_ui(s);
     t.show_cursor = show_cursor;
     t.show_debug_visuals = show_hitboxes || show_baselines;
     t.py_selectable = selectable;
@@ -932,6 +954,12 @@ class Text:
             float(self.spacing[0]),
             float(self.spacing[1]),
         )
+        # Keep tick-time state collection on the native path for performance.
+        # Styled fallback (for unfocused editable markup preview) is handled in render().
+        extra = {
+            "native_widget_id": int(self._native_id),
+            "show_cursor": caret,
+        }
         state = xos.ui._text_render(
             self.text,
             self.x1,
@@ -944,9 +972,12 @@ class Text:
             hitboxes=True,
             baselines=True,
             size=self.size,
-            native_widget_id=int(self._native_id),
-            show_cursor=caret,
+            alignment_x=float(self.alignment[0]),
+            alignment_y=float(self.alignment[1]),
+            spacing_x=float(self.spacing[0]),
+            spacing_y=float(self.spacing[1]),
             render=False,
+            **extra,
         )
         self._last_tick_state = TextRenderState(state)
         if self.editable:
@@ -1009,9 +1040,10 @@ class Text:
         try:
             extra = {}
             nid = getattr(self, "_native_id", None)
-            if nid is not None:
+            eff = self._effective_input_focus()
+            use_native_visual = bool((not self.editable) or eff)
+            if nid is not None and use_native_visual:
                 extra["native_widget_id"] = int(nid)
-                eff = self._effective_input_focus()
                 extra["show_cursor"] = bool(self.show_cursor and eff)
             state = _text_render(
                 self.text,
@@ -1021,9 +1053,13 @@ class Text:
                 self.y2,
                 resolved_color,
                 # Always compute and return full render geometry.
-                True,
-                True,
+                bool(resolved_hitboxes),
+                bool(resolved_baselines),
                 resolved_size,
+                alignment_x=float(self.alignment[0]),
+                alignment_y=float(self.alignment[1]),
+                spacing_x=float(self.spacing[0]),
+                spacing_y=float(self.spacing[1]),
                 **extra,
             )
             rendered_state = TextRenderState(state)

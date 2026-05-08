@@ -1,7 +1,8 @@
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::{
-    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
+    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextLayoutAlign,
+    TextRasterizer,
 };
 use crate::rasterizer::text::ui_markup;
 use fontdue::Font;
@@ -62,6 +63,10 @@ pub struct UiText {
     pub color_spans: Vec<(usize, usize, (u8, u8, u8))>,
     /// Relative scale spans from `[label](size=…)` (same indices as [`Self::text`]).
     pub scale_spans: Vec<(usize, usize, f32)>,
+    /// Normalized alignment (`0,0` top-left; `1,1` bottom-right), matching Python `xos.ui.Text.alignment`.
+    pub alignment: (f32, f32),
+    /// Start-to-start spacing multipliers `(x, y)`, matching Python `xos.ui.Text.spacing`.
+    pub spacing: (f32, f32),
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -261,8 +266,12 @@ impl UiText {
         let font = shared_font()?;
         let mut rasterizer = TextRasterizer::new(font, self.size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
+        rasterizer.set_spacing(self.spacing.0.max(0.0), self.spacing.1.max(0.0));
         rasterizer.glyph_scale_spans.clone_from(&self.scale_spans);
-        rasterizer.tick(box_width, box_height);
+        rasterizer.tick_aligned(box_width, box_height, TextLayoutAlign {
+            x: self.alignment.0.clamp(0.0, 1.0),
+            y: self.alignment.1.clamp(0.0, 1.0),
+        });
 
         let baseline_color = (100, 100, 100, 255);
         for line in &rasterizer.lines {

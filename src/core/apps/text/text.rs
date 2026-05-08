@@ -294,6 +294,16 @@ impl TextApp {
 
     /// Python `xos.ui.Text`: set document from literal string (may include `[…](color=… size=…)` markup).
     pub(crate) fn set_document_text_py_ui(&mut self, raw: String) {
+        // Editable Python widgets should keep the literal source text so users can edit
+        // inline markup (`[text](color=... size=...)`) directly. Read-only widgets still
+        // parse markup into spans for styled display.
+        if !self.read_only {
+            self.glyph_color_spans.clear();
+            self.text_rasterizer.glyph_scale_spans.clear();
+            self.text_rasterizer.set_text(raw);
+            self.text_rasterizer.invalidate_layout_cache();
+            return;
+        }
         let base_px = self.text_rasterizer.font_size.max(1.0);
         let (display, color_spans, scale_spans) = ui_markup::strip_inline_ui_markup(&raw, base_px);
         self.glyph_color_spans = color_spans;
