@@ -1118,6 +1118,7 @@ class Text:
         self._pointer_down_xy = None
         self._pointer_dragged = False
         self._drag_select_anchor_raw = None
+        self._focus_cursor_sync_pending = False
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -1373,12 +1374,17 @@ class Text:
                         if inner_start >= inner_end or ((lb - 1) <= cp <= (rp + 1)):
                             active = r
                             break
-                self._active_markup_range = active
-                self._show_markup_source = active is not None
+                if self._focus_cursor_sync_pending:
+                    self._active_markup_range = None
+                    self._show_markup_source = False
+                else:
+                    self._active_markup_range = active
+                    self._show_markup_source = active is not None
             else:
                 self._active_markup_range = None
                 self._show_markup_source = False
                 self._last_native_cursor = None
+                self._focus_cursor_sync_pending = False
         return self._last_tick_state
 
     def on_events(self, app):
@@ -1403,7 +1409,10 @@ class Text:
                 if getattr(self, "_sticky_focus", False):
                     self.is_focused = True
                 else:
+                    was_focused = bool(self.is_focused)
                     self.is_focused = hit
+                    if hit and (not was_focused):
+                        self._focus_cursor_sync_pending = True
                 if hit:
                     self._reset_blink()
             mx0 = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
@@ -1589,6 +1598,7 @@ class Text:
                     try:
                         xos.ui._text_set_cursor(int(nid), int(raw_cursor))
                         self._last_native_cursor = int(raw_cursor)
+                        self._focus_cursor_sync_pending = False
                         self._reset_blink()
                         # Keep styled-vs-source decision in sync immediately after click-set cursor
                         # so we don't flash a mismatched frame.
@@ -1606,6 +1616,7 @@ class Text:
             self._pointer_down_xy = None
             self._pointer_dragged = False
             self._drag_select_anchor_raw = None
+            self._focus_cursor_sync_pending = False
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
@@ -1638,23 +1649,28 @@ class Text:
             text_for_render = self.text
             if nid is not None and use_native_visual:
                 extra["native_widget_id"] = int(nid)
-                extra["show_cursor"] = bool(self.show_cursor and eff and self._blink_on)
+                extra["show_cursor"] = bool(
+                    self.show_cursor and eff and self._blink_on and (not self._focus_cursor_sync_pending)
+                )
             elif eff:
                 # Fallback renderer: preserve caret visibility while editing.
-                try:
-                    extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
-                except (ValueError, RuntimeError, OSError):
-                    extra["cursor_position"] = 0
-                if nid is not None:
+                if not self._focus_cursor_sync_pending:
                     try:
-                        s0 = int(xos.ui._text_peek_selection_start(int(nid)))
-                        s1 = int(xos.ui._text_peek_selection_end(int(nid)))
-                        if s0 >= 0 and s1 >= 0:
-                            extra["selection_start"] = s0
-                            extra["selection_end"] = s1
+                        extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
                     except (ValueError, RuntimeError, OSError):
-                        pass
-                extra["show_cursor"] = bool(self.show_cursor and eff and self._blink_on)
+                        extra["cursor_position"] = 0
+                    if nid is not None:
+                        try:
+                            s0 = int(xos.ui._text_peek_selection_start(int(nid)))
+                            s1 = int(xos.ui._text_peek_selection_end(int(nid)))
+                            if s0 >= 0 and s1 >= 0:
+                                extra["selection_start"] = s0
+                                extra["selection_end"] = s1
+                        except (ValueError, RuntimeError, OSError):
+                            pass
+                extra["show_cursor"] = bool(
+                    self.show_cursor and eff and self._blink_on and (not self._focus_cursor_sync_pending)
+                )
             if self.editable and (not use_native_visual) and nid is not None:
                 try:
                     extra["viewport_scroll_y"] = float(xos.ui._text_peek_scroll(int(nid)))
