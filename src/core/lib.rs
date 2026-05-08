@@ -207,9 +207,35 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
-    let game = option_env!("GAME_SELECTION").unwrap_or("ball");
-    let app = apps::get_app(game).ok_or(JsValue::from_str("App not found"))?;
+    let game = selected_wasm_app_name();
+    let app = apps::get_app(&game).ok_or_else(|| JsValue::from_str("App not found"))?;
     engine::run_web(app)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn selected_wasm_app_name() -> String {
+    let fallback = option_env!("GAME_SELECTION").unwrap_or("ball");
+    let Some(window) = web_sys::window() else {
+        return fallback.to_string();
+    };
+    let Ok(location) = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("location")) else {
+        return fallback.to_string();
+    };
+    let Ok(search) = js_sys::Reflect::get(&location, &JsValue::from_str("search")) else {
+        return fallback.to_string();
+    };
+    let Some(search) = search.as_string() else {
+        return fallback.to_string();
+    };
+
+    for pair in search.trim_start_matches('?').split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key == "app" && !value.is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    fallback.to_string()
 }
 
 // --- Tooling helpers ---
@@ -249,10 +275,45 @@ fn build_wasm(app_name: &str) {
     println!("✅ WASM built to {} with app: {app_name}", out_dir.display());
 }
 
+fn xos_project_root_or_exit() -> PathBuf {
+    match find_xos_project_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    }
+}
 
-fn launch_browser() {
-    thread::spawn(|| {
-        let _ = webbrowser::open("http://localhost:8080");
+fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
+    project_root.join("wasm-compiled-xos-output")
+}
+
+fn react_native_static_dir(project_root: &Path) -> PathBuf {
+    project_root
+        .join("src")
+        .join("core")
+        .join("react-native-embedder")
+        .join("static")
+}
+
+fn ensure_compiled_wasm_output(static_dir: &Path) {
+    let index = static_dir.join("index.html");
+    let js = static_dir.join("pkg").join("xos_wasm.js");
+    let wasm = static_dir.join("pkg").join("xos_wasm_bg.wasm");
+    if index.is_file() && js.is_file() && wasm.is_file() {
+        return;
+    }
+
+    eprintln!("❌ wasm output not found at {}", static_dir.display());
+    eprintln!("   Run `xos compile --wasm` first, then `xos app <app-name> --wasm`.");
+    std::process::exit(1);
+}
+
+fn launch_browser(app_name: &str) {
+    let url = format!("http://localhost:8080/?app={app_name}");
+    thread::spawn(move || {
+        let _ = webbrowser::open(&url);
     });
 }
 
@@ -271,29 +332,18 @@ fn mime_type(path: &Path) -> &'static str {
     }
 }
 
-fn start_web_server() {
-    let project_root = match find_xos_project_root() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ {e}");
-            std::process::exit(1);
-        }
-    };
-    let static_dir = project_root
-        .join("src")
-        .join("core")
-        .join("react-native-embedder")
-        .join("static");
+fn start_web_server(static_dir: PathBuf) {
     let index_path = static_dir.join("index.html");
     let server = Server::http("0.0.0.0:8080").unwrap();
     println!("🚀 Serving at http://localhost:8080");
 
     for request in server.incoming_requests() {
         let url = request.url();
-        let path = if url == "/" {
+        let url_path = url.split('?').next().unwrap_or(url);
+        let path = if url_path == "/" {
             index_path.clone()
         } else {
-            let full_path = static_dir.join(url.trim_start_matches('/'));
+            let full_path = static_dir.join(url_path.trim_start_matches('/'));
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
                 full_path
             } else {
@@ -320,13 +370,7 @@ fn start_web_server() {
 }
 
 fn launch_expo() {
-    let project_root = match find_xos_project_root() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("❌ {e}");
-            std::process::exit(1);
-        }
-    };
+    let project_root = xos_project_root_or_exit();
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
     cmd.current_dir(
@@ -346,13 +390,16 @@ fn launch_expo() {
 pub fn run_game(game: &str, wasm: bool, react_native: bool) {
     if wasm {
         println!("🕸️  Launching '{game}' in wasm mode...");
-        build_wasm(game);
-        launch_browser();
-        start_web_server();
+        let project_root = xos_project_root_or_exit();
+        let static_dir = wasm_compile_output_dir(&project_root);
+        ensure_compiled_wasm_output(&static_dir);
+        launch_browser(game);
+        start_web_server(static_dir);
     } else if react_native {
         println!("📱 Launching '{game}' in React Native mode...");
         build_wasm(game);
-        thread::spawn(start_web_server);
+        let static_dir = react_native_static_dir(&xos_project_root_or_exit());
+        thread::spawn(move || start_web_server(static_dir));
         launch_expo();
     } else {
         // println!("🖥️  Launching '{game}' in native mode...");
@@ -476,13 +523,16 @@ pub fn run<T: engine::Application + 'static>(app: T) {
     {
         if args.wasm {
             println!("🕸️  Launching app in wasm mode...");
-            build_wasm(app_name);
-            launch_browser();
-            start_web_server();
+            let project_root = xos_project_root_or_exit();
+            let static_dir = wasm_compile_output_dir(&project_root);
+            ensure_compiled_wasm_output(&static_dir);
+            launch_browser(app_name);
+            start_web_server(static_dir);
         } else if args.react_native {
             println!("📱 Launching app in React Native mode...");
             build_wasm(app_name);
-            thread::spawn(start_web_server);
+            let static_dir = react_native_static_dir(&xos_project_root_or_exit());
+            thread::spawn(move || start_web_server(static_dir));
             launch_expo();
         } else {
             // println!("🖥️  Launching app in native mode...");

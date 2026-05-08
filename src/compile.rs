@@ -357,11 +357,23 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>xos wasm build</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
 </head>
 <body>
+  <canvas id="xos-canvas" width="256" height="256"></canvas>
   <script type="module">
     import init from "./pkg/xos_wasm.js";
     init();
+    window.addEventListener("contextmenu", (event) => event.preventDefault());
   </script>
 </body>
 </html>
@@ -485,8 +497,6 @@ pub fn compile_wasm(clean: bool) -> bool {
         // Keep wasm artifacts isolated so `xos compile --wasm` can run concurrently
         // with iOS/CLI builds without contending on Cargo's target-dir lock.
         .env("CARGO_TARGET_DIR", wasm_target_dir)
-        // Nested `cargo build` inherits this; avoids long silent periods when stderr is not a TTY.
-        .env("CARGO_TERM_PROGRESS_WHEN", "always")
         .args([
             "build",
             "--target",
