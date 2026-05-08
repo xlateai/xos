@@ -1,7 +1,8 @@
 use crate::apps::partitions::partition::{Partition, PartitionData};
 use crate::rasterizer::text::fonts;
 use fontdue::Font;
-use std::time::{Instant, Duration};
+use crate::time::Instant;
+use std::time::Duration;
 
 const KEYBOARD_BG_COLOR: (u8, u8, u8) = (0, 0, 0); // Pitch black
 const KEY_COLOR: (u8, u8, u8) = (40, 40, 40);

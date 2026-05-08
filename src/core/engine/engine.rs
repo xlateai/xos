@@ -2,6 +2,7 @@ use super::f3_menu::F3Menu;
 
 use crate::tensor::burn_raster;
 use crate::tensor::{BurnTensor, WgpuDevice};
+use crate::time::Instant;
 use std::ptr::NonNull;
 
 /// Safe region bounding rectangle for UI elements
@@ -446,8 +447,8 @@ impl EngineState {
 
 /// Updates [`EngineState::delta_time_seconds`] from wall-clock time since the previous tick.
 /// The first tick uses `1.0 / 60.0` seconds so frame-independent logic has a reasonable initial step.
-pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Option<std::time::Instant>) {
-    let now = std::time::Instant::now();
+pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Option<Instant>) {
+    let now = Instant::now();
     engine_state.delta_time_seconds = last_instant
         .map(|prev| (now - prev).as_secs_f32())
         .unwrap_or(1.0 / 60.0);

@@ -33,6 +33,7 @@ use crate::engine::keyboard::shortcuts::{
     detect_shortcut, NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
 };
 use crate::rasterizer::RasterCache;
+use crate::time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
@@ -116,7 +117,7 @@ struct AppState {
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
     raster_cache: RasterCache,
-    last_tick_instant: Option<std::time::Instant>,
+    last_tick_instant: Option<Instant>,
     // Modifier key tracking for shortcuts
     command_held: bool,
     shift_held: bool,
@@ -212,7 +213,7 @@ impl AppState {
                 let _ = self.app.tick(&mut self.engine_state);
                 self.capture_paused_base_frame();
             } else {
-                self.last_tick_instant = Some(std::time::Instant::now());
+                self.last_tick_instant = Some(Instant::now());
                 if self.paused_base_frame.is_empty() {
                     self.capture_paused_base_frame();
                 }
@@ -858,7 +859,7 @@ pub fn start_headless_native(
         return Err(format!("Failed to setup app: {}", e).into());
     }
 
-    let mut last_tick_instant: Option<std::time::Instant> = None;
+    let mut last_tick_instant: Option<Instant> = None;
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
         if engine_state.paused {
             if engine_state.pending_step_ticks > 0 {
@@ -867,7 +868,7 @@ pub fn start_headless_native(
                 app.tick(&mut engine_state);
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(16));
-                last_tick_instant = Some(std::time::Instant::now());
+                last_tick_instant = Some(Instant::now());
             }
         } else {
             tick_frame_delta(&mut engine_state, &mut last_tick_instant);

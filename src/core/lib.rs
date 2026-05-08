@@ -8,6 +8,7 @@ use tiny_http::{Server, Response};
 use webbrowser;
 
 pub mod random;
+pub mod time;
 pub mod tuneable;
 pub mod ai;
 pub mod engine;

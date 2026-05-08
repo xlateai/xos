@@ -474,7 +474,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             state_ptr: *mut WasmState,
             canvas: HtmlCanvasElement,
             context: CanvasRenderingContext2d,
-            last_tick_instant: Option<std::time::Instant>,
+            last_tick_instant: Option<crate::time::Instant>,
         }
         
         let anim_state_ptr = Box::into_raw(Box::new(AnimationState {
@@ -514,7 +514,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.paused_base_h = shape[0];
                         state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
                     } else {
-                        anim_state.last_tick_instant = Some(std::time::Instant::now());
+                        anim_state.last_tick_instant = Some(crate::time::Instant::now());
                         if state.paused_base_frame.is_empty() {
                             let shape = state.engine_state.frame.shape();
                             state.paused_base_w = shape[1];

@@ -4,8 +4,8 @@
 use crate::engine::{EngineState, ScrollWheelUnit};
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::time::Instant;
 use fontdue::Font;
-use std::time::Instant;
 use std::time::Duration;
 
 // Keep in sync with `text.rs` for identical feel

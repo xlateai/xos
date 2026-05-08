@@ -13,7 +13,8 @@ use crate::ui::text as ui_text_edit;
 use crate::ui::onscreen_keyboard::KeyType;
 use crate::clipboard;
 use crate::engine::keyboard::shortcuts::ShortcutAction;
-use std::time::{Instant, Duration};
+use crate::time::Instant;
+use std::time::Duration;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
