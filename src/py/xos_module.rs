@@ -1043,9 +1043,9 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 host.app.render_viewport(viewport_id);
                 loop {
                     let timeout = if host.app.viewport_paused(viewport_id) {
-                        Some(Duration::from_millis(250))
+                        Some(crate::time::Duration::from_millis(250))
                     } else {
-                        Some(Duration::ZERO)
+                        Some(crate::time::Duration::ZERO)
                     };
                     match host.event_loop.pump_app_events(timeout, &mut host.app) {
                         PumpStatus::Continue => {}
