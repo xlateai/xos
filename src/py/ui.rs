@@ -334,8 +334,14 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         (Some(s), Some(e)) if s <= e => Some((s, e)),
         _ => None,
     };
-    let (viz_text, ui_color_spans, ui_scale_spans) =
-        ui_markup::strip_inline_ui_markup_with_exclusion(&text, size_px.max(1.0), exclusion);
+    let (viz_text, ui_color_spans, ui_scale_spans, ui_hitbox_spans, ui_baseline_spans) =
+        ui_markup::strip_inline_ui_markup_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            hitboxes,
+            baselines,
+        );
     let viz_cursor_position = ui_markup::map_raw_cursor_to_visual_with_exclusion(
         &text,
         size_px.max(1.0),
@@ -418,6 +424,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             viewport_scroll_y,
             color_spans: ui_color_spans,
             scale_spans: ui_scale_spans,
+            hitbox_spans: ui_hitbox_spans,
+            baseline_spans: ui_baseline_spans,
             alignment: (alignment_x, alignment_y),
             spacing: (spacing_x, spacing_y),
         };
