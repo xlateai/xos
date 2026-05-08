@@ -18,12 +18,20 @@ use crate::engine::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(target_arch = "wasm32")]
 fn viewport_metrics(window: &web_sys::Window) -> Result<(f64, f64, f32, u32, u32), JsValue> {
-    const MAX_BACKING_PIXELS: f64 = 16_000_000.0;
+    // Canvas2D uploads are the hot path on wasm. Full device DPR on large/retina
+    // windows can mean 8-16M pixels copied every frame, which makes Python text
+    // apps feel far slower than native. Keep a crisp-but-bounded backing store.
+    const MAX_DEVICE_PIXEL_RATIO: f64 = 1.5;
+    const MAX_BACKING_PIXELS: f64 = 4_000_000.0;
     let css_width = window.inner_width()?.as_f64().unwrap_or(1.0).max(1.0);
     let css_height = window.inner_height()?.as_f64().unwrap_or(1.0).max(1.0);
     let css_pixels = (css_width * css_height).max(1.0);
     let max_dpr = (MAX_BACKING_PIXELS / css_pixels).sqrt().max(1.0);
-    let dpr = window.device_pixel_ratio().max(1.0).min(max_dpr) as f32;
+    let dpr = window
+        .device_pixel_ratio()
+        .max(1.0)
+        .min(MAX_DEVICE_PIXEL_RATIO)
+        .min(max_dpr) as f32;
     let width = (css_width * f64::from(dpr)).round().max(1.0) as u32;
     let height = (css_height * f64::from(dpr)).round().max(1.0) as u32;
     Ok((css_width, css_height, dpr, width, height))
