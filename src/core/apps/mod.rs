@@ -6,6 +6,8 @@ pub mod study;
 pub mod text;
 /// Implementation lives under [`transcription`]; the CLI subcommand is `transcribe` via [`transcribe`].
 pub mod transcription;
+#[cfg(target_arch = "wasm32")]
+pub mod xpy;
 
 /// `xos app text` / `xos app study` — Python windowed apps (`text.py`, `study.py`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +24,7 @@ pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
     match name {
         "text" => text::launcher::boxed_text_demo_app(),
         "study" => study::launcher::boxed_study_app(),
+        "xpy" => xpy::launcher::boxed_xpy_app(),
         _ => None,
     }
 }
@@ -121,6 +124,10 @@ macro_rules! define_apps {
                 if !names.iter().any(|n| *n == extra) {
                     names.push(extra);
                 }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if !names.iter().any(|n| *n == "xpy") {
+                names.push("xpy");
             }
             names
         }

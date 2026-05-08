@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs as std_fs, thread};
 use tiny_http::{Response, Server};
 use webbrowser;
@@ -309,10 +310,53 @@ fn ensure_compiled_wasm_output(static_dir: &Path) {
 }
 
 fn launch_browser(app_name: &str) {
-    let url = format!("http://localhost:8080/?app={app_name}");
+    launch_browser_query(&format!("app={app_name}"));
+}
+
+fn launch_browser_query(query: &str) {
+    let url = format!("http://localhost:8080/?{query}");
     thread::spawn(move || {
         let _ = webbrowser::open(&url);
     });
+}
+
+fn unique_xpy_handoff_id(path: &Path) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("{stem}-{}-{millis}", std::process::id())
+}
+
+fn write_xpy_wasm_handoff(
+    static_dir: &Path,
+    file_path: &Path,
+    flags: &[String],
+) -> Result<String, String> {
+    let id = unique_xpy_handoff_id(file_path);
+    let source = std_fs::read_to_string(file_path)
+        .map_err(|e| format!("read python source {}: {e}", file_path.display()))?;
+    let handoff_dir = static_dir.join(".xos").join("xpy").join(&id);
+    std_fs::create_dir_all(&handoff_dir)
+        .map_err(|e| format!("create xpy handoff {}: {e}", handoff_dir.display()))?;
+    std_fs::write(handoff_dir.join("main.py"), source)
+        .map_err(|e| format!("write xpy handoff source: {e}"))?;
+    std_fs::write(handoff_dir.join("flags.txt"), flags.join("\n"))
+        .map_err(|e| format!("write xpy handoff flags: {e}"))?;
+    Ok(id)
 }
 
 fn mime_type(path: &Path) -> &'static str {
@@ -415,6 +459,25 @@ pub fn run_game(game: &str, wasm: bool, react_native: bool) {
             start().unwrap();
         }
     }
+}
+
+pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
+    println!(
+        "🕸️  Launching '{}' with xpy wasm mode...",
+        file_path.display()
+    );
+    let project_root = xos_project_root_or_exit();
+    let static_dir = wasm_compile_output_dir(&project_root);
+    ensure_compiled_wasm_output(&static_dir);
+    let id = match write_xpy_wasm_handoff(&static_dir, file_path, flags) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("❌ failed to prepare xpy wasm handoff: {e}");
+            std::process::exit(1);
+        }
+    };
+    launch_browser_query(&format!("app=xpy&xpy_id={id}"));
+    start_web_server(static_dir);
 }
 
 pub fn version() -> &'static str {
