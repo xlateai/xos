@@ -1,6 +1,7 @@
 //! macOS system audio via ScreenCaptureKit (macOS 13+). Requires **Screen Recording** permission.
 
 use crate::engine::audio::microphone::AudioBuffer;
+use screencapturekit::cm::{CMSampleBuffer, SCFrameStatus};
 use screencapturekit::shareable_content::SCShareableContent;
 use screencapturekit::stream::configuration::audio::{AudioChannelCount, AudioSampleRate};
 use screencapturekit::stream::configuration::SCStreamConfiguration;
@@ -8,7 +9,6 @@ use screencapturekit::stream::content_filter::SCContentFilter;
 use screencapturekit::stream::output_trait::SCStreamOutputTrait;
 use screencapturekit::stream::output_type::SCStreamOutputType;
 use screencapturekit::stream::sc_stream::SCStream;
-use screencapturekit::cm::{CMSampleBuffer, SCFrameStatus};
 
 struct SystemAudioHandler {
     buffer: AudioBuffer,
@@ -47,8 +47,7 @@ fn push_from_sample_buffer(buf: &AudioBuffer, sample: &CMSampleBuffer) {
         if ch == want_ch {
             if data.len() % (4 * ch) == 0 {
                 let n = data.len() / 4;
-                let floats =
-                    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<f32>(), n) };
+                let floats = unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<f32>(), n) };
                 buf.push_interleaved_f32(floats, ch as u16);
                 return;
             }
@@ -91,9 +90,8 @@ fn push_from_sample_buffer(buf: &AudioBuffer, sample: &CMSampleBuffer) {
                     return;
                 };
                 let d = b.data();
-                let floats = unsafe {
-                    std::slice::from_raw_parts(d.as_ptr().cast::<f32>(), d.len() / 4)
-                };
+                let floats =
+                    unsafe { std::slice::from_raw_parts(d.as_ptr().cast::<f32>(), d.len() / 4) };
                 if let Some(&s) = floats.get(fi) {
                     interleaved.push(s);
                 }
@@ -127,10 +125,7 @@ pub fn build_system_audio_stream(buffer: AudioBuffer) -> Result<SCStream, String
 
     let mut stream = SCStream::new(&filter, &config);
     stream
-        .add_output_handler(
-            SystemAudioHandler { buffer },
-            SCStreamOutputType::Audio,
-        )
+        .add_output_handler(SystemAudioHandler { buffer }, SCStreamOutputType::Audio)
         .ok_or_else(|| "ScreenCaptureKit: failed to add audio output handler".to_string())?;
     Ok(stream)
 }

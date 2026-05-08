@@ -108,7 +108,15 @@ impl VadStripCanvas {
         )
     }
 
-    fn draw_pixel(&self, buffer: &mut [u8], width: u32, height: u32, x: i32, y: i32, c: (u8, u8, u8)) {
+    fn draw_pixel(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+        x: i32,
+        y: i32,
+        c: (u8, u8, u8),
+    ) {
         if x < 0 || x >= width as i32 || y < 0 || y >= height as i32 {
             return;
         }
@@ -217,11 +225,31 @@ impl VadStripCanvas {
         }
 
         // Panel + level bar based on raw VAD probability [0, 1].
-        self.draw_rect(buffer, width, height, bar_x0, panel_top, bar_x1, panel_top + panel_h, PANEL_BG);
-        self.draw_rect(buffer, width, height, bar_x0, bar_y0, bar_x1, bar_y1, WAVE_BASELINE);
+        self.draw_rect(
+            buffer,
+            width,
+            height,
+            bar_x0,
+            panel_top,
+            bar_x1,
+            panel_top + panel_h,
+            PANEL_BG,
+        );
+        self.draw_rect(
+            buffer,
+            width,
+            height,
+            bar_x0,
+            bar_y0,
+            bar_x1,
+            bar_y1,
+            WAVE_BASELINE,
+        );
         let prob_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
         let fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_prob.clamp(0.0, 1.0);
-        self.draw_rect(buffer, width, height, bar_x0, bar_y0, fill_x1, bar_y1, prob_color);
+        self.draw_rect(
+            buffer, width, height, bar_x0, bar_y0, fill_x1, bar_y1, prob_color,
+        );
 
         // Baseline for center-origin waveform.
         self.draw_line(
@@ -236,7 +264,11 @@ impl VadStripCanvas {
         );
 
         // True left-to-right waveform from recent mono samples.
-        let points = self.waveform_points.max(2).min(width as usize).min(samples.len());
+        let points = self
+            .waveform_points
+            .max(2)
+            .min(width as usize)
+            .min(samples.len());
         let start_idx = samples.len().saturating_sub(points);
         let active = &samples[start_idx..];
         let wave_color = self.lerp_color(vad_prob, WAVE_SILENT, WAVE_SPEECH);
@@ -299,7 +331,8 @@ impl VadStripCanvas {
                         let idx = ((py as u32 * width + px as u32) * 4) as usize;
                         let alpha_f = alpha as f32 / 255.0;
                         let inv = 1.0 - alpha_f;
-                        buffer[idx] = (PANEL_FG.0 as f32 * alpha_f + buffer[idx] as f32 * inv) as u8;
+                        buffer[idx] =
+                            (PANEL_FG.0 as f32 * alpha_f + buffer[idx] as f32 * inv) as u8;
                         buffer[idx + 1] =
                             (PANEL_FG.1 as f32 * alpha_f + buffer[idx + 1] as f32 * inv) as u8;
                         buffer[idx + 2] =
@@ -327,7 +360,10 @@ impl VadApp {
         vad_label.set_text("VAD: 0.000".to_string());
         Self {
             listener: None,
-            engine: TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
+            engine: TranscriptionEngine::new_with_size_and_backend(
+                None,
+                transcribe_backend_from_env(),
+            ),
             strip: VadStripCanvas::new(),
             vad_label,
             vad_prob_ema: 0.0,
@@ -404,10 +440,7 @@ impl Application for VadApp {
 
         #[cfg(not(target_os = "ios"))]
         {
-            let names: Vec<String> = input_devices
-                .iter()
-                .map(|d| d.input_menu_label())
-                .collect();
+            let names: Vec<String> = input_devices.iter().map(|d| d.input_menu_label()).collect();
             let selection = Select::new()
                 .with_prompt("Select audio input (mic or loopback for system mix)")
                 .items(&names)
@@ -477,7 +510,8 @@ impl Application for VadApp {
                 p
             }
         };
-        self.vad_prob_ema = self.vad_prob_ema * (1.0 - VAD_PROB_EMA_ALPHA) + p_raw * VAD_PROB_EMA_ALPHA;
+        self.vad_prob_ema =
+            self.vad_prob_ema * (1.0 - VAD_PROB_EMA_ALPHA) + p_raw * VAD_PROB_EMA_ALPHA;
         let p = self.vad_prob_ema.clamp(0.0, 1.0);
         let l = self.listener.as_ref().expect("checked");
         let th = vad_display_threshold();

@@ -1,20 +1,24 @@
-use rustpython_vm::{
-    builtins::PyDict, PyObjectRef, PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs,
-};
 use crate::apps::text::TextApp;
-use crate::rasterizer::text::fonts;
-use crate::rasterizer::text::ui_markup;
-use crate::python_api::engine::py_engine_tls::{with_callback_engine_state_mut, with_tick_engine_state_mut};
+use crate::python_api::engine::py_engine_tls::{
+    with_callback_engine_state_mut, with_tick_engine_state_mut,
+};
 use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
     insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
-    peek_editor_visual_state, peek_embed_document_string, python_embed_set_document,
-    set_text_widget_selection,
-    set_text_widget_cursor,
-    pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect, tick_text_widget,
+    peek_editor_visual_state, peek_embed_document_string, pointer_mouse_in_shown_osk_strip,
+    python_embed_set_document, set_text_widget_cursor, set_text_widget_selection,
+    sync_embed_text_norm_rect, tick_text_widget,
 };
-use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
+use crate::python_api::rasterizer::{
+    CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH,
+};
+use crate::rasterizer::text::fonts;
+use crate::rasterizer::text::ui_markup;
 use crate::ui::{Button, UiText};
+use rustpython_vm::{
+    builtins::PyDict, builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult,
+    VirtualMachine,
+};
 
 fn frame_wh_from_app(vm: &VirtualMachine, app: PyObjectRef) -> PyResult<(u32, u32)> {
     let frame = vm.get_attribute_opt(app.clone(), "frame")?.ok_or_else(|| {
@@ -32,32 +36,43 @@ fn frame_wh_from_app(vm: &VirtualMachine, app: PyObjectRef) -> PyResult<(u32, u3
     Ok((w as u32, h as u32))
 }
 
-fn read_bool_prop(vm: &VirtualMachine, obj: PyObjectRef, key: &'static str, default: bool) -> PyResult<bool> {
+fn read_bool_prop(
+    vm: &VirtualMachine,
+    obj: PyObjectRef,
+    key: &'static str,
+    default: bool,
+) -> PyResult<bool> {
     match vm.get_attribute_opt(obj.clone(), key)? {
         Some(v) => v.clone().try_into_value(vm),
         None => Ok(default),
     }
 }
 
-fn getattr_required(vm: &VirtualMachine, obj: PyObjectRef, name: &'static str) -> PyResult<PyObjectRef> {
+fn getattr_required(
+    vm: &VirtualMachine,
+    obj: PyObjectRef,
+    name: &'static str,
+) -> PyResult<PyObjectRef> {
     vm.get_attribute_opt(obj.clone(), name)?
         .ok_or_else(|| vm.new_attribute_error(format!("missing attribute '{}'", name)))
 }
 
-fn py_number_to_f64(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f64> {
+fn py_number_to_f64(
+    value: rustpython_vm::PyObjectRef,
+    vm: &VirtualMachine,
+    name: &str,
+) -> PyResult<f64> {
     if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
         return Ok(v);
     }
     if let Ok(v) = value.clone().try_into_value::<i64>(vm) {
         return Ok(v as f64);
     }
-    Err(vm.new_type_error(format!(
-        "{name} must be int or float"
-    )))
+    Err(vm.new_type_error(format!("{name} must be int or float")))
 }
 
 /// xos.ui.button() - create and draw a button
-/// 
+///
 /// Usage: xos.ui.button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
 /// - x: x position in pixels
 /// - y: y position in pixels
@@ -68,7 +83,7 @@ fn py_number_to_f64(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name
 /// - bg_color: optional (r, g, b) tuple for background color
 /// - hover_color: optional (r, g, b) tuple for hover color
 /// - text_color: optional (r, g, b) tuple for text color
-/// 
+///
 /// Returns: None (draws directly to frame buffer)
 fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -78,7 +93,7 @@ fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             args_vec.len()
         )));
     }
-    
+
     // Extract required arguments
     let x: i32 = args_vec[0].clone().try_into_value(vm)?;
     let y: i32 = args_vec[1].clone().try_into_value(vm)?;
@@ -86,10 +101,11 @@ fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let height: u32 = args_vec[3].clone().try_into_value(vm)?;
     let text: String = args_vec[4].clone().try_into_value(vm)?;
     let is_hovered: bool = args_vec[5].clone().try_into_value(vm)?;
-    
+
     // Extract optional color arguments
     let bg_color = if args_vec.len() > 6 {
-        let color_tuple = args_vec[6].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        let color_tuple = args_vec[6]
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
             .ok_or_else(|| vm.new_type_error("bg_color must be a tuple".to_string()))?;
         let color_vec = color_tuple.as_slice();
         if color_vec.len() != 3 {
@@ -102,9 +118,10 @@ fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         (50, 150, 50) // Default green
     };
-    
+
     let hover_color = if args_vec.len() > 7 {
-        let color_tuple = args_vec[7].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        let color_tuple = args_vec[7]
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
             .ok_or_else(|| vm.new_type_error("hover_color must be a tuple".to_string()))?;
         let color_vec = color_tuple.as_slice();
         if color_vec.len() != 3 {
@@ -117,9 +134,10 @@ fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         (70, 170, 70) // Default light green
     };
-    
+
     let text_color = if args_vec.len() > 8 {
-        let color_tuple = args_vec[8].downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        let color_tuple = args_vec[8]
+            .downcast_ref::<rustpython_vm::builtins::PyTuple>()
             .ok_or_else(|| vm.new_type_error("text_color must be a tuple".to_string()))?;
         let color_vec = color_tuple.as_slice();
         if color_vec.len() != 3 {
@@ -132,30 +150,42 @@ fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         (255, 255, 255) // Default white
     };
-    
+
     // Get the frame buffer from global context
-    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
-    
+
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
-        vm.new_runtime_error("No frame buffer context set. UI must be called during tick().".to_string())
+        vm.new_runtime_error(
+            "No frame buffer context set. UI must be called during tick().".to_string(),
+        )
     })?;
-    
+
     // Create button and draw it
     let mut btn = Button::new(x, y, width, height, text);
     btn.bg_color = bg_color;
     btn.hover_color = hover_color;
     btn.text_color = text_color;
-    
-    let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
-    btn.draw(buffer, canvas_width as u32, canvas_height as u32, is_hovered);
-    
+
+    let buffer =
+        unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
+    btn.draw(
+        buffer,
+        canvas_width as u32,
+        canvas_height as u32,
+        is_hovered,
+    );
+
     Ok(vm.ctx.none())
 }
 
 /// xos.ui.button_contains() - check if a point is inside a button
-/// 
+///
 /// Usage: xos.ui.button_contains(button_x, button_y, button_width, button_height, point_x, point_y)
 /// Returns: bool
 fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -166,17 +196,23 @@ fn button_contains(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             args_vec.len()
         )));
     }
-    
+
     let button_x: i32 = args_vec[0].clone().try_into_value(vm)?;
     let button_y: i32 = args_vec[1].clone().try_into_value(vm)?;
     let button_width: u32 = args_vec[2].clone().try_into_value(vm)?;
     let button_height: u32 = args_vec[3].clone().try_into_value(vm)?;
     let point_x: f64 = args_vec[4].clone().try_into_value(vm)?;
     let point_y: f64 = args_vec[5].clone().try_into_value(vm)?;
-    
-    let btn = Button::new(button_x, button_y, button_width, button_height, String::new());
+
+    let btn = Button::new(
+        button_x,
+        button_y,
+        button_width,
+        button_height,
+        String::new(),
+    );
     let contains = btn.contains_point(point_x as f32, point_y as f32);
-    
+
     Ok(vm.ctx.new_bool(contains).into())
 }
 
@@ -322,12 +358,18 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         None
     };
 
-    let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
-        vm.new_runtime_error("No frame buffer context set. UI must be called during tick().".to_string())
+        vm.new_runtime_error(
+            "No frame buffer context set. UI must be called during tick().".to_string(),
+        )
     })?;
 
     if !(0.0..=1.0).contains(&(x1 as f32))
@@ -477,7 +519,8 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .map_err(|e| vm.new_runtime_error(e))?
         } else {
             // Compute layout/render state without touching the live frame buffer.
-            let mut scratch = vec![0_u8; canvas_width.saturating_mul(canvas_height).saturating_mul(4)];
+            let mut scratch =
+                vec![0_u8; canvas_width.saturating_mul(canvas_height).saturating_mul(4)];
             text_ui
                 .render(scratch.as_mut_slice(), canvas_width, canvas_height)
                 .map_err(|e| vm.new_runtime_error(e))?
@@ -530,9 +573,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     vm.ctx.new_float(b[1][0] as f64).into(),
                     vm.ctx.new_float(b[1][1] as f64).into(),
                 ]);
-                vm.ctx
-                    .new_list(vec![p0.into(), p1.into()])
-                    .into()
+                vm.ctx.new_list(vec![p0.into(), p1.into()]).into()
             })
             .collect(),
     );
@@ -564,7 +605,11 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let x2 = py_number_to_f64(getattr_required(vm, text_py.clone(), "x2")?, vm, "x2")?;
     let y2 = py_number_to_f64(getattr_required(vm, text_py.clone(), "y2")?, vm, "y2")?;
 
-    if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&y1) || !(0.0..=1.0).contains(&x2) || !(0.0..=1.0).contains(&y2) {
+    if !(0.0..=1.0).contains(&x1)
+        || !(0.0..=1.0).contains(&y1)
+        || !(0.0..=1.0).contains(&x2)
+        || !(0.0..=1.0).contains(&y2)
+    {
         return Err(vm.new_value_error(
             "Text rect x1, y1, x2, y2 must be normalized in [0.0, 1.0]".to_string(),
         ));
@@ -587,9 +632,7 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else if let Some(v) = vm.get_attribute_opt(text_py.clone(), "font_size")? {
         py_number_to_f64(v, vm, "font_size")?
     } else {
-        return Err(vm.new_attribute_error(
-            "Text requires attribute 'size' (pixels)".to_string(),
-        ));
+        return Err(vm.new_attribute_error("Text requires attribute 'size' (pixels)".to_string()));
     };
     let fs = fs_raw as f32;
     // Support both new show_* names and legacy names.
@@ -614,9 +657,9 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .ok_or_else(|| vm.new_type_error("Text.alignment must be a tuple (x, y)".to_string()))?;
     let alignment_items = alignment_tuple.as_slice();
     if alignment_items.len() != 2 {
-        return Err(vm.new_type_error(
-            "Text.alignment must have exactly 2 values: (x, y)".to_string(),
-        ));
+        return Err(
+            vm.new_type_error("Text.alignment must have exactly 2 values: (x, y)".to_string())
+        );
     }
     let align_x = py_number_to_f64(alignment_items[0].clone(), vm, "alignment[0]")? as f32;
     let align_y = py_number_to_f64(alignment_items[1].clone(), vm, "alignment[1]")? as f32;
@@ -626,9 +669,9 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .ok_or_else(|| vm.new_type_error("Text.spacing must be a tuple (x, y)".to_string()))?;
     let spacing_items = spacing_tuple.as_slice();
     if spacing_items.len() != 2 {
-        return Err(vm.new_type_error(
-            "Text.spacing must have exactly 2 values: (x, y)".to_string(),
-        ));
+        return Err(
+            vm.new_type_error("Text.spacing must have exactly 2 values: (x, y)".to_string())
+        );
     }
     let spacing_x = py_number_to_f64(spacing_items[0].clone(), vm, "spacing[0]")? as f32;
     let spacing_y = py_number_to_f64(spacing_items[1].clone(), vm, "spacing[1]")? as f32;
@@ -730,9 +773,7 @@ fn text_widget_dispatch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_peek_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
-        return Err(vm.new_type_error(
-            "_text_peek_document requires (native_id,)".to_string(),
-        ));
+        return Err(vm.new_type_error("_text_peek_document requires (native_id,)".to_string()));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
     match peek_embed_document_string(id as u64) {
@@ -747,9 +788,7 @@ fn text_peek_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
-        return Err(vm.new_type_error(
-            "_text_peek_cursor requires (native_id,)".to_string(),
-        ));
+        return Err(vm.new_type_error("_text_peek_cursor requires (native_id,)".to_string()));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
     match peek_editor_visual_state(id as u64) {
@@ -764,16 +803,19 @@ fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_peek_selection_start(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
-        return Err(vm.new_type_error(
-            "_text_peek_selection_start requires (native_id,)".to_string(),
-        ));
+        return Err(
+            vm.new_type_error("_text_peek_selection_start requires (native_id,)".to_string())
+        );
     }
     let id: i64 = av[0].clone().try_into_value(vm)?;
     if id < 0 {
         return Err(vm.new_value_error("native_id must be non-negative".to_string()));
     }
     match peek_editor_visual_state(id as u64) {
-        Some(peek) => Ok(vm.ctx.new_int(peek.selection_start.map(|v| v as i64).unwrap_or(-1)).into()),
+        Some(peek) => Ok(vm
+            .ctx
+            .new_int(peek.selection_start.map(|v| v as i64).unwrap_or(-1))
+            .into()),
         None => Err(vm.new_value_error(format!(
             "_text_peek_selection_start: unknown or non-embedded widget id {}",
             id
@@ -784,16 +826,17 @@ fn text_peek_selection_start(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_peek_selection_end(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
-        return Err(vm.new_type_error(
-            "_text_peek_selection_end requires (native_id,)".to_string(),
-        ));
+        return Err(vm.new_type_error("_text_peek_selection_end requires (native_id,)".to_string()));
     }
     let id: i64 = av[0].clone().try_into_value(vm)?;
     if id < 0 {
         return Err(vm.new_value_error("native_id must be non-negative".to_string()));
     }
     match peek_editor_visual_state(id as u64) {
-        Some(peek) => Ok(vm.ctx.new_int(peek.selection_end.map(|v| v as i64).unwrap_or(-1)).into()),
+        Some(peek) => Ok(vm
+            .ctx
+            .new_int(peek.selection_end.map(|v| v as i64).unwrap_or(-1))
+            .into()),
         None => Err(vm.new_value_error(format!(
             "_text_peek_selection_end: unknown or non-embedded widget id {}",
             id
@@ -804,9 +847,7 @@ fn text_peek_selection_end(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_peek_scroll(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() != 1 {
-        return Err(vm.new_type_error(
-            "_text_peek_scroll requires (native_id,)".to_string(),
-        ));
+        return Err(vm.new_type_error("_text_peek_scroll requires (native_id,)".to_string()));
     }
     let id: usize = av[0].clone().try_into_value(vm)?;
     match peek_editor_visual_state(id as u64) {
@@ -879,9 +920,9 @@ fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn text_set_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() != 2 {
-        return Err(vm.new_type_error(
-            "_text_set_cursor requires (native_id, cursor_position)".to_string(),
-        ));
+        return Err(
+            vm.new_type_error("_text_set_cursor requires (native_id, cursor_position)".to_string())
+        );
     }
     let id: i64 = args_vec[0].clone().try_into_value(vm)?;
     let cursor_position: usize = args_vec[1].clone().try_into_value(vm)?;
@@ -916,7 +957,8 @@ fn text_set_selection(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 /// True during `on_events` when `mouse_*` corresponds to the visible on-screen keyboard strip (no Python focus churn).
 fn text_focus_skip_pointer_for_osk(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let blocked = with_callback_engine_state_mut(|s| pointer_mouse_in_shown_osk_strip(s)).unwrap_or(false);
+    let blocked =
+        with_callback_engine_state_mut(|s| pointer_mouse_in_shown_osk_strip(s)).unwrap_or(false);
     Ok(vm.ctx.new_bool(blocked).into())
 }
 
@@ -934,9 +976,12 @@ fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let x2 = py_number_to_f64(av[3].clone(), vm, "x2")? as f32;
     let y2 = py_number_to_f64(av[4].clone(), vm, "y2")? as f32;
 
-    match with_tick_engine_state_mut(|state| sync_embed_text_norm_rect(id as u64, state, x1, y1, x2, y2)) {
+    match with_tick_engine_state_mut(|state| {
+        sync_embed_text_norm_rect(id as u64, state, x1, y1, x2, y2)
+    }) {
         None => Err(vm.new_runtime_error(
-            "_text_sync_norm_rect must run during Application.tick() (engine TLS required).".to_string(),
+            "_text_sync_norm_rect must run during Application.tick() (engine TLS required)."
+                .to_string(),
         )),
         Some(Ok(())) => Ok(vm.ctx.none()),
         Some(Err(msg)) => Err(vm.new_value_error(msg.to_string())),
@@ -945,10 +990,22 @@ fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
-    module.set_attr("button", vm.new_function("button", button), vm).unwrap();
-    module.set_attr("button_contains", vm.new_function("button_contains", button_contains), vm).unwrap();
     module
-        .set_attr("_text_render", vm.new_function("_text_render", text_render), vm)
+        .set_attr("button", vm.new_function("button", button), vm)
+        .unwrap();
+    module
+        .set_attr(
+            "button_contains",
+            vm.new_function("button_contains", button_contains),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_render",
+            vm.new_function("_text_render", text_render),
+            vm,
+        )
         .unwrap();
     module
         .set_attr(
@@ -974,7 +1031,10 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     module
         .set_attr(
             "_text_skip_focus_for_osk_pointer",
-            vm.new_function("_text_skip_focus_for_osk_pointer", text_focus_skip_pointer_for_osk),
+            vm.new_function(
+                "_text_skip_focus_for_osk_pointer",
+                text_focus_skip_pointer_for_osk,
+            ),
             vm,
         )
         .unwrap();
@@ -986,10 +1046,18 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         )
         .unwrap();
     module
-        .set_attr("_text_tick", vm.new_function("_text_tick", text_widget_tick), vm)
+        .set_attr(
+            "_text_tick",
+            vm.new_function("_text_tick", text_widget_tick),
+            vm,
+        )
         .unwrap();
     module
-        .set_attr("_text_dispatch", vm.new_function("_text_dispatch", text_widget_dispatch), vm)
+        .set_attr(
+            "_text_dispatch",
+            vm.new_function("_text_dispatch", text_widget_dispatch),
+            vm,
+        )
         .unwrap();
     module
         .set_attr(
@@ -1050,7 +1118,10 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
 
     let scope = vm.new_scope_with_builtins();
     let text_render_fn = module.get_attr("_text_render", vm).unwrap();
-    scope.globals.set_item("_text_render", text_render_fn, vm).unwrap();
+    scope
+        .globals
+        .set_item("_text_render", text_render_fn, vm)
+        .unwrap();
     let py_text_code = r#"
 class OnScreenKeyboard:
     def __init__(self):
@@ -1231,10 +1302,10 @@ class Text:
         return n
 
     def _reset_blink(self):
-        import time
+        import xos
         self._blink_elapsed = 0.0
         self._blink_on = True
-        self._blink_last_ts = float(time.monotonic())
+        self._blink_last_ts = float(xos.time.monotonic())
 
     @property
     def focused(self):
@@ -1255,7 +1326,6 @@ class Text:
         self.size = float(value)
 
     def tick(self, app):
-        import time
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
@@ -1289,7 +1359,7 @@ class Text:
             float(self.x2),
             float(self.y2),
         )
-        now_ts = float(time.monotonic())
+        now_ts = float(xos.time.monotonic())
         if self._blink_last_ts is None:
             self._blink_last_ts = now_ts
         dt = max(0.0, min(0.25, now_ts - float(self._blink_last_ts)))
@@ -1822,4 +1892,3 @@ def onscreen_keyboard():
 
     module
 }
-

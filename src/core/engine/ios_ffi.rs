@@ -9,13 +9,11 @@ use std::panic;
 #[cfg(target_os = "ios")]
 use std::ptr;
 #[cfg(target_os = "ios")]
-use std::sync::{Mutex, OnceLock};
-#[cfg(target_os = "ios")]
-use std::sync::mpsc::{
-    sync_channel, Receiver, SyncSender, TrySendError,
-};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 #[cfg(target_os = "ios")]
 use std::sync::Arc;
+#[cfg(target_os = "ios")]
+use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "ios")]
 use std::thread::{self, JoinHandle};
 #[cfg(target_os = "ios")]
@@ -24,16 +22,16 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "ios")]
 use crate::apps;
 #[cfg(target_os = "ios")]
-use crate::engine::{
-    apply_frame_view_zoom,
-    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
-    tick_frame_delta, tick_frame_view_zoom, Application, EngineState, F3Menu, FrameState,
-    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle,
-};
+use crate::auth::load_node_identity;
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
 #[cfg(target_os = "ios")]
-use crate::auth::load_node_identity;
+use crate::engine::{
+    apply_frame_view_zoom, f3_menu_handle_mouse_down, f3_menu_handle_mouse_move,
+    f3_menu_handle_mouse_up, tick_f3_menu, tick_frame_delta, tick_frame_view_zoom, Application,
+    EngineState, F3Menu, FrameState, KeyboardModifiers, KeyboardState, MouseState,
+    SafeRegionBoundingRectangle,
+};
 #[cfg(target_os = "ios")]
 use crate::mesh::{MeshMode, MeshSession};
 #[cfg(target_os = "ios")]
@@ -147,7 +145,7 @@ impl Write for IosLogWriter {
 fn setup_logging() {
     use std::sync::Once;
     static INIT: Once = Once::new();
-    
+
     INIT.call_once(|| {
         // Set up panic hook to log panics
         std::panic::set_hook(Box::new(|panic_info| {
@@ -175,7 +173,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         match std::ffi::CStr::from_ptr(app_name).to_str() {
             Ok(s) => s,
             Err(_) => {
-                return CString::new("invalid app_name encoding").unwrap().into_raw();
+                return CString::new("invalid app_name encoding")
+                    .unwrap()
+                    .into_raw();
             }
         }
     };
@@ -222,7 +222,9 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
 
     // Call setup
     if let Err(e) = app.setup(&mut engine_state) {
-        return CString::new(format!("Setup failed: {}", e)).unwrap().into_raw();
+        return CString::new(format!("Setup failed: {}", e))
+            .unwrap()
+            .into_raw();
     }
 
     let ios_state = IosEngineState {
@@ -237,7 +239,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
 
     let mut state = ENGINE_STATE.lock().unwrap();
     *state = Some(ios_state);
-    
+
     // Set up logging redirection
     setup_logging();
 
@@ -279,7 +281,8 @@ pub extern "C" fn xos_engine_tick() -> i32 {
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             if ios_state.engine_state.paused {
                 if ios_state.engine_state.pending_step_ticks > 0 {
-                    ios_state.engine_state.pending_step_ticks = ios_state.engine_state.pending_step_ticks.saturating_sub(1);
+                    ios_state.engine_state.pending_step_ticks =
+                        ios_state.engine_state.pending_step_ticks.saturating_sub(1);
                     tick_frame_delta(
                         &mut ios_state.engine_state,
                         &mut ios_state.last_tick_instant,
@@ -302,12 +305,12 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 
         ios_state.engine_state.mouse.x = local_px;
         ios_state.engine_state.mouse.y = local_py;
-        
+
         // Check for panic first
         if let Err(_) = result {
             return 2; // Panic occurred
         }
-        
+
         // Then draw the keyboard on top (handles positioning, rendering, and key repeats)
         {
             let width = ios_state.width;
@@ -318,7 +321,8 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             // Split borrows: get buffer and keyboard separately
             let (buffer, keyboard) = {
                 let buffer_ptr = ios_state.engine_state.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard = &mut ios_state.engine_state.keyboard.onscreen;
+                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard =
+                    &mut ios_state.engine_state.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
             keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
@@ -326,11 +330,11 @@ pub extern "C" fn xos_engine_tick() -> i32 {
 
         tick_f3_menu(&mut ios_state.engine_state);
         tick_ios_remote_frame_push(ios_state);
-        
+
         // Swap R and B channels in-place for iOS Metal compatibility (RGBA -> BGRA)
         let frame_buffer = ios_state.engine_state.frame_buffer_mut();
         let pixel_count = frame_buffer.len() / 4;
-        
+
         for i in 0..pixel_count {
             let idx = i * 4;
             if idx + 3 < frame_buffer.len() {
@@ -381,7 +385,8 @@ fn ios_remote_encoder_run(session: Arc<MeshSession>, rx: Receiver<(u32, u32, Vec
 
 #[cfg(target_os = "ios")]
 fn try_connect_ios_remote_mesh() -> Result<Arc<MeshSession>, String> {
-    let node_identity = load_node_identity().map_err(|e| format!("node identity unavailable: {e}"))?;
+    let node_identity =
+        load_node_identity().map_err(|e| format!("node identity unavailable: {e}"))?;
     let session = MeshSession::join_with_identity(
         IOS_REMOTE_MESH_ID,
         MeshMode::Lan,
@@ -460,13 +465,24 @@ fn tick_ios_remote_input(state: &mut IosEngineState) {
         }
     }
 
-    let last = packets.last().map(|p| p.body.clone()).unwrap_or_else(|| json!({}));
+    let last = packets
+        .last()
+        .map(|p| p.body.clone())
+        .unwrap_or_else(|| json!({}));
     let scroll_sum: f64 = packets
         .iter()
         .map(|p| p.body.get("scroll").and_then(|v| v.as_f64()).unwrap_or(0.0))
         .sum();
-    let nx = last.get("nx").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
-    let ny = last.get("ny").and_then(|v| v.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let nx = last
+        .get("nx")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let ny = last
+        .get("ny")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
     let left = last.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
     let right = last.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -530,10 +546,7 @@ fn tick_ios_remote_frame_push(state: &mut IosEngineState) {
     }
 
     let rgba = state.engine_state.frame.data().to_vec();
-    match remote
-        .frame_tx
-        .try_send((state.width, state.height, rgba))
-    {
+    match remote.frame_tx.try_send((state.width, state.height, rgba)) {
         Ok(()) => {
             remote.last_frame_queued_at = Some(Instant::now());
         }
@@ -619,12 +632,12 @@ pub extern "C" fn xos_engine_update_mouse(x: f32, y: f32) -> i32 {
     if let Some(ref mut ios_state) = *state {
         let prev_x = ios_state.engine_state.mouse.x;
         let prev_y = ios_state.engine_state.mouse.y;
-        
+
         ios_state.engine_state.mouse.x = x;
         ios_state.engine_state.mouse.y = y;
         ios_state.engine_state.mouse.dx = x - prev_x;
         ios_state.engine_state.mouse.dy = y - prev_y;
-        
+
         if !f3_menu_handle_mouse_move(&mut ios_state.engine_state) {
             ios_state.app.on_mouse_move(&mut ios_state.engine_state);
         }
@@ -701,8 +714,9 @@ pub extern "C" fn xos_engine_set_safe_region(x1: f32, y1: f32, x2: f32, y2: f32)
     };
 
     if let Some(ref mut ios_state) = *state {
-        let safe =
-            crate::engine::SafeRegionBoundingRectangle::from_clamped_normalized_corners(x1, y1, x2, y2);
+        let safe = crate::engine::SafeRegionBoundingRectangle::from_clamped_normalized_corners(
+            x1, y1, x2, y2,
+        );
         ios_state.engine_state.set_safe_region_boundaries(safe);
         0
     } else {
@@ -724,7 +738,9 @@ pub extern "C" fn xos_engine_resize(width: u32, height: u32) -> i32 {
         ios_state.height = height;
         ios_state.engine_state.resize_frame(width, height);
         // Notify app of screen size change
-        ios_state.app.on_screen_size_change(&mut ios_state.engine_state, width, height);
+        ios_state
+            .app
+            .on_screen_size_change(&mut ios_state.engine_state, width, height);
         0
     } else {
         1
@@ -764,7 +780,7 @@ pub extern "C" fn xos_magnetometer_init() -> i32 {
         Ok(m) => m,
         Err(_) => return 1,
     };
-    
+
     match crate::engine::sensors::Magnetometer::new() {
         Ok(m) => {
             *mag = Some(MagnetometerWrapper(m));
@@ -786,13 +802,19 @@ pub extern "C" fn xos_magnetometer_get_latest(x: *mut f64, y: *mut f64, z: *mut 
         Ok(m) => m,
         Err(_) => return 2,
     };
-    
+
     if let Some(ref mut wrapper) = *mag {
         if let Some(reading) = wrapper.0.get_latest_reading() {
             unsafe {
-                if !x.is_null() { *x = reading.x; }
-                if !y.is_null() { *y = reading.y; }
-                if !z.is_null() { *z = reading.z; }
+                if !x.is_null() {
+                    *x = reading.x;
+                }
+                if !y.is_null() {
+                    *y = reading.y;
+                }
+                if !z.is_null() {
+                    *z = reading.z;
+                }
             }
             0
         } else {
@@ -818,19 +840,25 @@ pub extern "C" fn xos_magnetometer_drain_readings(
         Ok(m) => m,
         Err(_) => return -1,
     };
-    
+
     if let Some(ref mut wrapper) = *mag {
         let readings = wrapper.0.drain_readings();
         let count = readings.len().min(max_count);
-        
+
         unsafe {
             for (i, reading) in readings.iter().take(count).enumerate() {
-                if !x_array.is_null() { *x_array.add(i) = reading.x; }
-                if !y_array.is_null() { *y_array.add(i) = reading.y; }
-                if !z_array.is_null() { *z_array.add(i) = reading.z; }
+                if !x_array.is_null() {
+                    *x_array.add(i) = reading.x;
+                }
+                if !y_array.is_null() {
+                    *y_array.add(i) = reading.y;
+                }
+                if !z_array.is_null() {
+                    *z_array.add(i) = reading.z;
+                }
             }
         }
-        
+
         count as i32
     } else {
         -1
@@ -845,7 +873,7 @@ pub extern "C" fn xos_magnetometer_get_total_readings() -> u64 {
         Ok(m) => m,
         Err(_) => return 0,
     };
-    
+
     if let Some(ref wrapper) = *mag {
         wrapper.0.get_total_readings()
     } else {
@@ -861,7 +889,7 @@ pub extern "C" fn xos_magnetometer_cleanup() {
         Ok(m) => m,
         Err(_) => return,
     };
-    
+
     *mag = None;
 }
 
@@ -884,11 +912,11 @@ pub extern "C" fn xos_list_applications_count() -> usize {
 #[no_mangle]
 pub extern "C" fn xos_list_applications_get_name(index: usize) -> *mut c_char {
     let apps = apps::list_apps();
-    
+
     if index >= apps.len() {
         return ptr::null_mut();
     }
-    
+
     let app_name = apps[index];
     match CString::new(app_name) {
         Ok(c_str) => c_str.into_raw(),
@@ -906,4 +934,3 @@ pub extern "C" fn xos_list_applications_free_name(ptr: *mut c_char) {
         }
     }
 }
-

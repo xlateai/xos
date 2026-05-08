@@ -185,9 +185,9 @@ pub fn transcribe_waveform_with_intermediates(
     backend: WhisperBackend,
 ) -> Result<(String, Vec<ActivationStep>), String> {
     match backend {
-        WhisperBackend::Ct2 => Err(
-            "forward_layer_by_layer is only supported for the Burn (WGPU) backend".to_string(),
-        ),
+        WhisperBackend::Ct2 => {
+            Err("forward_layer_by_layer is only supported for the Burn (WGPU) backend".to_string())
+        }
         WhisperBackend::Burn => {
             #[cfg(all(
                 feature = "whisper_burn",
@@ -430,7 +430,9 @@ impl TranscriptionEngine {
             let caption = if decode_job_tx.is_some() {
                 String::new()
             } else {
-                load_note.clone().unwrap_or_else(|| "Waiting for audio…".to_string())
+                load_note
+                    .clone()
+                    .unwrap_or_else(|| "Waiting for audio…".to_string())
             };
             return Ok(Self {
                 transcript_epoch: 0,
@@ -623,8 +625,8 @@ impl TranscriptionEngine {
             self.segment_pcm.clear();
             self.resample_buf.clear();
             self.live_transcript.clear();
-            self.last_partial_decode = Instant::now()
-                - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+            self.last_partial_decode =
+                Instant::now() - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
             if let Some(rx) = &self.decode_result_rx {
                 while rx.try_recv().is_ok() {}
             }
@@ -688,8 +690,8 @@ impl TranscriptionEngine {
     fn reset_utterance_state(&mut self) {
         self.live_transcript.clear();
         self.segment_pcm.clear();
-        self.last_partial_decode = Instant::now()
-            - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+        self.last_partial_decode =
+            Instant::now() - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
         self.pcm_first_frame_inclusive = 0;
         self.last_ingested_frames = None;
         if let Some(rx) = &self.decode_result_rx {
@@ -814,7 +816,9 @@ impl TranscriptionEngine {
         let n = tail_len.min(mono.len());
         let tail = &mono[mono.len() - n..];
         let tail_first_frame = ingested_frames.saturating_sub(n as u64);
-        let skip = (self.pcm_first_frame_inclusive.saturating_sub(tail_first_frame)) as usize;
+        let skip = (self
+            .pcm_first_frame_inclusive
+            .saturating_sub(tail_first_frame)) as usize;
         let skip = skip.min(n);
         if skip < n {
             self.segment_pcm.extend_from_slice(&tail[skip..]);
@@ -829,7 +833,9 @@ impl TranscriptionEngine {
             return;
         }
         let oldest_in_buffer = g.saturating_sub(l as u64);
-        let skip = (self.pcm_first_frame_inclusive.saturating_sub(oldest_in_buffer)) as usize;
+        let skip = (self
+            .pcm_first_frame_inclusive
+            .saturating_sub(oldest_in_buffer)) as usize;
         let skip = skip.min(l);
         self.segment_pcm.extend_from_slice(&mono[skip..]);
     }
@@ -844,7 +850,8 @@ impl TranscriptionEngine {
         }
         if raw != self.live_transcript {
             self.live_transcript = raw;
-            self.pending_iter_events.push(Some(self.live_transcript.clone()));
+            self.pending_iter_events
+                .push(Some(self.live_transcript.clone()));
             self.transcript_epoch = self.transcript_epoch.saturating_add(1);
         }
     }
@@ -895,10 +902,10 @@ impl TranscriptionEngine {
 
         let mono = sample::downmix_mono(channels);
         let n = mono.len().max(1);
-        let tail_slow = ((sample_rate as usize).saturating_mul(sample::LEVEL_METER_TAIL_MS as usize)
-            / 1000)
-            .max(64)
-            .min(n);
+        let tail_slow =
+            ((sample_rate as usize).saturating_mul(sample::LEVEL_METER_TAIL_MS as usize) / 1000)
+                .max(64)
+                .min(n);
         self.last_level_rms = sample::rms_tail(&mono, tail_slow);
 
         let mut decoded: Vec<String> = Vec::new();
@@ -915,8 +922,8 @@ impl TranscriptionEngine {
             self.segment_pcm.clear();
             self.seed_mono_respecting_pcm_watermark(&mono, ingested_frames);
             self.segment_input_rate = sample_rate;
-            self.last_partial_decode = Instant::now()
-                - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
+            self.last_partial_decode =
+                Instant::now() - Duration::from_millis(sample::GROWING_CLIP_PARTIAL_DECODE_MS);
         } else if ingested_frames > prev_g {
             let delta = (ingested_frames - prev_g) as usize;
             let take = delta.min(mono.len());

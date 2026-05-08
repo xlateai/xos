@@ -8,7 +8,7 @@
 //! Normal windowed app (not the overlay host). The streamer sends ~30 JPEGs/s; input events are
 //! coalesced per tick so backlog does not replay stale cursor positions after a pause or slow frame.
 
-use crate::engine::{Application, EngineState, ScrollWheelUnit};
+use crate::engine::{Application, EngineState};
 use crate::rasterizer::fill;
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -526,7 +526,7 @@ impl Application for RemoteApp {
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32, _unit: ScrollWheelUnit) {
+    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32, _unit: crate::engine::ScrollWheelUnit) {
         if state.paused {
             return;
         }

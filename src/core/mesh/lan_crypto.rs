@@ -1,5 +1,8 @@
 //! LAN mesh: mutual RSA signatures + X25519 ECDH, then AES-256-GCM for all payloads.
 
+use crate::auth::{
+    load_identity, node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity,
+};
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -12,7 +15,6 @@ use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use x25519_dalek::{EphemeralSecret, PublicKey};
-use crate::auth::{load_identity, node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity};
 
 const HS_VER: u32 = 3;
 const HS_VER_PRE_ACCOUNT: u32 = 2;
@@ -317,8 +319,8 @@ pub fn decrypt_mesh_line(cipher: &Aes256Gcm, line: &str) -> Result<String, Strin
         return Err("truncated ciphertext".to_string());
     }
     let nonce = Nonce::from_slice(&raw[..12]);
-    let plain = cipher
-        .decrypt(nonce, raw[12..].as_ref())
-        .map_err(|e| format!("LAN mesh decrypt failed (wrong AES key or corrupt ciphertext): {e}"))?;
+    let plain = cipher.decrypt(nonce, raw[12..].as_ref()).map_err(|e| {
+        format!("LAN mesh decrypt failed (wrong AES key or corrupt ciphertext): {e}")
+    })?;
     String::from_utf8(plain).map_err(|e| e.to_string())
 }

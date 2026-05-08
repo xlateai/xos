@@ -57,7 +57,7 @@ jobs:
 
       - name: 📏 Zip metrics
         run: |
-          zip_path="wasm-compiled-xos-output/xos-wasm.zip"
+          zip_path="target/wasm/main/xos-wasm.zip"
           test -s "$zip_path"
           echo "Zip details:"
           ls -lh "$zip_path"
@@ -67,12 +67,12 @@ jobs:
 
       - name: ✅ Assert zip
         run: |
-          test -s wasm-compiled-xos-output/xos-wasm.zip
-          echo "Found wasm-compiled-xos-output/xos-wasm.zip"
+          test -s target/wasm/main/xos-wasm.zip
+          echo "Found target/wasm/main/xos-wasm.zip"
 
       - name: 📤 Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name || 'xos-wasm-zip' }}
-          path: wasm-compiled-xos-output/xos-wasm.zip
+          path: target/wasm/main/xos-wasm.zip
           if-no-files-found: error

@@ -1,6 +1,6 @@
 use crate::engine::EngineState;
-use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use crate::rasterizer::text::fonts;
+use crate::rasterizer::text::text_rasterization::TextRasterizer;
 
 /// A simple, reusable selector component for choosing between options
 pub struct Selector {
@@ -24,10 +24,11 @@ impl Selector {
     /// Create a new selector with the given options
     pub fn new(options: Vec<String>) -> Self {
         let font_size = 44.93; // 30% larger than 34.56
-        
+
         // Create a text renderer for each option
         // Each renderer gets its own font instance (fontdue Font is not Clone)
-        let text_renderers: Vec<TextRasterizer> = options.iter()
+        let text_renderers: Vec<TextRasterizer> = options
+            .iter()
             .map(|option| {
                 let font = fonts::default_font();
                 let mut renderer = TextRasterizer::new(font, font_size);
@@ -74,7 +75,9 @@ impl Selector {
 
     /// Get the selected option as a string
     pub fn selected_option(&self) -> Option<&str> {
-        self.selected.and_then(|idx| self.options.get(idx)).map(|s| s.as_str())
+        self.selected
+            .and_then(|idx| self.options.get(idx))
+            .map(|s| s.as_str())
     }
 
     /// Get the selected option index
@@ -102,12 +105,15 @@ impl Selector {
         let y = (height - selector_height) / 2.0;
 
         // Check if click is within selector bounds
-        if mouse_x >= x && mouse_x <= x + selector_width &&
-           mouse_y >= y && mouse_y <= y + selector_height {
+        if mouse_x >= x
+            && mouse_x <= x + selector_width
+            && mouse_y >= y
+            && mouse_y <= y + selector_height
+        {
             // Check which option was clicked
             let start_y = y + 20.0; // Top padding
             let click_y = mouse_y - start_y;
-            
+
             if click_y >= 0.0 {
                 let option_idx = (click_y / option_height) as usize;
                 if option_idx < self.options.len() {
@@ -137,22 +143,24 @@ impl Selector {
             text_renderer.tick(10000.0, height); // Large width to prevent wrapping
         }
     }
-    
+
     /// Check if a click is outside the selector bounds
     pub fn is_click_outside(&self, mouse_x: f32, mouse_y: f32, width: f32, height: f32) -> bool {
         if !self.is_open {
             return false;
         }
-        
+
         let selector_width = 507.0; // 30% larger than 390.0
         let option_height = 101.0; // 30% larger than 78.0
         let selector_height = (self.options.len() as f32 * option_height) + 40.0;
         let x = (width - selector_width) / 2.0;
         let y = (height - selector_height) / 2.0;
-        
+
         // Return true if click is outside selector bounds
-        !(mouse_x >= x && mouse_x <= x + selector_width &&
-          mouse_y >= y && mouse_y <= y + selector_height)
+        !(mouse_x >= x
+            && mouse_x <= x + selector_width
+            && mouse_y >= y
+            && mouse_y <= y + selector_height)
     }
 
     /// Render the selector to the frame buffer
@@ -188,9 +196,12 @@ impl Selector {
                 let idx = ((py * width + px) * 4) as usize;
                 if idx + 3 < buffer.len() {
                     // Darken the background
-                    buffer[idx + 0] = (buffer[idx + 0] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
-                    buffer[idx + 1] = (buffer[idx + 1] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
-                    buffer[idx + 2] = (buffer[idx + 2] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
+                    buffer[idx + 0] =
+                        (buffer[idx + 0] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
+                    buffer[idx + 1] =
+                        (buffer[idx + 1] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
+                    buffer[idx + 2] =
+                        (buffer[idx + 2] as u16 * (255 - overlay_alpha as u16) / 255) as u8;
                 }
             }
         }
@@ -215,9 +226,15 @@ impl Selector {
                     if idx + 3 < buffer.len() {
                         // Blend with background
                         let blend_alpha = bg_alpha as f32 / 255.0;
-                        buffer[idx + 0] = ((bg_r as f32 * blend_alpha) + (buffer[idx + 0] as f32 * (1.0 - blend_alpha))) as u8;
-                        buffer[idx + 1] = ((bg_g as f32 * blend_alpha) + (buffer[idx + 1] as f32 * (1.0 - blend_alpha))) as u8;
-                        buffer[idx + 2] = ((bg_b as f32 * blend_alpha) + (buffer[idx + 2] as f32 * (1.0 - blend_alpha))) as u8;
+                        buffer[idx + 0] = ((bg_r as f32 * blend_alpha)
+                            + (buffer[idx + 0] as f32 * (1.0 - blend_alpha)))
+                            as u8;
+                        buffer[idx + 1] = ((bg_g as f32 * blend_alpha)
+                            + (buffer[idx + 1] as f32 * (1.0 - blend_alpha)))
+                            as u8;
+                        buffer[idx + 2] = ((bg_b as f32 * blend_alpha)
+                            + (buffer[idx + 2] as f32 * (1.0 - blend_alpha)))
+                            as u8;
                         buffer[idx + 3] = 0xff;
                     }
                 }
@@ -298,8 +315,10 @@ impl Selector {
             let option_rect_height = option_height as i32 - 4;
 
             // Check if mouse is hovering over this option
-            let is_hovered = mouse_x >= scaled_x + 20 && mouse_x <= scaled_x + 20 + option_width &&
-                            mouse_y >= option_rect_y && mouse_y <= option_rect_y + option_rect_height;
+            let is_hovered = mouse_x >= scaled_x + 20
+                && mouse_x <= scaled_x + 20 + option_width
+                && mouse_y >= option_rect_y
+                && mouse_y <= option_rect_y + option_rect_height;
 
             // Draw option background (highlight if hovered)
             let option_bg = if is_hovered {
@@ -314,9 +333,15 @@ impl Selector {
                         let idx = ((py as u32 * width + px as u32) * 4) as usize;
                         if idx + 3 < buffer.len() {
                             let blend_alpha = (alpha * 0.8) as f32;
-                            buffer[idx + 0] = ((option_bg.0 as f32 * blend_alpha) + (buffer[idx + 0] as f32 * (1.0 - blend_alpha))) as u8;
-                            buffer[idx + 1] = ((option_bg.1 as f32 * blend_alpha) + (buffer[idx + 1] as f32 * (1.0 - blend_alpha))) as u8;
-                            buffer[idx + 2] = ((option_bg.2 as f32 * blend_alpha) + (buffer[idx + 2] as f32 * (1.0 - blend_alpha))) as u8;
+                            buffer[idx + 0] = ((option_bg.0 as f32 * blend_alpha)
+                                + (buffer[idx + 0] as f32 * (1.0 - blend_alpha)))
+                                as u8;
+                            buffer[idx + 1] = ((option_bg.1 as f32 * blend_alpha)
+                                + (buffer[idx + 1] as f32 * (1.0 - blend_alpha)))
+                                as u8;
+                            buffer[idx + 2] = ((option_bg.2 as f32 * blend_alpha)
+                                + (buffer[idx + 2] as f32 * (1.0 - blend_alpha)))
+                                as u8;
                             buffer[idx + 3] = 0xff;
                         }
                     }
@@ -331,11 +356,11 @@ impl Selector {
                 } else {
                     0.0
                 };
-                
+
                 // Center text horizontally in the option box
                 let option_center_x = (scaled_x + 20) as f32 + option_width as f32 / 2.0;
                 let text_x = option_center_x - text_width / 2.0;
-                
+
                 // Top-align text vertically in the option box
                 // Position text at the top with some padding
                 let text_top_padding = 10.0; // Padding from top
@@ -363,15 +388,21 @@ impl Selector {
                                         // Apply alpha from both the bitmap value and animation
                                         let bitmap_alpha = val as f32 / 255.0;
                                         let final_alpha = (bitmap_alpha * alpha) as f32;
-                                        
+
                                         // Blend text color with background
                                         let bg_r = buffer[idx + 0] as f32;
                                         let bg_g = buffer[idx + 1] as f32;
                                         let bg_b = buffer[idx + 2] as f32;
-                                        
-                                        buffer[idx + 0] = ((text_color.0 as f32 * final_alpha) + (bg_r * (1.0 - final_alpha))) as u8;
-                                        buffer[idx + 1] = ((text_color.1 as f32 * final_alpha) + (bg_g * (1.0 - final_alpha))) as u8;
-                                        buffer[idx + 2] = ((text_color.2 as f32 * final_alpha) + (bg_b * (1.0 - final_alpha))) as u8;
+
+                                        buffer[idx + 0] = ((text_color.0 as f32 * final_alpha)
+                                            + (bg_r * (1.0 - final_alpha)))
+                                            as u8;
+                                        buffer[idx + 1] = ((text_color.1 as f32 * final_alpha)
+                                            + (bg_g * (1.0 - final_alpha)))
+                                            as u8;
+                                        buffer[idx + 2] = ((text_color.2 as f32 * final_alpha)
+                                            + (bg_b * (1.0 - final_alpha)))
+                                            as u8;
                                         buffer[idx + 3] = 0xff;
                                     }
                                 }

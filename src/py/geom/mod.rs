@@ -1,6 +1,6 @@
 pub mod rect;
 
-use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
+use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
 
 pub fn make_geom_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.geom", vm.ctx.new_dict(), None);

@@ -19,7 +19,10 @@ pub enum TranscribeLangMenuDown {
     Dismiss,
     DismissInColumn,
     /// Index into [`TRANSCRIBE_LANGUAGES`].
-    Pick { index: usize, changed: bool },
+    Pick {
+        index: usize,
+        changed: bool,
+    },
 }
 
 pub struct TranscribeLanguageSelector {
@@ -261,7 +264,15 @@ impl TranscribeLanguageSelector {
         let safe_bottom_px = (t + lh) as usize;
         let item_h = MENU_ITEM_HEIGHT as usize;
 
-        self.draw_rect(buffer, width, left_x, menu_y, column_width, item_h, (0, 0, 0));
+        self.draw_rect(
+            buffer,
+            width,
+            left_x,
+            menu_y,
+            column_width,
+            item_h,
+            (0, 0, 0),
+        );
         self.draw_text_pixels(
             buffer,
             width,
@@ -375,8 +386,10 @@ impl TranscribeLanguageSelector {
                             let a = alpha as f32 / 255.0;
                             let inv = 1.0 - a;
                             buffer[idx] = (color.0 as f32 * a + buffer[idx] as f32 * inv) as u8;
-                            buffer[idx + 1] = (color.1 as f32 * a + buffer[idx + 1] as f32 * inv) as u8;
-                            buffer[idx + 2] = (color.2 as f32 * a + buffer[idx + 2] as f32 * inv) as u8;
+                            buffer[idx + 1] =
+                                (color.1 as f32 * a + buffer[idx + 1] as f32 * inv) as u8;
+                            buffer[idx + 2] =
+                                (color.2 as f32 * a + buffer[idx + 2] as f32 * inv) as u8;
                             buffer[idx + 3] = 0xff;
                         }
                     }

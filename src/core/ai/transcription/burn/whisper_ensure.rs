@@ -7,15 +7,15 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use burn::backend::wgpu::Wgpu;
-use burn::config::Config;
-use burn_store::pytorch::PytorchReader;
-use burn_store::{BurnpackStore, ModuleSnapshot, PytorchStore};
 use crate::ai::transcription::burn::whisper_burn::custom_kernels::CustomKernelsBackend;
 use crate::ai::transcription::burn::whisper_burn::model::{
     AudioEncoderConfig, TextDecoderConfig, Whisper, WhisperConfig,
 };
 use crate::ai::transcription::burn::whisper_burn::MixedPrecisionAdapter;
+use burn::backend::wgpu::Wgpu;
+use burn::config::Config;
+use burn_store::pytorch::PytorchReader;
+use burn_store::{BurnpackStore, ModuleSnapshot, PytorchStore};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -38,8 +38,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let data =
-        fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let data = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(&data);
     Ok(hex_lower(&hasher.finalize()))
@@ -80,8 +79,7 @@ fn save_whisper_artifacts<B: CustomKernelsBackend>(
     let bpk = dir.join(format!("{name}.bpk"));
     let bpk_f16 = dir.join(format!("{name}-f16.bpk"));
     let mut store = BurnpackStore::from_file(
-        bpk
-            .to_str()
+        bpk.to_str()
             .ok_or_else(|| "non-utf8 bpk path".to_string())?,
     )
     .overwrite(true);
@@ -185,9 +183,7 @@ fn convert_pt_to_burnpack(dir: &Path, stem: &str) -> Result<(), String> {
     let pt_s = pt_path
         .to_str()
         .ok_or_else(|| "non-utf8 .pt path".to_string())?;
-    eprintln!(
-        "[xos-whisper] Converting PyTorch checkpoint to Burnpack (this may take a minute)…"
-    );
+    eprintln!("[xos-whisper] Converting PyTorch checkpoint to Burnpack (this may take a minute)…");
     let (whisper, whisper_config): (Whisper<Wgpu>, WhisperConfig) =
         load_whisper_from_pt(pt_s).map_err(|e| format!("load_whisper: {e}"))?;
 
@@ -206,9 +202,7 @@ pub(crate) fn artifacts_ready(dir: &Path, model_key: &str) -> bool {
     let tok = dir.join(format!("{model_key}-tokenizer.json"));
     let f32 = dir.join(format!("{model_key}.bpk"));
     let f16 = dir.join(format!("{model_key}-f16.bpk"));
-    cfg.is_file()
-        && tok.is_file()
-        && (f32.is_file() || f16.is_file())
+    cfg.is_file() && tok.is_file() && (f32.is_file() || f16.is_file())
 }
 
 /// Populate `{data}/models/whisper/{model_key}-burn/` (see `xos path --data`).

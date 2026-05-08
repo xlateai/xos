@@ -1,8 +1,8 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock, RwLock};
-use std::fmt::Debug;
 
 /// Trait all tuneables implement
 pub trait TuneableEntry: Send + Sync {
@@ -16,7 +16,11 @@ pub trait TuneableEntry: Send + Sync {
 static REGISTRY: OnceLock<Mutex<Vec<&'static dyn TuneableEntry>>> = OnceLock::new();
 
 pub fn register(entry: &'static dyn TuneableEntry) {
-    REGISTRY.get_or_init(Default::default).lock().unwrap().push(entry);
+    REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .push(entry);
 }
 
 fn patch_tuneable_block(lines: &mut Vec<String>, entries: &[&dyn TuneableEntry]) {
@@ -53,9 +57,10 @@ fn patch_tuneable_block(lines: &mut Vec<String>, entries: &[&dyn TuneableEntry])
     }
 }
 
-
 pub fn write_all_to_source() {
-    let Some(registry) = REGISTRY.get() else { return };
+    let Some(registry) = REGISTRY.get() else {
+        return;
+    };
     let registry = registry.lock().unwrap();
 
     // Group tuneables by file
@@ -66,14 +71,15 @@ pub fn write_all_to_source() {
 
     for (file, entries) in by_file {
         let path = Path::new(file);
-        let Ok(content) = fs::read_to_string(path) else { continue };
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
         patch_tuneable_block(&mut lines, &entries);
         let _ = fs::write(path, lines.join("\n"));
     }
 }
-
 
 pub struct Tuneable<T: Copy + Debug + 'static> {
     name: &'static str,
@@ -84,7 +90,13 @@ pub struct Tuneable<T: Copy + Debug + 'static> {
 }
 
 impl<T: Copy + Debug + 'static> Tuneable<T> {
-    pub const fn new(name: &'static str, value: T, file: &'static str, line: u32, column: u32) -> Self {
+    pub const fn new(
+        name: &'static str,
+        value: T,
+        file: &'static str,
+        line: u32,
+        column: u32,
+    ) -> Self {
         Self {
             name,
             file,
@@ -106,10 +118,18 @@ impl<T: Copy + Debug + 'static> Tuneable<T> {
 macro_rules! impl_tuneable_entry {
     ($t:ty) => {
         impl TuneableEntry for Tuneable<$t> {
-            fn file(&self) -> &'static str { self.file }
-            fn line(&self) -> u32 { self.line }
-            fn column(&self) -> u32 { self.column }
-            fn name(&self) -> &'static str { self.name }
+            fn file(&self) -> &'static str {
+                self.file
+            }
+            fn line(&self) -> u32 {
+                self.line
+            }
+            fn column(&self) -> u32 {
+                self.column
+            }
+            fn name(&self) -> &'static str {
+                self.name
+            }
             fn write_source_line(&self) -> String {
                 format!("    {}: {} = {:?};", self.name, stringify!($t), self.get())
             }

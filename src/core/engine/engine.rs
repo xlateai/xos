@@ -2,22 +2,23 @@ use super::f3_menu::F3Menu;
 
 use crate::tensor::burn_raster;
 use crate::tensor::{BurnTensor, WgpuDevice};
+use crate::time::Instant;
 use std::ptr::NonNull;
 
 /// Safe region bounding rectangle for UI elements
-/// 
+///
 /// Defines the safe rectangular area where content can be displayed without being
 /// obscured by system UI elements (e.g., notches, home indicators, etc.).
-/// 
+///
 /// Coordinates are normalized (0.0 to 1.0) relative to the full viewport dimensions.
 /// The coordinate system uses:
 /// - x1, x2: horizontal coordinates (left to right, 0.0 to 1.0)
 /// - y1, y2: vertical coordinates (top to bottom, 0.0 to 1.0)
-/// 
+///
 /// The rectangle is defined by two corner points:
 /// - (x1, y1): top-left corner (minimum x, minimum y)
 /// - (x2, y2): bottom-right corner (maximum x, maximum y)
-/// 
+///
 /// For a full-screen safe region (no restrictions), use (0.0, 0.0, 1.0, 1.0).
 #[derive(Debug, Clone)]
 pub struct SafeRegionBoundingRectangle {
@@ -44,11 +45,11 @@ impl SafeRegionBoundingRectangle {
     }
 
     /// Create safe region for iOS devices (iPhone 16 Pro safe area)
-    /// 
+    ///
     /// Accounts for:
     /// - Dynamic Island at the top (~59pt, normalized to ~0.069)
     /// - Home indicator at the bottom (~34pt, normalized to ~0.960)
-    /// 
+    ///
     /// Returns a rectangle that excludes these areas.
     /// For iPhone 16 Pro (393x852 points), this is approximately (0.0, 0.069, 1.0, 0.960)
     pub fn ios_iphone_16_pro() -> Self {
@@ -58,9 +59,9 @@ impl SafeRegionBoundingRectangle {
         // Normalized: top ~0.069, bottom ~0.960
         Self {
             x1: 0.0,
-            y1: 0.08,  // Top edge starts below Dynamic Island
+            y1: 0.08, // Top edge starts below Dynamic Island
             x2: 1.0,
-            y2: 0.95,  // Bottom edge ends above home indicator
+            y2: 0.95, // Bottom edge ends above home indicator
         }
     }
 
@@ -309,7 +310,6 @@ impl CursorStyleSetter {
     }
 }
 
-
 macro_rules! impl_cursor_style_setters {
     ($($variant:ident => $method:ident),* $(,)?) => {
         impl CursorStyleSetter {
@@ -409,9 +409,7 @@ pub const FRAME_VIEW_ZOOM_MAX: f32 = 24.0;
 /// Global UI scale multiplier from F3: **25% → 0.25**, **100% → 1.0**, **500% → 5.0**.
 #[inline]
 pub fn f3_ui_scale_multiplier(percent: u16) -> f32 {
-    (percent
-        .clamp(F3_UI_SCALE_MIN_PERCENT, F3_UI_SCALE_MAX_PERCENT) as f32)
-        / 100.0
+    (percent.clamp(F3_UI_SCALE_MIN_PERCENT, F3_UI_SCALE_MAX_PERCENT) as f32) / 100.0
 }
 
 impl EngineState {
@@ -446,8 +444,8 @@ impl EngineState {
 
 /// Updates [`EngineState::delta_time_seconds`] from wall-clock time since the previous tick.
 /// The first tick uses `1.0 / 60.0` seconds so frame-independent logic has a reasonable initial step.
-pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Option<std::time::Instant>) {
-    let now = std::time::Instant::now();
+pub fn tick_frame_delta(engine_state: &mut EngineState, last_instant: &mut Option<Instant>) {
+    let now = Instant::now();
     engine_state.delta_time_seconds = last_instant
         .map(|prev| (now - prev).as_secs_f32())
         .unwrap_or(1.0 / 60.0);
@@ -494,8 +492,14 @@ pub fn tick_frame_view_zoom(engine_state: &mut EngineState) {
         engine_state.frame_view_zoom_velocity = 0.0;
     }
 
-    engine_state.frame_view_center_x = clamp_center_for_zoom(engine_state.frame_view_center_x, engine_state.frame_view_zoom);
-    engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, engine_state.frame_view_zoom);
+    engine_state.frame_view_center_x = clamp_center_for_zoom(
+        engine_state.frame_view_center_x,
+        engine_state.frame_view_zoom,
+    );
+    engine_state.frame_view_center_y = clamp_center_for_zoom(
+        engine_state.frame_view_center_y,
+        engine_state.frame_view_zoom,
+    );
 }
 
 /// Apply current frame-view zoom directly to the app frame buffer (before keyboard/F3 overlays).
@@ -549,8 +553,10 @@ pub fn frame_view_pan_by_pixels(
     let h = output_height.max(1.0);
     engine_state.frame_view_center_x -= dx / (w * zoom);
     engine_state.frame_view_center_y -= dy / (h * zoom);
-    engine_state.frame_view_center_x = clamp_center_for_zoom(engine_state.frame_view_center_x, zoom);
-    engine_state.frame_view_center_y = clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
+    engine_state.frame_view_center_x =
+        clamp_center_for_zoom(engine_state.frame_view_center_x, zoom);
+    engine_state.frame_view_center_y =
+        clamp_center_for_zoom(engine_state.frame_view_center_y, zoom);
 }
 
 /// How [`Application::on_scroll`] reported vertical deltas should be interpreted.
@@ -624,12 +630,19 @@ pub trait Application {
         }
 
         if let Some(ch) = special_key.character {
-            if let Some(shortcut) = detect_shortcut(ch, special_key.command_held, special_key.shift_held) {
+            if let Some(shortcut) =
+                detect_shortcut(ch, special_key.command_held, special_key.shift_held)
+            {
                 self.on_key_shortcut(state, shortcut);
             }
         }
     }
-    fn on_key_shortcut(&mut self, _state: &mut EngineState, _shortcut: crate::engine::keyboard::shortcuts::ShortcutAction) {}
+    fn on_key_shortcut(
+        &mut self,
+        _state: &mut EngineState,
+        _shortcut: crate::engine::keyboard::shortcuts::ShortcutAction,
+    ) {
+    }
     fn on_screen_size_change(&mut self, _state: &mut EngineState, _width: u32, _height: u32) {}
 
     /// Called when the window is closing or Ctrl+C requested exit — stop I/O that can block drop.

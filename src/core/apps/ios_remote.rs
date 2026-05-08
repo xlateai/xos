@@ -1,7 +1,7 @@
 //! Viewer for iOS XOS mesh streaming (`ios-xos`).
 //! Run on desktop: connects to the iOS publisher and forwards pointer input.
 
-use crate::engine::{Application, EngineState, ScrollWheelUnit};
+use crate::engine::{Application, EngineState};
 #[cfg(all(
     not(target_arch = "wasm32"),
     not(target_os = "ios"),
@@ -248,7 +248,7 @@ impl Application for IosRemoteApp {
         );
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32, _unit: ScrollWheelUnit) {
+    fn on_scroll(&mut self, state: &mut EngineState, _dx: f32, dy: f32, _unit: crate::engine::ScrollWheelUnit) {
         if state.paused {
             return;
         }

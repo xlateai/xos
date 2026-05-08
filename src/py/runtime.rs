@@ -1,11 +1,10 @@
 ///! Unified Python runtime for xos
 ///! Handles execution of Python code in both CLI and coder environments
 ///! with centralized logging and error handling
-
-use rustpython_vm::{Interpreter, AsObject, VirtualMachine, builtins::PyBaseExceptionRef};
+use rustpython_vm::{builtins::PyBaseExceptionRef, AsObject, Interpreter, VirtualMachine};
+use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::fs;
 use std::sync::{Arc, Mutex};
 
 /// `--long-name` → `long_name`; only ASCII letters, digits, underscore after mapping.
@@ -49,7 +48,9 @@ _xos_flags = _XosFlags()
 
 /// Collect `--snake-style` args after the script path into flag names (`snake_style`).
 pub fn parse_script_cli_flags(rest: &[String]) -> Vec<String> {
-    rest.iter().filter_map(|a| cli_flag_to_snake_name(a)).collect()
+    rest.iter()
+        .filter_map(|a| cli_flag_to_snake_name(a))
+        .collect()
 }
 
 /// Callback type for capturing print output
@@ -89,17 +90,23 @@ pub fn execute_python_code(
 ) {
     let output_buffer = Arc::new(Mutex::new(String::new()));
     let output_buffer_clone = Arc::clone(&output_buffer);
-    
+
     let (result, app_instance, new_scope) = interpreter.enter(|vm| {
         // Clear previous app instance from builtins
-        let _ = vm.builtins.as_object().to_owned().del_attr("__xos_app_instance__", vm);
-        
+        let _ = vm
+            .builtins
+            .as_object()
+            .to_owned()
+            .del_attr("__xos_app_instance__", vm);
+
         // Get or create persistent scope
         let scope = if let Some(existing_scope) = persistent_scope {
             existing_scope
         } else {
             let new_scope = vm.new_scope_with_builtins();
-            let _ = new_scope.globals.set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
+            let _ = new_scope
+                .globals
+                .set_item("__name__", vm.ctx.new_str("__main__").into(), vm);
             new_scope
         };
 
@@ -108,30 +115,34 @@ pub fn execute_python_code(
             let script_path = PathBuf::from(filename);
             if let Some(dir) = script_path.parent() {
                 let dir_str = dir.to_string_lossy().to_string();
-                let _ = scope
-                    .globals
-                    .set_item("__xos_script_dir__", vm.ctx.new_str(dir_str.as_str()).into(), vm);
+                let _ = scope.globals.set_item(
+                    "__xos_script_dir__",
+                    vm.ctx.new_str(dir_str.as_str()).into(),
+                    vm,
+                );
             }
             let _ = scope
                 .globals
                 .set_item("__file__", vm.ctx.new_str(filename).into(), vm);
         }
-        
+
         // Set up print capture
         let buffer_for_capture = Arc::clone(&output_buffer_clone);
         let callback_clone = print_callback.clone();
         let write_output_fn = vm.new_function(
             "__write_output__",
-            move |args: rustpython_vm::function::FuncArgs, _vm: &rustpython_vm::VirtualMachine| -> rustpython_vm::PyResult {
+            move |args: rustpython_vm::function::FuncArgs,
+                  _vm: &rustpython_vm::VirtualMachine|
+                  -> rustpython_vm::PyResult {
                 if let Some(text_obj) = args.args.first() {
                     if let Ok(text) = text_obj.str(_vm) {
                         let text_str = text.to_string();
-                        
+
                         // Write to buffer
                         if let Ok(mut buffer) = buffer_for_capture.lock() {
                             buffer.push_str(&text_str);
                         }
-                        
+
                         // Call callback if provided
                         if let Some(ref callback) = callback_clone {
                             callback(&text_str);
@@ -141,8 +152,11 @@ pub fn execute_python_code(
                 Ok(_vm.ctx.none())
             },
         );
-        scope.globals.set_item("__write_output__", write_output_fn.into(), vm).ok();
-        
+        scope
+            .globals
+            .set_item("__write_output__", write_output_fn.into(), vm)
+            .ok();
+
         // Override print to capture output
         let setup_code = format!(
             r#"
@@ -157,7 +171,10 @@ __original_print__ = builtins.print
 "#,
             xos_flags_setup_python(script_flags)
         );
-        let setup_code = format!("{}{}", setup_code, r#"
+        let setup_code = format!(
+            "{}{}",
+            setup_code,
+            r#"
 __original_import__ = builtins.__import__
 
 try:
@@ -205,23 +222,25 @@ def __custom_print__(*args, sep=' ', end='\n', **kwargs):
 builtins.print = __custom_print__
 xos.print = __custom_print__
 builtins.__import__ = __xos_import__
-"#);
-        
+"#
+        );
+
         if let Err(e) = vm.run_code_string(scope.clone(), &setup_code, "<setup>".to_string()) {
             eprintln!("Failed to set up print capture: {:?}", e);
         }
-        
+
         // Run the code
         let exec_result = vm.run_code_string(scope.clone(), code, filename.to_string());
-        
+
         // Restore original print
         let restore_code = r#"
 builtins.print = __original_print__
 xos.print = __original_print__
 builtins.__import__ = __original_import__
 "#;
-        vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string()).ok();
-        
+        vm.run_code_string(scope.clone(), restore_code, "<restore>".to_string())
+            .ok();
+
         // Handle errors
         let result = if let Err(py_exc) = exec_result {
             let error_text = format_python_exception(vm, &py_exc);
@@ -229,15 +248,16 @@ builtins.__import__ = __original_import__
         } else {
             Ok(())
         };
-        
+
         // Check if an xos.Application was registered
-        let app_instance = vm.get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__")
+        let app_instance = vm
+            .get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__")
             .ok()
             .flatten();
-        
+
         (result, app_instance, scope)
     });
-    
+
     let output = output_buffer.lock().unwrap().clone();
     (result, output, app_instance, Some(new_scope))
 }
@@ -251,16 +271,23 @@ pub fn run_python_file(file_path: &PathBuf, script_flags: &[String]) {
     let code = match fs::read_to_string(&resolved_file_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading file {}: {}", resolved_file_path.display(), e);
+            eprintln!(
+                "❌ Error reading file {}: {}",
+                resolved_file_path.display(),
+                e
+            );
             std::process::exit(1);
         }
     };
-    
+
     // Create interpreter with xos module
     let interpreter = Interpreter::with_init(Default::default(), |vm| {
-        vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
+        vm.add_native_module(
+            "xos".to_owned(),
+            Box::new(crate::python_api::xos_module::make_module),
+        );
     });
-    
+
     let print_cb: PrintCallback = Arc::new(|s: &str| {
         print!("{}", s);
         let _ = io::stdout().flush();
@@ -275,7 +302,7 @@ pub fn run_python_file(file_path: &PathBuf, script_flags: &[String]) {
         Some(print_cb),
         script_flags,
     );
-    
+
     // Handle errors
     if let Err(error_msg) = result {
         if !output.is_empty() {
@@ -290,16 +317,19 @@ pub fn run_python_file(file_path: &PathBuf, script_flags: &[String]) {
 pub fn run_python_interactive() {
     // Create interpreter with xos module
     let interpreter = Interpreter::with_init(Default::default(), |vm| {
-        vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
+        vm.add_native_module(
+            "xos".to_owned(),
+            Box::new(crate::python_api::xos_module::make_module),
+        );
     });
-    
+
     // Persistent scope
     let mut persistent_scope: Option<rustpython_vm::scope::Scope> = None;
-    
+
     let stdin = io::stdin();
     let mut code_buffer = String::new();
     let mut continuation = false;
-    
+
     loop {
         // Print prompt
         if continuation {
@@ -308,7 +338,7 @@ pub fn run_python_interactive() {
             print!("🐍 > ");
         }
         io::stdout().flush().unwrap();
-        
+
         // Read line
         let mut line = String::new();
         match stdin.lock().read_line(&mut line) {
@@ -318,26 +348,26 @@ pub fn run_python_interactive() {
             }
             Ok(_) => {
                 let trimmed = line.trim_end();
-                
+
                 // Check for exit commands
                 if trimmed == "exit()" || trimmed == "quit()" {
                     break;
                 }
-                
+
                 // Skip empty lines unless we're in continuation mode
                 if trimmed.is_empty() && !continuation {
                     continue;
                 }
-                
+
                 // Add line to buffer
                 if continuation {
                     code_buffer.push_str(&line);
                 } else {
                     code_buffer = line.clone();
                 }
-                
+
                 let code_to_try = code_buffer.trim_end();
-                
+
                 // Try to execute
                 let (result, output, _, new_scope) = execute_python_code(
                     &interpreter,
@@ -347,14 +377,14 @@ pub fn run_python_interactive() {
                     None,
                     &[],
                 );
-                
+
                 persistent_scope = new_scope;
-                
+
                 // Print output
                 if !output.is_empty() {
                     print!("{}", output);
                 }
-                
+
                 match result {
                     Ok(_) => {
                         continuation = false;
@@ -362,12 +392,12 @@ pub fn run_python_interactive() {
                     }
                     Err(error_msg) => {
                         // Check if this is a continuation case (incomplete statement)
-                        let is_incomplete = error_msg.contains("unexpected EOF") || 
-                                           error_msg.contains("incomplete") ||
-                                           error_msg.contains("EOL") ||
-                                           (error_msg.contains("SyntaxError") && error_msg.contains("EOF")) ||
-                                           (code_to_try.trim().ends_with(':') && !code_to_try.contains('\n'));
-                        
+                        let is_incomplete = error_msg.contains("unexpected EOF")
+                            || error_msg.contains("incomplete")
+                            || error_msg.contains("EOL")
+                            || (error_msg.contains("SyntaxError") && error_msg.contains("EOF"))
+                            || (code_to_try.trim().ends_with(':') && !code_to_try.contains('\n'));
+
                         if is_incomplete {
                             continuation = true;
                         } else {
@@ -397,21 +427,28 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
     let resolved_file_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.clone());
-    
+
     // Read the Python file
     let code = match fs::read_to_string(&resolved_file_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("❌ Error reading file {}: {}", resolved_file_path.display(), e);
+            eprintln!(
+                "❌ Error reading file {}: {}",
+                resolved_file_path.display(),
+                e
+            );
             std::process::exit(1);
         }
     };
-    
+
     // Create interpreter with xos module
     let interpreter = Interpreter::with_init(Default::default(), |vm| {
-        vm.add_native_module("xos".to_owned(), Box::new(crate::python_api::xos_module::make_module));
+        vm.add_native_module(
+            "xos".to_owned(),
+            Box::new(crate::python_api::xos_module::make_module),
+        );
     });
-    
+
     let print_cb: PrintCallback = Arc::new(|s: &str| {
         print!("{}", s);
         let _ = io::stdout().flush();
@@ -426,7 +463,7 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
         Some(print_cb),
         script_flags,
     );
-    
+
     // Handle errors
     if let Err(error_msg) = result {
         if !output.is_empty() {
@@ -435,7 +472,7 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
         eprintln!("{}", error_msg);
         std::process::exit(1);
     }
-    
+
     if let Some(app_instance) = app_instance {
         let headless = interpreter.enter(|vm| {
             vm.get_attribute_opt(app_instance.clone(), "headless")
@@ -464,7 +501,7 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
                 std::process::exit(1);
             }
         }
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             eprintln!("❌ WASM not supported for Python apps yet");
@@ -474,4 +511,3 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
         // eprintln!("ℹ️  Python script completed (no xos app launched)");
     }
 }
-

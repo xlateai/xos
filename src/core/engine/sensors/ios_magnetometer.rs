@@ -1,6 +1,6 @@
-use ringbuf::{HeapRb, Producer, Consumer};
-use std::sync::{Mutex, Arc};
 use super::MagnetometerReading;
+use ringbuf::{Consumer, HeapRb, Producer};
+use std::sync::{Arc, Mutex};
 
 /// Thread-safe wrapper for Producer (needed for FFI callbacks)
 struct ProducerWrapper {
@@ -25,9 +25,7 @@ impl Magnetometer {
         #[cfg(target_os = "ios")]
         {
             // Initialize magnetometer on iOS side with error handling
-            let magnetometer_id = unsafe {
-                xos_sensors_magnetometer_init()
-            };
+            let magnetometer_id = unsafe { xos_sensors_magnetometer_init() };
 
             if magnetometer_id == u32::MAX {
                 return Err("Failed to initialize magnetometer (iOS returned error)".to_string());
@@ -51,7 +49,7 @@ impl Magnetometer {
                 producer_wrapper_ptr,
                 total_readings: 0,
             };
-            
+
             unsafe {
                 xos_sensors_magnetometer_set_callback(
                     magnetometer_id,
@@ -65,12 +63,19 @@ impl Magnetometer {
             if result != 0 {
                 // Clean up on failure
                 unsafe {
-                    xos_sensors_magnetometer_set_callback(magnetometer_id, None, std::ptr::null_mut());
+                    xos_sensors_magnetometer_set_callback(
+                        magnetometer_id,
+                        None,
+                        std::ptr::null_mut(),
+                    );
                     xos_sensors_magnetometer_destroy(magnetometer_id);
                     // Recover the producer wrapper box to avoid leak
                     let _ = Box::from_raw(producer_wrapper_ptr as *mut ProducerWrapper);
                 }
-                return Err(format!("Failed to start magnetometer (error code: {})", result));
+                return Err(format!(
+                    "Failed to start magnetometer (error code: {})",
+                    result
+                ));
             }
 
             Ok(magnetometer)
@@ -119,11 +124,15 @@ impl Drop for Magnetometer {
                 // IMPORTANT: Clear callback FIRST to prevent any new callbacks
                 // This must happen before destroy to avoid race conditions
                 // The Swift side will also clear the callback in stop(), providing double protection
-                xos_sensors_magnetometer_set_callback(self.magnetometer_id, None, std::ptr::null_mut());
-                
+                xos_sensors_magnetometer_set_callback(
+                    self.magnetometer_id,
+                    None,
+                    std::ptr::null_mut(),
+                );
+
                 // Now destroy the listener (this will stop updates on Swift side)
                 xos_sensors_magnetometer_destroy(self.magnetometer_id);
-                
+
                 // Recover the producer wrapper box to avoid leak
                 // Do this last, after ensuring no more callbacks can fire
                 if !self.producer_wrapper_ptr.is_null() {
@@ -149,7 +158,7 @@ extern "C" fn magnetometer_callback(x: f64, y: f64, z: f64, user_data: *mut std:
         // but it's better than nothing
         let wrapper = unsafe { &*(user_data as *const ProducerWrapper) };
         let reading = MagnetometerReading { x, y, z };
-        
+
         // Lock producer and push to ring buffer (non-blocking, may fail if full)
         // If buffer is full, we drop the sample (better than blocking)
         // If lock fails (e.g., mutex was poisoned), we drop the sample

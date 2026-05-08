@@ -2,9 +2,9 @@
 
 use crate::python_api::dtypes::DType;
 pub use crate::tensor::tensor::{
-    Tensor, create_tensor_from_data, py_number_to_f64, tensor_flat_data_list, tensor_shape_tuple,
+    create_tensor_from_data, py_number_to_f64, tensor_flat_data_list, tensor_shape_tuple, Tensor,
 };
-use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
 fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
@@ -91,7 +91,11 @@ pub fn tensor_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .ok_or_else(|| vm.new_type_error("data must be a list".to_string()))?;
     let data_vec = data_list.borrow_vec();
     let mut flat_data = Vec::new();
-    fn flatten_list(obj: &rustpython_vm::PyObjectRef, flat: &mut Vec<f32>, vm: &VirtualMachine) -> PyResult<()> {
+    fn flatten_list(
+        obj: &rustpython_vm::PyObjectRef,
+        flat: &mut Vec<f32>,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
         if let Some(list) = obj.downcast_ref::<rustpython_vm::builtins::PyList>() {
             for item in list.borrow_vec().iter() {
                 flatten_list(item, flat, vm)?;
@@ -113,7 +117,8 @@ pub fn tensor_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 .iter()
                 .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
                 .collect::<Result<Vec<_>, _>>()?
-        } else if let Some(shape_list) = shape_arg.downcast_ref::<rustpython_vm::builtins::PyList>() {
+        } else if let Some(shape_list) = shape_arg.downcast_ref::<rustpython_vm::builtins::PyList>()
+        {
             shape_list
                 .borrow_vec()
                 .iter()
@@ -295,12 +300,28 @@ pub fn stack_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 pub fn register_tensors_functions(module: &PyRef<PyModule>, vm: &VirtualMachine) {
-    module.set_attr("tensor", vm.new_function("tensor", tensor_fn), vm).unwrap();
-    module.set_attr("zeros", vm.new_function("zeros", zeros_fn), vm).unwrap();
-    module.set_attr("ones", vm.new_function("ones", ones_fn), vm).unwrap();
-    module.set_attr("full", vm.new_function("full", full_fn), vm).unwrap();
-    module.set_attr("arange", vm.new_function("arange", arange_fn), vm).unwrap();
-    module.set_attr("stack", vm.new_function("stack", stack_fn), vm).unwrap();
-    module.set_attr("where", vm.new_function("where", where_fn), vm).unwrap();
-    module.set_attr("clip", vm.new_function("clip", clip_fn), vm).unwrap();
+    module
+        .set_attr("tensor", vm.new_function("tensor", tensor_fn), vm)
+        .unwrap();
+    module
+        .set_attr("zeros", vm.new_function("zeros", zeros_fn), vm)
+        .unwrap();
+    module
+        .set_attr("ones", vm.new_function("ones", ones_fn), vm)
+        .unwrap();
+    module
+        .set_attr("full", vm.new_function("full", full_fn), vm)
+        .unwrap();
+    module
+        .set_attr("arange", vm.new_function("arange", arange_fn), vm)
+        .unwrap();
+    module
+        .set_attr("stack", vm.new_function("stack", stack_fn), vm)
+        .unwrap();
+    module
+        .set_attr("where", vm.new_function("where", where_fn), vm)
+        .unwrap();
+    module
+        .set_attr("clip", vm.new_function("clip", clip_fn), vm)
+        .unwrap();
 }

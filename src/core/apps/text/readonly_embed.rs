@@ -2,10 +2,10 @@
 //! [`super::text::TextApp`](crate::apps::text::TextApp) — no keyboard, cursor, selection, or debug overlays.
 
 use crate::engine::{EngineState, ScrollWheelUnit};
-use crate::ui::onscreen_keyboard::KeyType;
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
+use crate::time::Instant;
+use crate::ui::onscreen_keyboard::KeyType;
 use fontdue::Font;
-use std::time::Instant;
 use std::time::Duration;
 
 // Keep in sync with `text.rs` for identical feel
@@ -123,7 +123,11 @@ impl TranscriptTextView {
     /// the bottom after layout (new transcript lines).
     pub fn set_text(&mut self, text: String) {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        let cur = self.text_rasterizer.text.replace("\r\n", "\n").replace('\r', "\n");
+        let cur = self
+            .text_rasterizer
+            .text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
         if normalized != cur && self.stick_to_tail {
             self.pending_snap_to_tail = true;
         }
@@ -192,8 +196,11 @@ impl TranscriptTextView {
                     if should_select {
                         self.dragging = false;
                         self.selecting = true;
-                        let start_idx =
-                            self.find_nearest_char_index(self.last_pointer_x, self.last_mouse_y, self.last_rect);
+                        let start_idx = self.find_nearest_char_index(
+                            self.last_pointer_x,
+                            self.last_mouse_y,
+                            self.last_rect,
+                        );
                         self.selection_start = Some(start_idx);
                         self.selection_end = Some(start_idx);
                         self.cursor_position = start_idx;
@@ -290,7 +297,13 @@ impl TranscriptTextView {
         }
     }
 
-    pub fn on_trackpad_pointer_move(&mut self, mx: f32, my: f32, rect: (f32, f32, f32, f32), is_left_clicking: bool) {
+    pub fn on_trackpad_pointer_move(
+        &mut self,
+        mx: f32,
+        my: f32,
+        rect: (f32, f32, f32, f32),
+        is_left_clicking: bool,
+    ) {
         if !self.trackpad_active || !is_left_clicking {
             return;
         }
@@ -490,15 +503,25 @@ impl TranscriptTextView {
         }
 
         if let (Some(sel_start), Some(sel_end)) = (self.selection_start, self.selection_end) {
-            let (start_idx, end_idx) = if sel_start <= sel_end { (sel_start, sel_end) } else { (sel_end, sel_start) };
-            let pulse_alpha =
-                SELECTION_COLOR.3 as f32 / 255.0 * ((self.selection_anim_phase * 2.4).sin() * 0.12 + 0.88);
-            let mut per_line: std::collections::HashMap<usize, (f32, f32, f32)> = std::collections::HashMap::new();
+            let (start_idx, end_idx) = if sel_start <= sel_end {
+                (sel_start, sel_end)
+            } else {
+                (sel_end, sel_start)
+            };
+            let pulse_alpha = SELECTION_COLOR.3 as f32 / 255.0
+                * ((self.selection_anim_phase * 2.4).sin() * 0.12 + 0.88);
+            let mut per_line: std::collections::HashMap<usize, (f32, f32, f32)> =
+                std::collections::HashMap::new();
             for c in &self.text_rasterizer.characters {
                 if c.char_index >= start_idx && c.char_index < end_idx {
                     let left = c.x;
                     let right = c.x + c.metrics.advance_width;
-                    let baseline_y = self.text_rasterizer.lines.get(c.line_index).map(|l| l.baseline_y).unwrap_or(0.0);
+                    let baseline_y = self
+                        .text_rasterizer
+                        .lines
+                        .get(c.line_index)
+                        .map(|l| l.baseline_y)
+                        .unwrap_or(0.0);
                     per_line
                         .entry(c.line_index)
                         .and_modify(|(min_x, max_x, _)| {
@@ -511,8 +534,10 @@ impl TranscriptTextView {
             for (_, (min_x, max_x, baseline_y)) in per_line {
                 let sel_left = (ox + min_x).round() as i32;
                 let sel_right = (ox + max_x).round() as i32;
-                let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top) as i32;
-                let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top) as i32;
+                let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y)
+                    + content_top) as i32;
+                let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y)
+                    + content_top) as i32;
                 for y in sel_top.max(0)..sel_bottom.min(h_i) {
                     for x in sel_left.max(0)..sel_right.min(w_i) {
                         let sxf = x as f32;
@@ -524,9 +549,12 @@ impl TranscriptTextView {
                         if idx + 3 < buffer.len() {
                             let a = pulse_alpha;
                             let inv = 1.0 - a;
-                            buffer[idx] = (buffer[idx] as f32 * inv + SELECTION_COLOR.0 as f32 * a) as u8;
-                            buffer[idx + 1] = (buffer[idx + 1] as f32 * inv + SELECTION_COLOR.1 as f32 * a) as u8;
-                            buffer[idx + 2] = (buffer[idx + 2] as f32 * inv + SELECTION_COLOR.2 as f32 * a) as u8;
+                            buffer[idx] =
+                                (buffer[idx] as f32 * inv + SELECTION_COLOR.0 as f32 * a) as u8;
+                            buffer[idx + 1] =
+                                (buffer[idx + 1] as f32 * inv + SELECTION_COLOR.1 as f32 * a) as u8;
+                            buffer[idx + 2] =
+                                (buffer[idx + 2] as f32 * inv + SELECTION_COLOR.2 as f32 * a) as u8;
                         }
                     }
                 }
@@ -541,7 +569,8 @@ impl TranscriptTextView {
             }
             let slide_max = character.width;
             let g_left = character.x - slide_max;
-            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
+            let g_right =
+                character.x + character.metrics.advance_width + character.metrics.width as f32;
             if g_right < 0.0 || g_left > content_w {
                 continue;
             }
@@ -596,9 +625,12 @@ impl TranscriptTextView {
         if !has_expand_selection {
             let cx_f = ox + self.smooth_cursor_x;
             if cx_f >= rx0 && cx_f <= rx1 {
-                let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + content_top).round() as i32;
-                let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + content_top).round()
-                    as i32;
+                let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y)
+                    + content_top)
+                    .round() as i32;
+                let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y)
+                    + content_top)
+                    .round() as i32;
                 let cx = cx_f.round() as i32;
                 let y0 = cursor_top.max(ry0.floor() as i32).max(0);
                 let y1 = cursor_bottom.min(ry1.ceil() as i32).min(h_i);
@@ -667,10 +699,19 @@ impl TranscriptTextView {
             return None;
         }
         let chars: Vec<char> = self.text_rasterizer.text.chars().collect();
-        Some(chars[s.min(chars.len())..e.min(chars.len())].iter().collect())
+        Some(
+            chars[s.min(chars.len())..e.min(chars.len())]
+                .iter()
+                .collect(),
+        )
     }
 
-    fn find_nearest_char_index(&self, screen_x: f32, screen_y: f32, rect: (f32, f32, f32, f32)) -> usize {
+    fn find_nearest_char_index(
+        &self,
+        screen_x: f32,
+        screen_y: f32,
+        rect: (f32, f32, f32, f32),
+    ) -> usize {
         let text_x = screen_x - (rect.0 + H_PAD);
         let text_y = screen_y - rect.1 + self.scroll_y;
         let mut nearest_idx = self.text_rasterizer.text.chars().count();
@@ -683,7 +724,11 @@ impl TranscriptTextView {
             let d = dx * dx + dy * dy;
             if d < min_dist_sq {
                 min_dist_sq = d;
-                nearest_idx = if text_x > cx { c.char_index + 1 } else { c.char_index };
+                nearest_idx = if text_x > cx {
+                    c.char_index + 1
+                } else {
+                    c.char_index
+                };
             }
         }
         nearest_idx.min(self.text_rasterizer.text.chars().count())
@@ -707,7 +752,12 @@ impl TranscriptTextView {
             if chars_in_line.is_empty() || cursor == line.start_index {
                 return (0.0, line.baseline_y);
             }
-            if let Some(char_at_cursor) = self.text_rasterizer.characters.iter().find(|c| c.char_index == cursor) {
+            if let Some(char_at_cursor) = self
+                .text_rasterizer
+                .characters
+                .iter()
+                .find(|c| c.char_index == cursor)
+            {
                 return (char_at_cursor.x, line.baseline_y);
             }
             if let Some(last) = chars_in_line.last() {

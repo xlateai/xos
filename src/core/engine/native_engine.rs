@@ -1,5 +1,26 @@
+use super::engine::{
+    tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
+    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle,
+};
+use super::{
+    apply_frame_view_zoom, f3_menu_boost_interaction_fade, f3_menu_handle_frame_zoom_scroll,
+    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
+    f3_menu_handle_zoom_scroll, frame_view_pan_by_pixels, tick_f3_menu, tick_frame_view_zoom,
+    F3Menu,
+};
+use crate::engine::keyboard::shortcuts::{
+    detect_shortcut, NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
+};
+use crate::rasterizer::RasterCache;
+use crate::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex};
+#[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
+use winit::platform::windows::WindowExtWindows;
 #[cfg(not(target_arch = "wasm32"))]
 use winit::{
     application::ApplicationHandler,
@@ -9,33 +30,10 @@ use winit::{
     keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
 };
-#[cfg(all(not(target_arch = "wasm32"), target_os = "windows"))]
-use winit::platform::windows::WindowExtWindows;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Arc, Mutex};
-use super::{
-    apply_frame_view_zoom,
-    f3_menu_boost_interaction_fade,
-    f3_menu_handle_frame_zoom_scroll,
-    f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up,
-    f3_menu_handle_zoom_scroll, tick_f3_menu,
-    frame_view_pan_by_pixels,
-    tick_frame_view_zoom,
-    F3Menu,
-};
-use super::engine::{
-    tick_frame_delta, Application, CursorStyle, CursorStyleSetter, EngineState, FrameState,
-    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle,
-};
-use crate::engine::keyboard::shortcuts::{
-    detect_shortcut, NamedSpecialKey, PhysicalSpecialKey, SpecialKeyEvent,
-};
-use crate::rasterizer::RasterCache;
 
 #[cfg(not(target_arch = "wasm32"))]
-static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> = once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
+static SHOULD_EXIT: once_cell::sync::Lazy<Arc<AtomicBool>> =
+    once_cell::sync::Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 /// Wakes the winit loop so `SHOULD_EXIT` is observed promptly (Ctrl+C, Esc, programmatic exit).
 #[cfg(not(target_arch = "wasm32"))]
@@ -71,8 +69,7 @@ fn overlay_window_attributes(event_loop: &ActiveEventLoop) -> WindowAttributes {
         .map(|m| {
             let pos = m.position();
             let sz = m.size();
-            let margin =
-                ((sz.width.min(sz.height) as f32) * 0.02).max(12.0).round() as i32;
+            let margin = ((sz.width.min(sz.height) as f32) * 0.02).max(12.0).round() as i32;
             let inner_w = ((sz.width as f32) * 0.3).max(200.0).round() as u32;
             let inner_h = ((sz.height as f32) * 0.3).max(120.0).round() as u32;
             (inner_w, inner_h, pos.x + margin, pos.y + margin)
@@ -116,7 +113,7 @@ struct AppState {
     app: Box<dyn Application>,
     size: winit::dpi::PhysicalSize<u32>,
     raster_cache: RasterCache,
-    last_tick_instant: Option<std::time::Instant>,
+    last_tick_instant: Option<Instant>,
     // Modifier key tracking for shortcuts
     command_held: bool,
     shift_held: bool,
@@ -207,12 +204,13 @@ impl AppState {
 
         if self.engine_state.paused {
             if self.engine_state.pending_step_ticks > 0 {
-                self.engine_state.pending_step_ticks = self.engine_state.pending_step_ticks.saturating_sub(1);
+                self.engine_state.pending_step_ticks =
+                    self.engine_state.pending_step_ticks.saturating_sub(1);
                 tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 let _ = self.app.tick(&mut self.engine_state);
                 self.capture_paused_base_frame();
             } else {
-                self.last_tick_instant = Some(std::time::Instant::now());
+                self.last_tick_instant = Some(Instant::now());
                 if self.paused_base_frame.is_empty() {
                     self.capture_paused_base_frame();
                 }
@@ -264,29 +262,40 @@ impl ApplicationHandler for AppState {
         // Application resumed
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         // Check if Ctrl+C was pressed
         if SHOULD_EXIT.load(Ordering::Relaxed) {
             self.app.prepare_shutdown(&mut self.engine_state);
             event_loop.exit();
             return;
         }
-        
+
         match event {
             WindowEvent::CloseRequested => {
                 self.app.prepare_shutdown(&mut self.engine_state);
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                let current_size =
-                    physical_size_for_buffers(self.window.inner_size(), self.size);
+                let current_size = physical_size_for_buffers(self.window.inner_size(), self.size);
                 if current_size != self.size {
                     self.size = current_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.resize_frame(self.size.width, self.size.height);
+                    let _ = self
+                        .pixels
+                        .resize_surface(self.size.width, self.size.height);
+                    self.engine_state
+                        .resize_frame(self.size.width, self.size.height);
                     // Notify app of screen size change
-                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    let _ = self.app.on_screen_size_change(
+                        &mut self.engine_state,
+                        self.size.width,
+                        self.size.height,
+                    );
                 }
                 self.tick_and_render_frame();
             }
@@ -296,38 +305,56 @@ impl ApplicationHandler for AppState {
                 } else {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.resize_frame(self.size.width, self.size.height);
-                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    let _ = self
+                        .pixels
+                        .resize_surface(self.size.width, self.size.height);
+                    self.engine_state
+                        .resize_frame(self.size.width, self.size.height);
+                    let _ = self.app.on_screen_size_change(
+                        &mut self.engine_state,
+                        self.size.width,
+                        self.size.height,
+                    );
                     // Keep simulation/render progressing during live drag-resize.
                     self.tick_and_render_frame();
                     self.window.request_redraw();
                 }
             }
-            WindowEvent::ScaleFactorChanged { scale_factor: _, .. } => {
+            WindowEvent::ScaleFactorChanged {
+                scale_factor: _, ..
+            } => {
                 let new_size = physical_size_for_buffers(self.window.inner_size(), self.size);
                 if new_size != self.size {
                     self.size = new_size;
                     let _ = self.pixels.resize_buffer(self.size.width, self.size.height);
-                    let _ = self.pixels.resize_surface(self.size.width, self.size.height);
-                    self.engine_state.resize_frame(self.size.width, self.size.height);
+                    let _ = self
+                        .pixels
+                        .resize_surface(self.size.width, self.size.height);
+                    self.engine_state
+                        .resize_frame(self.size.width, self.size.height);
                     // Notify app of screen size change
-                    let _ = self.app.on_screen_size_change(&mut self.engine_state, self.size.width, self.size.height);
+                    let _ = self.app.on_screen_size_change(
+                        &mut self.engine_state,
+                        self.size.width,
+                        self.size.height,
+                    );
                     self.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let prev_x = self.engine_state.mouse.x;
                 let prev_y = self.engine_state.mouse.y;
-            
+
                 self.engine_state.mouse.x = position.x as f32;
                 self.engine_state.mouse.y = position.y as f32;
-            
+
                 self.engine_state.mouse.dx = self.engine_state.mouse.x - prev_x;
                 self.engine_state.mouse.dy = self.engine_state.mouse.y - prev_y;
 
                 if self.frame_pan_dragging {
-                    if !self.engine_state.mouse.is_left_clicking || !(self.command_held && self.shift_held) {
+                    if !self.engine_state.mouse.is_left_clicking
+                        || !(self.command_held && self.shift_held)
+                    {
                         self.frame_pan_dragging = false;
                     }
                 }
@@ -348,7 +375,7 @@ impl ApplicationHandler for AppState {
                     }
                     return;
                 }
-            
+
                 if !f3_menu_handle_mouse_move(&mut self.engine_state) {
                     let _ = self.app.on_mouse_move(&mut self.engine_state);
                 }
@@ -409,7 +436,7 @@ impl ApplicationHandler for AppState {
                 ElementState::Released => {
                     self.engine_state.mouse.is_right_clicking = false;
                 }
-            }
+            },
             WindowEvent::MouseWheel { delta, .. } => {
                 use crate::engine::ScrollWheelUnit;
                 let (dx, dy, unit) = match delta {
@@ -457,7 +484,7 @@ impl ApplicationHandler for AppState {
                 {
                     self.command_held = modifiers.state().control_key();
                 }
-                
+
                 self.shift_held = modifiers.state().shift_key();
                 self.alt_held = modifiers.state().alt_key();
                 self.sync_modifiers_to_engine();
@@ -555,7 +582,11 @@ impl ApplicationHandler for AppState {
                     // which would insert a second newline or duplicate control handling.
                     let skip_text_controls_from_named_special = matches!(
                         named_key,
-                        Some(NamedSpecialKey::Enter | NamedSpecialKey::Tab | NamedSpecialKey::Backspace)
+                        Some(
+                            NamedSpecialKey::Enter
+                                | NamedSpecialKey::Tab
+                                | NamedSpecialKey::Backspace
+                        )
                     );
 
                     // Printable text: prefer `event.text`; on macOS it is often populated only on the
@@ -571,7 +602,8 @@ impl ApplicationHandler for AppState {
                                     {
                                         continue;
                                     }
-                                    if matches!(named_key, Some(NamedSpecialKey::Tab)) && ch == '\t' {
+                                    if matches!(named_key, Some(NamedSpecialKey::Tab)) && ch == '\t'
+                                    {
                                         continue;
                                     }
                                     if matches!(named_key, Some(NamedSpecialKey::Backspace))
@@ -603,7 +635,7 @@ impl ApplicationHandler for AppState {
             event_loop.exit();
             return;
         }
-        
+
         // Update cursor style (zoom-pan gesture gets grab/grabbing cursor override).
         if self.command_held && self.shift_held && self.engine_state.frame_view_zoom > 1.001 {
             self.window.set_cursor_visible(true);
@@ -634,7 +666,7 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
-        
+
         // Keep continuous redraw only while running; paused mode is event-driven to avoid busy CPU usage.
         if !self.engine_state.paused {
             self.window.request_redraw();
@@ -666,7 +698,7 @@ impl ApplicationHandler for AppStateWrapper {
                         w.set_skip_taskbar(true);
                     }
                     w
-                },
+                }
                 Err(e) => {
                     eprintln!("Failed to create window: {}", e);
                     return;
@@ -724,7 +756,8 @@ impl ApplicationHandler for AppStateWrapper {
                 return;
             }
 
-            let app = std::mem::replace(&mut self.app, Box::new(crate::apps::blank::BlankApp::new()));
+            let app =
+                std::mem::replace(&mut self.app, Box::new(crate::apps::blank::BlankApp::new()));
             self.app_state = Some(AppState {
                 window,
                 pixels,
@@ -744,7 +777,12 @@ impl ApplicationHandler for AppStateWrapper {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         if let Some(ref mut app_state) = self.app_state {
             app_state.window_event(event_loop, window_id, event);
         }
@@ -858,7 +896,7 @@ pub fn start_headless_native(
         return Err(format!("Failed to setup app: {}", e).into());
     }
 
-    let mut last_tick_instant: Option<std::time::Instant> = None;
+    let mut last_tick_instant: Option<Instant> = None;
     while !SHOULD_EXIT.load(Ordering::Relaxed) {
         if engine_state.paused {
             if engine_state.pending_step_ticks > 0 {
@@ -867,7 +905,7 @@ pub fn start_headless_native(
                 app.tick(&mut engine_state);
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(16));
-                last_tick_instant = Some(std::time::Instant::now());
+                last_tick_instant = Some(Instant::now());
             }
         } else {
             tick_frame_delta(&mut engine_state, &mut last_tick_instant);

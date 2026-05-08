@@ -1,6 +1,6 @@
 use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use crate::engine::audio::AudioListener;
-use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
+use rustpython_vm::{function::FuncArgs, PyObjectRef, PyResult, VirtualMachine};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
@@ -43,9 +43,7 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(sz) = size.as_deref() {
         let lower = sz.trim().to_ascii_lowercase();
         if lower != "small" && lower != "tiny" && lower != "base" {
-            return Err(vm.new_value_error(
-                "size must be 'small', 'tiny', or 'base'".to_string(),
-            ));
+            return Err(vm.new_value_error("size must be 'small', 'tiny', or 'base'".to_string()));
         }
     }
     let backend_kw = args.kwargs.get("backend").cloned();
@@ -67,9 +65,9 @@ pub fn transcription_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         None
     };
-    let listener_ptr_obj = mic_obj
-        .get_attr("_listener_ptr", vm)
-        .map_err(|_| vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string()))?;
+    let listener_ptr_obj = mic_obj.get_attr("_listener_ptr", vm).map_err(|_| {
+        vm.new_type_error("xos.audio.transcription expects xos.audio.Microphone".to_string())
+    })?;
     let listener_ptr: usize = listener_ptr_obj.try_into_value(vm)?;
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
@@ -201,7 +199,10 @@ pub fn transcriber_vad_prob(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let state = map
         .get(&ptr)
         .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
-    Ok(vm.ctx.new_float(state.engine.last_vad_speech_prob() as f64).into())
+    Ok(vm
+        .ctx
+        .new_float(state.engine.last_vad_speech_prob() as f64)
+        .into())
 }
 
 pub fn transcriber_buffered_seconds(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -212,7 +213,10 @@ pub fn transcriber_buffered_seconds(args: FuncArgs, vm: &VirtualMachine) -> PyRe
     let state = map
         .get(&ptr)
         .ok_or_else(|| vm.new_runtime_error("Invalid transcriber pointer".to_string()))?;
-    Ok(vm.ctx.new_float(state.engine.buffered_segment_seconds() as f64).into())
+    Ok(vm
+        .ctx
+        .new_float(state.engine.buffered_segment_seconds() as f64)
+        .into())
 }
 
 pub fn transcriber_clip_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -330,4 +334,3 @@ pub fn transcriber_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .collect();
     Ok(vm.ctx.new_list(items).into())
 }
-

@@ -1,12 +1,12 @@
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{LazyLock, Mutex};
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+use std::cell::RefCell;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
 use winit::{
     application::ApplicationHandler,
@@ -17,8 +17,6 @@ use winit::{
     platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
     window::{CursorIcon, Window, WindowAttributes, WindowId},
 };
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
-use std::cell::RefCell;
 
 static STANDALONE_FRAME_BUFFERS: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -140,7 +138,11 @@ impl StandalonePreviewApp {
             self.f3_engine_state.insert(
                 viewport_id,
                 crate::engine::EngineState {
-                    frame: crate::engine::FrameState::new(size.width.max(1), size.height.max(1), safe_region),
+                    frame: crate::engine::FrameState::new(
+                        size.width.max(1),
+                        size.height.max(1),
+                        safe_region,
+                    ),
                     mouse: crate::engine::MouseState {
                         x: 0.0,
                         y: 0.0,
@@ -195,9 +197,12 @@ impl StandalonePreviewApp {
         if frame_data.width != state.size.width || frame_data.height != state.size.height {
             let target_w = state.size.width.max(1);
             let target_h = state.size.height.max(1);
-            let mut resized = vec![0u8; (target_w as usize)
-                .saturating_mul(target_h as usize)
-                .saturating_mul(4)];
+            let mut resized = vec![
+                0u8;
+                (target_w as usize)
+                    .saturating_mul(target_h as usize)
+                    .saturating_mul(4)
+            ];
 
             let copy_w = frame_data.width.min(target_w) as usize;
             let copy_h = frame_data.height.min(target_h) as usize;
@@ -246,7 +251,11 @@ impl StandalonePreviewApp {
         let expected = (state.size.width as usize)
             .saturating_mul(state.size.height as usize)
             .saturating_mul(4);
-        if src_rgba.len() >= (src_w as usize).saturating_mul(src_h as usize).saturating_mul(4) {
+        if src_rgba.len()
+            >= (src_w as usize)
+                .saturating_mul(src_h as usize)
+                .saturating_mul(4)
+        {
             if let Some(es) = self.f3_engine_state.get_mut(&viewport_id) {
                 let frame = es.frame.buffer_mut();
                 frame.fill(0);
@@ -296,12 +305,13 @@ impl ApplicationHandler for StandalonePreviewApp {
         self.ensure_windows_created(event_loop);
     }
 
-    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        let Some(viewport_id) = self
-            .states
-            .get(&_window_id)
-            .map(|s| s.viewport_id)
-        else {
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(viewport_id) = self.states.get(&_window_id).map(|s| s.viewport_id) else {
             return;
         };
         match event {
@@ -313,7 +323,9 @@ impl ApplicationHandler for StandalonePreviewApp {
                 std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
-                let Some(state) = self.states.get_mut(&_window_id) else { return; };
+                let Some(state) = self.states.get_mut(&_window_id) else {
+                    return;
+                };
                 if new_size.width > 0 && new_size.height > 0 {
                     state.size = new_size;
                     let _ = state.pixels.resize_buffer(new_size.width, new_size.height);
@@ -323,9 +335,12 @@ impl ApplicationHandler for StandalonePreviewApp {
                         let _ = crate::engine::f3_menu_handle_mouse_move(es);
                     }
                     if let Some(frame_data) = self.pending_frames.get_mut(&viewport_id) {
-                        let mut resized = vec![0u8; (new_size.width as usize)
-                            .saturating_mul(new_size.height as usize)
-                            .saturating_mul(4)];
+                        let mut resized = vec![
+                            0u8;
+                            (new_size.width as usize)
+                                .saturating_mul(new_size.height as usize)
+                                .saturating_mul(4)
+                        ];
                         let copy_w = frame_data.width.min(new_size.width) as usize;
                         let copy_h = frame_data.height.min(new_size.height) as usize;
                         let src_stride = frame_data.width as usize * 4;
@@ -355,10 +370,8 @@ impl ApplicationHandler for StandalonePreviewApp {
                     let shift = *self.shift_held.get(&viewport_id).unwrap_or(&false);
                     let dragging = *self.frame_pan_dragging.get(&viewport_id).unwrap_or(&false);
 
-                    let actively_dragging = dragging
-                        && es.mouse.is_left_clicking
-                        && command
-                        && shift;
+                    let actively_dragging =
+                        dragging && es.mouse.is_left_clicking && command && shift;
                     if dragging && !actively_dragging {
                         self.frame_pan_dragging.insert(viewport_id, false);
                     }
@@ -411,7 +424,8 @@ impl ApplicationHandler for StandalonePreviewApp {
                                 let was_paused = es.paused;
                                 let _ = crate::engine::f3_menu_handle_mouse_down(es);
                                 if !was_paused && es.paused {
-                                    if let Some(frame_data) = self.pending_frames.get(&viewport_id) {
+                                    if let Some(frame_data) = self.pending_frames.get(&viewport_id)
+                                    {
                                         self.paused_base_frames.insert(
                                             viewport_id,
                                             StandalonePendingFrame {
@@ -491,8 +505,7 @@ impl ApplicationHandler for StandalonePreviewApp {
                     es.keyboard.modifiers.command = cmd_k;
                     es.keyboard.modifiers.shift = shift_k;
                 }
-                if !(cmd_k && shift_k)
-                {
+                if !(cmd_k && shift_k) {
                     self.frame_pan_dragging.insert(viewport_id, false);
                 }
             }
@@ -556,23 +569,52 @@ fn get_mouse(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// For periodic updates, use a viewport app with tick() instead
 fn xos_sleep(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let seconds: f64 = args.bind(vm)?;
-    let duration = std::time::Duration::from_secs_f64(seconds);
-    std::thread::sleep(duration);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let duration = crate::time::Duration::from_secs_f64(seconds);
+        std::thread::sleep(duration);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if seconds > 0.0 {
+            return Err(vm.new_runtime_error(
+                "xos.sleep is not available on wasm; use tick-driven timing instead".to_string(),
+            ));
+        }
+    }
     Ok(vm.ctx.none())
+}
+
+fn xos_time_time(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Ok(vm.ctx.new_float(crate::time::unix_seconds_f64()).into())
+}
+
+fn xos_time_monotonic(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Ok(vm
+        .ctx
+        .new_float(crate::time::monotonic_seconds_f64())
+        .into())
+}
+
+fn xos_time_perf_counter(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Ok(vm
+        .ctx
+        .new_float(crate::time::perf_counter_seconds_f64())
+        .into())
 }
 
 fn minecraft_color_to_ansi(code: char) -> Option<&'static str> {
     match code {
-        '0' => Some("\x1b[30m"), // black
-        '1' => Some("\x1b[34m"), // dark blue
-        '2' => Some("\x1b[32m"), // dark green
-        '3' => Some("\x1b[36m"), // dark aqua
-        '4' => Some("\x1b[31m"), // dark red
-        '5' => Some("\x1b[35m"), // dark purple
-        '6' => Some("\x1b[33m"), // gold
-        '7' => Some("\x1b[37m"), // gray
-        '8' => Some("\x1b[90m"), // dark gray
-        '9' => Some("\x1b[94m"), // blue
+        '0' => Some("\x1b[30m"),       // black
+        '1' => Some("\x1b[34m"),       // dark blue
+        '2' => Some("\x1b[32m"),       // dark green
+        '3' => Some("\x1b[36m"),       // dark aqua
+        '4' => Some("\x1b[31m"),       // dark red
+        '5' => Some("\x1b[35m"),       // dark purple
+        '6' => Some("\x1b[33m"),       // gold
+        '7' => Some("\x1b[37m"),       // gray
+        '8' => Some("\x1b[90m"),       // dark gray
+        '9' => Some("\x1b[94m"),       // blue
         'a' | 'A' => Some("\x1b[92m"), // green
         'b' | 'B' => Some("\x1b[96m"), // aqua
         'c' | 'C' => Some("\x1b[91m"), // red
@@ -668,30 +710,33 @@ fn xos_print_color(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
 
-    let parse_rgba_from_tuple = |tuple_obj: &rustpython_vm::builtins::PyTuple| -> PyResult<(i32, i32, i32, i32)> {
-        let items = tuple_obj.as_slice();
-        if items.len() == 3 {
-            let r: i32 = items[0].clone().try_into_value(vm)?;
-            let g: i32 = items[1].clone().try_into_value(vm)?;
-            let b: i32 = items[2].clone().try_into_value(vm)?;
-            Ok((r, g, b, 255))
-        } else if items.len() == 4 {
-            let r: i32 = items[0].clone().try_into_value(vm)?;
-            let g: i32 = items[1].clone().try_into_value(vm)?;
-            let b: i32 = items[2].clone().try_into_value(vm)?;
-            let a: i32 = items[3].clone().try_into_value(vm)?;
-            Ok((r, g, b, a))
-        } else {
-            Err(vm.new_type_error("color tuple must be (r, g, b) or (r, g, b, a)".to_string()))
-        }
-    };
+    let parse_rgba_from_tuple =
+        |tuple_obj: &rustpython_vm::builtins::PyTuple| -> PyResult<(i32, i32, i32, i32)> {
+            let items = tuple_obj.as_slice();
+            if items.len() == 3 {
+                let r: i32 = items[0].clone().try_into_value(vm)?;
+                let g: i32 = items[1].clone().try_into_value(vm)?;
+                let b: i32 = items[2].clone().try_into_value(vm)?;
+                Ok((r, g, b, 255))
+            } else if items.len() == 4 {
+                let r: i32 = items[0].clone().try_into_value(vm)?;
+                let g: i32 = items[1].clone().try_into_value(vm)?;
+                let b: i32 = items[2].clone().try_into_value(vm)?;
+                let a: i32 = items[3].clone().try_into_value(vm)?;
+                Ok((r, g, b, a))
+            } else {
+                Err(vm.new_type_error("color tuple must be (r, g, b) or (r, g, b, a)".to_string()))
+            }
+        };
 
     let (r, g, b, a): (i32, i32, i32, i32) = match args_vec.len() {
         0 => (0, 0, 0, 255),
         1 => {
             let color_tuple = args_vec[0]
                 .downcast_ref::<rustpython_vm::builtins::PyTuple>()
-                .ok_or_else(|| vm.new_type_error("clear(color): color must be a tuple".to_string()))?;
+                .ok_or_else(|| {
+                    vm.new_type_error("clear(color): color must be a tuple".to_string())
+                })?;
             parse_rgba_from_tuple(color_tuple)?
         }
         3 => {
@@ -719,11 +764,17 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .unwrap()
         .as_ref()
         .map(|ptr| ptr.0);
-    let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap();
-    let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH
+        .lock()
+        .unwrap();
+    let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT
+        .lock()
+        .unwrap();
 
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
-        vm.new_runtime_error("No frame buffer context set. frame.clear must be called during tick().".to_string())
+        vm.new_runtime_error(
+            "No frame buffer context set. frame.clear must be called during tick().".to_string(),
+        )
     })?;
 
     let buffer_len = width * height * 4;
@@ -763,9 +814,9 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
 
     {
-        let mut buffers = STANDALONE_FRAME_BUFFERS
-            .lock()
-            .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?;
+        let mut buffers = STANDALONE_FRAME_BUFFERS.lock().map_err(|_| {
+            vm.new_runtime_error("standalone frame buffer lock poisoned".to_string())
+        })?;
         let buf = buffers.entry(viewport_id).or_default();
         let required = width.saturating_mul(height).saturating_mul(4);
         if buf.len() != required {
@@ -789,7 +840,11 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
     tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
     tensor_dict.set_item("size", vm.ctx.new_int(width * height * 4).into(), vm)?;
-    tensor_dict.set_item("_xos_viewport_id", vm.ctx.new_int(viewport_id as i64).into(), vm)?;
+    tensor_dict.set_item(
+        "_xos_viewport_id",
+        vm.ctx.new_int(viewport_id as i64).into(),
+        vm,
+    )?;
 
     let frame_dict = vm.ctx.new_dict();
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
@@ -860,20 +915,21 @@ fn frame_standalone_window_size(_args: FuncArgs, vm: &VirtualMachine) -> PyResul
             0
         };
         let maybe_size = STANDALONE_PREVIEW_HOST.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .and_then(|host| {
-                    host.app
-                        .viewport_to_window
-                        .get(&viewport_id)
-                        .and_then(|wid| host.app.states.get(wid))
-                        .map(|s| (s.size.width, s.size.height))
-                })
+            slot.borrow().as_ref().and_then(|host| {
+                host.app
+                    .viewport_to_window
+                    .get(&viewport_id)
+                    .and_then(|wid| host.app.states.get(wid))
+                    .map(|s| (s.size.width, s.size.height))
+            })
         });
         if let Some((w, h)) = maybe_size {
             Ok(vm
                 .ctx
-                .new_tuple(vec![vm.ctx.new_int(w as usize).into(), vm.ctx.new_int(h as usize).into()])
+                .new_tuple(vec![
+                    vm.ctx.new_int(w as usize).into(),
+                    vm.ctx.new_int(h as usize).into(),
+                ])
                 .into())
         } else {
             Ok(vm.ctx.none())
@@ -926,8 +982,12 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         } else {
             0
         };
-        let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap() as u32;
-        let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap() as u32;
+        let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH
+            .lock()
+            .unwrap() as u32;
+        let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT
+            .lock()
+            .unwrap() as u32;
         let frame = STANDALONE_FRAME_BUFFERS
             .lock()
             .map_err(|_| vm.new_runtime_error("standalone frame buffer lock poisoned".to_string()))?
@@ -938,8 +998,9 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         STANDALONE_PREVIEW_HOST.with(|slot| {
             let mut opt = slot.borrow_mut();
             if opt.is_none() {
-                let event_loop = EventLoop::new()
-                    .map_err(|e| vm.new_runtime_error(format!("failed to create preview event loop: {e}")))?;
+                let event_loop = EventLoop::new().map_err(|e| {
+                    vm.new_runtime_error(format!("failed to create preview event loop: {e}"))
+                })?;
                 *opt = Some(StandalonePreviewHost {
                     event_loop,
                     app: StandalonePreviewApp::new(),
@@ -982,9 +1043,9 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 host.app.render_viewport(viewport_id);
                 loop {
                     let timeout = if host.app.viewport_paused(viewport_id) {
-                        Some(Duration::from_millis(250))
+                        Some(crate::time::Duration::from_millis(250))
                     } else {
-                        Some(Duration::ZERO)
+                        Some(crate::time::Duration::ZERO)
                     };
                     match host.event_loop.pump_app_events(timeout, &mut host.app) {
                         PumpStatus::Continue => {}
@@ -1016,25 +1077,60 @@ fn frame_present_standalone(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Create the xos module with Application base class
 pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos", vm.ctx.new_dict(), None);
-    
+
     // Add functions to the module
-    module.set_attr("hello", vm.new_function("hello", hello), vm).unwrap();
-    module.set_attr("get_frame_buffer", vm.new_function("get_frame_buffer", get_frame_buffer), vm).unwrap();
-    module.set_attr("get_mouse", vm.new_function("get_mouse", get_mouse), vm).unwrap();
-    
+    module
+        .set_attr("hello", vm.new_function("hello", hello), vm)
+        .unwrap();
+    module
+        .set_attr(
+            "get_frame_buffer",
+            vm.new_function("get_frame_buffer", get_frame_buffer),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr("get_mouse", vm.new_function("get_mouse", get_mouse), vm)
+        .unwrap();
+
     // Make xos.print an alias to the builtin print function
     if let Ok(builtin_print) = vm.builtins.get_attr("print", vm) {
         module.set_attr("print", builtin_print, vm).unwrap();
     }
-    
-    module.set_attr("sleep", vm.new_function("sleep", xos_sleep), vm).unwrap();
+
+    module
+        .set_attr("sleep", vm.new_function("sleep", xos_sleep), vm)
+        .unwrap();
+    let time_module = vm.new_module("xos.time", vm.ctx.new_dict(), None);
+    time_module
+        .set_attr("time", vm.new_function("time", xos_time_time), vm)
+        .unwrap();
+    time_module
+        .set_attr(
+            "monotonic",
+            vm.new_function("monotonic", xos_time_monotonic),
+            vm,
+        )
+        .unwrap();
+    time_module
+        .set_attr(
+            "perf_counter",
+            vm.new_function("perf_counter", xos_time_perf_counter),
+            vm,
+        )
+        .unwrap();
+    module.set_attr("time", time_module, vm).unwrap();
     module
         .set_attr("colorize", vm.new_function("colorize", xos_colorize), vm)
         .unwrap();
     module
-        .set_attr("print_color", vm.new_function("print_color", xos_print_color), vm)
+        .set_attr(
+            "print_color",
+            vm.new_function("print_color", xos_print_color),
+            vm,
+        )
         .unwrap();
-    
+
     // Add the random submodule
     let random_module = crate::python_api::random::random::make_random_module(vm);
     module.set_attr("random", random_module, vm).unwrap();
@@ -1044,7 +1140,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     string_module
         .set_attr(
             "ascii_letters",
-            vm.ctx.new_str("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+            vm.ctx
+                .new_str("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"),
             vm,
         )
         .unwrap();
@@ -1052,10 +1149,12 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr("digits", vm.ctx.new_str("0123456789"), vm)
         .unwrap();
     module.set_attr("string", string_module, vm).unwrap();
-    
+
     // Add the rasterizer submodule
     let rasterizer_module = crate::python_api::rasterizer::make_rasterizer_module(vm);
-    module.set_attr("rasterizer", rasterizer_module, vm).unwrap();
+    module
+        .set_attr("rasterizer", rasterizer_module, vm)
+        .unwrap();
 
     // Add the frame submodule
     let frame_module = vm.new_module("xos.frame", vm.ctx.new_dict(), None);
@@ -1063,13 +1162,25 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr("clear", vm.new_function("clear", frame_clear), vm)
         .unwrap();
     frame_module
-        .set_attr("_begin_standalone", vm.new_function("_begin_standalone", frame_begin_standalone), vm)
+        .set_attr(
+            "_begin_standalone",
+            vm.new_function("_begin_standalone", frame_begin_standalone),
+            vm,
+        )
         .unwrap();
     frame_module
-        .set_attr("_end_standalone", vm.new_function("_end_standalone", frame_end_standalone), vm)
+        .set_attr(
+            "_end_standalone",
+            vm.new_function("_end_standalone", frame_end_standalone),
+            vm,
+        )
         .unwrap();
     frame_module
-        .set_attr("_has_context", vm.new_function("_has_context", frame_has_context), vm)
+        .set_attr(
+            "_has_context",
+            vm.new_function("_has_context", frame_has_context),
+            vm,
+        )
         .unwrap();
     frame_module
         .set_attr(
@@ -1086,7 +1197,11 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         )
         .unwrap();
     frame_module
-        .set_attr("_present_standalone", vm.new_function("_present_standalone", frame_present_standalone), vm)
+        .set_attr(
+            "_present_standalone",
+            vm.new_function("_present_standalone", frame_present_standalone),
+            vm,
+        )
         .unwrap();
     frame_module
         .set_attr(
@@ -1107,15 +1222,15 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
 
     let regex_module = crate::python_api::regex::make_regex_module(vm);
     module.set_attr("regex", regex_module, vm).unwrap();
-    
+
     // Add the sensors submodule
     let sensors_module = crate::python_api::sensors::make_sensors_module(vm);
     module.set_attr("sensors", sensors_module, vm).unwrap();
-    
+
     // Add the audio submodule
     let audio_module = crate::python_api::audio::make_audio_module(vm);
     module.set_attr("audio", audio_module, vm).unwrap();
-    
+
     // Add the system submodule
     let system_module = crate::python_api::system::make_system_module(vm);
     module.set_attr("system", system_module, vm).unwrap();
@@ -1135,36 +1250,52 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add AI helpers.
     let ai_module = crate::python_api::ai::make_ai_module(vm);
     module.set_attr("ai", ai_module, vm).unwrap();
-    
+
     // Add the dialoguer submodule
     let dialoguer_module = crate::python_api::dialoguer::make_dialoguer_module(vm);
     module.set_attr("dialoguer", dialoguer_module, vm).unwrap();
-    
+
     // Add the math submodule
     let math_module = crate::python_api::math::make_math_module(vm);
     module.set_attr("math", math_module, vm).unwrap();
-    
+
     // Add the ops submodule
     let ops_module = crate::python_api::ops::make_ops_module(vm);
     module.set_attr("ops", ops_module, vm).unwrap();
-    
+
     // Add the tensors submodule (Burn-backed, replaces array)
     let tensors_module = crate::python_api::make_tensors_module(vm);
-    module.set_attr("tensor", tensors_module.get_attr("tensor", vm).unwrap(), vm).unwrap();
-    module.set_attr("zeros", tensors_module.get_attr("zeros", vm).unwrap(), vm).unwrap();
-    module.set_attr("ones", tensors_module.get_attr("ones", vm).unwrap(), vm).unwrap();
-    module.set_attr("full", tensors_module.get_attr("full", vm).unwrap(), vm).unwrap();
-    module.set_attr("arange", tensors_module.get_attr("arange", vm).unwrap(), vm).unwrap();
-    module.set_attr("stack", tensors_module.get_attr("stack", vm).unwrap(), vm).unwrap();
-    module.set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm).unwrap();
-    module.set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm).unwrap();
+    module
+        .set_attr("tensor", tensors_module.get_attr("tensor", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("zeros", tensors_module.get_attr("zeros", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("ones", tensors_module.get_attr("ones", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("full", tensors_module.get_attr("full", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("arange", tensors_module.get_attr("arange", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("stack", tensors_module.get_attr("stack", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("where", tensors_module.get_attr("where", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm)
+        .unwrap();
 
     crate::python_api::burn_train::register_burn_module(&module, vm);
 
     // Add nn submodule
     let nn_module = crate::python_api::nn::make_nn_module(vm);
     module.set_attr("nn", nn_module, vm).unwrap();
-    
+
     // Add the data submodule
     let data_module = crate::python_api::data::make_data_module(vm);
     module.set_attr("data", data_module, vm).unwrap();
@@ -1178,7 +1309,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     // Add the ui submodule
     let ui_module = crate::python_api::ui::make_ui_module(vm);
     module.set_attr("ui", ui_module, vm).unwrap();
-    
+
     // Add the dtypes module and expose dtype constants
     let dtypes_module = crate::python_api::dtypes::make_dtypes_module(vm);
     // Expose all dtype constants directly on xos module
@@ -1220,16 +1351,20 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     if let Ok(dtype) = dtypes_module.get_attr("bool", vm) {
         module.set_attr("bool", dtype, vm).ok();
     }
-    
+
     // Define the Application base class in Python
     let application_class_code = crate::python_api::engine::pyapp::APPLICATION_CLASS_CODE;
-    
+
     // Execute the Application class definition
     let scope = vm.new_scope_with_builtins();
-    if let Err(e) = vm.run_code_string(scope.clone(), application_class_code, "<xos_module>".to_string()) {
+    if let Err(e) = vm.run_code_string(
+        scope.clone(),
+        application_class_code,
+        "<xos_module>".to_string(),
+    ) {
         eprintln!("Failed to create Application class: {:?}", e);
     }
-    
+
     // xos.Tensor — single Python tensor type (see APPLICATION_CLASS_CODE)
     if let Ok(tensor_cls) = scope.globals.get_item("Tensor", vm) {
         vm.builtins.set_attr("Tensor", tensor_cls.clone(), vm).ok();
@@ -1240,7 +1375,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         module.set_attr("Application", app_class, vm).unwrap();
     }
     if let Ok(engine_state_cls) = scope.globals.get_item("EngineState", vm) {
-        vm.builtins.set_attr("EngineState", engine_state_cls.clone(), vm).ok();
+        vm.builtins
+            .set_attr("EngineState", engine_state_cls.clone(), vm)
+            .ok();
         module.set_attr("EngineState", engine_state_cls, vm).ok();
     }
     if let Ok(frame_cls) = scope.globals.get_item("Frame", vm) {
@@ -1257,4 +1394,3 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
 
     module
 }
-

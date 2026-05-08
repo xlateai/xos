@@ -2,18 +2,19 @@
 //! The interactive **`text`** binary target (`xos app text`) runs Python from [`super::launcher`] + `text.py`, not [`Application`] for [`TextApp`] directly.
 //!
 //! To experiment with legacy Rust-as-app behavior locally, instantiate [`TextApp`] in a scratch `main` / test harness.
+use crate::clipboard;
+use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
-use crate::rasterizer::{fill, fill_rect_buffer};
 use crate::rasterizer::text::fonts;
 use crate::rasterizer::text::text_rasterization::{
     line_band_intersects_doc_viewport, TextLayoutAlign, TextRasterizer,
 };
 use crate::rasterizer::text::ui_markup;
-use crate::ui::text as ui_text_edit;
+use crate::rasterizer::{fill, fill_rect_buffer};
+use crate::time::Instant;
 use crate::ui::onscreen_keyboard::KeyType;
-use crate::clipboard;
-use crate::engine::keyboard::shortcuts::ShortcutAction;
-use std::time::{Instant, Duration};
+use crate::ui::text as ui_text_edit;
+use std::time::Duration;
 
 const BACKGROUND_COLOR: (u8, u8, u8) = (0, 0, 0);
 const TEXT_COLOR: (u8, u8, u8) = (255, 255, 255);
@@ -62,17 +63,15 @@ const WHEEL_ACCEL_IDLE_DECAY: f32 = 0.86;
 const WHEEL_STREAK_HOLD: Duration = Duration::from_millis(72);
 
 // Arrow key characters (using Unicode arrow symbols)
-const ARROW_LEFT: char = '\u{2190}';  // ←
+const ARROW_LEFT: char = '\u{2190}'; // ←
 const ARROW_RIGHT: char = '\u{2192}'; // →
-const ARROW_UP: char = '\u{2191}';    // ↑
-const ARROW_DOWN: char = '\u{2193}';  // ↓
+const ARROW_UP: char = '\u{2191}'; // ↑
+const ARROW_DOWN: char = '\u{2193}'; // ↓
 
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TextViewportMetrics {
-    frame_w: f32,
-    frame_h: f32,
     pub(crate) layout_w: f32,
     pub(crate) visible_h: f32,
     pub(crate) draw_x: f32,
@@ -117,7 +116,7 @@ pub struct TextApp {
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
     last_tap_y: f32,
-    last_tap_scrolled: bool, // Track if user scrolled between taps
+    last_tap_scrolled: bool,    // Track if user scrolled between taps
     pub cursor_position: usize, // Character index where cursor should be
     dragging: bool,
     last_mouse_y: f32,
@@ -205,7 +204,6 @@ pub struct TextApp {
     /// Caret blink phase in seconds (period 1.0s; visible during first 0.5s).
     cursor_blink_elapsed: f32,
 }
-
 
 impl TextApp {
     pub fn new() -> Self {
@@ -441,8 +439,6 @@ impl TextApp {
             // Match [`UiText::render`] clip rect height (no keyboard clip — render draws the same box).
             let vh = vh_u.max(1) as f32;
             TextViewportMetrics {
-                frame_w,
-                frame_h,
                 layout_w: vw,
                 visible_h: vh,
                 draw_x: vx,
@@ -451,8 +447,6 @@ impl TextApp {
             }
         } else {
             TextViewportMetrics {
-                frame_w,
-                frame_h,
                 layout_w: frame_w,
                 visible_h: (content_bottom - content_top).max(1.0),
                 draw_x: 0.0,
@@ -498,7 +492,12 @@ impl TextApp {
         }
     }
 
-    pub(crate) fn paint_viewport(&mut self, ctx: &ViewportPaintCtx, buffer: &mut [u8], glyph_rgba: (u8, u8, u8, u8)) {
+    pub(crate) fn paint_viewport(
+        &mut self,
+        ctx: &ViewportPaintCtx,
+        buffer: &mut [u8],
+        glyph_rgba: (u8, u8, u8, u8),
+    ) {
         let fw = ctx.fw;
         let fh = ctx.fh;
         let width = ctx.width;
@@ -617,24 +616,46 @@ impl TextApp {
                 // Layout-space spans must be offset by the embed viewport origin (same as glyph `px`).
                 let sel_left = (draw_off_x + *min_x).round() as i32;
                 let sel_right = (draw_off_x + *max_x).round() as i32;
-                let sel_top =
-                    ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y) as i32;
-                let sel_bottom =
-                    ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y) as i32;
+                let sel_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y)
+                    + draw_off_y) as i32;
+                let sel_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y)
+                    + draw_off_y) as i32;
 
-                let y_lo = sel_top.min(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let y_hi = sel_top.max(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let x_lo = sel_left.min(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
-                let x_hi = sel_left.max(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
+                let y_lo = sel_top
+                    .min(sel_bottom)
+                    .max(clip_top)
+                    .max(0)
+                    .min(h_i.min(clip_bottom));
+                let y_hi = sel_top
+                    .max(sel_bottom)
+                    .max(clip_top)
+                    .max(0)
+                    .min(h_i.min(clip_bottom));
+                let x_lo = sel_left
+                    .min(sel_right)
+                    .max(clip_left)
+                    .max(0)
+                    .min(w_i.min(clip_right));
+                let x_hi = sel_left
+                    .max(sel_right)
+                    .max(clip_left)
+                    .max(0)
+                    .min(w_i.min(clip_right));
 
                 for y in y_lo..y_hi {
                     for x in x_lo..x_hi {
                         let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
                         let alpha = SELECTION_COLOR.3 as f32 / 255.0;
                         let inv_alpha = 1.0 - alpha;
-                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
-                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
-                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
+                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha
+                            + SELECTION_COLOR.0 as f32 * alpha)
+                            as u8;
+                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha
+                            + SELECTION_COLOR.1 as f32 * alpha)
+                            as u8;
+                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha
+                            + SELECTION_COLOR.2 as f32 * alpha)
+                            as u8;
                     }
                 }
             }
@@ -651,26 +672,50 @@ impl TextApp {
                     continue;
                 }
 
-                let sel_left = (draw_off_x + self.caret_x_for_line_index(line_idx, line_sel_start)).round() as i32;
-                let sel_right = (draw_off_x + self.caret_x_for_line_index(line_idx, line_sel_end)).round() as i32;
-                let sel_top =
-                    ((line.baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y) as i32;
-                let sel_bottom =
-                    ((line.baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y) as i32;
+                let sel_left = (draw_off_x + self.caret_x_for_line_index(line_idx, line_sel_start))
+                    .round() as i32;
+                let sel_right = (draw_off_x + self.caret_x_for_line_index(line_idx, line_sel_end))
+                    .round() as i32;
+                let sel_top = ((line.baseline_y - self.text_rasterizer.ascent - self.scroll_y)
+                    + draw_off_y) as i32;
+                let sel_bottom = ((line.baseline_y + self.text_rasterizer.descent - self.scroll_y)
+                    + draw_off_y) as i32;
 
-                let y_lo = sel_top.min(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let y_hi = sel_top.max(sel_bottom).max(clip_top).max(0).min(h_i.min(clip_bottom));
-                let x_lo = sel_left.min(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
-                let x_hi = sel_left.max(sel_right).max(clip_left).max(0).min(w_i.min(clip_right));
+                let y_lo = sel_top
+                    .min(sel_bottom)
+                    .max(clip_top)
+                    .max(0)
+                    .min(h_i.min(clip_bottom));
+                let y_hi = sel_top
+                    .max(sel_bottom)
+                    .max(clip_top)
+                    .max(0)
+                    .min(h_i.min(clip_bottom));
+                let x_lo = sel_left
+                    .min(sel_right)
+                    .max(clip_left)
+                    .max(0)
+                    .min(w_i.min(clip_right));
+                let x_hi = sel_left
+                    .max(sel_right)
+                    .max(clip_left)
+                    .max(0)
+                    .min(w_i.min(clip_right));
 
                 for y in y_lo..y_hi {
                     for x in x_lo..x_hi {
                         let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
                         let alpha = SELECTION_COLOR.3 as f32 / 255.0;
                         let inv_alpha = 1.0 - alpha;
-                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha + SELECTION_COLOR.0 as f32 * alpha) as u8;
-                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha + SELECTION_COLOR.1 as f32 * alpha) as u8;
-                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha + SELECTION_COLOR.2 as f32 * alpha) as u8;
+                        buffer[idx + 0] = (buffer[idx + 0] as f32 * inv_alpha
+                            + SELECTION_COLOR.0 as f32 * alpha)
+                            as u8;
+                        buffer[idx + 1] = (buffer[idx + 1] as f32 * inv_alpha
+                            + SELECTION_COLOR.1 as f32 * alpha)
+                            as u8;
+                        buffer[idx + 2] = (buffer[idx + 2] as f32 * inv_alpha
+                            + SELECTION_COLOR.2 as f32 * alpha)
+                            as u8;
                     }
                 }
             }
@@ -691,7 +736,8 @@ impl TextApp {
             }
             let slide_max = character.width;
             let g_left = character.x - slide_max;
-            let g_right = character.x + character.metrics.advance_width + character.metrics.width as f32;
+            let g_right =
+                character.x + character.metrics.advance_width + character.metrics.width as f32;
             if g_right < 0.0 || g_left > layout_w {
                 continue;
             }
@@ -715,8 +761,11 @@ impl TextApp {
 
             let fade_f = fade_alpha_byte as f32 / 255.0;
 
-            let (gr, gg, gb) =
-                ui_markup::glyph_rgb_with_spans(character.char_index, base_rgb, &self.glyph_color_spans);
+            let (gr, gg, gb) = ui_markup::glyph_rgb_with_spans(
+                character.char_index,
+                base_rgb,
+                &self.glyph_color_spans,
+            );
             let (gr, gg, gb) = (gr as u32, gg as u32, gb as u32);
 
             for y in 0..character.metrics.height {
@@ -729,8 +778,10 @@ impl TextApp {
                     let sx = px + x as i32;
                     let sy = py + y as i32;
 
-                    let in_viewport = sx >= clip_left && sx < clip_right && sy >= clip_top && sy < clip_bottom;
-                    if !in_viewport || sx < 0 || sx >= width as i32 || sy < 0 || sy >= height as i32 {
+                    let in_viewport =
+                        sx >= clip_left && sx < clip_right && sy >= clip_top && sy < clip_bottom;
+                    if !in_viewport || sx < 0 || sx >= width as i32 || sy < 0 || sy >= height as i32
+                    {
                         continue;
                     }
 
@@ -740,9 +791,12 @@ impl TextApp {
                     let inv = 1.0 - composite;
 
                     let idx = ((sy as u32 * width as u32 + sx as u32) * 4) as usize;
-                    buffer[idx + 0] = (gr as f32 * composite + buffer[idx + 0] as f32 * inv).clamp(0.0, 255.0) as u8;
-                    buffer[idx + 1] = (gg as f32 * composite + buffer[idx + 1] as f32 * inv).clamp(0.0, 255.0) as u8;
-                    buffer[idx + 2] = (gb as f32 * composite + buffer[idx + 2] as f32 * inv).clamp(0.0, 255.0) as u8;
+                    buffer[idx + 0] = (gr as f32 * composite + buffer[idx + 0] as f32 * inv)
+                        .clamp(0.0, 255.0) as u8;
+                    buffer[idx + 1] = (gg as f32 * composite + buffer[idx + 1] as f32 * inv)
+                        .clamp(0.0, 255.0) as u8;
+                    buffer[idx + 2] = (gb as f32 * composite + buffer[idx + 2] as f32 * inv)
+                        .clamp(0.0, 255.0) as u8;
                     buffer[idx + 3] = 0xff;
                 }
             }
@@ -778,15 +832,23 @@ impl TextApp {
                 self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.65;
             }
 
-            let cursor_top =
-                ((baseline_y - self.text_rasterizer.ascent - self.scroll_y) + draw_off_y).round() as i32;
-            let cursor_bottom =
-                ((baseline_y + self.text_rasterizer.descent - self.scroll_y) + draw_off_y).round() as i32;
+            let cursor_top = ((baseline_y - self.text_rasterizer.ascent - self.scroll_y)
+                + draw_off_y)
+                .round() as i32;
+            let cursor_bottom = ((baseline_y + self.text_rasterizer.descent - self.scroll_y)
+                + draw_off_y)
+                .round() as i32;
             let cx = (draw_off_x + self.smooth_cursor_x).round() as i32;
 
             for y in cursor_top..cursor_bottom {
-                if y >= clip_top && y < clip_bottom && cx >= clip_left && cx < clip_right
-                    && y >= 0 && y < height as i32 && cx >= 0 && cx < width as i32
+                if y >= clip_top
+                    && y < clip_bottom
+                    && cx >= clip_left
+                    && cx < clip_right
+                    && y >= 0
+                    && y < height as i32
+                    && cx >= 0
+                    && cx < width as i32
                 {
                     let idx = ((y as u32 * width as u32 + cx as u32) * 4) as usize;
                     buffer[idx + 0] = CURSOR_COLOR.0;
@@ -800,28 +862,30 @@ impl TextApp {
         if is_trackpad_mode && is_keyboard_shown {
             // One shared laser across Python embed widgets: draw only from the focused editor.
             if !(self.python_viewport.is_some() && !self.py_input_focused) {
-            if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
-                let dot_radius = 6.0;
-                let dot_x_i = laser_x.round() as i32;
-                let dot_y_i = laser_y.round() as i32;
+                if let (Some(laser_x), Some(laser_y)) =
+                    (self.trackpad_laser_x, self.trackpad_laser_y)
+                {
+                    let dot_radius = 6.0;
+                    let dot_x_i = laser_x.round() as i32;
+                    let dot_y_i = laser_y.round() as i32;
 
-                for dy in -(dot_radius as i32)..=(dot_radius as i32) {
-                    for dx in -(dot_radius as i32)..=(dot_radius as i32) {
-                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
-                        if distance <= dot_radius {
-                            let x = dot_x_i + dx;
-                            let y = dot_y_i + dy;
-                            if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                                let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                                buffer[idx + 0] = 255;
-                                buffer[idx + 1] = 0;
-                                buffer[idx + 2] = 0;
-                                buffer[idx + 3] = 255;
+                    for dy in -(dot_radius as i32)..=(dot_radius as i32) {
+                        for dx in -(dot_radius as i32)..=(dot_radius as i32) {
+                            let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                            if distance <= dot_radius {
+                                let x = dot_x_i + dx;
+                                let y = dot_y_i + dy;
+                                if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                                    buffer[idx + 0] = 255;
+                                    buffer[idx + 1] = 0;
+                                    buffer[idx + 2] = 0;
+                                    buffer[idx + 3] = 255;
+                                }
                             }
                         }
                     }
                 }
-            }
             }
         }
     }
@@ -919,7 +983,7 @@ impl TextApp {
         }
         let x = x as u32;
         let y = y as u32;
-    
+
         let mut draw_pixel = |x, y| {
             if x < width && y < height {
                 let idx = ((y * width + x) * 4) as usize;
@@ -929,7 +993,7 @@ impl TextApp {
                 buffer[idx + 3] = alpha;
             }
         };
-    
+
         for dx in 0..w {
             draw_pixel(x + dx, y);
             draw_pixel(x + dx, y + h.saturating_sub(1));
@@ -950,10 +1014,10 @@ impl Application for TextApp {
             let safe_region = &state.frame.safe_region_boundaries;
             let content_top = self.layout_content_top(safe_region.y1, height);
             let content_height = height - content_top;
-            
+
             // Tick the engine once to calculate line positions
             self.text_rasterizer.tick(shape[1] as f32, content_height);
-            
+
             // Start with scroll at 0 (text at top of safe region)
             self.scroll_y = 0.0;
             self.scroll_target = 0.0;
@@ -984,25 +1048,32 @@ impl Application for TextApp {
             self.text_rasterizer
                 .sync_default_font_family_from_engine(&mut self.engine_font_family_version_seen);
         }
-        
+
         // Extract all needed values in a block to release borrows
         let (width, height, content_top, _content_bottom, is_trackpad_mode, is_keyboard_shown) = {
             let shape = state.frame.shape();
             let width = shape[1] as f32;
             let height = shape[0] as f32;
-            
+
             let safe_region = &state.frame.safe_region_boundaries;
-            
+
             // Get keyboard top edge (whether visible or not)
             let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
-            
+
             let content_top = self.layout_content_top(safe_region.y1, height);
             let content_bottom = self.effective_content_bottom_px(height, keyboard_top_y); // Above keyboard / parent chrome
-            
+
             let is_trackpad_mode = state.keyboard.onscreen.is_trackpad_mode();
             let is_keyboard_shown = state.keyboard.onscreen.is_shown();
-            
-            (width, height, content_top, content_bottom, is_trackpad_mode, is_keyboard_shown)
+
+            (
+                width,
+                height,
+                content_top,
+                content_bottom,
+                is_trackpad_mode,
+                is_keyboard_shown,
+            )
         };
 
         self.sync_python_viewport_from_norm(width, height);
@@ -1034,7 +1105,7 @@ impl Application for TextApp {
                 self.last_engine_scaled_font = target_font;
             }
         }
-        
+
         let dt = state.delta_time_seconds.clamp(1e-4, 0.1);
         self.cursor_blink_elapsed = (self.cursor_blink_elapsed + dt) % 1.0;
 
@@ -1077,12 +1148,12 @@ impl Application for TextApp {
         // 3. Calculate natural content bounds
         let natural_min = 0.0;
         let natural_max = (doc_bottom - visible_height).max(0.0);
-        
+
         // 4. Calculate overscroll limits (based on screen percentage)
         let overscroll_distance = visible_height * SCROLL_OVERSCROLL_LIMIT;
         let limit_min = natural_min - overscroll_distance;
         let limit_max = natural_max + overscroll_distance;
-        
+
         // 5. Apply limits and physics (authoritative `scroll_target`, smoothed `scroll_y`)
         if !self.dragging {
             if self.scroll_target < natural_min {
@@ -1135,7 +1206,12 @@ impl Application for TextApp {
             } else {
                 fill(
                     &mut state.frame,
-                    (BACKGROUND_COLOR.0, BACKGROUND_COLOR.1, BACKGROUND_COLOR.2, 0xff),
+                    (
+                        BACKGROUND_COLOR.0,
+                        BACKGROUND_COLOR.1,
+                        BACKGROUND_COLOR.2,
+                        0xff,
+                    ),
                 );
             }
         }
@@ -1156,7 +1232,6 @@ impl Application for TextApp {
             (TEXT_COLOR.0, TEXT_COLOR.1, TEXT_COLOR.2, 255),
         );
     }
-    
 
     fn on_scroll(&mut self, _state: &mut EngineState, _dx: f32, dy: f32, unit: ScrollWheelUnit) {
         if self.python_viewport.is_some() && !self.py_scrollable {
@@ -1180,9 +1255,9 @@ impl Application for TextApp {
         if self.read_only {
             return;
         }
-        
+
         let content_height = self.viewport_metrics(state).visible_h;
-        
+
         match ch {
             ARROW_LEFT => {
                 let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
@@ -1342,42 +1417,52 @@ impl Application for TextApp {
         let allow_sel = !(self.python_viewport.is_some() && !self.py_selectable);
 
         // Check if temp trackpad mode should be activated (Shift/SymbolToggle drag)
-        if let (Some(initial_x), Some(initial_y)) = (self.temp_trackpad_initial_x, self.temp_trackpad_initial_y) {
-            if state.keyboard.onscreen.check_temp_trackpad_activation(initial_x, initial_y, state.mouse.x, state.mouse.y) {
+        if let (Some(initial_x), Some(initial_y)) =
+            (self.temp_trackpad_initial_x, self.temp_trackpad_initial_y)
+        {
+            if state.keyboard.onscreen.check_temp_trackpad_activation(
+                initial_x,
+                initial_y,
+                state.mouse.x,
+                state.mouse.y,
+            ) {
                 // Temp trackpad mode was activated — bootstrap laser using cursor / anchors.
                 self.ensure_trackpad_laser_initialized(state);
-                
+
                 // Clear initial position tracking
                 self.temp_trackpad_initial_x = None;
                 self.temp_trackpad_initial_y = None;
-                
+
                 // Mark as active and set last mouse position
                 self.trackpad_active = true;
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
                 self.trackpad_last_mouse_y = Some(state.mouse.y);
             }
         }
-        
+
         // Check if we're in trackpad mode AND actively using it
         if state.keyboard.onscreen.is_trackpad_mode() {
             // Bootstrap laser if unset (last plain click, strip-proportional fallback, or caret).
             if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                 self.ensure_trackpad_laser_initialized(state);
             }
-            
+
             // If mouse is in trackpad area and active (dragging), move the laser
             if self.trackpad_active && state.mouse.is_left_clicking {
-                if let (Some(laser_x), Some(laser_y), Some(last_mouse_x), Some(last_mouse_y)) = 
-                    (self.trackpad_laser_x, self.trackpad_laser_y, self.trackpad_last_mouse_x, self.trackpad_last_mouse_y) {
-                    
+                if let (Some(laser_x), Some(laser_y), Some(last_mouse_x), Some(last_mouse_y)) = (
+                    self.trackpad_laser_x,
+                    self.trackpad_laser_y,
+                    self.trackpad_last_mouse_x,
+                    self.trackpad_last_mouse_y,
+                ) {
                     let mouse_dx = state.mouse.x - last_mouse_x;
                     let mouse_dy = state.mouse.y - last_mouse_y;
-                    
+
                     // Track if mouse moved (for tap vs drag detection)
                     if mouse_dx.abs() > 2.0 || mouse_dy.abs() > 2.0 {
                         self.trackpad_moved = true;
                     }
-                    
+
                     // Move laser 2x with mouse movement (double speed)
                     let new_laser_x = (laser_x + mouse_dx * 2.0).max(0.0).min(width);
 
@@ -1389,7 +1474,11 @@ impl Application for TextApp {
 
                     // Python multi-editor: laser may use the full frame from the top (notch/status)
                     // down to just above the OSK; caret updates only while the laser is inside a text rect.
-                    let laser_y_global_min = if embed_py { 0.0 } else { safe_region.y1 * height };
+                    let laser_y_global_min = if embed_py {
+                        0.0
+                    } else {
+                        safe_region.y1 * height
+                    };
                     let keyboard_top_px = keyboard_top_y * height;
                     let y_global_max = if keyboard_top_px > laser_y_global_min + 2.0 {
                         keyboard_top_px - 2.0
@@ -1428,9 +1517,14 @@ impl Application for TextApp {
                     self.trackpad_laser_y = Some(new_laser_y);
 
                     // Only move caret/selection while the laser is over this pane (still free elsewhere for future UI taps).
-                    if !embed_py || self.python_viewport_contains_screen_point(new_laser_x, new_laser_y) {
-                        let char_index =
-                            self.find_nearest_char_index_from_screen(state, new_laser_x, new_laser_y);
+                    if !embed_py
+                        || self.python_viewport_contains_screen_point(new_laser_x, new_laser_y)
+                    {
+                        let char_index = self.find_nearest_char_index_from_screen(
+                            state,
+                            new_laser_x,
+                            new_laser_y,
+                        );
                         if self.trackpad_selecting {
                             self.selection_end = Some(char_index);
                         }
@@ -1439,11 +1533,11 @@ impl Application for TextApp {
                         self.ensure_cursor_visible(vh_sel);
                     }
                 }
-                
+
                 // Update last mouse position
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
                 self.trackpad_last_mouse_y = Some(state.mouse.y);
-                
+
                 // Don't allow normal scrolling when actively using trackpad
                 return;
             }
@@ -1454,12 +1548,12 @@ impl Application for TextApp {
             self.trackpad_last_mouse_x = None;
             self.trackpad_last_mouse_y = None;
         }
-        
+
         // Don't allow scrolling if touch started on keyboard
         if self.touch_started_on_keyboard {
             return;
         }
-        
+
         // Check if mouse moved significantly from tap position (start dragging or selecting)
         if !self.dragging && !self.selecting && state.mouse.is_left_clicking {
             let dx = (state.mouse.x - self.last_tap_x).abs();
@@ -1474,7 +1568,7 @@ impl Application for TextApp {
                     self.dragging = true;
                     self.last_mouse_y = state.mouse.y;
                 }
-                
+
                 #[cfg(not(target_os = "ios"))]
                 {
                     // macOS/Desktop: Allow text selection from click-drag
@@ -1495,7 +1589,7 @@ impl Application for TextApp {
                                 self.last_tap_x,
                                 self.last_tap_y,
                             );
-                            
+
                             self.selection_start = Some(start_char_idx);
                             self.selection_end = Some(start_char_idx);
                             self.cursor_position = start_char_idx;
@@ -1509,7 +1603,7 @@ impl Application for TextApp {
                                 self.last_tap_x,
                                 self.last_tap_y,
                             );
-                            
+
                             self.selection_start = Some(start_char_idx);
                             self.selection_end = Some(start_char_idx);
                             self.cursor_position = start_char_idx;
@@ -1521,7 +1615,7 @@ impl Application for TextApp {
                 }
             }
         }
-        
+
         // Handle text selection while dragging
         if allow_sel && self.selecting && state.mouse.is_left_clicking {
             // Find nearest character using rendered on-screen hitboxes only.
@@ -1532,7 +1626,7 @@ impl Application for TextApp {
             let vh_drag = self.viewport_metrics(state).visible_h;
             self.ensure_cursor_visible(vh_drag);
         }
-        
+
         // Scroll drag: 1:1 tracking + EMA of finger speed for release momentum.
         if self.dragging {
             if self.last_drag_sample_time.is_none() {
@@ -1595,18 +1689,15 @@ impl Application for TextApp {
         }
 
         // Check if keyboard handled the event (Python host forwards pointer first when embedded — skip dup)
-        let keyboard_claimed =
-            self.python_viewport.is_none()
-                && state.keyboard.onscreen.on_mouse_down(
-                    state.mouse.x,
-                    state.mouse.y,
-                    width,
-                    height,
-                );
+        let keyboard_claimed = self.python_viewport.is_none()
+            && state
+                .keyboard
+                .onscreen
+                .on_mouse_down(state.mouse.x, state.mouse.y, width, height);
         if keyboard_claimed {
             // Mark that touch started on keyboard to prevent scrolling
             self.touch_started_on_keyboard = true;
-            
+
             // Check if user pressed Shift or SymbolToggle (for temp trackpad activation on drag)
             // This covers: Shift (standard mode), #+= (symbols1 mode), and 123 (symbols2 mode)
             let held_key = state.keyboard.onscreen.get_held_key_type();
@@ -1622,23 +1713,23 @@ impl Application for TextApp {
             }
             return;
         }
-        
+
         // Check if we're in trackpad mode and clicking in the trackpad area
         if state.keyboard.onscreen.is_trackpad_mode() {
             let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
             let keyboard_region_top = keyboard_top_y * height;
-            
+
             // Check if clicking in the trackpad area (keyboard region)
             if state.mouse.y >= keyboard_region_top {
                 self.trackpad_active = true;
-                
+
                 if self.trackpad_laser_x.is_none() || self.trackpad_laser_y.is_none() {
                     self.ensure_trackpad_laser_initialized(state);
                 }
-                
+
                 self.trackpad_last_mouse_x = Some(state.mouse.x);
                 self.trackpad_last_mouse_y = Some(state.mouse.y);
-                
+
                 // Check for double-tap to start selection
                 let now = Instant::now();
                 let is_double_tap = if let Some(last_time) = self.trackpad_last_tap_time {
@@ -1647,7 +1738,7 @@ impl Application for TextApp {
                 } else {
                     false
                 };
-                
+
                 if is_double_tap {
                     // Start selection mode immediately, even on first interaction:
                     // anchor selection at current laser hit instead of stale cursor/focus.
@@ -1666,37 +1757,40 @@ impl Application for TextApp {
                     // Record tap time (selection will be cleared on release if no drag)
                     self.trackpad_last_tap_time = Some(now);
                 }
-                
+
                 // Reset moved flag
                 self.trackpad_moved = false;
-                
+
                 return;
             }
         }
-        
+
         // Touch started outside keyboard or keyboard is hidden
         self.touch_started_on_keyboard = false;
-        
+
         // Get keyboard region for double-tap detection
         let (_, keyboard_top_y, _, _) = state.keyboard.onscreen.top_edge_coordinates();
         let keyboard_region_top = keyboard_top_y * height;
-        
+
         // Check for double tap in content area OR in keyboard region (even if hidden)
         // Only trigger if user didn't scroll between taps AND velocity is low
         let now = Instant::now();
         let is_double_tap = if let Some(last_time) = self.last_tap_time {
             let time_since_last = now.duration_since(last_time);
-            let distance = ((state.mouse.x - self.last_tap_x).powi(2) + (state.mouse.y - self.last_tap_y).powi(2)).sqrt();
-            
+            let distance = ((state.mouse.x - self.last_tap_x).powi(2)
+                + (state.mouse.y - self.last_tap_y).powi(2))
+            .sqrt();
+
             time_since_last < Duration::from_millis(DOUBLE_TAP_TIME_MS) 
                 && distance < DOUBLE_TAP_DISTANCE 
                 && !self.last_tap_scrolled // Don't trigger if user scrolled
                 && (self.scroll_target - self.scroll_y).abs() < SCROLL_SETTLE_FOR_TAP
-                && self.drag_scroll_momentum.abs() < DRAG_MOMENTUM_SETTLE_FOR_TAP // Not coasting from drag
+                && self.drag_scroll_momentum.abs() < DRAG_MOMENTUM_SETTLE_FOR_TAP
+        // Not coasting from drag
         } else {
             false
         };
-        
+
         if is_double_tap {
             // While keyboard is visible, taps on the keyboard bar are mostly key hits — typing can
             // produce two taps within DOUBLE_TAP_TIME_MS; don't treat that as "toggle keyboard".
@@ -1721,7 +1815,7 @@ impl Application for TextApp {
             self.pending_cursor_tap_y = None;
             return; // Don't process cursor positioning for double-tap
         }
-        
+
         // If single tap in keyboard region while keyboard is hidden, don't move cursor
         if state.mouse.y >= keyboard_region_top && !state.keyboard.onscreen.is_shown() {
             // Just update tap tracking for potential double-tap
@@ -1731,7 +1825,7 @@ impl Application for TextApp {
             self.last_tap_scrolled = false; // Reset scroll flag for new tap
             return;
         }
-        
+
         // Normal single tap in content area — skip cursor placement when not selectable (Python widgets)
         if !(self.python_viewport.is_some() && !self.py_selectable) {
             // Single tap - record position but don't move cursor yet
@@ -1747,13 +1841,13 @@ impl Application for TextApp {
                 self.selection_end = None;
             }
         }
-        
+
         // Update tap tracking
         self.last_tap_time = Some(now);
         self.last_tap_x = state.mouse.x;
         self.last_tap_y = state.mouse.y;
         self.last_tap_scrolled = false; // Reset scroll flag for new tap
-        
+
         // Don't start dragging immediately - wait for mouse movement
         // Dragging will be started in on_mouse_move if mouse moves significantly
     }
@@ -1763,19 +1857,23 @@ impl Application for TextApp {
         if self.python_viewport.is_none() {
             state.keyboard.onscreen.on_mouse_up();
         }
-        
+
         // Check if we should move cursor (only if user didn't scroll and didn't drag/select)
         if let (Some(tap_x), Some(tap_y)) = (self.pending_cursor_tap_x, self.pending_cursor_tap_y) {
             // Check if user scrolled (scroll_y changed significantly)
             let scroll_delta = (self.scroll_target - self.initial_scroll_target).abs();
             let scroll_threshold = 1.0; // pixels
-            
+
             // Check if user dragged (moved mouse significantly)
-            let drag_distance = ((state.mouse.x - tap_x).powi(2) + (state.mouse.y - tap_y).powi(2)).sqrt();
+            let drag_distance =
+                ((state.mouse.x - tap_x).powi(2) + (state.mouse.y - tap_y).powi(2)).sqrt();
             let drag_threshold = 10.0; // pixels
-            
+
             // Only move cursor if user didn't scroll and didn't drag/select
-            if scroll_delta < scroll_threshold && !self.selecting && (!self.dragging || drag_distance < drag_threshold) {
+            if scroll_delta < scroll_threshold
+                && !self.selecting
+                && (!self.dragging || drag_distance < drag_threshold)
+            {
                 let char_index = self.find_nearest_char_index_from_screen(state, tap_x, tap_y);
                 self.cursor_position = char_index;
 
@@ -1788,12 +1886,12 @@ impl Application for TextApp {
                     self.selection_end = None;
                 }
             }
-            
+
             // Clear pending cursor position
             self.pending_cursor_tap_x = None;
             self.pending_cursor_tap_y = None;
         }
-        
+
         // Stop dragging and selecting
         self.dragging = false;
         self.last_drag_sample_time = None;
@@ -1829,12 +1927,12 @@ impl Application for TextApp {
         self.trackpad_moved = false;
         self.trackpad_last_mouse_x = None;
         self.trackpad_last_mouse_y = None;
-        
+
         // Clear temp trackpad initial position tracking
         self.temp_trackpad_initial_x = None;
         self.temp_trackpad_initial_y = None;
     }
-    
+
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
         self.apply_keyboard_shortcut(shortcut, state);
     }
@@ -1885,7 +1983,11 @@ impl Application for TextApp {
 }
 
 impl TextApp {
-    pub(crate) fn apply_keyboard_shortcut(&mut self, shortcut: ShortcutAction, state: &mut EngineState) {
+    pub(crate) fn apply_keyboard_shortcut(
+        &mut self,
+        shortcut: ShortcutAction,
+        state: &mut EngineState,
+    ) {
         if self.python_viewport.is_some() && !self.py_allow_shortcuts {
             return;
         }
@@ -1912,7 +2014,11 @@ impl TextApp {
 
     /// Cursor + selection state used by collaborative wrappers (e.g. text mesh).
     pub fn shared_selection_state(&self) -> (usize, Option<usize>, Option<usize>) {
-        (self.cursor_position, self.selection_start, self.selection_end)
+        (
+            self.cursor_position,
+            self.selection_start,
+            self.selection_end,
+        )
     }
 
     /// Applies externally synchronized cursor/selection with bounds clamping.
@@ -1984,11 +2090,13 @@ impl TextApp {
 
         self.initialize_laser_at_cursor(state);
     }
-    
+
     /// Auto-scroll to keep cursor visible on screen
     fn ensure_cursor_visible(&mut self, content_height: f32) {
         let (_, cursor_baseline_y) = self.get_cursor_screen_position();
-        let line_height = self.text_rasterizer.ascent + self.text_rasterizer.descent.abs() + self.text_rasterizer.line_gap;
+        let line_height = self.text_rasterizer.ascent
+            + self.text_rasterizer.descent.abs()
+            + self.text_rasterizer.line_gap;
 
         // Match scroll limits in [`tick`]: requesting past `natural_max` fights elastic clamps → jitter typing at EOF.
         let doc_bottom = self.document_bottom_y_px();
@@ -2026,7 +2134,7 @@ impl TextApp {
             self.scroll_y = self.scroll_target;
         }
     }
-    
+
     fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
@@ -2042,25 +2150,36 @@ impl TextApp {
 
     fn move_cursor_up(&mut self) {
         // Find current line
-        let line_idx_opt = self.text_rasterizer.lines.iter()
+        let line_idx_opt = self
+            .text_rasterizer
+            .lines
+            .iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
             })
             .map(|(idx, _)| idx);
-        
+
         if let Some(line_idx) = line_idx_opt {
             if line_idx > 0 {
                 // Move to previous line
                 let prev_line = &self.text_rasterizer.lines[line_idx - 1];
-                
+
                 // Find current x position in current line
-                let current_x = if let Some(char_at_cursor) = self.text_rasterizer.characters.iter()
-                    .find(|c| c.char_index == self.cursor_position) {
+                let current_x = if let Some(char_at_cursor) = self
+                    .text_rasterizer
+                    .characters
+                    .iter()
+                    .find(|c| c.char_index == self.cursor_position)
+                {
                     char_at_cursor.x
-                } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
+                } else if let Some(last_in_line) = self
+                    .text_rasterizer
+                    .characters
+                    .iter()
                     .filter(|c| c.line_index == line_idx)
-                    .last() {
+                    .last()
+                {
                     last_in_line.x
                         + self
                             .text_rasterizer
@@ -2068,13 +2187,17 @@ impl TextApp {
                 } else {
                     0.0
                 };
-                
+
                 // Find character in previous line closest to current_x
                 let mut best_char_index = prev_line.end_index;
                 let mut min_distance = f32::MAX;
-                
-                for character in self.text_rasterizer.characters.iter()
-                    .filter(|c| c.line_index == line_idx - 1) {
+
+                for character in self
+                    .text_rasterizer
+                    .characters
+                    .iter()
+                    .filter(|c| c.line_index == line_idx - 1)
+                {
                     let distance = (character.x - current_x).abs();
                     if distance < min_distance {
                         min_distance = distance;
@@ -2092,7 +2215,7 @@ impl TextApp {
                         best_char_index = character.char_index + 1;
                     }
                 }
-                
+
                 self.cursor_position = best_char_index.min(prev_line.end_index);
             } else {
                 // Already at first line, move to start
@@ -2103,25 +2226,36 @@ impl TextApp {
 
     fn move_cursor_down(&mut self) {
         // Find current line
-        let line_idx_opt = self.text_rasterizer.lines.iter()
+        let line_idx_opt = self
+            .text_rasterizer
+            .lines
+            .iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
             })
             .map(|(idx, _)| idx);
-        
+
         if let Some(line_idx) = line_idx_opt {
             if line_idx < self.text_rasterizer.lines.len() - 1 {
                 // Move to next line
                 let next_line = &self.text_rasterizer.lines[line_idx + 1];
-                
+
                 // Find current x position in current line
-                let current_x = if let Some(char_at_cursor) = self.text_rasterizer.characters.iter()
-                    .find(|c| c.char_index == self.cursor_position) {
+                let current_x = if let Some(char_at_cursor) = self
+                    .text_rasterizer
+                    .characters
+                    .iter()
+                    .find(|c| c.char_index == self.cursor_position)
+                {
                     char_at_cursor.x
-                } else if let Some(last_in_line) = self.text_rasterizer.characters.iter()
+                } else if let Some(last_in_line) = self
+                    .text_rasterizer
+                    .characters
+                    .iter()
                     .filter(|c| c.line_index == line_idx)
-                    .last() {
+                    .last()
+                {
                     last_in_line.x
                         + self
                             .text_rasterizer
@@ -2129,13 +2263,17 @@ impl TextApp {
                 } else {
                     0.0
                 };
-                
+
                 // Find character in next line closest to current_x
                 let mut best_char_index = next_line.end_index;
                 let mut min_distance = f32::MAX;
-                
-                for character in self.text_rasterizer.characters.iter()
-                    .filter(|c| c.line_index == line_idx + 1) {
+
+                for character in self
+                    .text_rasterizer
+                    .characters
+                    .iter()
+                    .filter(|c| c.line_index == line_idx + 1)
+                {
                     let distance = (character.x - current_x).abs();
                     if distance < min_distance {
                         min_distance = distance;
@@ -2153,7 +2291,7 @@ impl TextApp {
                         best_char_index = character.char_index + 1;
                     }
                 }
-                
+
                 self.cursor_position = best_char_index.min(next_line.end_index);
             } else {
                 // Already at last line, move to end
@@ -2161,7 +2299,7 @@ impl TextApp {
             }
         }
     }
-    
+
     fn find_nearest_char_index_from_screen(
         &self,
         state: &EngineState,
@@ -2196,8 +2334,10 @@ impl TextApp {
                 continue;
             }
 
-            let line_top = vp.draw_y + (line.baseline_y - self.text_rasterizer.ascent - self.scroll_y);
-            let line_bottom = vp.draw_y + (line.baseline_y + self.text_rasterizer.descent - self.scroll_y);
+            let line_top =
+                vp.draw_y + (line.baseline_y - self.text_rasterizer.ascent - self.scroll_y);
+            let line_bottom =
+                vp.draw_y + (line.baseline_y + self.text_rasterizer.descent - self.scroll_y);
             let dy = if screen_y < line_top {
                 line_top - screen_y
             } else if screen_y > line_bottom {
@@ -2284,7 +2424,10 @@ impl TextApp {
                     continue;
                 }
                 has_chars = true;
-                let right = character.x + self.text_rasterizer.advance_with_spacing(character.metrics.advance_width);
+                let right = character.x
+                    + self
+                        .text_rasterizer
+                        .advance_with_spacing(character.metrics.advance_width);
                 line_left = line_left.min(character.x);
                 line_right = line_right.max(right);
             }
@@ -2312,7 +2455,7 @@ impl TextApp {
 
         text_len
     }
-    
+
     fn save_undo_state(&mut self) {
         ui_text_edit::save_undo_state(
             &mut self.undo_stack,
@@ -2321,23 +2464,29 @@ impl TextApp {
             self.cursor_position,
         );
     }
-    
+
     /// Get the cursor position in text coordinates (x, y)
     fn get_cursor_screen_position(&self) -> (f32, f32) {
         // Find cursor position based on cursor_position index
         // First, find which line the cursor is on
-        let line_info_with_idx = self.text_rasterizer.lines.iter()
+        let line_info_with_idx = self
+            .text_rasterizer
+            .lines
+            .iter()
             .enumerate()
             .find(|(_, line)| {
                 line.start_index <= self.cursor_position && self.cursor_position <= line.end_index
             });
-        
+
         if let Some((line_idx, line)) = line_info_with_idx {
             // Found the line - check if there are characters in this line
-            let chars_in_line: Vec<_> = self.text_rasterizer.characters.iter()
+            let chars_in_line: Vec<_> = self
+                .text_rasterizer
+                .characters
+                .iter()
                 .filter(|c| c.line_index == line_idx)
                 .collect();
-            
+
             if chars_in_line.is_empty() {
                 // Empty line — X from layout (e.g. horizontal centering).
                 (
@@ -2356,17 +2505,19 @@ impl TextApp {
                     // Find character at or before cursor position
                     let mut found_char = None;
                     let mut char_after = None;
-                    
+
                     for character in self.text_rasterizer.characters.iter() {
                         if character.char_index == self.cursor_position {
                             found_char = Some(character);
                             break;
-                        } else if character.char_index > self.cursor_position && character.line_index == line_idx {
+                        } else if character.char_index > self.cursor_position
+                            && character.line_index == line_idx
+                        {
                             char_after = Some(character);
                             break;
                         }
                     }
-                    
+
                     if let Some(char_at_cursor) = found_char {
                         // Cursor is before this character
                         (char_at_cursor.x, line.baseline_y)
@@ -2395,7 +2546,10 @@ impl TextApp {
         } else if self.cursor_position == 0 {
             // Cursor at very start (before any lines)
             if let Some(first_line) = self.text_rasterizer.lines.first() {
-                (self.text_rasterizer.line_leading_caret_x(0), first_line.baseline_y)
+                (
+                    self.text_rasterizer.line_leading_caret_x(0),
+                    first_line.baseline_y,
+                )
             } else {
                 (0.0, self.text_rasterizer.ascent)
             }
@@ -2405,10 +2559,13 @@ impl TextApp {
                 // Find the line index
                 let last_line_idx = self.text_rasterizer.lines.len() - 1;
                 // Check if last line has characters
-                let chars_in_last_line: Vec<_> = self.text_rasterizer.characters.iter()
+                let chars_in_last_line: Vec<_> = self
+                    .text_rasterizer
+                    .characters
+                    .iter()
                     .filter(|c| c.line_index == last_line_idx)
                     .collect();
-                
+
                 if chars_in_last_line.is_empty() {
                     (
                         self.text_rasterizer.line_leading_caret_x(last_line_idx),
@@ -2430,7 +2587,10 @@ impl TextApp {
                 }
             } else if let Some(last) = self.text_rasterizer.characters.last() {
                 (
-                    last.x + self.text_rasterizer.advance_with_spacing(last.metrics.advance_width),
+                    last.x
+                        + self
+                            .text_rasterizer
+                            .advance_with_spacing(last.metrics.advance_width),
                     self.text_rasterizer
                         .lines
                         .last()
@@ -2466,11 +2626,14 @@ impl TextApp {
             if character.char_index >= clamped {
                 return character.x;
             }
-            x = character.x + self.text_rasterizer.advance_with_spacing(character.metrics.advance_width);
+            x = character.x
+                + self
+                    .text_rasterizer
+                    .advance_with_spacing(character.metrics.advance_width);
         }
         x
     }
-    
+
     /// Delete the current selection and return true if a selection was deleted
     fn delete_selection(&mut self) -> bool {
         ui_text_edit::delete_selection(
@@ -2480,7 +2643,7 @@ impl TextApp {
             &mut self.selection_end,
         )
     }
-    
+
     fn handle_action_key(&mut self, action: KeyType, state: &mut EngineState) {
         let content_height = self.viewport_metrics(state).visible_h;
 
@@ -2561,7 +2724,8 @@ impl TextApp {
                 }
                 if let Some((text, cursor)) = self.undo_stack.pop() {
                     // Save current state to redo stack
-                    self.redo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
+                    self.redo_stack
+                        .push((self.text_rasterizer.text.clone(), self.cursor_position));
                     // Restore previous state
                     self.text_rasterizer.text = text;
                     self.cursor_position = cursor;
@@ -2578,7 +2742,8 @@ impl TextApp {
                 }
                 if let Some((text, cursor)) = self.redo_stack.pop() {
                     // Save current state to undo stack
-                    self.undo_stack.push((self.text_rasterizer.text.clone(), self.cursor_position));
+                    self.undo_stack
+                        .push((self.text_rasterizer.text.clone(), self.cursor_position));
                     // Restore redone state
                     self.text_rasterizer.text = text;
                     self.cursor_position = cursor;

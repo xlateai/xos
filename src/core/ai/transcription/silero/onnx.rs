@@ -44,7 +44,10 @@ impl SileroVadSession {
     /// One 512-sample frame at 16 kHz. Returns speech probability in \[0, 1\].
     pub fn predict_chunk(&mut self, chunk512: &[f32]) -> Result<f32, String> {
         if chunk512.len() != WINDOW {
-            return Err(format!("Silero VAD expects {WINDOW} samples, got {}", chunk512.len()));
+            return Err(format!(
+                "Silero VAD expects {WINDOW} samples, got {}",
+                chunk512.len()
+            ));
         }
 
         let mut input = Vec::with_capacity(EFFECTIVE);
@@ -75,7 +78,9 @@ impl SileroVadSession {
         let state_n = outputs
             .get("stateN")
             .ok_or_else(|| "Silero ONNX missing output 'stateN'".to_string())?;
-        let (_, st) = state_n.try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
+        let (_, st) = state_n
+            .try_extract_tensor::<f32>()
+            .map_err(|e| e.to_string())?;
         if st.len() == STATE_LEN {
             self.state.copy_from_slice(st);
         }

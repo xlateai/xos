@@ -1,9 +1,9 @@
 // src/random/native_random.rs
 
-use rand::{Rng, SeedableRng};
-use rand::rngs::StdRng;
-use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use std::sync::Mutex;
 
 static RNG: Lazy<Mutex<StdRng>> = Lazy::new(|| {
     let seed = rand::random::<u64>();

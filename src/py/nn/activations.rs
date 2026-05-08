@@ -1,4 +1,4 @@
-use rustpython_vm::{PyResult, VirtualMachine, function::FuncArgs};
+use rustpython_vm::{function::FuncArgs, PyResult, VirtualMachine};
 
 fn relu_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -27,7 +27,15 @@ fn relu_call(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn relu_new(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let obj = vm.ctx.new_dict();
     obj.set_item("__class_name__", vm.ctx.new_str("ReLU").into(), vm)?;
-    obj.set_item("forward", vm.new_function("forward", relu_forward).into(), vm)?;
-    obj.set_item("__call__", vm.new_function("__call__", relu_call).into(), vm)?;
+    obj.set_item(
+        "forward",
+        vm.new_function("forward", relu_forward).into(),
+        vm,
+    )?;
+    obj.set_item(
+        "__call__",
+        vm.new_function("__call__", relu_call).into(),
+        vm,
+    )?;
     Ok(obj.into())
 }

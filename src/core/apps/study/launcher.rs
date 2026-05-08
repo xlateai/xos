@@ -1,9 +1,8 @@
 //! Python UI for `xos app study` / iOS **`study`**: prefers `study.py` on disk under the crate root,
 //! else [`include_str!`] embedded copy so binaries without checkout still run.
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::fmt::Write;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -38,11 +37,30 @@ fn escape_python_string_literal(contents: &str) -> String {
 }
 
 fn study_app_source_and_logical_path() -> (String, String) {
-    let study_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/study");
-    let path = study_dir.join("study.py");
+    #[cfg(not(target_arch = "wasm32"))]
+    let (study_main, study_data, logical_path) = {
+        let study_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/study");
+        let path = study_dir.join("study.py");
 
-    let study_data = std::fs::read_to_string(study_dir.join("study_data.py"))
-        .unwrap_or_else(|_| STUDY_DATA_PY_EMBED.to_string());
+        let study_data = std::fs::read_to_string(study_dir.join("study_data.py"))
+            .unwrap_or_else(|_| STUDY_DATA_PY_EMBED.to_string());
+        let study_main =
+            std::fs::read_to_string(&path).unwrap_or_else(|_| STUDY_APP_PY_EMBED.to_string());
+        let logical_path = if path.is_file() {
+            path.to_string_lossy().to_string()
+        } else {
+            "study/study.py".to_string()
+        };
+
+        (study_main, study_data, logical_path)
+    };
+
+    #[cfg(target_arch = "wasm32")]
+    let (study_main, study_data, logical_path) = (
+        STUDY_APP_PY_EMBED.to_string(),
+        STUDY_DATA_PY_EMBED.to_string(),
+        "study/study.py".to_string(),
+    );
 
     let quoted = escape_python_string_literal(&study_data);
     let prelude = format!(
@@ -56,16 +74,7 @@ sys.modules["study_data"] = __study_data_mod
         quoted = quoted
     );
 
-    match std::fs::read_to_string(&path) {
-        Ok(main) => (
-            format!("{prelude}{main}"),
-            path.to_string_lossy().to_string(),
-        ),
-        Err(_) => (
-            format!("{prelude}{}", STUDY_APP_PY_EMBED),
-            "study/study.py".to_string(),
-        ),
-    }
+    (format!("{prelude}{study_main}"), logical_path)
 }
 
 pub fn boxed_study_app() -> Option<Box<dyn Application>> {
@@ -84,7 +93,9 @@ pub fn boxed_study_app() -> Option<Box<dyn Application>> {
         execute_python_code(&interpreter, &code, &fname, None, Some(print_cb), &[]);
 
     if let Err(e) = run_result {
-        crate::print(&format!("❌ Failed to load study app Python ({fname}):\n{e}"));
+        crate::print(&format!(
+            "❌ Failed to load study app Python ({fname}):\n{e}"
+        ));
         return None;
     }
 

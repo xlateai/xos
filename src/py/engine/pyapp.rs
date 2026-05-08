@@ -1,18 +1,18 @@
-use rustpython_vm::{
-    Interpreter, PyObjectRef, PyResult, AsObject, VirtualMachine, builtins::PyBaseExceptionRef,
-};
 use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState, SafeRegionBoundingRectangle, ScrollWheelUnit};
 use crate::python_api::engine::py_engine_tls::{CallbackEngineStateGuard, TickEngineStateGuard};
+use rustpython_vm::{
+    builtins::PyBaseExceptionRef, AsObject, Interpreter, PyObjectRef, PyResult, VirtualMachine,
+};
 
 /// Format a Python exception with traceback info
 fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
     let mut output = String::new();
-    
+
     // Try to show traceback info if available
     if let Some(traceback) = py_exc.traceback() {
         output.push_str("Traceback (most recent call last):\n");
-        
+
         // Use the debug format which should show file/line info
         let tb_str = format!("{:?}", traceback);
         if !tb_str.is_empty() && tb_str.len() < 500 {
@@ -26,27 +26,39 @@ fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> 
             }
         }
     }
-    
+
     // Get exception class name
     let class_name = py_exc.class().name().to_string();
-    
+
     // Try to get the exception message
-    let msg = vm.call_method(py_exc.as_object(), "__str__", ())
+    let msg = vm
+        .call_method(py_exc.as_object(), "__str__", ())
         .ok()
         .and_then(|result| result.str(vm).ok().map(|s| s.to_string()))
         .unwrap_or_default();
-    
+
     // Add exception info
     if !msg.is_empty() {
         output.push_str(&format!("{}: {}", class_name, msg));
     } else {
         output.push_str(&class_name);
     }
-    
+
     output
 }
 
-fn sync_app_safe_region(vm: &VirtualMachine, app: &PyObjectRef, safe: &SafeRegionBoundingRectangle) -> PyResult<()> {
+fn log_py_runtime_error(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::print(message);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{message}");
+}
+
+fn sync_app_safe_region(
+    vm: &VirtualMachine,
+    app: &PyObjectRef,
+    safe: &SafeRegionBoundingRectangle,
+) -> PyResult<()> {
     let cls = vm.builtins.get_attr("__xos_SafeRegion_cls__", vm)?;
     let x1: PyObjectRef = vm.ctx.new_float(safe.x1 as f64).into();
     let y1: PyObjectRef = vm.ctx.new_float(safe.y1 as f64).into();
@@ -71,7 +83,11 @@ pub(crate) enum RoutedPyEvent {
     Shortcut(ShortcutAction),
 }
 
-fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &EngineState) -> PyResult {
+fn build_routed_event_dict(
+    vm: &VirtualMachine,
+    ev: RoutedPyEvent,
+    state: &EngineState,
+) -> PyResult {
     let d = vm.ctx.new_dict();
     match ev {
         RoutedPyEvent::MouseDown => {
@@ -89,8 +105,16 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &Engin
                     .into(),
                 vm,
             )?;
-            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
-            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+            d.set_item(
+                "is_left",
+                vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                vm,
+            )?;
+            d.set_item(
+                "is_right",
+                vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                vm,
+            )?;
         }
         RoutedPyEvent::MouseUp => {
             d.set_item("kind", vm.ctx.new_str("mouse_up").into(), vm)?;
@@ -107,8 +131,16 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &Engin
                     .into(),
                 vm,
             )?;
-            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
-            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+            d.set_item(
+                "is_left",
+                vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                vm,
+            )?;
+            d.set_item(
+                "is_right",
+                vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                vm,
+            )?;
         }
         RoutedPyEvent::MouseMove => {
             d.set_item("kind", vm.ctx.new_str("mouse_move").into(), vm)?;
@@ -125,8 +157,16 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &Engin
                     .into(),
                 vm,
             )?;
-            d.set_item("is_left", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)?;
-            d.set_item("is_right", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)?;
+            d.set_item(
+                "is_left",
+                vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                vm,
+            )?;
+            d.set_item(
+                "is_right",
+                vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                vm,
+            )?;
         }
         RoutedPyEvent::Scroll { dx, dy, unit } => {
             d.set_item("kind", vm.ctx.new_str("scroll").into(), vm)?;
@@ -159,7 +199,11 @@ fn build_routed_event_dict(vm: &VirtualMachine, ev: RoutedPyEvent, state: &Engin
 }
 
 #[inline]
-fn sync_app_mouse_from_engine(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &EngineState) {
+fn sync_app_mouse_from_engine(
+    vm: &VirtualMachine,
+    app_instance: &PyObjectRef,
+    state: &EngineState,
+) {
     let mouse_dict = vm.ctx.new_dict();
     let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
     let _ = mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm);
@@ -177,7 +221,11 @@ fn sync_app_mouse_from_engine(vm: &VirtualMachine, app_instance: &PyObjectRef, s
 }
 
 /// Replay pointer at the trackpad laser so `xos.ui.Text` hit-testing updates focus (`Group` sees both widgets).
-fn drain_embed_synthetic_click(vm: &VirtualMachine, app_instance: &PyObjectRef, state: &mut EngineState) {
+fn drain_embed_synthetic_click(
+    vm: &VirtualMachine,
+    app_instance: &PyObjectRef,
+    state: &mut EngineState,
+) {
     let Some((sx, sy)) = state.embed_synthetic_click_screen.take() else {
         return;
     };
@@ -223,20 +271,20 @@ fn try_dispatch_python_on_events(
     let dict = match build_routed_event_dict(vm, ev, state) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!(
+            log_py_runtime_error(&format!(
                 "Failed to build routed _xos_event dict:\n{}",
                 format_python_exception(vm, &e)
-            );
+            ));
             return;
         }
     };
     let _evt_store = app_instance.set_attr("_xos_event", dict, vm);
     let _guard = CallbackEngineStateGuard::install(state);
     if let Err(e) = vm.call_method(app_instance, "on_events", ()) {
-        eprintln!(
+        log_py_runtime_error(&format!(
             "Python on_events error:\n{}",
             format_python_exception(vm, &e)
-        );
+        ));
     }
     let _clear = app_instance.set_attr("_xos_event", vm.ctx.none(), vm);
 }
@@ -789,7 +837,7 @@ class Application:
         cls.tick = _wrapped_tick
 
     def _xos_pre_tick(self):
-        import xos, time
+        import xos
         if not getattr(self, "_xos_initialized", False):
             raise RuntimeError("xos.Application.__init__() was not called. Call super().__init__() first.")
 
@@ -810,7 +858,7 @@ class Application:
                 self.xos_scale = float(sp)
 
         # Standalone timing (manual Python-driven tick loop).
-        now = time.perf_counter()
+        now = xos.time.perf_counter()
         last = getattr(self, "_xos_last_tick_time", None)
         if last is None:
             dt = 1.0 / 60.0
@@ -913,55 +961,83 @@ impl Application for PyApp {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
                 // Create Python frame object from engine state
-                let frame_dict = crate::python_api::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
-                    .map_err(|e| format!("Failed to create frame object: {:?}", e))?;
-                
+                let frame_dict = crate::python_api::engine::py_bindings::create_py_frame_state(
+                    vm,
+                    &mut state.frame,
+                )
+                .map_err(|e| format!("Failed to create frame object: {:?}", e))?;
+
                 if let Ok(wrapper_class) = vm.builtins.get_attr("Frame", vm) {
                     // Use the newer call API instead of deprecated invoke
                     if let Ok(frame_obj) = wrapper_class.call((frame_dict.clone(),), vm) {
-                        app_instance.set_attr("frame", frame_obj, vm)
+                        app_instance
+                            .set_attr("frame", frame_obj, vm)
                             .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
                     } else {
                         // Fallback: just use the dict directly
-                        app_instance.set_attr("frame", frame_dict, vm)
+                        app_instance
+                            .set_attr("frame", frame_dict, vm)
                             .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
                     }
                 } else {
                     // Fallback: just use the dict directly
-                    app_instance.set_attr("frame", frame_dict, vm)
+                    app_instance
+                        .set_attr("frame", frame_dict, vm)
                         .map_err(|e| format!("Failed to set frame attribute: {:?}", e))?;
                 }
-                
+
                 // Create mouse object
                 let mouse_dict = vm.ctx.new_dict();
-                mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)
+                mouse_dict
+                    .set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm)
                     .map_err(|e| format!("Mouse x error: {:?}", e))?;
-                mouse_dict.set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)
+                mouse_dict
+                    .set_item("y", vm.ctx.new_float(state.mouse.y as f64).into(), vm)
                     .map_err(|e| format!("Mouse y error: {:?}", e))?;
-                mouse_dict.set_item("is_left_clicking", vm.ctx.new_bool(state.mouse.is_left_clicking).into(), vm)
+                mouse_dict
+                    .set_item(
+                        "is_left_clicking",
+                        vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+                        vm,
+                    )
                     .map_err(|e| format!("Mouse clicking error: {:?}", e))?;
-                mouse_dict.set_item("is_right_clicking", vm.ctx.new_bool(state.mouse.is_right_clicking).into(), vm)
+                mouse_dict
+                    .set_item(
+                        "is_right_clicking",
+                        vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+                        vm,
+                    )
                     .map_err(|e| format!("Mouse right click error: {:?}", e))?;
-                
-                app_instance.set_attr("mouse", mouse_dict, vm)
+
+                app_instance
+                    .set_attr("mouse", mouse_dict, vm)
                     .map_err(|e| format!("Failed to set mouse attribute: {:?}", e))?;
-                app_instance.set_attr("_xos_engine_bound", vm.ctx.new_bool(true), vm)
+                app_instance
+                    .set_attr("_xos_engine_bound", vm.ctx.new_bool(true), vm)
                     .map_err(|e| format!("Failed to set _xos_engine_bound attribute: {:?}", e))?;
 
                 // Seed timing field so Python can read it in setup/tick.
                 let timestep = state.delta_time_seconds.max(1e-5) as f64;
-                app_instance.set_attr("dt", vm.ctx.new_float(timestep), vm)
+                app_instance
+                    .set_attr("dt", vm.ctx.new_float(timestep), vm)
                     .map_err(|e| format!("Failed to set dt attribute: {:?}", e))?;
-                app_instance.set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
+                app_instance
+                    .set_attr("fps", vm.ctx.new_float(1.0 / timestep), vm)
                     .map_err(|e| format!("Failed to set fps attribute: {:?}", e))?;
-                app_instance.set_attr("t", vm.ctx.new_int(0usize), vm)
+                app_instance
+                    .set_attr("t", vm.ctx.new_int(0usize), vm)
                     .map_err(|e| format!("Failed to set t attribute: {:?}", e))?;
-                app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm)
+                app_instance
+                    .set_attr(
+                        "xos_scale",
+                        vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0),
+                        vm,
+                    )
                     .map_err(|e| format!("Failed to set xos_scale attribute: {:?}", e))?;
 
                 sync_app_safe_region(vm, app_instance, &state.frame.safe_region_boundaries)
                     .map_err(|e| format!("Failed to sync safe_region: {:?}", e))?;
-                
+
                 Ok(())
             })
         } else {
@@ -980,7 +1056,7 @@ impl Application for PyApp {
 
             let tick_index = self.ticks_completed;
             let mut tick_failed = false;
-            
+
             self.interpreter.enter(|vm| {
                 // Require subclasses to call super().__init__() so base fields exist.
                 let initialized_ok = match vm.get_attribute_opt(app_instance.clone(), "_xos_initialized") {
@@ -988,9 +1064,9 @@ impl Application for PyApp {
                     Ok(None) | Err(_) => false,
                 };
                 if !initialized_ok {
-                    eprintln!(
+                    log_py_runtime_error(
                         "Python app init error:\nRuntimeError: xos.Application.__init__() was not called. \
-Call super().__init__() in your app __init__ before using tick()."
+Call super().__init__() in your app __init__ before using tick().",
                     );
                     tick_failed = true;
                     return;
@@ -999,7 +1075,7 @@ Call super().__init__() in your app __init__ before using tick()."
                 // Update frame data before calling tick
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
                     let _ = crate::python_api::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
-                    
+
                     // Update mouse data
                     let mouse_dict = vm.ctx.new_dict();
                     let _ = mouse_dict.set_item("x", vm.ctx.new_float(state.mouse.x as f64).into(), vm);
@@ -1017,27 +1093,30 @@ Call super().__init__() in your app __init__ before using tick()."
                     let _ = app_instance.set_attr("t", vm.ctx.new_int(tick_index as usize), vm);
                     let _ = app_instance.set_attr("xos_scale", vm.ctx.new_float(state.ui_scale_percent as f64 / 100.0), vm);
                     let _ = sync_app_safe_region(vm, &app_instance, &state.frame.safe_region_boundaries);
-                    
+
                     // Call tick (xos.ui may call into Rust with `TickEngineStateGuard` active)
                     let _tls_guard = TickEngineStateGuard::install(state);
                     if let Err(e) = vm.call_method(&app_instance, "tick", ()) {
                         let error_msg = format_python_exception(vm, &e);
-                        eprintln!("Python tick error:\n{}", error_msg);
+                        log_py_runtime_error(&format!("Python tick error:\n{}", error_msg));
                         tick_failed = true;
                     }
                 }
             });
 
             if tick_failed {
-                // Stop ticking this Python app after the first runtime error.
-                self.app_instance = None;
+                // Stop ticking this Python app after the first runtime error on native. In the browser,
+                // keep the RAF loop recoverable and surface the error in the console.
                 #[cfg(not(target_arch = "wasm32"))]
-                crate::engine::native_engine::request_exit();
-                eprintln!("Python app execution stopped after tick error.");
+                {
+                    self.app_instance = None;
+                    crate::engine::native_engine::request_exit();
+                    log_py_runtime_error("Python app execution stopped after tick error.");
+                }
             } else {
                 self.ticks_completed = self.ticks_completed.saturating_add(1);
             }
-            
+
             // Clear the frame buffer context after tick
             crate::python_api::rasterizer::clear_frame_buffer_context();
         }
@@ -1166,7 +1245,12 @@ Call super().__init__() in your app __init__ before using tick()."
     fn on_key_shortcut(&mut self, state: &mut EngineState, shortcut: ShortcutAction) {
         if let Some(ref app_instance) = self.app_instance {
             self.interpreter.enter(|vm| {
-                try_dispatch_python_on_events(vm, app_instance, state, RoutedPyEvent::Shortcut(shortcut));
+                try_dispatch_python_on_events(
+                    vm,
+                    app_instance,
+                    state,
+                    RoutedPyEvent::Shortcut(shortcut),
+                );
             });
         }
     }
@@ -1178,17 +1262,32 @@ Call super().__init__() in your app __init__ before using tick()."
             let frame_width = shape[1];
             let frame_height = shape[0];
             let buffer = state.frame.buffer_mut();
-            crate::python_api::rasterizer::set_frame_buffer_context(buffer, frame_width, frame_height);
-            
+            crate::python_api::rasterizer::set_frame_buffer_context(
+                buffer,
+                frame_width,
+                frame_height,
+            );
+
             self.interpreter.enter(|vm| {
                 // Update frame data before calling the handler
                 if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
-                    let _ = crate::python_api::engine::py_bindings::update_py_frame_state(vm, frame_obj, &mut state.frame);
+                    let _ = crate::python_api::engine::py_bindings::update_py_frame_state(
+                        vm,
+                        frame_obj,
+                        &mut state.frame,
+                    );
                 }
                 // Call the Python handler
-                let _ = vm.call_method(app_instance, "on_screen_size_change", (width, height));
+                if let Err(e) =
+                    vm.call_method(app_instance, "on_screen_size_change", (width, height))
+                {
+                    log_py_runtime_error(&format!(
+                        "Python on_screen_size_change error:\n{}",
+                        format_python_exception(vm, &e)
+                    ));
+                }
             });
-            
+
             // Clear the frame buffer context after handler completes
             crate::python_api::rasterizer::clear_frame_buffer_context();
         }

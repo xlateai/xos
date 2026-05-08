@@ -1,6 +1,9 @@
 use crate::python_api::dtypes::DType;
 use crate::python_api::tensors::{create_tensor_from_data, tensor_flat_data_list};
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyTuple, function::FuncArgs};
+use rustpython_vm::{
+    builtins::PyDict, builtins::PyList, builtins::PyTuple, function::FuncArgs, PyResult,
+    VirtualMachine,
+};
 
 use super::wrap_tensor_dict;
 
@@ -73,7 +76,15 @@ pub fn linear_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("bias") {
         obj.set_item("bias", v.clone(), vm)?;
     }
-    obj.set_item("forward", vm.new_function("forward", linear_forward).into(), vm)?;
-    obj.set_item("__call__", vm.new_function("__call__", linear_call).into(), vm)?;
+    obj.set_item(
+        "forward",
+        vm.new_function("forward", linear_forward).into(),
+        vm,
+    )?;
+    obj.set_item(
+        "__call__",
+        vm.new_function("__call__", linear_call).into(),
+        vm,
+    )?;
     Ok(obj.into())
 }

@@ -8,11 +8,10 @@ use crate::engine::keyboard::shortcuts::ShortcutAction;
 use crate::engine::{Application, EngineState, ScrollWheelUnit};
 use crate::rasterizer::fill;
 use crate::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
-use crate::ui::{
-    AudioInputMenuDown, AudioInputSelector, TranscribeLangMenuDown,
-    TranscribeLanguageSelector,
-};
 use crate::ui::onscreen_keyboard::KeyType;
+#[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
+use crate::ui::TranscribeLangMenuDown;
+use crate::ui::{AudioInputMenuDown, AudioInputSelector, TranscribeLanguageSelector};
 use fontdue::Font;
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -33,6 +32,7 @@ const THRESHOLD_MAX: f32 = 1.0;
 /// Waveform vertical gain (display only): `0` = quiet / low swing, `1` = full (legacy “maxed” look).
 const WAVE_DISPLAY_INTENSITY_DEFAULT: f32 = 0.10;
 const WAVE_SMOOTH_WINDOW: usize = 7;
+#[cfg(target_os = "ios")]
 const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
@@ -128,8 +128,6 @@ struct UiBounds {
     slider: Option<(f32, f32, f32, f32)>,
     /// Full-width “wave intensity” (gain) control below the green capture button.
     intensity: Option<(f32, f32, f32, f32)>,
-    /// **lang** button to the right of capture (transcription language; whisper builds only).
-    lang: Option<(f32, f32, f32, f32)>,
     /// Dedicated **device** button (left of center mic) that opens the input selector menu.
     device: Option<(f32, f32, f32, f32)>,
     /// Center mic button (tap: toggle live; hold: record-and-run full-clip inference).
@@ -168,7 +166,11 @@ impl VisualCanvas {
         } else {
             0.2 + 1.35 + (boosted - 1.0).ln().max(0.0) * 0.4
         };
-        if value < 0.0 { -amplified } else { amplified }
+        if value < 0.0 {
+            -amplified
+        } else {
+            amplified
+        }
     }
 
     fn lerp_color(&self, t: f32, a: (u8, u8, u8), b: (u8, u8, u8)) -> (u8, u8, u8) {
@@ -180,7 +182,15 @@ impl VisualCanvas {
         )
     }
 
-    fn draw_pixel(&self, buffer: &mut [u8], width: u32, height: u32, x: i32, y: i32, c: (u8, u8, u8)) {
+    fn draw_pixel(
+        &self,
+        buffer: &mut [u8],
+        width: u32,
+        height: u32,
+        x: i32,
+        y: i32,
+        c: (u8, u8, u8),
+    ) {
         if x < 0 || x >= width as i32 || y < 0 || y >= height as i32 {
             return;
         }
@@ -307,7 +317,7 @@ impl VisualCanvas {
         wave_rect: (f32, f32, f32, f32),
         safe_layout: (f32, f32, f32, f32),
         audio_selector: &mut AudioInputSelector,
-        lang_selector: &mut TranscribeLanguageSelector,
+        _lang_selector: &mut TranscribeLanguageSelector,
         live_toggle_on: bool,
         ptt_hold_active: bool,
         ptt_hold_seconds: f32,
@@ -352,7 +362,7 @@ impl VisualCanvas {
             capture_btn_r.0 - side_gap,
             capture_btn_r.3,
         );
-        let mut lang_btn_r = (
+        let mut _lang_btn_r = (
             capture_btn_r.2 + side_gap,
             capture_btn_r.1,
             capture_btn_r.2 + side_gap + side_w,
@@ -363,16 +373,20 @@ impl VisualCanvas {
             let shift = wl - device_btn_r.0;
             device_btn_r.0 += shift;
             device_btn_r.2 += shift;
-            lang_btn_r.0 += shift;
-            lang_btn_r.2 += shift;
+            _lang_btn_r.0 += shift;
+            _lang_btn_r.2 += shift;
         }
-        let layout_right_edge = if use_full_width_fill { full_w } else { safe_right };
-        if lang_btn_r.2 > layout_right_edge {
-            let shift = lang_btn_r.2 - layout_right_edge;
+        let layout_right_edge = if use_full_width_fill {
+            full_w
+        } else {
+            safe_right
+        };
+        if _lang_btn_r.2 > layout_right_edge {
+            let shift = _lang_btn_r.2 - layout_right_edge;
             device_btn_r.0 -= shift;
             device_btn_r.2 -= shift;
-            lang_btn_r.0 -= shift;
-            lang_btn_r.2 -= shift;
+            _lang_btn_r.0 -= shift;
+            _lang_btn_r.2 -= shift;
         }
 
         let line_top = wave_rect.1;
@@ -382,7 +396,11 @@ impl VisualCanvas {
         let wave_half_amp = line_h * 0.45;
         let pre_gain = 0.02 + 0.98 * waveform_intensity.clamp(0.0, 1.0);
 
-        let panel_h = if show_vad_panel { (sh * LEVEL_PANEL_H_FRAC).max(36.0) } else { 0.0 };
+        let panel_h = if show_vad_panel {
+            (sh * LEVEL_PANEL_H_FRAC).max(36.0)
+        } else {
+            0.0
+        };
         let control_text_size = ((sh * LEVEL_PANEL_H_FRAC).max(36.0) * 0.42).clamp(12.0, 22.0);
         let panel_top = if show_vad_panel {
             t + sh - panel_h - sh * 0.03
@@ -397,36 +415,26 @@ impl VisualCanvas {
 
         let transcript_gap_compact = sh * 0.012;
         let transcript_gap_normal = sh * 0.02;
-        let (textbox_y0, textbox_y1, textbox_x0, textbox_x1) = if let Some(kty) =
-            keyboard_top_normalized
-        {
-            let transcript_bottom_abs = kty * full_h - OSK_CONTENT_GAP_PX;
-            let tt = wave_rect.3 + transcript_gap_compact;
-            let tb = transcript_bottom_abs.max(tt + 36.0);
-            (tt, tb, 0.0, full_w)
-        } else {
-            let transcript_top = wave_rect.3 + transcript_gap_normal;
-            let transcript_bottom = if show_vad_panel {
-                panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC
+        let (textbox_y0, textbox_y1, textbox_x0, textbox_x1) =
+            if let Some(kty) = keyboard_top_normalized {
+                let transcript_bottom_abs = kty * full_h - OSK_CONTENT_GAP_PX;
+                let tt = wave_rect.3 + transcript_gap_compact;
+                let tb = transcript_bottom_abs.max(tt + 36.0);
+                (tt, tb, 0.0, full_w)
             } else {
-                t + sh - sh * 0.01
+                let transcript_top = wave_rect.3 + transcript_gap_normal;
+                let transcript_bottom = if show_vad_panel {
+                    panel_top - sh * TEXTBOX_BOTTOM_GAP_FRAC
+                } else {
+                    t + sh - sh * 0.01
+                };
+                (transcript_top, transcript_bottom, l + pad, l + sw - pad)
             };
-            (
-                transcript_top,
-                transcript_bottom,
-                l + pad,
-                l + sw - pad,
-            )
-        };
         let transcript_h = (textbox_y1 - textbox_y0).max(0.0);
 
         let all_samples = listener.get_samples_by_channel();
         let samples_empty = all_samples.is_empty() || all_samples[0].is_empty();
-        let samples: &[f32] = if samples_empty {
-            &[]
-        } else {
-            &all_samples[0]
-        };
+        let samples: &[f32] = if samples_empty { &[] } else { &all_samples[0] };
 
         // waveform
         let points = if samples.is_empty() {
@@ -512,11 +520,11 @@ impl VisualCanvas {
         audio_selector.last_button_rect = device_btn_r;
 
         #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        if lang_btn_r.2 > lang_btn_r.0 && lang_btn_r.3 > lang_btn_r.1 {
-            lang_selector.draw(
+        if _lang_btn_r.2 > _lang_btn_r.0 && _lang_btn_r.3 > _lang_btn_r.1 {
+            _lang_selector.draw(
                 state,
                 font,
-                lang_btn_r,
+                _lang_btn_r,
                 width as usize,
                 height as usize,
                 safe_layout,
@@ -601,7 +609,10 @@ impl VisualCanvas {
                     device_btn_r.3,
                     (180, 186, 196),
                 );
-                let mut dev_text = TextRasterizer::new(font.clone(), ((device_btn_r.3 - device_btn_r.1) * 0.28).clamp(10.0, 20.0));
+                let mut dev_text = TextRasterizer::new(
+                    font.clone(),
+                    ((device_btn_r.3 - device_btn_r.1) * 0.28).clamp(10.0, 20.0),
+                );
                 dev_text.set_text("device".to_string());
                 dev_text.tick(width as f32, height as f32);
                 self.blend_text(
@@ -661,10 +672,46 @@ impl VisualCanvas {
         // Transcript area: background + border only; text is drawn by [`TranscriptTextView`] (TextApp-style scroll).
         if transcript_h > 10.0 {
             // No fill: transcript sits on the same black as the rest of the frame; outline only.
-            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x1, textbox_y0 + 1.0, TEXTBOX_BORDER);
-            self.draw_rect(buffer, width, height, textbox_x0, textbox_y1 - 1.0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
-            self.draw_rect(buffer, width, height, textbox_x0, textbox_y0, textbox_x0 + 1.0, textbox_y1, TEXTBOX_BORDER);
-            self.draw_rect(buffer, width, height, textbox_x1 - 1.0, textbox_y0, textbox_x1, textbox_y1, TEXTBOX_BORDER);
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                textbox_x0,
+                textbox_y0,
+                textbox_x1,
+                textbox_y0 + 1.0,
+                TEXTBOX_BORDER,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                textbox_x0,
+                textbox_y1 - 1.0,
+                textbox_x1,
+                textbox_y1,
+                TEXTBOX_BORDER,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                textbox_x0,
+                textbox_y0,
+                textbox_x0 + 1.0,
+                textbox_y1,
+                TEXTBOX_BORDER,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                textbox_x1 - 1.0,
+                textbox_y0,
+                textbox_x1,
+                textbox_y1,
+                TEXTBOX_BORDER,
+            );
         }
         if ptt_hold_active {
             let mut hold_timer = TextRasterizer::new(font.clone(), control_text_size);
@@ -687,17 +734,71 @@ impl VisualCanvas {
         let slider_y0 = panel_top + panel_h * 0.82;
         let slider_y1 = slider_y0 + panel_h * 0.10;
         if show_vad_panel {
-            self.draw_rect(buffer, width, height, bar_x0, panel_top, bar_x1, panel_top + panel_h, PANEL_BG);
-            self.draw_rect(buffer, width, height, bar_x0, bar_y0, bar_x1, bar_y1, WAVE_BASELINE);
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                bar_x0,
+                panel_top,
+                bar_x1,
+                panel_top + panel_h,
+                PANEL_BG,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                bar_x0,
+                bar_y0,
+                bar_x1,
+                bar_y1,
+                WAVE_BASELINE,
+            );
             let raw_color = self.lerp_color(vad_raw, WAVE_SILENT, WAVE_SPEECH);
             let ema_color = (130, 190, 255);
             let raw_fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_raw.clamp(0.0, 1.0);
             let ema_fill_x1 = bar_x0 + (bar_x1 - bar_x0) * vad_ema.clamp(0.0, 1.0);
             let mid_y = bar_y0 + (bar_y1 - bar_y0) * 0.5;
-            self.draw_rect(buffer, width, height, bar_x0, bar_y0, raw_fill_x1, mid_y, raw_color);
-            self.draw_rect(buffer, width, height, bar_x0, mid_y, ema_fill_x1, bar_y1, ema_color);
-            self.draw_rect(buffer, width, height, tx - 1.0, bar_y0 - 2.0, tx + 1.0, bar_y1 + 2.0, (255, 255, 255));
-            self.draw_rect(buffer, width, height, slider_x0, slider_y0, slider_x1, slider_y1, WAVE_BASELINE);
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                bar_x0,
+                bar_y0,
+                raw_fill_x1,
+                mid_y,
+                raw_color,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                bar_x0,
+                mid_y,
+                ema_fill_x1,
+                bar_y1,
+                ema_color,
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                tx - 1.0,
+                bar_y0 - 2.0,
+                tx + 1.0,
+                bar_y1 + 2.0,
+                (255, 255, 255),
+            );
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                slider_x0,
+                slider_y0,
+                slider_x1,
+                slider_y1,
+                WAVE_BASELINE,
+            );
             self.draw_rect(
                 buffer,
                 width,
@@ -730,9 +831,12 @@ impl VisualCanvas {
             );
         }
 
-        let intensity_hit = (int_stack_r.0, int_stack_r.1 - 6.0, int_stack_r.2, int_stack_r.3 + 5.0);
-        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        let lang_hit = (lang_btn_r.0, lang_btn_r.1 - 4.0, lang_btn_r.2, lang_btn_r.3 + 4.0);
+        let intensity_hit = (
+            int_stack_r.0,
+            int_stack_r.1 - 6.0,
+            int_stack_r.2,
+            int_stack_r.3 + 5.0,
+        );
         UiBounds {
             transcript: if transcript_h > 10.0 {
                 Some((textbox_x0, textbox_y0, textbox_x1, textbox_y1))
@@ -740,7 +844,12 @@ impl VisualCanvas {
                 None
             },
             slider: if show_vad_panel {
-                Some((slider_x0, slider_y0 - panel_h * 0.1, slider_x1, slider_y1 + panel_h * 0.1))
+                Some((
+                    slider_x0,
+                    slider_y0 - panel_h * 0.1,
+                    slider_x1,
+                    slider_y1 + panel_h * 0.1,
+                ))
             } else {
                 None
             },
@@ -748,20 +857,6 @@ impl VisualCanvas {
                 Some(intensity_hit)
             } else {
                 None
-            },
-            lang: {
-                #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-                {
-                    if lang_btn_r.2 > lang_btn_r.0 {
-                        Some(lang_hit)
-                    } else {
-                        None
-                    }
-                }
-                #[cfg(not(all(feature = "whisper", not(target_arch = "wasm32"))))]
-                {
-                    None
-                }
             },
             device: if device_btn_r.2 > device_btn_r.0 {
                 Some(device_btn_r)
@@ -834,7 +929,9 @@ impl TranscribeApp {
             Some("en"),
         ) {
             Ok(e) => e,
-            Err(_) => TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env()),
+            Err(_) => {
+                TranscriptionEngine::new_with_size_and_backend(None, transcribe_backend_from_env())
+            }
         };
         Self {
             listener: None,
@@ -901,28 +998,26 @@ impl TranscribeApp {
     }
 
     /// Replace the live Whisper decode thread with the current [`TranscribeLanguageSelector`] code.
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     fn recreate_transcription_engine(&mut self) {
-        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        {
-            let code = self.lang_selector.current_language_code();
-            let backend = transcribe_backend_from_env();
-            match TranscriptionEngine::new_with_size_backend_language(None, backend, Some(code)) {
-                Ok(e) => {
-                    self.engine = e;
-                    if let Some(l) = &self.listener {
-                        self.engine
-                            .set_device_hint(l.device_name(), l.buffer().sample_rate());
-                    }
-                    self.committed_lines.clear();
-                    self.segment_live_text.clear();
-                    self.in_speech_segment = false;
-                    self.speech_run_frames = 0;
-                    self.silence_run_frames = 0;
-                    self.silence_idle_clip_frames = 0;
-                    self.transcript_view.set_text(String::new());
+        let code = self.lang_selector.current_language_code();
+        let backend = transcribe_backend_from_env();
+        match TranscriptionEngine::new_with_size_backend_language(None, backend, Some(code)) {
+            Ok(e) => {
+                self.engine = e;
+                if let Some(l) = &self.listener {
+                    self.engine
+                        .set_device_hint(l.device_name(), l.buffer().sample_rate());
                 }
-                Err(e) => eprintln!("transcribe: failed to set language: {e}"),
+                self.committed_lines.clear();
+                self.segment_live_text.clear();
+                self.in_speech_segment = false;
+                self.speech_run_frames = 0;
+                self.silence_run_frames = 0;
+                self.silence_idle_clip_frames = 0;
+                self.transcript_view.set_text(String::new());
             }
+            Err(e) => eprintln!("transcribe: failed to set language: {e}"),
         }
     }
 
@@ -997,16 +1092,22 @@ impl TranscribeApp {
 
     fn transcript_text_size(height: f32, f3_ui_scale_mul: f32) -> f32 {
         let base = (height * 0.039).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX);
-        (base * f3_ui_scale_mul.clamp(0.25, 5.0)).clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX * 2.0)
+        (base * f3_ui_scale_mul.clamp(0.25, 5.0))
+            .clamp(TRANSCRIPT_TEXT_SIZE_MIN, TRANSCRIPT_TEXT_SIZE_MAX * 2.0)
     }
 
     fn handle_transcript_action_key(&mut self, action: KeyType) {
         if let Some(copied) = self.transcript_view.on_action_key(action) {
-            if let Err(e) = clipboard::set_contents(&copied) {
-                #[cfg(not(target_arch = "wasm32"))]
-                eprintln!(
-                    "transcript: failed to write clipboard ({e}). On Linux install wl-clipboard or xclip."
-                );
+            match clipboard::set_contents(&copied) {
+                Ok(()) => {}
+                Err(e) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    eprintln!(
+                        "transcript: failed to write clipboard ({e}). On Linux install wl-clipboard or xclip."
+                    );
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = e;
+                }
             }
         }
     }
@@ -1061,12 +1162,16 @@ impl Application for TranscribeApp {
 
             let initial = preferred
                 .or_else(|| {
-                    self.audio_selector.input_devices.iter().find(|d| {
-                        matches!(
-                            d.input_kind_hint(),
-                            Some(audio::InputDeviceKind::LoopbackOrVirtual)
-                        )
-                    }).cloned()
+                    self.audio_selector
+                        .input_devices
+                        .iter()
+                        .find(|d| {
+                            matches!(
+                                d.input_kind_hint(),
+                                Some(audio::InputDeviceKind::LoopbackOrVirtual)
+                            )
+                        })
+                        .cloned()
                 })
                 .or_else(|| self.audio_selector.input_devices.first().cloned())
                 .ok_or_else(|| {
@@ -1093,9 +1198,7 @@ impl Application for TranscribeApp {
         self.recreate_input_listener()?;
 
         if self.audio_selector.input_devices.len() > 1 {
-            println!(
-                "transcribe: tap device to choose input (Default or a device)"
-            );
+            println!("transcribe: tap device to choose input (Default or a device)");
             let _ = io::stdout().flush();
         }
         Ok(())
@@ -1355,8 +1458,7 @@ impl Application for TranscribeApp {
             let pad = (ssw * 0.03).max(12.0);
             let (transcript_top, transcript_bottom, textbox_x0, textbox_x1) = if osk_shown {
                 let tt_osk = wave_rect.3 + ssh * 0.012;
-                let tb =
-                    (keyboard_top_norm * h - OSK_CONTENT_GAP_PX).max(tt_osk + 36.0);
+                let tb = (keyboard_top_norm * h - OSK_CONTENT_GAP_PX).max(tt_osk + 36.0);
                 (tt_osk, tb, 0.0, w)
             } else {
                 let transcript_top = wave_top + wave_h + ssh * 0.02;
@@ -1372,7 +1474,10 @@ impl Application for TranscribeApp {
             let clip_x1 = (textbox_x1 - 1.0).min(w);
             let clip_y1 = (transcript_bottom - TRANSCRIPT_INNER_PAD).min(h);
             self.transcript_view
-                .set_font_size(Self::transcript_text_size(ssh, state.f3_ui_scale_multiplier()));
+                .set_font_size(Self::transcript_text_size(
+                    ssh,
+                    state.f3_ui_scale_multiplier(),
+                ));
             self.transcript_view
                 .set_text_with_color_spans(full_text, color_spans);
             self.transcript_view
@@ -1392,8 +1497,10 @@ impl Application for TranscribeApp {
         match shortcut {
             ShortcutAction::Copy => self.handle_transcript_action_key(KeyType::Copy),
             ShortcutAction::SelectAll => self.handle_transcript_action_key(KeyType::SelectAll),
-            ShortcutAction::Cut | ShortcutAction::Paste | ShortcutAction::Undo | ShortcutAction::Redo => {
-            }
+            ShortcutAction::Cut
+            | ShortcutAction::Paste
+            | ShortcutAction::Undo
+            | ShortcutAction::Redo => {}
         }
     }
 
@@ -1425,11 +1532,8 @@ impl Application for TranscribeApp {
             let keyboard_top_px = keyboard_top_y * height;
             if state.mouse.y >= keyboard_top_px {
                 if let Some(r) = self.ui_bounds.transcript {
-                    self.transcript_view.on_trackpad_pointer_down(
-                        state.mouse.x,
-                        state.mouse.y,
-                        r,
-                    );
+                    self.transcript_view
+                        .on_trackpad_pointer_down(state.mouse.x, state.mouse.y, r);
                 }
                 return;
             }
@@ -1461,11 +1565,10 @@ impl Application for TranscribeApp {
         if self.lang_selector.show_menu {
             self.audio_selector.show_menu = false;
             let layout = safe_layout_pixels(state);
-            match self.lang_selector.on_menu_pointer_down(
-                state.mouse.x,
-                state.mouse.y,
-                layout,
-            ) {
+            match self
+                .lang_selector
+                .on_menu_pointer_down(state.mouse.x, state.mouse.y, layout)
+            {
                 TranscribeLangMenuDown::Dismiss | TranscribeLangMenuDown::DismissInColumn => {
                     self.lang_selector.show_menu = false;
                 }
@@ -1504,11 +1607,12 @@ impl Application for TranscribeApp {
             self.intensity_slider_dragging = false;
             return;
         }
-        if self
-            .ui_bounds
-            .device
-            .is_some_and(|r| state.mouse.x >= r.0 && state.mouse.x <= r.2 && state.mouse.y >= r.1 && state.mouse.y <= r.3)
-        {
+        if self.ui_bounds.device.is_some_and(|r| {
+            state.mouse.x >= r.0
+                && state.mouse.x <= r.2
+                && state.mouse.y >= r.1
+                && state.mouse.y <= r.3
+        }) {
             self.audio_selector.show_menu = true;
             self.lang_selector.show_menu = false;
             self.transcript_pointer_down = false;
@@ -1516,11 +1620,12 @@ impl Application for TranscribeApp {
             self.intensity_slider_dragging = false;
             return;
         }
-        if self
-            .ui_bounds
-            .mic
-            .is_some_and(|r| state.mouse.x >= r.0 && state.mouse.x <= r.2 && state.mouse.y >= r.1 && state.mouse.y <= r.3)
-        {
+        if self.ui_bounds.mic.is_some_and(|r| {
+            state.mouse.x >= r.0
+                && state.mouse.x <= r.2
+                && state.mouse.y >= r.1
+                && state.mouse.y <= r.3
+        }) {
             self.mic_pointer_down = true;
             self.mic_pointer_down_at = Some(Instant::now());
             self.lang_selector.show_menu = false;
@@ -1606,10 +1711,7 @@ impl Application for TranscribeApp {
                         Ok(text) => {
                             let t = Self::normalize_text(&text);
                             if !t.is_empty() {
-                                self.push_dedup_committed_line(
-                                    &t,
-                                    Some(HOLD_FINAL_TEXT_COLOR),
-                                );
+                                self.push_dedup_committed_line(&t, Some(HOLD_FINAL_TEXT_COLOR));
                             }
                         }
                         Err(e) => {
@@ -1682,7 +1784,13 @@ impl Application for TranscribeApp {
         }
     }
 
-    fn on_scroll(&mut self, state: &mut EngineState, _delta_x: f32, delta_y: f32, unit: ScrollWheelUnit) {
+    fn on_scroll(
+        &mut self,
+        state: &mut EngineState,
+        _delta_x: f32,
+        delta_y: f32,
+        unit: ScrollWheelUnit,
+    ) {
         let Some((x0, y0, x1, y1)) = self.ui_bounds.transcript else {
             return;
         };
@@ -1690,8 +1798,7 @@ impl Application for TranscribeApp {
         let fh = shape[0] as f32;
         let mx = state.mouse.x;
         let my = state.mouse.y;
-        let strictly_in_transcript_box =
-            mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
+        let strictly_in_transcript_box = mx >= x0 && mx <= x1 && my >= y0 && my <= y1;
         // With OSK open, wheel/touch may report the pointer over waveform chrome or lateral margins;
         // treat the whole safe strip above the keyboard as scrollable transcript.
         let (_, kty_norm, _, _) = state.keyboard.onscreen.top_edge_coordinates();

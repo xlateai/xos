@@ -71,7 +71,12 @@ fn trim_property_value(v: &str) -> &str {
 fn parse_link_dest(
     dest: &str,
     base_font_px: f32,
-) -> (Option<(u8, u8, u8)>, Option<f32>, Option<bool>, Option<bool>) {
+) -> (
+    Option<(u8, u8, u8)>,
+    Option<f32>,
+    Option<bool>,
+    Option<bool>,
+) {
     let mut color = None;
     let mut size_mult = None;
     let mut hitboxes = None;
@@ -143,10 +148,10 @@ pub fn strip_inline_ui_markup_with_exclusion(
     let mut baseline_per_char = Vec::<bool>::with_capacity(chars.len());
     let mut color_per_char = Vec::<Option<(u8, u8, u8)>>::with_capacity(chars.len());
     let mut scale_per_char = Vec::<Option<f32>>::with_capacity(chars.len());
-    let mut curr_hitboxes = default_hitboxes;
-    let mut curr_baselines = default_baselines;
-    let mut curr_color: Option<(u8, u8, u8)> = None;
-    let mut curr_scale: Option<f32> = None;
+    let curr_hitboxes = default_hitboxes;
+    let curr_baselines = default_baselines;
+    let curr_color: Option<(u8, u8, u8)> = None;
+    let curr_scale: Option<f32> = None;
     let mut i = 0usize;
     while i < chars.len() {
         if let Some((xs, xe)) = exclude_raw_range {
@@ -161,7 +166,8 @@ pub fn strip_inline_ui_markup_with_exclusion(
             }
         }
         if chars[i] == '[' {
-            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i) {
+            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i)
+            {
                 let inner_start = i + 1;
                 let inner_end = close_bracket_idx;
                 let dest_start = close_bracket_idx + 2;
@@ -286,7 +292,8 @@ pub fn map_raw_cursor_to_visual_with_exclusion(
             }
         }
         if chars[i] == '[' {
-            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i) {
+            if let Some((close_bracket_idx, close_paren_idx)) = find_markdown_paren_link(&chars, i)
+            {
                 let inner_start = i + 1;
                 let inner_end = close_bracket_idx;
                 let dest_start = close_bracket_idx + 2;

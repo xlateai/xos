@@ -2,11 +2,13 @@ mod compile;
 mod daemon;
 
 use clap::{CommandFactory, Parser, Subcommand};
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::json;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,11 +18,11 @@ use std::time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Method, Response, Server};
 #[cfg(not(target_arch = "wasm32"))]
-use serde_json::json;
-#[cfg(not(target_arch = "wasm32"))]
 use uuid::Uuid;
-use xos::apps::{AppCommands, run_app_command};
-use xos::python_api::{parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive};
+use xos::apps::{run_app_command, AppCommands};
+use xos::python_api::{
+    parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn login_offline_interactive() -> Result<(), String> {
@@ -123,7 +125,12 @@ fn login_offline_reset_interactive() -> Result<(), String> {
 #[command(about = "Experimental OS Window Manager", disable_version_flag = true)]
 struct Cli {
     /// Print version (semver), then a line of git info or `git tree not available`
-    #[arg(short = 'v', visible_short_alias = 'V', long = "version", global = true)]
+    #[arg(
+        short = 'v',
+        visible_short_alias = 'V',
+        long = "version",
+        global = true
+    )]
     print_version: bool,
 
     #[command(subcommand)]
@@ -144,7 +151,7 @@ enum Commands {
         /// Compile Rust library for iOS (`xos compile --ios`; same with `xos build --ios`)
         #[arg(long)]
         ios: bool,
-        /// Build WebAssembly output into `wasm-compiled-xos-output/` and create `xos-wasm.zip`.
+        /// Build WebAssembly output into `target/wasm/main/` and create `xos-wasm.zip`.
         #[arg(long)]
         wasm: bool,
         /// Run `cargo clean` in the project root before building (full rebuild).
@@ -416,8 +423,8 @@ fn relay_metrics_snapshot(state: &RelayState, telemetry: &RelayTelemetry) -> Rel
     let meshes = state.meshes.len();
     let clients: usize = state.meshes.values().map(|m| m.nodes.len()).sum();
     let packets = telemetry.packet_units.load(Ordering::Relaxed);
-    let raw_bytes_total = telemetry.bytes_in.load(Ordering::Relaxed)
-        + telemetry.bytes_out.load(Ordering::Relaxed);
+    let raw_bytes_total =
+        telemetry.bytes_in.load(Ordering::Relaxed) + telemetry.bytes_out.load(Ordering::Relaxed);
     RelayMetricsSnapshot {
         meshes,
         clients,
@@ -438,7 +445,10 @@ impl Default for RelayTelemetry {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn relay_tty_write_metrics_stderr(last: Option<RelayMetricsSnapshot>, cur: RelayMetricsSnapshot) -> bool {
+fn relay_tty_write_metrics_stderr(
+    last: Option<RelayMetricsSnapshot>,
+    cur: RelayMetricsSnapshot,
+) -> bool {
     use std::io::Write as _;
 
     fn write_four_lines(w: &mut impl std::io::Write, s: RelayMetricsSnapshot) {
@@ -496,7 +506,9 @@ fn relay_record_response_json(
     packet_units: u64,
 ) -> String {
     let out = serde_json::to_string(resp).unwrap_or_else(|_| "{}".to_string());
-    telemetry.bytes_in.fetch_add(body_len as u64, Ordering::Relaxed);
+    telemetry
+        .bytes_in
+        .fetch_add(body_len as u64, Ordering::Relaxed);
     telemetry
         .bytes_out
         .fetch_add(out.len() as u64, Ordering::Relaxed);
@@ -591,7 +603,10 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
                     .unwrap_or("")
                     .to_string();
                 if mesh_hash.is_empty() || node_hash.is_empty() {
-                    (json!({"ok": false, "error": "mesh_hash_key and node_hash_key required"}), 1u64)
+                    (
+                        json!({"ok": false, "error": "mesh_hash_key and node_hash_key required"}),
+                        1u64,
+                    )
                 } else {
                     let mut g = state.lock().unwrap();
                     prune_all_relay_state(&mut g, now);
@@ -614,10 +629,18 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
             "/mesh/send" => {
                 let sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
                 let to_rank = v.get("to_rank").and_then(|x| x.as_u64()).map(|x| x as u32);
-                let kind = v.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let kind = v
+                    .get("kind")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let payload = v.get("payload").cloned().unwrap_or_else(|| json!({}));
                 let from_rank = v.get("from_rank").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-                let from_id = v.get("from_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let from_id = v
+                    .get("from_id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let mut g = state.lock().unwrap();
                 prune_all_relay_state(&mut g, now);
                 let mut forwarded: u64 = 0;
@@ -653,11 +676,7 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
                 } else {
                     json!({"ok": false, "error": "unknown session"})
                 };
-                let packet_units = if found_mesh {
-                    forwarded.max(1)
-                } else {
-                    1
-                };
+                let packet_units = if found_mesh { forwarded.max(1) } else { 1 };
                 (resp, packet_units)
             }
             "/mesh/poll" => {
@@ -726,8 +745,7 @@ fn main() {
             let first = original_args[1].as_str();
             let should_insert_py = !matches!(
                 first,
-                "py"
-                    | "python"
+                "py" | "python"
                     | "rs"
                     | "rust"
                     | "app"
@@ -761,8 +779,7 @@ fn main() {
             let first = original_args[1].as_str();
             let should_insert_rs = !matches!(
                 first,
-                "rs"
-                    | "rust"
+                "rs" | "rust"
                     | "app"
                     | "py"
                     | "python"
@@ -797,7 +814,7 @@ fn main() {
         }
     }
 
-    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--web`, `--ios`).
+    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--wasm`, `--ios`).
     if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
         original_args[1] = "rs".to_string();
         original_args.insert(2, "coder".to_string());
@@ -813,35 +830,27 @@ fn main() {
             "xos"
         };
         println!("{} v{}", bin_name, env!("CARGO_PKG_VERSION"));
-        println!(
-            "{}",
-            version_git_second_line(io::stdout().is_terminal())
-        );
+        println!("{}", version_git_second_line(io::stdout().is_terminal()));
         return;
     }
 
     let resolved_python_file = match &cli.command {
         Some(Commands::Py {
-            file: Some(file),
-            ..
-        }) => {
-            match resolve_python_file_path(file.as_path()) {
-                Some(path) => Some(path),
-                None => {
-                    eprintln!("❌ Python file not found: {}", file.display());
-                    eprintln!("   Checked current directory and xos project root.");
-                    std::process::exit(1);
-                }
+            file: Some(file), ..
+        }) => match resolve_python_file_path(file.as_path()) {
+            Some(path) => Some(path),
+            None => {
+                eprintln!("❌ Python file not found: {}", file.display());
+                eprintln!("   Checked current directory and xos project root.");
+                std::process::exit(1);
             }
-        }
+        },
         _ => None,
     };
 
     let should_ensure_daemon = matches!(
         &cli.command,
-        Some(Commands::Rs { .. })
-            | Some(Commands::Py { .. })
-            | Some(Commands::Terminal)
+        Some(Commands::Rs { .. }) | Some(Commands::Py { .. }) | Some(Commands::Terminal)
     );
     if should_ensure_daemon {
         if let Err(e) = daemon::maybe_ensure_daemon_running() {
@@ -1032,12 +1041,7 @@ fn main() {
         }) => {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                run_relay_server(
-                    bind.as_str(),
-                    port,
-                    no_metrics,
-                    metrics_interval_ms,
-                );
+                run_relay_server(bind.as_str(), port, no_metrics, metrics_interval_ms);
             }
             #[cfg(target_arch = "wasm32")]
             {

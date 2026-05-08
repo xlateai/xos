@@ -1,13 +1,17 @@
 /// Cross-platform clipboard operations
-/// 
+///
 /// Provides a simple interface for clipboard get/set operations
 /// that works on macOS, iOS, and other platforms.
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(target_arch = "wasm32")]
+static WASM_CLIPBOARD: std::sync::LazyLock<std::sync::Mutex<String>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(String::new()));
+
 #[cfg(target_os = "ios")]
-use std::ffi::{CString, CStr};
+use std::ffi::{CStr, CString};
 #[cfg(target_os = "ios")]
 use std::os::raw::c_char;
 
@@ -30,21 +34,29 @@ extern "C" {
 
 /// Get the current clipboard contents
 pub fn get_contents() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return WASM_CLIPBOARD.lock().ok().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        });
+    }
+
     #[cfg(target_os = "macos")]
     {
-        Command::new("pbpaste")
-            .output()
-            .ok()
-            .and_then(|output| {
-                let text = String::from_utf8(output.stdout).ok()?;
-                if text.is_empty() {
-                    None
-                } else {
-                    Some(text)
-                }
-            })
+        Command::new("pbpaste").output().ok().and_then(|output| {
+            let text = String::from_utf8(output.stdout).ok()?;
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        })
     }
-    
+
     #[cfg(target_os = "ios")]
     {
         // Use iOS FFI to access UIPasteboard
@@ -100,13 +112,21 @@ pub fn get_contents() -> Option<String> {
             }
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         clipboard_linux_get()
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux"
+        ))
+    ))]
     {
         None
     }
@@ -121,7 +141,10 @@ fn clipboard_linux_get() -> Option<String> {
         if !output.status.success() {
             return None;
         }
-        let s = String::from_utf8(output.stdout).ok()?.trim_end_matches('\n').to_string();
+        let s = String::from_utf8(output.stdout)
+            .ok()?
+            .trim_end_matches('\n')
+            .to_string();
         if s.is_empty() {
             None
         } else {
@@ -164,28 +187,41 @@ fn clipboard_linux_set(text: &str) -> Result<(), std::io::Error> {
 
 /// Set the clipboard contents
 pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut slot) = WASM_CLIPBOARD.lock() {
+            *slot = text.to_string();
+        }
+        if let Some(clipboard) = web_sys::window().map(|w| w.navigator().clipboard()) {
+            let promise = clipboard.write_text(text);
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            });
+        }
+        return Ok(());
+    }
+
     #[cfg(target_os = "macos")]
     {
         use std::io::Write;
         let mut child = Command::new("pbcopy")
             .stdin(std::process::Stdio::piped())
             .spawn()?;
-        
+
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(text.as_bytes())?;
         }
         child.wait()?;
         Ok(())
     }
-    
+
     #[cfg(target_os = "ios")]
     {
         // Use iOS FFI to access UIPasteboard
         // Calls Swift function xosClipboardSetContentsIOS
-        let c_text = CString::new(text).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
-        })?;
-        
+        let c_text = CString::new(text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
         unsafe {
             let result = xos_clipboard_set_contents_ios(c_text.as_ptr());
             if result == 0 {
@@ -193,7 +229,7 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    "Failed to set clipboard contents"
+                    "Failed to set clipboard contents",
                 ))
             }
         }
@@ -258,13 +294,21 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
             Ok(())
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         clipboard_linux_set(text)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "linux")))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux"
+        ))
+    ))]
     {
         let _ = text;
         Err(std::io::Error::new(
@@ -273,4 +317,3 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
         ))
     }
 }
-

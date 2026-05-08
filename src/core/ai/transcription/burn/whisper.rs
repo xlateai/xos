@@ -10,17 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread;
 
-use burn_store::{BurnpackStore, ModuleSnapshot};
 use burn::backend::Wgpu;
 use burn::config::Config;
 use burn::module::Module;
 use burn::tensor::backend::Backend;
 use burn::tensor::{ElementConversion, Int, Tensor, TensorData};
+use burn_store::{BurnpackStore, ModuleSnapshot};
 
 use crate::ai::transcription::burn::whisper_burn::model::{Whisper, WhisperConfig};
 use crate::ai::transcription::burn::whisper_burn::token::{Gpt2Tokenizer, SpecialToken};
 use crate::ai::transcription::burn::whisper_burn::transcribe::{
-    WhisperParams, compute_mel_cpu, transcribe as fw_transcribe,
+    compute_mel_cpu, transcribe as fw_transcribe, WhisperParams,
 };
 use crate::ai::transcription::burn::whisper_burn::MixedPrecisionAdapter;
 use crate::ai::transcription::{ActivationStep, TensorDebugStats};
@@ -436,8 +436,8 @@ fn legacy_transcription_burn_dir(model_key: &str) -> Result<PathBuf, String> {
 /// Download / convert into `xos path --data`/models/whisper/{model}-burn/ if needed, then resolve load path.
 /// Skips fetching when the repo-bundled tree already has a complete model pack.
 pub(crate) fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let primary =
-        crate::auth::whisper_model_backend_cache_dir(model_key, "burn").map_err(|e| e.to_string())?;
+    let primary = crate::auth::whisper_model_backend_cache_dir(model_key, "burn")
+        .map_err(|e| e.to_string())?;
     let legacy_transcription = legacy_transcription_burn_dir(model_key)?;
     let legacy_flat = crate::auth::whisper_model_cache_dir(model_key).map_err(|e| e.to_string())?;
     let primary_ok = super::whisper_ensure::artifacts_ready(&primary, model_key);
@@ -461,8 +461,8 @@ pub(crate) fn prepare_whisper_models_root(model_key: &str) -> Result<PathBuf, St
 /// Prefer `{data}/models/whisper/{model}-burn/`, then legacy `transcription/burn/{model}/`,
 /// then legacy flat `whisper/{model}/`, then the repo bundle `models/burn/`.
 fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
-    let primary =
-        crate::auth::whisper_model_backend_cache_dir(model_key, "burn").map_err(|e| e.to_string())?;
+    let primary = crate::auth::whisper_model_backend_cache_dir(model_key, "burn")
+        .map_err(|e| e.to_string())?;
     if whisper_artifacts_present(&primary, model_key) {
         return Ok(primary);
     }
@@ -543,12 +543,8 @@ fn with_cached_model<T>(
         let mut slot = slot.borrow_mut();
         let needs_load = slot.as_ref().map(|m| m.key != key).unwrap_or(true);
         if needs_load {
-            let (bpe, whisper) = load_whisper(
-                models_root,
-                &sel.canonical,
-                sel.prefer_f16_weights,
-                &device,
-            )?;
+            let (bpe, whisper) =
+                load_whisper(models_root, &sel.canonical, sel.prefer_f16_weights, &device)?;
             *slot = Some(CachedWhisperModel { key, bpe, whisper });
         }
         let entry = slot.as_ref().expect("cache populated");
@@ -613,8 +609,7 @@ fn load_whisper(
         .to_str()
         .ok_or_else(|| format!("invalid utf-8 in tokenizer path {}", tok_path.display()))?;
     let bpe = Gpt2Tokenizer::new(tok_s).map_err(|e| format!("tokenizer load: {e}"))?;
-    let whisper_config =
-        WhisperConfig::load(&cfg_path).map_err(|e| format!("config load: {e}"))?;
+    let whisper_config = WhisperConfig::load(&cfg_path).map_err(|e| format!("config load: {e}"))?;
 
     let mut store = BurnpackStore::from_file(
         bpk_path

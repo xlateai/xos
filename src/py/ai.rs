@@ -1,10 +1,15 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
 #[cfg(not(target_arch = "wasm32"))]
 use burn::tensor::DType;
 #[cfg(not(target_arch = "wasm32"))]
 use burn_store::{BurnpackStore, ModuleStore};
-use rustpython_vm::{AsObject, PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+#[cfg(not(target_arch = "wasm32"))]
+use rustpython_vm::AsObject;
+use rustpython_vm::{
+    builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine,
+};
 
 use crate::tensor::tensor::tensor_flat_data_list;
 
@@ -21,10 +26,14 @@ fn waveform_vec_from_py(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Vec<
     }
 }
 
-fn to_py_err(vm: &VirtualMachine, msg: impl Into<String>) -> rustpython_vm::builtins::PyBaseExceptionRef {
+fn to_py_err(
+    vm: &VirtualMachine,
+    msg: impl Into<String>,
+) -> rustpython_vm::builtins::PyBaseExceptionRef {
     vm.new_runtime_error(msg.into())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_bool_flag(obj: Option<&PyObjectRef>, vm: &VirtualMachine) -> PyResult<bool> {
     match obj {
         Some(v) => v.clone().try_into_value(vm),
@@ -32,7 +41,12 @@ fn parse_bool_flag(obj: Option<&PyObjectRef>, vm: &VirtualMachine) -> PyResult<b
     }
 }
 
-fn parse_usize_flag(obj: Option<&PyObjectRef>, default: usize, vm: &VirtualMachine) -> PyResult<usize> {
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_usize_flag(
+    obj: Option<&PyObjectRef>,
+    default: usize,
+    vm: &VirtualMachine,
+) -> PyResult<usize> {
     match obj {
         Some(v) => {
             let n: i64 = v.clone().try_into_value(vm)?;
@@ -46,13 +60,18 @@ fn parse_usize_flag(obj: Option<&PyObjectRef>, default: usize, vm: &VirtualMachi
     }
 }
 
-fn parse_string_arg(obj: Option<&PyObjectRef>, default: &str, vm: &VirtualMachine) -> PyResult<String> {
+fn parse_string_arg(
+    obj: Option<&PyObjectRef>,
+    default: &str,
+    vm: &VirtualMachine,
+) -> PyResult<String> {
     match obj {
         Some(v) => v.clone().try_into_value(vm),
         None => Ok(default.to_string()),
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn summarize(values: &[f32]) -> (usize, usize, usize, f32, f32, f32) {
     let mut finite = 0usize;
     let mut nan = 0usize;
@@ -95,8 +114,8 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
         (model_trim, false)
     };
     // Same tree as `xos path --data` (`auth_data_dir()`): `%LOCALAPPDATA%/xos` on Windows, `~/.xos` elsewhere.
-    let new_root =
-        crate::auth::whisper_model_backend_cache_dir(dir_name, "burn").map_err(|e| e.to_string())?;
+    let new_root = crate::auth::whisper_model_backend_cache_dir(dir_name, "burn")
+        .map_err(|e| e.to_string())?;
     let legacy_transcription = crate::auth::auth_data_dir()
         .map_err(|e| e.to_string())?
         .join("models")
@@ -143,16 +162,6 @@ fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<Pa
     ))
 }
 
-#[cfg(target_arch = "wasm32")]
-fn resolve_weights_path(model: &str, override_path: Option<String>) -> Result<PathBuf, String> {
-    if let Some(p) = override_path {
-        return Ok(PathBuf::from(p));
-    }
-    Err(format!(
-        "whisper weights path for model '{model}' requires override_path on wasm builds"
-    ))
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args;
@@ -164,13 +173,8 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         None
     };
-    let override_path = override_path.and_then(|s| {
-        if s.trim().is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    });
+    let override_path =
+        override_path.and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
 
     // Match native transcription: populate ~/.xos/models/whisper/{tiny,small}-burn/ before opening burnpack.
     if override_path.is_none() {
@@ -190,9 +194,12 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     let weights_path = resolve_weights_path(&model, override_path).map_err(|e| to_py_err(vm, e))?;
-    let weights_s = weights_path
-        .to_str()
-        .ok_or_else(|| to_py_err(vm, format!("invalid utf-8 path: {}", weights_path.display())))?;
+    let weights_s = weights_path.to_str().ok_or_else(|| {
+        to_py_err(
+            vm,
+            format!("invalid utf-8 path: {}", weights_path.display()),
+        )
+    })?;
 
     let mut store = BurnpackStore::from_file(weights_s);
     let snapshots = store
@@ -241,8 +248,12 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             stats
                 .set_item("finite", vm.ctx.new_int(finite as i64).into(), vm)
                 .ok();
-            stats.set_item("nan", vm.ctx.new_int(nan as i64).into(), vm).ok();
-            stats.set_item("inf", vm.ctx.new_int(inf as i64).into(), vm).ok();
+            stats
+                .set_item("nan", vm.ctx.new_int(nan as i64).into(), vm)
+                .ok();
+            stats
+                .set_item("inf", vm.ctx.new_int(inf as i64).into(), vm)
+                .ok();
             stats
                 .set_item("min", vm.ctx.new_float(min_v as f64).into(), vm)
                 .ok();
@@ -270,7 +281,9 @@ fn whisper_load_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             entry
                 .set_item(
                     "values_truncated",
-                    vm.ctx.new_bool(!full_values && vals.len() > max_values).into(),
+                    vm.ctx
+                        .new_bool(!full_values && vals.len() > max_values)
+                        .into(),
                     vm,
                 )
                 .ok();
@@ -326,11 +339,12 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     let backend_s = parse_string_arg(av.get(3), "burn", vm)?;
-    let backend = crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
-        vm.new_value_error(format!(
-            "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
-        ))
-    })?;
+    let backend =
+        crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
+            vm.new_value_error(format!(
+                "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
+            ))
+        })?;
 
     let text = crate::ai::transcription::transcribe_waveform_once(
         Some(&model),
@@ -364,11 +378,12 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
     }
 
     let backend_s = parse_string_arg(av.get(3), "burn", vm)?;
-    let backend = crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
-        vm.new_value_error(format!(
-            "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
-        ))
-    })?;
+    let backend =
+        crate::ai::transcription::WhisperBackend::from_str(&backend_s).ok_or_else(|| {
+            vm.new_value_error(format!(
+                "unknown whisper backend '{backend_s}' (use 'burn' or 'ct2')"
+            ))
+        })?;
 
     let (text, steps) = crate::ai::transcription::transcribe_waveform_with_intermediates(
         Some(&model),
@@ -379,58 +394,65 @@ fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) ->
     .map_err(|e| to_py_err(vm, e))?;
 
     let out_steps: Vec<PyObjectRef> = steps
-            .into_iter()
-            .map(|s| {
-                let d = vm.ctx.new_dict();
-                match s.name {
-                    Some(name) => d.set_item("name", vm.ctx.new_str(name).into(), vm).ok(),
-                    None => d.set_item("name", vm.ctx.none(), vm).ok(),
-                };
-                let shape: Vec<PyObjectRef> = s
-                    .shape
-                    .into_iter()
-                    .map(|v| vm.ctx.new_int(v as i64).into())
-                    .collect();
-                let prefix_len = s.values.len();
-                let values: Vec<PyObjectRef> = s
-                    .values
-                    .into_iter()
-                    .map(|v| vm.ctx.new_float(v as f64).into())
-                    .collect();
-                d.set_item("shape", vm.ctx.new_list(shape).into(), vm).ok();
-                d.set_item("values", vm.ctx.new_list(values).into(), vm).ok();
-                let stats = vm.ctx.new_dict();
+        .into_iter()
+        .map(|s| {
+            let d = vm.ctx.new_dict();
+            match s.name {
+                Some(name) => d.set_item("name", vm.ctx.new_str(name).into(), vm).ok(),
+                None => d.set_item("name", vm.ctx.none(), vm).ok(),
+            };
+            let shape: Vec<PyObjectRef> = s
+                .shape
+                .into_iter()
+                .map(|v| vm.ctx.new_int(v as i64).into())
+                .collect();
+            let prefix_len = s.values.len();
+            let values: Vec<PyObjectRef> = s
+                .values
+                .into_iter()
+                .map(|v| vm.ctx.new_float(v as f64).into())
+                .collect();
+            d.set_item("shape", vm.ctx.new_list(shape).into(), vm).ok();
+            d.set_item("values", vm.ctx.new_list(values).into(), vm)
+                .ok();
+            let stats = vm.ctx.new_dict();
+            stats
+                .set_item("num_values", vm.ctx.new_int(prefix_len as i64).into(), vm)
+                .ok();
+            if let Some(fs) = s.full_stats {
                 stats
-                    .set_item("num_values", vm.ctx.new_int(prefix_len as i64).into(), vm)
+                    .set_item("full_mean", vm.ctx.new_float(f64::from(fs.mean)).into(), vm)
                     .ok();
-                if let Some(fs) = s.full_stats {
-                    stats
-                        .set_item("full_mean", vm.ctx.new_float(f64::from(fs.mean)).into(), vm)
-                        .ok();
-                    stats
-                        .set_item("full_std", vm.ctx.new_float(f64::from(fs.std)).into(), vm)
-                        .ok();
-                    stats
-                        .set_item("full_min", vm.ctx.new_float(f64::from(fs.min)).into(), vm)
-                        .ok();
-                    stats
-                        .set_item("full_max", vm.ctx.new_float(f64::from(fs.max)).into(), vm)
-                        .ok();
-                }
-                if let Some((ds, dam)) = s.device_preflight {
-                    stats
-                        .set_item("device_sum", vm.ctx.new_float(f64::from(ds)).into(), vm)
-                        .ok();
-                    stats
-                        .set_item("device_abs_max", vm.ctx.new_float(f64::from(dam)).into(), vm)
-                        .ok();
-                }
-                d.set_item("stats", stats.into(), vm).ok();
-                d.into()
-            })
-            .collect();
+                stats
+                    .set_item("full_std", vm.ctx.new_float(f64::from(fs.std)).into(), vm)
+                    .ok();
+                stats
+                    .set_item("full_min", vm.ctx.new_float(f64::from(fs.min)).into(), vm)
+                    .ok();
+                stats
+                    .set_item("full_max", vm.ctx.new_float(f64::from(fs.max)).into(), vm)
+                    .ok();
+            }
+            if let Some((ds, dam)) = s.device_preflight {
+                stats
+                    .set_item("device_sum", vm.ctx.new_float(f64::from(ds)).into(), vm)
+                    .ok();
+                stats
+                    .set_item(
+                        "device_abs_max",
+                        vm.ctx.new_float(f64::from(dam)).into(),
+                        vm,
+                    )
+                    .ok();
+            }
+            d.set_item("stats", stats.into(), vm).ok();
+            d.into()
+        })
+        .collect();
     let payload = vm.ctx.new_dict();
-    payload.set_item("text", vm.ctx.new_str(text).into(), vm).ok();
+    payload
+        .set_item("text", vm.ctx.new_str(text).into(), vm)
+        .ok();
     payload
         .set_item("steps", vm.ctx.new_list(out_steps).into(), vm)
         .ok();
@@ -441,7 +463,11 @@ pub fn make_ai_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let ai = vm.new_module("xos.ai", vm.ctx.new_dict(), None);
     let whisper = vm.new_module("xos.ai.whisper", vm.ctx.new_dict(), None);
     whisper
-        .set_attr("_load_payload", vm.new_function("_load_payload", whisper_load_payload), vm)
+        .set_attr(
+            "_load_payload",
+            vm.new_function("_load_payload", whisper_load_payload),
+            vm,
+        )
         .ok();
     whisper
         .set_attr(
@@ -642,4 +668,3 @@ def load(model="tiny", full_values=False, max_values=128, weights_path=None, bac
     ai.set_attr("whisper", whisper, vm).ok();
     ai
 }
-

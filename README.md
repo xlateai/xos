@@ -166,8 +166,10 @@ xrs
 xrs <app-name>
 xos rs
 xos rs <app-name>
+xos rs <app-name> --wasm
 xos rs <app-name> --ios
 xos compile
+xos compile --wasm
 xos build
 xos path
 xos path --exe
@@ -176,6 +178,7 @@ xos path --exe
 - `**xpy**` / `**xpy <file>**` is the same as `**xos py**` / `**xos py <file>**` (shorter binary; same CLI).
 - `**xrs**` / `**xrs <app-name>**` is the same as `**xos rs**` / `**xos rs <app-name>**` (shorter binary for Rust apps).
 - Subcommand aliases: `**xos rust**` / `**xos app**` → `**xos rs**`; `**xos python**` → `**xos py**`.
+- `xos compile --wasm` writes the browser bundle and `xos-wasm.zip` under `target/wasm/main/`; `xos app <app-name> --wasm` serves that compiled bundle.
 
 ### 📱 Using `--ios`
 

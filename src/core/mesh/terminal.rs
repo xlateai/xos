@@ -102,8 +102,7 @@ impl LineEditor {
             if let Some(ref c) = self.cooked {
                 return if wait {
                     Ok(Some(
-                        c.rx
-                            .recv()
+                        c.rx.recv()
                             .map_err(|_| "stdin channel closed".to_string())?,
                     ))
                 } else {

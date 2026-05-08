@@ -29,9 +29,7 @@ pub enum AudioInputMenuDown {
     /// Click on the title bar / padding inside the column — menu should close.
     DismissInColumn,
     /// Picked “Default” or a device row. Recreate the listener if `selection_changed`.
-    Pick {
-        selection_changed: bool,
-    },
+    Pick { selection_changed: bool },
 }
 
 /// Hold-to-menu + tap-to-toggle for a single capture input list (`devices()` inputs only).
@@ -102,9 +100,7 @@ impl AudioInputSelector {
 
     /// Thickness of the optional waveform gain strip at the **bottom** of the wave band (below the green button).
     pub fn layout_intensity_strip_height(viewport_h: f32) -> f32 {
-        (viewport_h * 0.042)
-            .max(20.0)
-            .min(40.0)
+        (viewport_h * 0.042).max(20.0).min(40.0)
     }
 
     const INTENSITY_STRIP_TO_BUTTON_GAP: f32 = 6.0;
@@ -126,7 +122,11 @@ impl AudioInputSelector {
         with_intensity_strip: bool,
         trailing_w: f32,
         trailing_gap: f32,
-    ) -> ((f32, f32, f32, f32), (f32, f32, f32, f32), (f32, f32, f32, f32)) {
+    ) -> (
+        (f32, f32, f32, f32),
+        (f32, f32, f32, f32),
+        (f32, f32, f32, f32),
+    ) {
         let wave_w = (wave_x1 - wave_x0).max(0.0);
         let wave_h = (wave_y1 - wave_y0).max(0.0);
         let btn_size = Self::capture_button_size(wave_w, wave_h, viewport_w, viewport_h);
@@ -205,13 +205,7 @@ impl AudioInputSelector {
         viewport_h: f32,
     ) -> (f32, f32, f32, f32) {
         let (_, b) = Self::layout_intensity_and_capture(
-            wave_x0,
-            wave_y0,
-            wave_x1,
-            wave_y1,
-            viewport_w,
-            viewport_h,
-            false,
+            wave_x0, wave_y0, wave_x1, wave_y1, viewport_w, viewport_h, false,
         );
         b
     }
@@ -305,7 +299,12 @@ impl AudioInputSelector {
         AudioInputSelectorUp::None
     }
 
-    fn apply_input_column_click(&mut self, mouse_y: usize, menu_y: usize, item_height: usize) -> bool {
+    fn apply_input_column_click(
+        &mut self,
+        mouse_y: usize,
+        menu_y: usize,
+        item_height: usize,
+    ) -> bool {
         let default_y = menu_y + item_height + 5;
         if mouse_y >= default_y && mouse_y < default_y + item_height {
             self.use_default_input = true;
@@ -380,7 +379,13 @@ impl AudioInputSelector {
         }
     }
 
-    fn draw_button_pixels(&self, state: &mut EngineState, btn: (f32, f32, f32, f32), width: usize, height: usize) {
+    fn draw_button_pixels(
+        &self,
+        state: &mut EngineState,
+        btn: (f32, f32, f32, f32),
+        width: usize,
+        height: usize,
+    ) {
         let buffer = state.frame_buffer_mut();
         let x_start = btn.0.floor().max(0.0) as usize;
         let y_start = btn.1.floor().max(0.0) as usize;
@@ -431,14 +436,34 @@ impl AudioInputSelector {
         let layout_left = l.max(0.0) as usize;
         let layout_width = lw.max(1.0) as usize;
         let top_off = t.max(0.0) as usize;
-        let (left_x, column_width, menu_y_rel) = Self::input_menu_geometry(layout_left, layout_width);
+        let (left_x, column_width, menu_y_rel) =
+            Self::input_menu_geometry(layout_left, layout_width);
         let menu_y = top_off + menu_y_rel;
         let safe_bottom_px = (t + lh) as usize;
 
         let item_height = MENU_ITEM_HEIGHT as usize;
 
-        self.draw_rect(buffer, width, height, left_x, menu_y, column_width, item_height, (0, 0, 0));
-        self.draw_text(buffer, width, height, font, "Input", left_x + 10, menu_y + 15, 20.0, (255, 255, 255));
+        self.draw_rect(
+            buffer,
+            width,
+            height,
+            left_x,
+            menu_y,
+            column_width,
+            item_height,
+            (0, 0, 0),
+        );
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            font,
+            "Input",
+            left_x + 10,
+            menu_y + 15,
+            20.0,
+            (255, 255, 255),
+        );
 
         let default_y = menu_y + item_height + 5;
         let default_color = if self.use_default_input {
@@ -446,9 +471,32 @@ impl AudioInputSelector {
         } else {
             (0, 0, 0)
         };
-        self.draw_rect(buffer, width, height, left_x, default_y, column_width, item_height, default_color);
-        let text_color = if self.use_default_input { (0, 0, 0) } else { (255, 255, 255) };
-        self.draw_text(buffer, width, height, font, "Default", left_x + 10, default_y + 15, 16.0, text_color);
+        self.draw_rect(
+            buffer,
+            width,
+            height,
+            left_x,
+            default_y,
+            column_width,
+            item_height,
+            default_color,
+        );
+        let text_color = if self.use_default_input {
+            (0, 0, 0)
+        } else {
+            (255, 255, 255)
+        };
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            font,
+            "Default",
+            left_x + 10,
+            default_y + 15,
+            16.0,
+            text_color,
+        );
 
         for (i, device) in self.input_devices.iter().enumerate() {
             let item_y = default_y + item_height + 5 + i * (item_height + 5);
@@ -460,13 +508,25 @@ impl AudioInputSelector {
             } else {
                 (0, 0, 0)
             };
-            self.draw_rect(buffer, width, height, left_x, item_y, column_width, item_height, item_color);
+            self.draw_rect(
+                buffer,
+                width,
+                height,
+                left_x,
+                item_y,
+                column_width,
+                item_height,
+                item_color,
+            );
             let full_label = device.input_menu_label();
             let max_chars = 42_usize;
             let device_name = if full_label.chars().count() > max_chars {
                 format!(
                     "{}...",
-                    full_label.chars().take(max_chars.saturating_sub(3)).collect::<String>()
+                    full_label
+                        .chars()
+                        .take(max_chars.saturating_sub(3))
+                        .collect::<String>()
                 )
             } else {
                 full_label
@@ -476,7 +536,17 @@ impl AudioInputSelector {
             } else {
                 (255, 255, 255)
             };
-            self.draw_text(buffer, width, height, font, &device_name, left_x + 10, item_y + 15, 14.0, tcol);
+            self.draw_text(
+                buffer,
+                width,
+                height,
+                font,
+                &device_name,
+                left_x + 10,
+                item_y + 15,
+                14.0,
+                tcol,
+            );
         }
     }
 
@@ -517,12 +587,15 @@ impl AudioInputSelector {
                         let alpha_f = alpha as f32 / 255.0;
                         let inv_alpha = 1.0 - alpha_f;
 
-                        buffer[idx + 0] =
-                            ((color.0 as f32 * alpha_f) + (buffer[idx + 0] as f32 * inv_alpha)) as u8;
-                        buffer[idx + 1] =
-                            ((color.1 as f32 * alpha_f) + (buffer[idx + 1] as f32 * inv_alpha)) as u8;
-                        buffer[idx + 2] =
-                            ((color.2 as f32 * alpha_f) + (buffer[idx + 2] as f32 * inv_alpha)) as u8;
+                        buffer[idx + 0] = ((color.0 as f32 * alpha_f)
+                            + (buffer[idx + 0] as f32 * inv_alpha))
+                            as u8;
+                        buffer[idx + 1] = ((color.1 as f32 * alpha_f)
+                            + (buffer[idx + 1] as f32 * inv_alpha))
+                            as u8;
+                        buffer[idx + 2] = ((color.2 as f32 * alpha_f)
+                            + (buffer[idx + 2] as f32 * inv_alpha))
+                            as u8;
                     }
                 }
             }

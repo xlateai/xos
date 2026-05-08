@@ -1,4 +1,4 @@
-use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
+use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
 
 /// Resolve a palette name as exposed on `xos.color` (e.g. `WHITE`, `light_blue`, `gray`) to RGB.
 pub fn lookup_xos_named_color_rgb(name: &str) -> Option<(u8, u8, u8)> {

@@ -1,13 +1,13 @@
 use super::custom_kernels::CustomKernelsBackend;
 use super::model::*;
 use super::transcribe::{
-    CHUNK_SIZE, SamplingStrategy, SegmentDecodeResult, WhisperParams,
-    average_cross_attention_for_token, compute_entropy, sequence_score,
+    average_cross_attention_for_token, compute_entropy, sequence_score, SamplingStrategy,
+    SegmentDecodeResult, WhisperParams, CHUNK_SIZE,
 };
 use burn::tensor::TensorData;
 use burn::tensor::{
-    ElementConversion, Int, Tensor,
     activation::{log_softmax, softmax},
+    ElementConversion, Int, Tensor,
 };
 use std::f32;
 

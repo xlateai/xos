@@ -139,13 +139,16 @@ struct PanelGeom {
     slider_top: f32,
     slider_bottom: f32,
     font_header_top: f32,
-    font_header_bottom: f32,
     font_options_top: f32,
     font_option_height: f32,
     font_option_gap: f32,
+    #[cfg(target_os = "ios")]
     toggle_left: f32,
+    #[cfg(target_os = "ios")]
     toggle_right: f32,
+    #[cfg(target_os = "ios")]
     toggle_top: f32,
+    #[cfg(target_os = "ios")]
     toggle_bottom: f32,
     font_option_count: usize,
     button_left: f32,
@@ -184,12 +187,11 @@ fn panel_geom(
     let font_option_gap = (4.0 * us).max(2.0);
     #[cfg(target_os = "ios")]
     let toggle_h = (28.0 * us).max(18.0);
-    #[cfg(not(target_os = "ios"))]
-    let toggle_h = 0.0_f32;
     let font_options_h = if font_option_count == 0 {
         0.0
     } else {
-        font_option_count as f32 * font_option_h + (font_option_count as f32 - 1.0) * font_option_gap
+        font_option_count as f32 * font_option_h
+            + (font_option_count as f32 - 1.0) * font_option_gap
     };
     let slider_w = (200.0 * us).max(120.0);
     let mini_h = (92.0 * us).max(56.0);
@@ -205,8 +207,16 @@ fn panel_geom(
     let toggle_extra = line_gap + toggle_h;
     #[cfg(not(target_os = "ios"))]
     let toggle_extra = 0.0_f32;
-    let panel_h =
-        pad + line_h + line_gap + line_h + line_gap + slider_h + font_extra + minimap_extra + toggle_extra + pad;
+    let panel_h = pad
+        + line_h
+        + line_gap
+        + line_h
+        + line_gap
+        + slider_h
+        + font_extra
+        + minimap_extra
+        + toggle_extra
+        + pad;
     let panel_left = w - panel_w - pad;
     let panel_top = safe_top + pad;
     let button_size = (22.0 * us).max(12.0);
@@ -234,6 +244,7 @@ fn panel_geom(
         slider_bottom + line_gap
     };
     let minimap_bottom = minimap_top + mini_h;
+    #[cfg(target_os = "ios")]
     let toggle_top = if show_minimap {
         minimap_bottom + line_gap
     } else if font_option_count > 0 {
@@ -241,6 +252,7 @@ fn panel_geom(
     } else {
         slider_bottom + line_gap
     };
+    #[cfg(target_os = "ios")]
     let toggle_bottom = toggle_top + toggle_h;
     PanelGeom {
         panel_left,
@@ -252,13 +264,16 @@ fn panel_geom(
         slider_top,
         slider_bottom,
         font_header_top,
-        font_header_bottom,
         font_options_top,
         font_option_height: font_option_h,
         font_option_gap,
+        #[cfg(target_os = "ios")]
         toggle_left: slider_left,
+        #[cfg(target_os = "ios")]
         toggle_right: slider_right,
+        #[cfg(target_os = "ios")]
         toggle_top,
+        #[cfg(target_os = "ios")]
         toggle_bottom,
         font_option_count,
         button_left,
@@ -294,12 +309,18 @@ fn percent_from_mouse_x(mx: f32, geom: &PanelGeom, knob_w: f32) -> u16 {
     let lo = F3_UI_SCALE_MIN_PERCENT as f32;
     let hi = F3_UI_SCALE_MAX_PERCENT as f32;
     let p = (lo + t * (hi - lo)).round() as i32;
-    p.clamp(F3_UI_SCALE_MIN_PERCENT as i32, F3_UI_SCALE_MAX_PERCENT as i32) as u16
+    p.clamp(
+        F3_UI_SCALE_MIN_PERCENT as i32,
+        F3_UI_SCALE_MAX_PERCENT as i32,
+    ) as u16
 }
 
 #[inline]
 fn clamp_scale_percent_f32(v: f32) -> f32 {
-    v.clamp(F3_UI_SCALE_MIN_PERCENT as f32, F3_UI_SCALE_MAX_PERCENT as f32)
+    v.clamp(
+        F3_UI_SCALE_MIN_PERCENT as f32,
+        F3_UI_SCALE_MAX_PERCENT as f32,
+    )
 }
 
 #[inline]
@@ -446,22 +467,17 @@ fn measure_f3_panel(state: &mut EngineState) -> Option<(PanelGeom, f32)> {
         let menu = &mut state.f3_menu;
         sync_f3_default_font(menu);
         menu.fps_rasterizer.set_font_size(font_px);
-        menu
-            .fps_rasterizer
-            .set_text(format!("{fps_display} FPS"));
+        menu.fps_rasterizer.set_text(format!("{fps_display} FPS"));
         menu.fps_rasterizer.tick(width, height);
 
         menu.scale_rasterizer.set_font_size(font_px);
-        menu
-            .scale_rasterizer
+        menu.scale_rasterizer
             .set_text(format!("Scale: {}%", state.ui_scale_percent));
         menu.scale_rasterizer.tick(width, height);
 
-        menu
-            .font_header_rasterizer
+        menu.font_header_rasterizer
             .set_font_size(FONT_HEADER_BASE_SIZE * ui_scale);
-        menu
-            .font_header_rasterizer
+        menu.font_header_rasterizer
             .set_text(format!("Default font: {}", fonts::default_font_name()));
         menu.font_header_rasterizer.tick(width, height);
 
@@ -723,7 +739,12 @@ pub fn tick_f3_menu(state: &mut EngineState) {
         step_y0,
         step_x1,
         step_y1,
-        (step_bg.0, step_bg.1, step_bg.2, (255.0 * overlay_alpha) as u8),
+        (
+            step_bg.0,
+            step_bg.1,
+            step_bg.2,
+            (255.0 * overlay_alpha) as u8,
+        ),
     );
 
     // Step icon: rightward step-forward (triangle then right bar).
@@ -811,7 +832,10 @@ pub fn tick_f3_menu(state: &mut EngineState) {
     let knob_w_i = knob_w as i32;
     let inner = (geom.slider_right - geom.slider_left - knob_w).max(1.0);
     let range = (F3_UI_SCALE_MAX_PERCENT - F3_UI_SCALE_MIN_PERCENT) as f32;
-    let t = (state.ui_scale_percent.saturating_sub(F3_UI_SCALE_MIN_PERCENT) as f32) / range.max(1.0);
+    let t = (state
+        .ui_scale_percent
+        .saturating_sub(F3_UI_SCALE_MIN_PERCENT) as f32)
+        / range.max(1.0);
     let knob_left = geom.slider_left + t * inner;
     let knob_x1 = (knob_left + knob_w_i as f32).ceil() as i32;
     let knob_y0 = (geom.slider_top - 1.0).floor() as i32;
@@ -1033,7 +1057,8 @@ pub fn tick_f3_menu(state: &mut EngineState) {
             .iter()
             .map(|c| c.metrics.advance_width)
             .sum();
-        let tx = x0 + ((geom.slider_right - geom.slider_left - text_w) * 0.5).max(8.0 * geom.ui_scale);
+        let tx =
+            x0 + ((geom.slider_right - geom.slider_left - text_w) * 0.5).max(8.0 * geom.ui_scale);
         let ty = y0 + ((y1 - y0 - FONT_OPTION_BASE_SIZE * geom.ui_scale) * 0.35).max(2.0);
         blend_text(
             buffer,
@@ -1076,11 +1101,14 @@ fn blend_text(
                     let idx = ((py as u32 * width as u32 + px as u32) * 4) as usize;
                     let alpha_f = (alpha as f32 / 255.0) * overlay_alpha;
                     buffer[idx + 0] = ((rgb.0 as f32 * alpha_f)
-                        + (buffer[idx + 0] as f32 * (1.0 - alpha_f))) as u8;
+                        + (buffer[idx + 0] as f32 * (1.0 - alpha_f)))
+                        as u8;
                     buffer[idx + 1] = ((rgb.1 as f32 * alpha_f)
-                        + (buffer[idx + 1] as f32 * (1.0 - alpha_f))) as u8;
+                        + (buffer[idx + 1] as f32 * (1.0 - alpha_f)))
+                        as u8;
                     buffer[idx + 2] = ((rgb.2 as f32 * alpha_f)
-                        + (buffer[idx + 2] as f32 * (1.0 - alpha_f))) as u8;
+                        + (buffer[idx + 2] as f32 * (1.0 - alpha_f)))
+                        as u8;
                     buffer[idx + 3] = 0xff;
                 }
             }

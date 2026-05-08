@@ -21,7 +21,9 @@ static REGISTRY: Mutex<Option<HashMap<u64, TextApp>>> = Mutex::new(None);
 static ACTIVE_POINTER_WIDGET_ID: Mutex<Option<u64>> = Mutex::new(None);
 
 fn registry_mut() -> std::sync::MutexGuard<'static, Option<HashMap<u64, TextApp>>> {
-    REGISTRY.lock().expect("python Text registry mutex poisoned")
+    REGISTRY
+        .lock()
+        .expect("python Text registry mutex poisoned")
 }
 
 fn ensure_registry<'a>(
@@ -163,7 +165,10 @@ pub(crate) enum PyUiEventKind {
     Shortcut(ShortcutAction),
 }
 
-pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyResult<Option<PyUiEventKind>> {
+pub(crate) fn parse_app_xos_event(
+    vm: &VirtualMachine,
+    app: &PyObjectRef,
+) -> PyResult<Option<PyUiEventKind>> {
     let ev = match vm.get_attribute_opt(app.clone(), "_xos_event") {
         Ok(Some(o)) => o,
         Ok(None) => return Ok(None),
@@ -209,7 +214,9 @@ pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyR
                 vm.new_value_error("_xos_event char must be a non-empty string".to_string())
             })?;
             if s.chars().count() != 1 {
-                return Err(vm.new_value_error("_xos_event char must be a single unicode character".to_string()));
+                return Err(vm.new_value_error(
+                    "_xos_event char must be a single unicode character".to_string(),
+                ));
             }
             PyUiEventKind::Key(ch)
         }
@@ -235,7 +242,11 @@ pub(crate) fn parse_app_xos_event(vm: &VirtualMachine, app: &PyObjectRef) -> PyR
     }))
 }
 
-pub fn dispatch_text_widget_from_app(vm: &VirtualMachine, widget_id: u64, app: PyObjectRef) -> PyResult<()> {
+pub fn dispatch_text_widget_from_app(
+    vm: &VirtualMachine,
+    widget_id: u64,
+    app: PyObjectRef,
+) -> PyResult<()> {
     let Some(kind) = parse_app_xos_event(vm, &app)? else {
         return Ok(());
     };
@@ -245,11 +256,8 @@ pub fn dispatch_text_widget_from_app(vm: &VirtualMachine, widget_id: u64, app: P
     Ok(())
 }
 
-pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineState) {
-    let captured_id = ACTIVE_POINTER_WIDGET_ID
-        .lock()
-        .ok()
-        .and_then(|g| *g);
+pub(crate) fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineState) {
+    let captured_id = ACTIVE_POINTER_WIDGET_ID.lock().ok().and_then(|g| *g);
     // Pointer gesture capture: once a widget receives mouse down, subsequent move/scroll/up
     // must route only to that same widget until release.
     match kind {
@@ -273,7 +281,8 @@ pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineStat
     let mx = state.mouse.x;
     let my = state.mouse.y;
     let ptr_in_osk = pointer_mouse_in_shown_osk_strip(state);
-    let trackpad_global_pointer = state.keyboard.onscreen.is_trackpad_mode() && state.keyboard.onscreen.is_shown();
+    let trackpad_global_pointer =
+        state.keyboard.onscreen.is_trackpad_mode() && state.keyboard.onscreen.is_shown();
 
     if t.python_viewport.is_some() {
         let skip = match &kind {
@@ -358,7 +367,10 @@ pub fn tick_text_widget(
         return;
     };
     t.py_input_focused = py_input_focused;
-    t.py_alignment = (py_alignment_x.clamp(0.0, 1.0), py_alignment_y.clamp(0.0, 1.0));
+    t.py_alignment = (
+        py_alignment_x.clamp(0.0, 1.0),
+        py_alignment_y.clamp(0.0, 1.0),
+    );
     t.py_spacing = (py_spacing_x.max(0.0), py_spacing_y.max(0.0));
 
     // Unfocused embed widgets must not retain a phantom trackpad laser (only the focused pane drives it).
