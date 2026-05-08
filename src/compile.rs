@@ -506,6 +506,8 @@ pub fn compile_wasm(clean: bool) -> bool {
             "web",
             "--out-dir",
             &pkg_dir.display().to_string(),
+            ".",
+            "--verbose",
         ])
         .status();
 
