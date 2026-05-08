@@ -299,8 +299,8 @@ fn react_native_static_dir(project_root: &Path) -> PathBuf {
 
 fn ensure_compiled_wasm_output(static_dir: &Path) {
     let index = static_dir.join("index.html");
-    let js = static_dir.join("pkg").join("xos_wasm.js");
-    let wasm = static_dir.join("pkg").join("xos_wasm_bg.wasm");
+    let js = static_dir.join("pkg").join("xos.js");
+    let wasm = static_dir.join("pkg").join("xos_bg.wasm");
     if index.is_file() && js.is_file() && wasm.is_file() {
         return;
     }

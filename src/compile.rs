@@ -371,7 +371,7 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
 <body>
   <canvas id="xos-canvas" width="256" height="256"></canvas>
   <script type="module">
-    import init from "./pkg/xos_wasm.js";
+    import init from "./pkg/xos.js";
     init();
     window.addEventListener("contextmenu", (event) => event.preventDefault());
   </script>
@@ -447,7 +447,6 @@ fn zip_wasm_output(output_dir: &Path) -> bool {
 /// Build WebAssembly output into `wasm-compiled-xos-output/` at the repo root and package it.
 pub fn compile_wasm(clean: bool) -> bool {
     let project_root = find_project_root();
-    let wasm_target_dir = project_root.join("target").join("wasm");
     if clean && !run_cargo_clean(&project_root) {
         return false;
     }
@@ -472,10 +471,7 @@ pub fn compile_wasm(clean: bool) -> bool {
     }
 
     println!("🕸️  Building wasm output...");
-    eprintln!(
-        "    Note: Release wasm compiles a large dependency graph (ML stack, interpreter, WGSL). \
-         The toolchain may stay quiet for many minutes — that is usually normal rustc work, not a freeze."
-    );
+    eprintln!("    Running wasm-pack with the same app-runtime build path used by `xos app --wasm`.");
 
     let output_dir = project_root.join(WASM_OUTPUT_DIR_NAME);
     let pkg_dir = output_dir.join("pkg");
@@ -494,18 +490,12 @@ pub fn compile_wasm(clean: bool) -> bool {
     let status = Command::new("wasm-pack")
         .current_dir(&project_root)
         .env("GAME_SELECTION", "ball")
-        // Keep wasm artifacts isolated so `xos compile --wasm` can run concurrently
-        // with iOS/CLI builds without contending on Cargo's target-dir lock.
-        .env("CARGO_TARGET_DIR", wasm_target_dir)
         .args([
             "build",
             "--target",
             "web",
-            "--release",
             "--out-dir",
             &pkg_dir.display().to_string(),
-            "--out-name",
-            "xos_wasm",
         ])
         .status();
 

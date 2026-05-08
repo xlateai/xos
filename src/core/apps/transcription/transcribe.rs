@@ -33,6 +33,7 @@ const THRESHOLD_MAX: f32 = 1.0;
 /// Waveform vertical gain (display only): `0` = quiet / low swing, `1` = full (legacy “maxed” look).
 const WAVE_DISPLAY_INTENSITY_DEFAULT: f32 = 0.10;
 const WAVE_SMOOTH_WINDOW: usize = 7;
+#[cfg(target_os = "ios")]
 const WAVE_SMOOTH_WINDOW_IOS: usize = 5;
 const SPEECH_START_FRAMES: u32 = 2;
 const SILENCE_COMMIT_FRAMES: u32 = 5;
@@ -901,28 +902,26 @@ impl TranscribeApp {
     }
 
     /// Replace the live Whisper decode thread with the current [`TranscribeLanguageSelector`] code.
+    #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
     fn recreate_transcription_engine(&mut self) {
-        #[cfg(all(feature = "whisper", not(target_arch = "wasm32")))]
-        {
-            let code = self.lang_selector.current_language_code();
-            let backend = transcribe_backend_from_env();
-            match TranscriptionEngine::new_with_size_backend_language(None, backend, Some(code)) {
-                Ok(e) => {
-                    self.engine = e;
-                    if let Some(l) = &self.listener {
-                        self.engine
-                            .set_device_hint(l.device_name(), l.buffer().sample_rate());
-                    }
-                    self.committed_lines.clear();
-                    self.segment_live_text.clear();
-                    self.in_speech_segment = false;
-                    self.speech_run_frames = 0;
-                    self.silence_run_frames = 0;
-                    self.silence_idle_clip_frames = 0;
-                    self.transcript_view.set_text(String::new());
+        let code = self.lang_selector.current_language_code();
+        let backend = transcribe_backend_from_env();
+        match TranscriptionEngine::new_with_size_backend_language(None, backend, Some(code)) {
+            Ok(e) => {
+                self.engine = e;
+                if let Some(l) = &self.listener {
+                    self.engine
+                        .set_device_hint(l.device_name(), l.buffer().sample_rate());
                 }
-                Err(e) => eprintln!("transcribe: failed to set language: {e}"),
+                self.committed_lines.clear();
+                self.segment_live_text.clear();
+                self.in_speech_segment = false;
+                self.speech_run_frames = 0;
+                self.silence_run_frames = 0;
+                self.silence_idle_clip_frames = 0;
+                self.transcript_view.set_text(String::new());
             }
+            Err(e) => eprintln!("transcribe: failed to set language: {e}"),
         }
     }
 

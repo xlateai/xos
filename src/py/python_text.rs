@@ -245,7 +245,7 @@ pub fn dispatch_text_widget_from_app(vm: &VirtualMachine, widget_id: u64, app: P
     Ok(())
 }
 
-pub fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineState) {
+pub(crate) fn dispatch_text_widget(id: u64, kind: PyUiEventKind, state: &mut EngineState) {
     let captured_id = ACTIVE_POINTER_WIDGET_ID
         .lock()
         .ok()
