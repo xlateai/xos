@@ -3,13 +3,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{fs, thread};
+use std::{fs as std_fs, thread};
 use tiny_http::{Response, Server};
 use webbrowser;
 
 pub mod ai;
 pub mod apps;
 pub mod engine;
+pub mod fs;
 pub mod manager;
 pub mod mesh;
 pub mod random;
@@ -350,7 +351,7 @@ fn start_web_server(static_dir: PathBuf) {
             }
         };
 
-        match fs::read(&path) {
+        match std_fs::read(&path) {
             Ok(data) => {
                 let content_type = mime_type(&path);
                 let response = Response::from_data(data).with_header(

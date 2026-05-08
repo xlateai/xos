@@ -1,6 +1,6 @@
 [package]
 name = "xos"
-version = "0.3.18-pre6"
+version = "0.3.18-pre7"
 edition = "2021"
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
 repository = "https://github.com/xlateai/xos"
@@ -155,6 +155,8 @@ web-sys = { version = "0.3", features = [
   "Touch",
   "TouchList",
   "DomRect",
+  "Storage",
+  "XmlHttpRequest",
   "AudioContext",
   "AudioNode",
   "AudioDestinationNode",

@@ -1,13 +1,9 @@
 //! `xos.csv` — load UTF-8 CSV files with a header row; rows are dicts (`header → cell`).
 
 use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn parse_csv_file(path: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
-    let buf =
-        std::fs::read(PathBuf::from(path)).map_err(|e| format!("cannot read {:?}: {}", path, e))?;
+    let buf = crate::fs::read(path).map_err(|e| format!("cannot read {:?}: {}", path, e))?;
     let mut rdr = csv::ReaderBuilder::new()
         .flexible(true)
         .from_reader(buf.as_slice());
@@ -33,7 +29,6 @@ fn parse_csv_file(path: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String>
     Ok((headers, rows))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn load_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let path_str: String = args.bind(vm)?;
     let (headers, rows) = parse_csv_file(&path_str).map_err(|e| vm.new_os_error(e))?;
@@ -55,13 +50,6 @@ fn load_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .ctx
         .new_tuple(vec![py_headers.into(), py_row_list.into()])
         .into())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_native(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Err(vm.new_runtime_error(
-        "xos.csv._load_native: filesystem CSV load is not available on wasm".into(),
-    ))
 }
 
 pub fn make_csv_module(vm: &VirtualMachine) -> PyRef<PyModule> {

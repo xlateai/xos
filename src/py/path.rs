@@ -4,18 +4,11 @@
 use rustpython_vm::PyObjectRef;
 use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
-#[cfg(not(target_arch = "wasm32"))]
 fn path_fs_exists(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let s: String = args.bind(vm)?;
-    Ok(vm.ctx.new_bool(std::path::Path::new(&s).exists()).into())
+    Ok(vm.ctx.new_bool(crate::fs::exists(&s)).into())
 }
 
-#[cfg(target_arch = "wasm32")]
-fn path_fs_exists(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Ok(vm.ctx.new_bool(false).into())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn path_fs_makedirs(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.is_empty() || av.len() > 2 {
@@ -29,9 +22,8 @@ fn path_fs_makedirs(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|o| o.clone().try_into_value::<bool>(vm))
         .transpose()?
         .unwrap_or(false);
-    let p = std::path::Path::new(&path_s);
-    if p.exists() {
-        return if exists_ok && p.is_dir() {
+    if crate::fs::exists(&path_s) {
+        return if exists_ok && crate::fs::is_dir(&path_s) {
             Ok(vm.ctx.none())
         } else {
             Err(vm.new_os_error(if exists_ok {
@@ -44,14 +36,8 @@ fn path_fs_makedirs(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             }))
         };
     }
-    std::fs::create_dir_all(p)
-        .map_err(|e| vm.new_os_error(format!("makedirs {:?}: {}", path_s, e)))?;
+    crate::fs::create_dir_all(&path_s).map_err(|e| vm.new_os_error(e))?;
     Ok(vm.ctx.none())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn path_fs_makedirs(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Err(vm.new_runtime_error("xos.path: makedirs is not available on wasm builds".into()))
 }
 
 const DATAPATH_BODY: &str = r#"
@@ -128,11 +114,8 @@ fn inject_dotxos(
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn path_data(vm: &VirtualMachine) -> PyResult<String> {
-    crate::auth::auth_data_dir()
-        .map_err(|e| vm.new_runtime_error(e.to_string()))
-        .map(|p| p.to_string_lossy().to_string())
+    crate::fs::data_dir_string().map_err(|e| vm.new_runtime_error(e))
 }
 
 /// Repository root (dev / `cargo` builds). `None` on iOS, embedded, or `cargo install` when no
@@ -145,7 +128,11 @@ fn path_code(vm: &VirtualMachine) -> PyObjectRef {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
+fn path_code(vm: &VirtualMachine) -> PyResult {
+    Ok(vm.ctx.none())
+}
+
 pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let m = vm.new_module("xos.path", vm.ctx.new_dict(), None);
     let _ = m.set_attr("data", vm.new_function("data", path_data), vm);
@@ -161,33 +148,5 @@ pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     );
 
     let _ = inject_dotxos(vm, &m, "dotxos = _DataPath(str(_data_dir_str()))").expect("dotxos");
-    m
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
-    let m = vm.new_module("xos.path", vm.ctx.new_dict(), None);
-    let _ = m.set_attr(
-        "data",
-        vm.new_function("data", |vm: &VirtualMachine| -> PyResult<String> {
-            Err(vm.new_runtime_error(
-                "xos.path.data: not available on wasm (pass explicit model paths)".to_string(),
-            ))
-        }),
-        vm,
-    );
-    let _ = m.set_attr(
-        "code",
-        vm.new_function("code", |vm: &VirtualMachine| vm.ctx.none()),
-        vm,
-    );
-    let _ = m.set_attr(
-        "_data_dir_str",
-        vm.new_function("_data_dir_str", |vm: &VirtualMachine| -> PyResult {
-            Ok(vm.ctx.new_str(".").into())
-        }),
-        vm,
-    );
-    let _ = inject_dotxos(vm, &m, r#"dotxos = _DataPath(".")"#).expect("dotxos wasm");
     m
 }

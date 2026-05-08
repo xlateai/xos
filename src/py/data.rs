@@ -160,44 +160,10 @@ fn read_lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// HTTP(S) download into a local file (same data root as `xos path --data` on native platforms).
-#[cfg(not(target_arch = "wasm32"))]
 fn download(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (url, dest): (String, String) = args.bind(vm)?;
-    let path = std::path::Path::new(&dest);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                vm.new_os_error(format!("data.download: mkdir {:?}: {}", parent, e))
-            })?;
-        }
-    }
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(64))
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| vm.new_runtime_error(format!("data.download: client: {e}")))?;
-    let resp = client
-        .get(url.as_str())
-        .send()
-        .map_err(|e| vm.new_runtime_error(format!("data.download: request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(vm.new_runtime_error(format!(
-            "data.download: HTTP {} for {}",
-            resp.status(),
-            url
-        )));
-    }
-    let bytes = resp
-        .bytes()
-        .map_err(|e| vm.new_runtime_error(format!("data.download: body: {e}")))?;
-    std::fs::write(path, &bytes)
-        .map_err(|e| vm.new_os_error(format!("data.download: write {:?}: {}", path, e)))?;
+    crate::fs::download_to_path(&url, &dest).map_err(|e| vm.new_runtime_error(e))?;
     Ok(vm.ctx.none())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn download(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Err(vm.new_runtime_error("xos.data.download is not available on wasm builds".to_string()))
 }
 
 /// Create the data submodule
