@@ -507,7 +507,7 @@ pub fn compile_wasm(clean: bool) -> bool {
             "--out-dir",
             &pkg_dir.display().to_string(),
             ".",
-            "--verbose",
+            // "--verbose", // too many file paths
         ])
         .status();
 
