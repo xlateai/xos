@@ -37,8 +37,8 @@ macro_rules! define_apps {
                 #[command(name = stringify!($file), about = "")]
                 #[allow(non_camel_case_types)]
                 $Variant {
-                    #[arg(long)]
-                    web: bool,
+                    #[arg(long = "wasm", alias = "web")]
+                    wasm: bool,
                     #[arg(long = "react-native")]
                     react_native: bool,
                     #[arg(long)]
@@ -48,8 +48,8 @@ macro_rules! define_apps {
             // Python windowed UI: `src/core/apps/text/text.py` via [`maybe_python_cli_app`] (`get_app("text")`).
             #[command(name = "text", about = "")]
             TextCli {
-                #[arg(long)]
-                web: bool,
+                #[arg(long = "wasm", alias = "web")]
+                wasm: bool,
                 #[arg(long = "react-native")]
                 react_native: bool,
                 #[arg(long)]
@@ -57,8 +57,8 @@ macro_rules! define_apps {
             },
             #[command(name = "study", about = "")]
             StudyCli {
-                #[arg(long)]
-                web: bool,
+                #[arg(long = "wasm", alias = "web")]
+                wasm: bool,
                 #[arg(long = "react-native")]
                 react_native: bool,
                 #[arg(long)]
@@ -69,26 +69,26 @@ macro_rules! define_apps {
         pub fn run_app_command(app: AppCommands) {
             match app {
                 $(
-                    AppCommands::$Variant { web, react_native, ios } => {
+                    AppCommands::$Variant { wasm, react_native, ios } => {
                         if ios {
                             $crate::launch_ios_app(stringify!($file));
                         } else {
-                            $crate::run_game(stringify!($file), web, react_native);
+                            $crate::run_game(stringify!($file), wasm, react_native);
                         }
                     }
                 )*
-                AppCommands::TextCli { web, react_native, ios } => {
+                AppCommands::TextCli { wasm, react_native, ios } => {
                     if ios {
                         $crate::launch_ios_app("text");
                     } else {
-                        $crate::run_game("text", web, react_native);
+                        $crate::run_game("text", wasm, react_native);
                     }
                 }
-                AppCommands::StudyCli { web, react_native, ios } => {
+                AppCommands::StudyCli { wasm, react_native, ios } => {
                     if ios {
                         $crate::launch_ios_app("study");
                     } else {
-                        $crate::run_game("study", web, react_native);
+                        $crate::run_game("study", wasm, react_native);
                     }
                 }
             }
@@ -97,6 +97,10 @@ macro_rules! define_apps {
         pub fn get_app(name: &str) -> Option<Box<dyn Application>> {
             if let Some(app) = $crate::apps::maybe_python_cli_app(name) {
                 return Some(app);
+            }
+            #[cfg(target_arch = "wasm32")]
+            if name == "text" {
+                return Some(Box::new($crate::apps::text::TextApp::new()));
             }
             match name {
                 $(

@@ -166,8 +166,10 @@ xrs
 xrs <app-name>
 xos rs
 xos rs <app-name>
+xos rs <app-name> --wasm
 xos rs <app-name> --ios
 xos compile
+xos compile --wasm
 xos build
 xos path
 xos path --exe

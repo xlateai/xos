@@ -214,19 +214,39 @@ pub fn start() -> Result<(), JsValue> {
 
 // --- Tooling helpers ---
 fn build_wasm(app_name: &str) {
-    let out_dir = format!("src/core/react-native-embedder/static/pkg/");
+    let project_root = match find_xos_project_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
+    let out_dir = project_root
+        .join("src")
+        .join("core")
+        .join("react-native-embedder")
+        .join("static")
+        .join("pkg");
+    let out_dir_arg = out_dir.display().to_string();
 
     let mut command = Command::new("wasm-pack");
     command
+        .current_dir(&project_root)
         .env("GAME_SELECTION", app_name)
-        .args(["build", "--target", "web", "--out-dir", &out_dir]);
+        .args([
+            "build",
+            "--target",
+            "web",
+            "--out-dir",
+            &out_dir_arg,
+        ]);
 
     let status = command.status().expect("Failed to run wasm-pack");
     if !status.success() {
         panic!("WASM build failed");
     }
 
-    println!("✅ WASM built to {out_dir} with app: {app_name}");
+    println!("✅ WASM built to {} with app: {app_name}", out_dir.display());
 }
 
 
@@ -251,30 +271,34 @@ fn mime_type(path: &str) -> &'static str {
 }
 
 fn start_web_server() {
+    let project_root = match find_xos_project_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
+    let static_dir = project_root
+        .join("src")
+        .join("core")
+        .join("react-native-embedder")
+        .join("static");
+    let index_path = static_dir.join("index.html");
     let server = Server::http("0.0.0.0:8080").unwrap();
     println!("🚀 Serving at http://localhost:8080");
 
     for request in server.incoming_requests() {
         let url = request.url();
         let path = if url == "/" {
-            // always use the XOS root index.html
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/src/core/react-native-embedder/static/index.html"
-            )
-            .to_string()
+            index_path.clone()
         } else {
-            let full_path = format!("src/core/react-native-embedder/static{}", url);
+            let full_path = static_dir.join(url.trim_start_matches('/'));
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
                 full_path
             } else {
-                eprintln!("❌ File not found: {full_path}");
+                eprintln!("❌ File not found: {}", full_path.display());
                 // fallback to index.html so SPA still loads
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/src/core/react-native-embedder/static/index.html"
-                )
-                .to_string()
+                index_path.clone()
             }
         };
 
@@ -286,7 +310,7 @@ fn start_web_server() {
                 let _ = request.respond(response);
             }
             Err(e) => {
-                eprintln!("❌ Failed to read {path}: {e}");
+                eprintln!("❌ Failed to read {}: {e}", path.display());
                 let response = Response::from_string("404 Not Found").with_status_code(404);
                 let _ = request.respond(response);
             }
@@ -295,9 +319,21 @@ fn start_web_server() {
 }
 
 fn launch_expo() {
+    let project_root = match find_xos_project_root() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
     let mut cmd = Command::new("npx");
     cmd.arg("expo").arg("start").arg("--tunnel");
-    cmd.current_dir("src/core/react-native-embedder");
+    cmd.current_dir(
+        project_root
+            .join("src")
+            .join("core")
+            .join("react-native-embedder"),
+    );
 
     let status = cmd.status().expect("Failed to launch Expo. Is it installed?");
     if !status.success() {
@@ -306,9 +342,9 @@ fn launch_expo() {
 }
 
 // --- Main logic ---
-pub fn run_game(game: &str, web: bool, react_native: bool) {
-    if web {
-        println!("🌐 Launching '{game}' in web mode...");
+pub fn run_game(game: &str, wasm: bool, react_native: bool) {
+    if wasm {
+        println!("🕸️  Launching '{game}' in wasm mode...");
         build_wasm(game);
         launch_browser();
         start_web_server();
@@ -414,8 +450,8 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "xos-app")]
 struct XosAppArgs {
-    #[arg(long)]
-    web: bool,
+    #[arg(long = "wasm", alias = "web")]
+    wasm: bool,
 
     #[arg(long = "react-native")]
     react_native: bool,
@@ -437,8 +473,8 @@ pub fn run<T: engine::Application + 'static>(app: T) {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if args.web {
-            println!("🌐 Launching app in web mode...");
+        if args.wasm {
+            println!("🕸️  Launching app in wasm mode...");
             build_wasm(app_name);
             launch_browser();
             start_web_server();

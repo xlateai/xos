@@ -460,6 +460,10 @@ pub fn compile_wasm(clean: bool) -> bool {
     }
 
     println!("🕸️  Building wasm output...");
+    eprintln!(
+        "    Note: Release wasm compiles a large dependency graph (ML stack, interpreter, WGSL). \
+         The toolchain may stay quiet for many minutes — that is usually normal rustc work, not a freeze."
+    );
 
     let output_dir = project_root.join(WASM_OUTPUT_DIR_NAME);
     let pkg_dir = output_dir.join("pkg");
@@ -481,6 +485,8 @@ pub fn compile_wasm(clean: bool) -> bool {
         // Keep wasm artifacts isolated so `xos compile --wasm` can run concurrently
         // with iOS/CLI builds without contending on Cargo's target-dir lock.
         .env("CARGO_TARGET_DIR", wasm_target_dir)
+        // Nested `cargo build` inherits this; avoids long silent periods when stderr is not a TTY.
+        .env("CARGO_TERM_PROGRESS_WHEN", "always")
         .args([
             "build",
             "--target",

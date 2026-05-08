@@ -797,7 +797,7 @@ fn main() {
         }
     }
 
-    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--web`, `--ios`).
+    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--wasm`, `--ios`).
     if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
         original_args[1] = "rs".to_string();
         original_args.insert(2, "coder".to_string());
