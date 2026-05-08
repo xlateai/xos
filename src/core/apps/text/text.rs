@@ -111,6 +111,8 @@ pub struct TextApp {
     /// Desired scroll offset (wheel / drag / auto-scroll). Reset both when snapping from outside (e.g. coder).
     pub scroll_target: f32,
     pub smooth_cursor_x: f32,
+    /// Whether `smooth_cursor_x` has been initialized to the current caret layout x.
+    pub cursor_x_seeded: bool,
     pub fade_map: HashMap<(char, u32, u32), f32>,
     last_tap_time: Option<Instant>,
     last_tap_x: f32,
@@ -156,7 +158,8 @@ pub struct TextApp {
     selecting: bool,                // True when actively selecting text (dragging)
     // Configuration flags
     pub show_cursor: bool,
-    pub show_debug_visuals: bool,
+    pub show_hitbox_visuals: bool,
+    pub show_baseline_visuals: bool,
     pub read_only: bool,
     /// Last wrap width / font size used for glyph fade keys — when these change, reflow invalidates (x,y) keys.
     last_fade_wrap_width: f32,
@@ -233,6 +236,7 @@ impl TextApp {
             scroll_y: 0.0, // Always start at 0 (top of safe region)
             scroll_target: 0.0,
             smooth_cursor_x: 0.0,
+            cursor_x_seeded: false,
             fade_map: HashMap::new(),
             last_tap_time: None,
             last_tap_x: 0.0,
@@ -266,7 +270,8 @@ impl TextApp {
             selection_end: None,
             selecting: false,
             show_cursor: true,
-            show_debug_visuals: true,
+            show_hitbox_visuals: true,
+            show_baseline_visuals: true,
             read_only: false,
             last_fade_wrap_width: -1.0,
             last_fade_font_size: -1.0,
@@ -324,6 +329,7 @@ impl TextApp {
         let len = self.text_rasterizer.text.chars().count();
         self.cursor_position = if cursor_at_end { len } else { 0 };
         self.smooth_cursor_x = 0.0;
+        self.cursor_x_seeded = false;
         self.fade_map.clear();
     }
 
@@ -541,7 +547,7 @@ impl TextApp {
         };
 
         // Draw baselines (offset by layout origin)
-        if DRAW_BASELINES && self.show_debug_visuals {
+        if DRAW_BASELINES && self.show_baseline_visuals {
             for (line_idx, line) in self.text_rasterizer.lines.iter().enumerate() {
                 if !line_quick_visible(line_idx) {
                     continue;
@@ -741,7 +747,7 @@ impl TextApp {
                 }
             }
 
-            if SHOW_BOUNDING_RECTANGLES && self.show_debug_visuals {
+            if SHOW_BOUNDING_RECTANGLES && self.show_hitbox_visuals {
                 Self::draw_rect(
                     buffer,
                     width as u32,
@@ -760,9 +766,13 @@ impl TextApp {
             let (target_x, baseline_y) = self.get_cursor_screen_position();
 
             let dx = (target_x - self.smooth_cursor_x).abs();
+            // Seed immediately so the first visible frame respects alignment.
+            if !self.cursor_x_seeded {
+                self.smooth_cursor_x = target_x;
+                self.cursor_x_seeded = true;
             // Keep small anti-jitter smoothing, but snap quickly on real movement
             // so caret/pointer feedback feels immediate on iOS and desktop.
-            if dx > 24.0 {
+            } else if dx > 24.0 {
                 self.smooth_cursor_x = target_x;
             } else {
                 self.smooth_cursor_x += (target_x - self.smooth_cursor_x) * 0.65;
@@ -1876,6 +1886,7 @@ impl TextApp {
         self.cursor_position = cursor_position.min(text_len);
         self.selection_start = selection_start.map(|v| v.min(text_len));
         self.selection_end = selection_end.map(|v| v.min(text_len));
+        self.cursor_x_seeded = false;
     }
 
     /// Cursor / layout → full-frame pixel position (Python embed [`TextViewportMetrics::draw_x`] / `draw_y`).

@@ -181,7 +181,7 @@ pub struct UiTextRenderState {
     /// Character count per wrapped line that currently intersects the viewport (chunked like on-screen rows).
     pub lines: Vec<u32>,
     /// Per visible glyph (`character_may_appear_in_viewport`), normalized axis-aligned box: `[[x1,y1],[x2,y2]]` in [0,1]².
-    /// Matches `(N, 2, 2)`. Omitted entirely when callers pass `include_hitboxes=false`.
+    /// Matches `(N, 2, 2)`.
     pub hitboxes: Vec<[[f32; 2]; 2]>,
     /// Visual character index for each hitbox entry (same order as [`Self::hitboxes`]).
     pub hitbox_char_indices: Vec<u32>,
@@ -190,7 +190,7 @@ pub struct UiTextRenderState {
     pub baselines: Vec<[[f32; 2]; 2]>,
 }
 
-/// Builds line counts (viewport-visible lines only), matching baselines, and optional viewport-visible glyph hitboxes.
+/// Builds line counts (viewport-visible lines only), matching baselines, and viewport-visible glyph hitboxes.
 /// Mirrors chunked [`UiText::render`] tensors.
 pub fn collect_ui_text_render_state(
     rasterizer: &TextRasterizer,
@@ -201,7 +201,7 @@ pub fn collect_ui_text_render_state(
     sy: f32,
     frame_width: usize,
     frame_height: usize,
-    include_hitboxes: bool,
+    _include_hitboxes: bool,
 ) -> UiTextRenderState {
     let mut state = UiTextRenderState::default();
 
@@ -235,30 +235,30 @@ pub fn collect_ui_text_render_state(
         ]);
     }
 
-    if include_hitboxes {
-        for character in &rasterizer.characters {
-            if !character_may_appear_in_viewport(character, layout_w, sy, vis_doc_h) {
-                continue;
-            }
-            let px = x1 + character.x.round() as i32;
-            let py = y1 + (character.y - sy).round() as i32;
-            let gx1 = px;
-            let gy1 = py;
-            let gx2 = px + character.metrics.width as i32;
-            let gy2 = py + character.metrics.height as i32;
-
-            state.hitboxes.push([
-                [
-                    (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
-                ],
-                [
-                    (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
-                ],
-            ]);
-            state.hitbox_char_indices.push(character.char_index as u32);
+    // Always collect hitboxes for interaction consumers (selection, highlight, pointer hit-tests),
+    // regardless of debug overlay toggles.
+    for character in &rasterizer.characters {
+        if !character_may_appear_in_viewport(character, layout_w, sy, vis_doc_h) {
+            continue;
         }
+        let px = x1 + character.x.round() as i32;
+        let py = y1 + (character.y - sy).round() as i32;
+        let gx1 = px;
+        let gy1 = py;
+        let gx2 = px + character.metrics.width as i32;
+        let gy2 = py + character.metrics.height as i32;
+
+        state.hitboxes.push([
+            [
+                (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy1 as f32 / frame_height as f32).clamp(0.0, 1.0),
+            ],
+            [
+                (gx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
+            ],
+        ]);
+        state.hitbox_char_indices.push(character.char_index as u32);
     }
 
     state

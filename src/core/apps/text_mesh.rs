@@ -71,7 +71,8 @@ impl TextMeshApp {
     pub fn new() -> Self {
         let mut text_app = TextApp::new();
         text_app.uses_parent_ui_scale = true;
-        text_app.show_debug_visuals = false;
+        text_app.show_hitbox_visuals = false;
+        text_app.show_baseline_visuals = false;
         text_app.show_cursor = true;
         let current_user = Self::current_username();
         let status_user_label = current_user
