@@ -6,6 +6,10 @@
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(target_arch = "wasm32")]
+static WASM_CLIPBOARD: std::sync::LazyLock<std::sync::Mutex<String>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(String::new()));
+
 #[cfg(target_os = "ios")]
 use std::ffi::{CStr, CString};
 #[cfg(target_os = "ios")]
@@ -30,6 +34,17 @@ extern "C" {
 
 /// Get the current clipboard contents
 pub fn get_contents() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return WASM_CLIPBOARD.lock().ok().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        });
+    }
+
     #[cfg(target_os = "macos")]
     {
         Command::new("pbpaste").output().ok().and_then(|output| {
@@ -103,12 +118,15 @@ pub fn get_contents() -> Option<String> {
         clipboard_linux_get()
     }
 
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "windows",
-        target_os = "linux"
-    )))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux"
+        ))
+    ))]
     {
         None
     }
@@ -169,6 +187,20 @@ fn clipboard_linux_set(text: &str) -> Result<(), std::io::Error> {
 
 /// Set the clipboard contents
 pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut slot) = WASM_CLIPBOARD.lock() {
+            *slot = text.to_string();
+        }
+        if let Some(clipboard) = web_sys::window().map(|w| w.navigator().clipboard()) {
+            let promise = clipboard.write_text(text);
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            });
+        }
+        return Ok(());
+    }
+
     #[cfg(target_os = "macos")]
     {
         use std::io::Write;
@@ -268,12 +300,15 @@ pub fn set_contents(text: &str) -> Result<(), std::io::Error> {
         clipboard_linux_set(text)
     }
 
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "windows",
-        target_os = "linux"
-    )))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows",
+            target_os = "linux"
+        ))
+    ))]
     {
         let _ = text;
         Err(std::io::Error::new(

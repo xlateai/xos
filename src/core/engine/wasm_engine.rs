@@ -14,6 +14,7 @@ use super::{
     f3_menu_handle_zoom_scroll, frame_view_pan_by_pixels, tick_f3_menu, tick_frame_view_zoom,
     F3Menu,
 };
+use crate::engine::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(target_arch = "wasm32")]
 fn viewport_metrics(window: &web_sys::Window) -> Result<(f64, f64, f32, u32, u32), JsValue> {
@@ -48,6 +49,19 @@ fn canvas_backing_scale(canvas: &web_sys::HtmlCanvasElement) -> f32 {
     let rect = canvas.get_bounding_client_rect();
     let css_width = rect.width().max(1.0) as f32;
     canvas.width() as f32 / css_width
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_mouse_from_client_point(
+    state: &mut EngineState,
+    canvas: &web_sys::HtmlCanvasElement,
+    client_x: f64,
+    client_y: f64,
+) {
+    let rect = canvas.get_bounding_client_rect();
+    let scale = canvas_backing_scale(canvas) as f64;
+    state.mouse.x = ((client_x - rect.left()) * scale) as f32;
+    state.mouse.y = ((client_y - rect.top()) * scale) as f32;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -330,6 +344,87 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         up_callback.forget();
     }
 
+    // Window-level release: a drag can leave the canvas before mouseup, which otherwise
+    // leaves selection/drag state stuck inside text widgets.
+    {
+        let state_ptr_clone = state_ptr;
+        let canvas_clone = canvas.clone();
+        let window_up_callback = Closure::wrap(Box::new(move |event: MouseEvent| unsafe {
+            let state = &mut *state_ptr_clone;
+            set_mouse_from_client_point(
+                &mut state.engine_state,
+                &canvas_clone,
+                event.client_x() as f64,
+                event.client_y() as f64,
+            );
+            let had_left = state.engine_state.mouse.is_left_clicking;
+            let had_right = state.engine_state.mouse.is_right_clicking;
+            state.engine_state.mouse.is_left_clicking = false;
+            state.engine_state.mouse.is_right_clicking = false;
+            if state.frame_pan_dragging {
+                state.frame_pan_dragging = false;
+                event.prevent_default();
+                return;
+            }
+            if had_left || had_right {
+                if !f3_menu_handle_mouse_up(&mut state.engine_state) {
+                    state.app.on_mouse_up(&mut state.engine_state);
+                }
+                event.prevent_default();
+            }
+        }) as Box<dyn FnMut(_)>);
+        window.add_event_listener_with_callback(
+            "mouseup",
+            window_up_callback.as_ref().unchecked_ref(),
+        )?;
+        window_up_callback.forget();
+    }
+
+    {
+        let state_ptr_clone = state_ptr;
+        let blur_callback = Closure::wrap(Box::new(move || unsafe {
+            let state = &mut *state_ptr_clone;
+            let had_left = state.engine_state.mouse.is_left_clicking;
+            let had_right = state.engine_state.mouse.is_right_clicking;
+            state.engine_state.mouse.is_left_clicking = false;
+            state.engine_state.mouse.is_right_clicking = false;
+            state.frame_pan_dragging = false;
+            state.command_held = false;
+            state.shift_held = false;
+            state.engine_state.keyboard.modifiers.command = false;
+            state.engine_state.keyboard.modifiers.shift = false;
+            if had_left || had_right {
+                if !f3_menu_handle_mouse_up(&mut state.engine_state) {
+                    state.app.on_mouse_up(&mut state.engine_state);
+                }
+            }
+        }) as Box<dyn FnMut()>);
+        window.add_event_listener_with_callback("blur", blur_callback.as_ref().unchecked_ref())?;
+        blur_callback.forget();
+    }
+
+    {
+        let state_ptr_clone = state_ptr;
+        let leave_callback = Closure::wrap(Box::new(move |_event: MouseEvent| unsafe {
+            let state = &mut *state_ptr_clone;
+            let had_left = state.engine_state.mouse.is_left_clicking;
+            let had_right = state.engine_state.mouse.is_right_clicking;
+            state.engine_state.mouse.is_left_clicking = false;
+            state.engine_state.mouse.is_right_clicking = false;
+            state.frame_pan_dragging = false;
+            if had_left || had_right {
+                if !f3_menu_handle_mouse_up(&mut state.engine_state) {
+                    state.app.on_mouse_up(&mut state.engine_state);
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        window.add_event_listener_with_callback(
+            "mouseleave",
+            leave_callback.as_ref().unchecked_ref(),
+        )?;
+        leave_callback.forget();
+    }
+
     // Touch move (acts like mouse move + drag-to-scroll)
     {
         use web_sys::TouchEvent;
@@ -439,6 +534,20 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     event.ctrl_key() || event.meta_key();
                 state.engine_state.keyboard.modifiers.alt = event.alt_key();
 
+                if key.len() == 1 {
+                    if let Some(ch) = key.chars().next() {
+                        if let Some(shortcut) = detect_shortcut(
+                            ch,
+                            state.engine_state.keyboard.modifiers.command,
+                            state.engine_state.keyboard.modifiers.shift,
+                        ) {
+                            state.app.on_key_shortcut(&mut state.engine_state, shortcut);
+                            event.prevent_default();
+                            return;
+                        }
+                    }
+                }
+
                 match key.as_str() {
                     "Control" | "Meta" => {
                         state.command_held = true;
@@ -502,6 +611,34 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             keydown_callback.as_ref().unchecked_ref(),
         )?;
         keydown_callback.forget();
+    }
+
+    // Browser paste carries clipboard text synchronously through the event. Seed the XOS
+    // clipboard cache, then route a normal Paste shortcut into the app.
+    {
+        use crate::engine::keyboard::shortcuts::ShortcutAction;
+        use web_sys::ClipboardEvent;
+
+        let state_ptr_clone = state_ptr;
+        let paste_callback = Closure::wrap(Box::new(move |event: ClipboardEvent| {
+            if let Some(data) = event.clipboard_data() {
+                if let Ok(text) = data.get_data("text/plain") {
+                    if !text.is_empty() {
+                        let _ = crate::clipboard::set_contents(&text);
+                        unsafe {
+                            let state = &mut *state_ptr_clone;
+                            state
+                                .app
+                                .on_key_shortcut(&mut state.engine_state, ShortcutAction::Paste);
+                        }
+                        event.prevent_default();
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+        window
+            .add_event_listener_with_callback("paste", paste_callback.as_ref().unchecked_ref())?;
+        paste_callback.forget();
     }
 
     // Key up (modifier release for pan gesture)
