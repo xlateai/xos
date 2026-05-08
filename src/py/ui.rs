@@ -9,6 +9,8 @@ use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
     insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
     peek_editor_visual_state, peek_embed_document_string, python_embed_set_document,
+    set_text_widget_selection,
+    set_text_widget_cursor,
     pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect, tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
@@ -236,6 +238,26 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         24.0
     };
+    let alignment_x = if let Some(v) = args.kwargs.get("alignment_x") {
+        py_number_to_f64(v.clone(), vm, "alignment_x")? as f32
+    } else {
+        0.0
+    };
+    let alignment_y = if let Some(v) = args.kwargs.get("alignment_y") {
+        py_number_to_f64(v.clone(), vm, "alignment_y")? as f32
+    } else {
+        0.0
+    };
+    let spacing_x = if let Some(v) = args.kwargs.get("spacing_x") {
+        py_number_to_f64(v.clone(), vm, "spacing_x")? as f32
+    } else {
+        1.0
+    };
+    let spacing_y = if let Some(v) = args.kwargs.get("spacing_y") {
+        py_number_to_f64(v.clone(), vm, "spacing_y")? as f32
+    } else {
+        1.0
+    };
 
     let mut text = text;
     let mut should_render = true;
@@ -263,9 +285,42 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("show_cursor") {
         show_cursor = v.clone().try_into_value(vm)?;
     }
+    if let Some(v) = args.kwargs.get("cursor_position") {
+        cursor_position = v.clone().try_into_value(vm)?;
+    }
+    if let Some(v) = args.kwargs.get("selection_start") {
+        let s: i64 = v.clone().try_into_value(vm)?;
+        if s >= 0 {
+            selection_start_opt = Some(s as usize);
+        }
+    }
+    if let Some(v) = args.kwargs.get("selection_end") {
+        let e: i64 = v.clone().try_into_value(vm)?;
+        if e >= 0 {
+            selection_end_opt = Some(e as usize);
+        }
+    }
     if let Some(v) = args.kwargs.get("render") {
         should_render = v.clone().try_into_value(vm)?;
     }
+    if let Some(v) = args.kwargs.get("viewport_scroll_y") {
+        viewport_scroll_y = py_number_to_f64(v.clone(), vm, "viewport_scroll_y")? as f32;
+    }
+    let keep_directive_only_rows = if let Some(v) = args.kwargs.get("keep_directive_only_rows") {
+        v.clone().try_into_value(vm)?
+    } else {
+        false
+    };
+    let active_markup_start = if let Some(v) = args.kwargs.get("active_markup_start") {
+        Some(v.clone().try_into_value::<usize>(vm)?)
+    } else {
+        None
+    };
+    let active_markup_end = if let Some(v) = args.kwargs.get("active_markup_end") {
+        Some(v.clone().try_into_value::<usize>(vm)?)
+    } else {
+        None
+    };
 
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER.lock().unwrap().as_ref().map(|ptr| ptr.0);
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
@@ -297,8 +352,44 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         a.clamp(0, 255) as u8,
     );
 
-    let (viz_text, ui_color_spans, ui_scale_spans) =
-        ui_markup::strip_inline_ui_markup(&text, size_px.max(1.0));
+    let exclusion = match (active_markup_start, active_markup_end) {
+        (Some(s), Some(e)) if s <= e => Some((s, e)),
+        _ => None,
+    };
+    let (viz_text, ui_color_spans, ui_scale_spans, ui_hitbox_spans, ui_baseline_spans) =
+        ui_markup::strip_inline_ui_markup_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            hitboxes,
+            baselines,
+            keep_directive_only_rows,
+        );
+    let viz_cursor_position = ui_markup::map_raw_cursor_to_visual_with_exclusion(
+        &text,
+        size_px.max(1.0),
+        exclusion,
+        cursor_position,
+        keep_directive_only_rows,
+    );
+    let viz_selection_start = selection_start_opt.map(|s| {
+        ui_markup::map_raw_cursor_to_visual_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            s,
+            keep_directive_only_rows,
+        )
+    });
+    let viz_selection_end = selection_end_opt.map(|e| {
+        ui_markup::map_raw_cursor_to_visual_with_exclusion(
+            &text,
+            size_px.max(1.0),
+            exclusion,
+            e,
+            keep_directive_only_rows,
+        )
+    });
 
     let buffer =
         unsafe { std::slice::from_raw_parts_mut(buffer_ptr, canvas_width * canvas_height * 4) };
@@ -368,13 +459,17 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             baselines,
             size_px,
             show_cursor,
-            cursor_position,
-            selection_start: selection_start_opt,
-            selection_end: selection_end_opt,
+            cursor_position: viz_cursor_position,
+            selection_start: viz_selection_start,
+            selection_end: viz_selection_end,
             trackpad_pointer_px: trackpad_pointer,
             viewport_scroll_y,
             color_spans: ui_color_spans,
             scale_spans: ui_scale_spans,
+            hitbox_spans: ui_hitbox_spans,
+            baseline_spans: ui_baseline_spans,
+            alignment: (alignment_x, alignment_y),
+            spacing: (spacing_x, spacing_y),
         };
         if should_render {
             text_ui
@@ -415,6 +510,13 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             })
             .collect(),
     );
+    let hitbox_indices_py = vm.ctx.new_list(
+        render_state
+            .hitbox_char_indices
+            .iter()
+            .map(|v| vm.ctx.new_int(*v as usize).into())
+            .collect(),
+    );
     let baselines_py = vm.ctx.new_list(
         render_state
             .baselines
@@ -438,6 +540,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let state = vm.ctx.new_dict();
     state.set_item("lines", lines_py.into(), vm)?;
     state.set_item("hitboxes", hitboxes_py.into(), vm)?;
+    state.set_item("hitbox_char_indices", hitbox_indices_py.into(), vm)?;
     state.set_item("baselines", baselines_py.into(), vm)?;
     Ok(state.into())
 }
@@ -534,8 +637,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.python_viewport_norm = Some((x1 as f32, y1 as f32, x2 as f32, y2 as f32));
     t.python_viewport = Some((vx, vy, vw, vh));
     t.set_font_size(fs);
-    t.set_document_text_py_ui(s);
     t.read_only = !editable;
+    t.set_document_text_py_ui(s);
     t.show_cursor = show_cursor;
     t.show_debug_visuals = show_hitboxes || show_baselines;
     t.py_selectable = selectable;
@@ -640,6 +743,80 @@ fn text_peek_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn text_peek_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_cursor requires (native_id,)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.cursor_position).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_cursor: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
+fn text_peek_selection_start(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_selection_start requires (native_id,)".to_string(),
+        ));
+    }
+    let id: i64 = av[0].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.selection_start.map(|v| v as i64).unwrap_or(-1)).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_selection_start: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
+fn text_peek_selection_end(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_selection_end requires (native_id,)".to_string(),
+        ));
+    }
+    let id: i64 = av[0].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_int(peek.selection_end.map(|v| v as i64).unwrap_or(-1)).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_selection_end: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
+fn text_peek_scroll(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error(
+            "_text_peek_scroll requires (native_id,)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    match peek_editor_visual_state(id as u64) {
+        Some(peek) => Ok(vm.ctx.new_float(peek.scroll_y as f64).into()),
+        None => Err(vm.new_value_error(format!(
+            "_text_peek_scroll: unknown or non-embedded widget id {}",
+            id
+        ))),
+    }
+}
+
 fn text_set_document(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args.as_slice();
     if av.len() < 2 || av.len() > 3 {
@@ -695,6 +872,44 @@ fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "_onscreen_keyboard_top_norm() must run during Application.tick() (engine TLS required)."
                 .to_string(),
         )),
+    }
+}
+
+fn text_set_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(
+            "_text_set_cursor requires (native_id, cursor_position)".to_string(),
+        ));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let cursor_position: usize = args_vec[1].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match set_text_widget_cursor(id as u64, cursor_position) {
+        Ok(()) => Ok(vm.ctx.none()),
+        Err(e) => Err(vm.new_runtime_error(e.to_string())),
+    }
+}
+
+fn text_set_selection(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 4 {
+        return Err(vm.new_type_error(
+            "_text_set_selection requires (native_id, cursor_position, selection_start, selection_end)".to_string(),
+        ));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let cursor_position: usize = args_vec[1].clone().try_into_value(vm)?;
+    let selection_start: usize = args_vec[2].clone().try_into_value(vm)?;
+    let selection_end: usize = args_vec[3].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match set_text_widget_selection(id as u64, cursor_position, selection_start, selection_end) {
+        Ok(()) => Ok(vm.ctx.none()),
+        Err(e) => Err(vm.new_runtime_error(e.to_string())),
     }
 }
 
@@ -784,8 +999,50 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_text_peek_cursor",
+            vm.new_function("_text_peek_cursor", text_peek_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_peek_selection_start",
+            vm.new_function("_text_peek_selection_start", text_peek_selection_start),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_peek_selection_end",
+            vm.new_function("_text_peek_selection_end", text_peek_selection_end),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_text_set_document",
             vm.new_function("_text_set_document", text_set_document),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_set_cursor",
+            vm.new_function("_text_set_cursor", text_set_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_set_selection",
+            vm.new_function("_text_set_selection", text_set_selection),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_text_peek_scroll",
+            vm.new_function("_text_peek_scroll", text_peek_scroll),
             vm,
         )
         .unwrap();
@@ -819,8 +1076,8 @@ class Text:
         x2=1.0,
         y2=1.0,
         color=(255, 255, 255),
-        show_hitboxes=False,
-        show_baselines=False,
+        hitboxes=False,
+        baselines=False,
         size=24.0,
         font=None,
         **kwargs,
@@ -841,16 +1098,27 @@ class Text:
         self.x2 = x2
         self.y2 = y2
         self.color = color
-        legacy_hitboxes = kwargs.get("hitboxes", False)
-        legacy_baselines = kwargs.get("baselines", False)
-        self.show_hitboxes = bool(kwargs.get("show_hitboxes", show_hitboxes) or legacy_hitboxes)
-        self.show_baselines = bool(kwargs.get("show_baselines", show_baselines) or legacy_baselines)
+        legacy_show_hitboxes = kwargs.get("show_hitboxes", False)
+        legacy_show_baselines = kwargs.get("show_baselines", False)
+        self.hitboxes = bool(kwargs.get("hitboxes", hitboxes) or legacy_show_hitboxes)
+        self.baselines = bool(kwargs.get("baselines", baselines) or legacy_show_baselines)
         # Backward-compatible aliases.
-        self.hitboxes = self.show_hitboxes
-        self.baselines = self.show_baselines
+        self.show_hitboxes = self.hitboxes
+        self.show_baselines = self.baselines
         self.size = float(size)
         self._native_id = None
         self._last_tick_state = None
+        self._last_tick_state_dict = None
+        self._active_markup_range = None
+        self._show_markup_source = True
+        self._blink_on = True
+        self._blink_elapsed = 0.0
+        self._blink_last_ts = None
+        self._last_native_cursor = None
+        self._pointer_down_xy = None
+        self._pointer_dragged = False
+        self._drag_select_anchor_raw = None
+        self._focus_cursor_sync_pending = False
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -880,6 +1148,93 @@ class Text:
     def _effective_input_focus(self):
         return bool(getattr(self, "_sticky_focus", False) or self.is_focused)
 
+    @staticmethod
+    def _markup_ranges(s):
+        # Returns tuples: (open[,], close], open(, close), inner_start, inner_end)
+        text = str(s)
+        out = []
+        n = len(text)
+        i = 0
+        while i < n:
+            if text[i] != "[":
+                i += 1
+                continue
+            rb = text.find("](", i + 1)
+            if rb == -1:
+                i += 1
+                continue
+            rp = text.find(")", rb + 2)
+            if rp == -1:
+                i += 1
+                continue
+            out.append((i, rb, rb + 1, rp, i + 1, rb))
+            i = rp + 1
+        return out
+
+    @classmethod
+    def _should_show_markup_source(cls, text, cursor_pos):
+        # Show source while editing near a markup token, or when label is empty.
+        ranges = cls._markup_ranges(text)
+        if not ranges:
+            return False
+        cp = int(max(0, cursor_pos))
+        for lb, rb, lp, rp, inner_start, inner_end in ranges:
+            if inner_start >= inner_end:
+                return True
+            if (lb - 1) <= cp <= (rp + 1):
+                return True
+        return False
+
+    @staticmethod
+    def _rect_dist_sq(mx, my, x1, y1, x2, y2):
+        dx = 0.0 if x1 <= mx <= x2 else (x1 - mx if mx < x1 else mx - x2)
+        dy = 0.0 if y1 <= my <= y2 else (y1 - my if my < y1 else my - y2)
+        return dx * dx + dy * dy
+
+    @staticmethod
+    def _is_style_link_dest(dest):
+        d = str(dest).lower()
+        return ("color=" in d) or ("size=" in d) or ("hitboxes=" in d) or ("show_hitboxes=" in d) or ("baselines=" in d) or ("show_baselines=" in d)
+
+    def _map_visual_cursor_to_raw(self, text, visual_cursor, exclude_range=None, keep_directive_only_rows=False):
+        s = str(text)
+        n = len(s)
+        vc = int(max(0, visual_cursor))
+        i = 0
+        vis = 0
+        while i < n:
+            if vc <= vis:
+                return i
+            if exclude_range is not None:
+                xs, xe = exclude_range
+                if xs <= i <= xe:
+                    i += 1
+                    vis += 1
+                    continue
+            if s[i] == "[":
+                rb = s.find("](", i + 1)
+                rp = s.find(")", rb + 2) if rb != -1 else -1
+                if rb != -1 and rp != -1:
+                    dest = s[rb + 2:rp]
+                    if self._is_style_link_dest(dest):
+                        inner_start = i + 1
+                        inner_end = rb
+                        inner_len = max(0, inner_end - inner_start)
+                        if vc <= vis + inner_len:
+                            return inner_start + (vc - vis)
+                        vis += inner_len
+                        i = rp + 1
+                        continue
+            i += 1
+            vis += 1
+        return n
+
+    def _reset_blink(self):
+        import time
+        self._blink_elapsed = 0.0
+        self._blink_on = True
+        self._blink_last_ts = float(time.monotonic())
+
     @property
     def focused(self):
         return self._effective_input_focus()
@@ -899,16 +1254,28 @@ class Text:
         self.size = float(value)
 
     def tick(self, app):
+        import time
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
         nid = int(self._native_id)
+        eff = self._effective_input_focus()
         peek_s = ""
         try:
             peek_s = str(xos.ui._text_peek_document(nid))
         except (ValueError, RuntimeError, OSError):
             peek_s = ""
-        if not self.editable:
+        if self.editable:
+            # Allow fast app-driven swaps for editable regions (e.g. verdict/prompt text):
+            # if Python-side text changed while this widget is not actively focused, push it
+            # into the native editor before collecting render state.
+            if (not eff) and (str(self.text) != peek_s):
+                try:
+                    xos.ui._text_set_document(nid, str(self.text), True)
+                    peek_s = str(self.text)
+                except (ValueError, RuntimeError, OSError):
+                    pass
+        else:
             if self.text != peek_s:
                 try:
                     xos.ui._text_set_document(nid, str(self.text), True)
@@ -921,8 +1288,14 @@ class Text:
             float(self.x2),
             float(self.y2),
         )
-        eff = self._effective_input_focus()
-        caret = bool(self.show_cursor and eff)
+        now_ts = float(time.monotonic())
+        if self._blink_last_ts is None:
+            self._blink_last_ts = now_ts
+        dt = max(0.0, min(0.25, now_ts - float(self._blink_last_ts)))
+        self._blink_last_ts = now_ts
+        self._blink_elapsed = (float(self._blink_elapsed) + dt) % 1.0
+        self._blink_on = bool(self._blink_elapsed < 0.5)
+        caret = bool(self.show_cursor and eff and self._blink_on)
         xos.ui._text_tick(
             nid,
             float(self.size),
@@ -932,6 +1305,12 @@ class Text:
             float(self.spacing[0]),
             float(self.spacing[1]),
         )
+        # Keep tick-time state collection on the native path for performance.
+        # Styled fallback (for unfocused editable markup preview) is handled in render().
+        extra = {
+            "native_widget_id": int(self._native_id),
+            "show_cursor": caret,
+        }
         state = xos.ui._text_render(
             self.text,
             self.x1,
@@ -939,14 +1318,15 @@ class Text:
             self.x2,
             self.y2,
             self.color,
-            # Always compute and return hitboxes/baselines in render state.
-            # Visibility is controlled separately via show_* flags.
-            hitboxes=True,
-            baselines=True,
+            hitboxes=bool(self.hitboxes),
+            baselines=bool(self.baselines),
             size=self.size,
-            native_widget_id=int(self._native_id),
-            show_cursor=caret,
+            alignment_x=float(self.alignment[0]),
+            alignment_y=float(self.alignment[1]),
+            spacing_x=float(self.spacing[0]),
+            spacing_y=float(self.spacing[1]),
             render=False,
+            **extra,
         )
         self._last_tick_state = TextRenderState(state)
         if self.editable:
@@ -954,6 +1334,57 @@ class Text:
                 self.text = str(xos.ui._text_peek_document(nid))
             except (ValueError, RuntimeError, OSError):
                 pass
+        # Focused editable text: only show raw markup source when cursor is in/near a token,
+        # or when a token has an empty [] label (so it stays editable).
+        self._show_markup_source = True
+        if self.editable:
+            if eff:
+                try:
+                    cp = int(xos.ui._text_peek_cursor(nid))
+                except (ValueError, RuntimeError, OSError):
+                    cp = 0
+                sel_a = -1
+                sel_b = -1
+                try:
+                    sel_a = int(xos.ui._text_peek_selection_start(nid))
+                    sel_b = int(xos.ui._text_peek_selection_end(nid))
+                except (ValueError, RuntimeError, OSError):
+                    sel_a = -1
+                    sel_b = -1
+                if self._last_native_cursor is None or int(self._last_native_cursor) != int(cp):
+                    self._reset_blink()
+                self._last_native_cursor = int(cp)
+                ranges = self._markup_ranges(self.text)
+                active = None
+                if sel_a >= 0 and sel_b >= 0 and sel_a != sel_b:
+                    s0 = min(sel_a, sel_b)
+                    s1 = max(sel_a, sel_b)
+                    touched = []
+                    for r in ranges:
+                        lb, _rb, _lp, rp, _inner_start, _inner_end = r
+                        if max(s0, lb) <= min(s1, rp):
+                            touched.append(r)
+                    if touched:
+                        min_lb = min(r[0] for r in touched)
+                        max_rp = max(r[3] for r in touched)
+                        active = (min_lb, min_lb, min_lb, max_rp, min_lb + 1, min_lb + 1)
+                if active is None:
+                    for r in ranges:
+                        lb, _rb, _lp, rp, inner_start, inner_end = r
+                        if inner_start >= inner_end or ((lb - 1) <= cp <= (rp + 1)):
+                            active = r
+                            break
+                if self._focus_cursor_sync_pending:
+                    self._active_markup_range = None
+                    self._show_markup_source = False
+                else:
+                    self._active_markup_range = active
+                    self._show_markup_source = active is not None
+            else:
+                self._active_markup_range = None
+                self._show_markup_source = False
+                self._last_native_cursor = None
+                self._focus_cursor_sync_pending = False
         return self._last_tick_state
 
     def on_events(self, app):
@@ -978,18 +1409,220 @@ class Text:
                 if getattr(self, "_sticky_focus", False):
                     self.is_focused = True
                 else:
+                    was_focused = bool(self.is_focused)
                     self.is_focused = hit
+                    if hit and (not was_focused):
+                        self._focus_cursor_sync_pending = True
+                if hit:
+                    self._reset_blink()
+            mx0 = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+            my0 = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+            self._pointer_down_xy = (mx0, my0)
+            self._pointer_dragged = False
+            self._drag_select_anchor_raw = None
+        elif isinstance(ev, dict) and ev.get("kind") == "mouse_move":
+            if self._pointer_down_xy is not None:
+                mxm = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                mym = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                dx = mxm - float(self._pointer_down_xy[0])
+                dy = mym - float(self._pointer_down_xy[1])
+                if (dx * dx + dy * dy) > (7.0 * 7.0):
+                    self._pointer_dragged = True
         nid = getattr(self, "_native_id", None)
         if nid is None:
             self._native_id = int(xos.ui._text_register(self, app))
             nid = self._native_id
         xos.ui._text_dispatch(int(nid), app)
+        if (
+            isinstance(ev, dict)
+            and ev.get("kind") == "mouse_move"
+            and bool(self.editable)
+            and bool(self._effective_input_focus())
+            and self._pointer_down_xy is not None
+            and self._pointer_dragged
+        ):
+            state = getattr(self, "_last_tick_state_dict", None)
+            hitboxes = state.get("hitboxes") if isinstance(state, dict) else None
+            hitbox_char_indices = state.get("hitbox_char_indices") if isinstance(state, dict) else None
+            if (
+                isinstance(hitboxes, list)
+                and isinstance(hitbox_char_indices, list)
+                and hitboxes
+                and len(hitboxes) == len(hitbox_char_indices)
+            ):
+                fd = getattr(app.frame, "_data", app.frame)
+                fw = float(fd["width"])
+                fh = float(fd["height"])
+                mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+                if xa <= mx < xb and ya <= my < yb:
+                    best_i = 0
+                    best_d = 1e30
+                    best_l = 0.0
+                    best_r = 0.0
+                    for i, hb in enumerate(hitboxes):
+                        try:
+                            x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                            x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                        except Exception:
+                            continue
+                        x1p, y1p = x1n * fw, y1n * fh
+                        x2p, y2p = x2n * fw, y2n * fh
+                        d = self._rect_dist_sq(mx, my, x1p, y1p, x2p, y2p)
+                        if d < best_d:
+                            best_d = d
+                            best_i = i
+                            best_l = x1p
+                            best_r = x2p
+                    try:
+                        visual_cursor = int(hitbox_char_indices[best_i])
+                    except Exception:
+                        visual_cursor = int(best_i)
+                    if abs(mx - best_r) < abs(mx - best_l):
+                        visual_cursor += 1
+                    exclusion = None
+                    if self._active_markup_range is not None:
+                        lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                        exclusion = (int(lb), int(rp))
+                    raw_cursor = self._map_visual_cursor_to_raw(
+                        self.text,
+                        visual_cursor,
+                        exclusion,
+                        bool(self.editable and self._effective_input_focus()),
+                    )
+                    if self._drag_select_anchor_raw is None:
+                        down_x, down_y = self._pointer_down_xy
+                        anchor_i = best_i
+                        anchor_d = 1e30
+                        anchor_l = 0.0
+                        anchor_r = 0.0
+                        for i, hb in enumerate(hitboxes):
+                            try:
+                                x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                                x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                            except Exception:
+                                continue
+                            x1p, y1p = x1n * fw, y1n * fh
+                            x2p, y2p = x2n * fw, y2n * fh
+                            d = self._rect_dist_sq(float(down_x), float(down_y), x1p, y1p, x2p, y2p)
+                            if d < anchor_d:
+                                anchor_d = d
+                                anchor_i = i
+                                anchor_l = x1p
+                                anchor_r = x2p
+                        try:
+                            anchor_visual = int(hitbox_char_indices[anchor_i])
+                        except Exception:
+                            anchor_visual = int(anchor_i)
+                        if abs(float(down_x) - anchor_r) < abs(float(down_x) - anchor_l):
+                            anchor_visual += 1
+                        self._drag_select_anchor_raw = int(
+                            self._map_visual_cursor_to_raw(
+                                self.text,
+                                anchor_visual,
+                                exclusion,
+                                bool(self.editable and self._effective_input_focus()),
+                            )
+                        )
+                    anchor = int(self._drag_select_anchor_raw)
+                    try:
+                        xos.ui._text_set_selection(int(nid), int(raw_cursor), int(anchor), int(raw_cursor))
+                        self._last_native_cursor = int(raw_cursor)
+                        self._reset_blink()
+                    except (ValueError, RuntimeError, OSError):
+                        pass
+        if (
+            isinstance(ev, dict)
+            and ev.get("kind") == "mouse_up"
+            and bool(self.editable)
+            and bool(self._effective_input_focus())
+            and (not bool(self._pointer_dragged))
+        ):
+            state = getattr(self, "_last_tick_state_dict", None)
+            hitboxes = state.get("hitboxes") if isinstance(state, dict) else None
+            hitbox_char_indices = state.get("hitbox_char_indices") if isinstance(state, dict) else None
+            if (
+                isinstance(hitboxes, list)
+                and isinstance(hitbox_char_indices, list)
+                and hitboxes
+                and len(hitboxes) == len(hitbox_char_indices)
+            ):
+                fd = getattr(app.frame, "_data", app.frame)
+                fw = float(fd["width"])
+                fh = float(fd["height"])
+                mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+                if xa <= mx < xb and ya <= my < yb:
+                    best_i = 0
+                    best_d = 1e30
+                    best_l = 0.0
+                    best_r = 0.0
+                    for i, hb in enumerate(hitboxes):
+                        try:
+                            x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                            x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                        except Exception:
+                            continue
+                        x1p, y1p = x1n * fw, y1n * fh
+                        x2p, y2p = x2n * fw, y2n * fh
+                        d = self._rect_dist_sq(mx, my, x1p, y1p, x2p, y2p)
+                        if d < best_d:
+                            best_d = d
+                            best_i = i
+                            best_l = x1p
+                            best_r = x2p
+                    try:
+                        visual_cursor = int(hitbox_char_indices[best_i])
+                    except Exception:
+                        visual_cursor = int(best_i)
+                    if abs(mx - best_r) < abs(mx - best_l):
+                        visual_cursor += 1
+                    exclusion = None
+                    if self._active_markup_range is not None:
+                        lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                        exclusion = (int(lb), int(rp))
+                    raw_cursor = self._map_visual_cursor_to_raw(
+                        self.text,
+                        visual_cursor,
+                        exclusion,
+                        bool(self.editable and self._effective_input_focus()),
+                    )
+                    try:
+                        xos.ui._text_set_cursor(int(nid), int(raw_cursor))
+                        self._last_native_cursor = int(raw_cursor)
+                        self._focus_cursor_sync_pending = False
+                        self._reset_blink()
+                        # Keep styled-vs-source decision in sync immediately after click-set cursor
+                        # so we don't flash a mismatched frame.
+                        active = None
+                        for r in self._markup_ranges(self.text):
+                            lb, _rb, _lp, rp, inner_start, inner_end = r
+                            if inner_start >= inner_end or ((lb - 1) <= raw_cursor <= (rp + 1)):
+                                active = r
+                                break
+                        self._active_markup_range = active
+                        self._show_markup_source = active is not None
+                    except (ValueError, RuntimeError, OSError):
+                        pass
+        if isinstance(ev, dict) and ev.get("kind") == "mouse_up":
+            self._pointer_down_xy = None
+            self._pointer_dragged = False
+            self._drag_select_anchor_raw = None
+            self._focus_cursor_sync_pending = False
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
         resolved_color = self.color if color is None else color
-        resolved_hitboxes = self.show_hitboxes if hitboxes is None else hitboxes
-        resolved_baselines = self.show_baselines if baselines is None else baselines
+        resolved_hitboxes = self.hitboxes if hitboxes is None else hitboxes
+        resolved_baselines = self.baselines if baselines is None else baselines
         if font_size is not None:
             resolved_size = float(font_size)
         elif size is not None:
@@ -1009,23 +1642,64 @@ class Text:
         try:
             extra = {}
             nid = getattr(self, "_native_id", None)
-            if nid is not None:
+            eff = self._effective_input_focus()
+            # Editable widgets keep styled rendering so only the active token region can
+            # fall back to source while the rest stays styled. Read-only widgets use native visuals.
+            use_native_visual = bool(not self.editable)
+            text_for_render = self.text
+            if nid is not None and use_native_visual:
                 extra["native_widget_id"] = int(nid)
-                eff = self._effective_input_focus()
-                extra["show_cursor"] = bool(self.show_cursor and eff)
+                extra["show_cursor"] = bool(
+                    self.show_cursor and eff and self._blink_on and (not self._focus_cursor_sync_pending)
+                )
+            elif eff:
+                # Fallback renderer: preserve caret visibility while editing.
+                if not self._focus_cursor_sync_pending:
+                    try:
+                        extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
+                    except (ValueError, RuntimeError, OSError):
+                        extra["cursor_position"] = 0
+                    if nid is not None:
+                        try:
+                            s0 = int(xos.ui._text_peek_selection_start(int(nid)))
+                            s1 = int(xos.ui._text_peek_selection_end(int(nid)))
+                            if s0 >= 0 and s1 >= 0:
+                                extra["selection_start"] = s0
+                                extra["selection_end"] = s1
+                        except (ValueError, RuntimeError, OSError):
+                            pass
+                extra["show_cursor"] = bool(
+                    self.show_cursor and eff and self._blink_on and (not self._focus_cursor_sync_pending)
+                )
+            if self.editable and (not use_native_visual) and nid is not None:
+                try:
+                    extra["viewport_scroll_y"] = float(xos.ui._text_peek_scroll(int(nid)))
+                except (ValueError, RuntimeError, OSError):
+                    pass
+            if self.editable and eff and self._active_markup_range is not None:
+                lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                extra["active_markup_start"] = int(lb)
+                extra["active_markup_end"] = int(rp)
+            if self.editable:
+                extra["keep_directive_only_rows"] = bool(eff)
             state = _text_render(
-                self.text,
+                text_for_render,
                 self.x1,
                 self.y1,
                 self.x2,
                 self.y2,
                 resolved_color,
                 # Always compute and return full render geometry.
-                True,
-                True,
+                bool(resolved_hitboxes),
+                bool(resolved_baselines),
                 resolved_size,
+                alignment_x=float(self.alignment[0]),
+                alignment_y=float(self.alignment[1]),
+                spacing_x=float(self.spacing[0]),
+                spacing_y=float(self.spacing[1]),
                 **extra,
             )
+            self._last_tick_state_dict = state
             rendered_state = TextRenderState(state)
             self._last_tick_state = rendered_state
             return rendered_state
@@ -1092,13 +1766,15 @@ class TextRenderState:
         import xos
         self.lines = xos.tensor(state_dict["lines"], dtype=xos.int32)
         hb = state_dict["hitboxes"]
+        hi = state_dict.get("hitbox_char_indices", [])
         bl = state_dict["baselines"]
         n_hb = len(hb)
         n_bl = len(bl)
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
+        self.hitbox_char_indices = xos.tensor(hi, dtype=xos.int32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
-def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hitboxes=False, show_baselines=False, size=24.0, font=None, **kwargs):
+def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxes=False, baselines=False, size=24.0, font=None, **kwargs):
     if "font_size" in kwargs:
         size = kwargs.pop("font_size")
     if "fontsize" in kwargs:
@@ -1110,8 +1786,8 @@ def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), show_hi
         x2=x2,
         y2=y2,
         color=color,
-        show_hitboxes=show_hitboxes,
-        show_baselines=show_baselines,
+        hitboxes=hitboxes,
+        baselines=baselines,
         size=size,
         font=font,
         **kwargs

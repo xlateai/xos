@@ -1,7 +1,8 @@
 use crate::rasterizer::fill_rect_buffer;
 use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::{
-    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextRasterizer,
+    character_may_appear_in_viewport, line_band_intersects_doc_viewport, TextLayoutAlign,
+    TextRasterizer,
 };
 use crate::rasterizer::text::ui_markup;
 use fontdue::Font;
@@ -62,6 +63,28 @@ pub struct UiText {
     pub color_spans: Vec<(usize, usize, (u8, u8, u8))>,
     /// Relative scale spans from `[label](size=…)` (same indices as [`Self::text`]).
     pub scale_spans: Vec<(usize, usize, f32)>,
+    /// Per-glyph hitbox enable spans (cascade / inline overrides from markup directives).
+    pub hitbox_spans: Vec<(usize, usize, bool)>,
+    /// Per-glyph baseline enable spans (cascade / inline overrides from markup directives).
+    pub baseline_spans: Vec<(usize, usize, bool)>,
+    /// Normalized alignment (`0,0` top-left; `1,1` bottom-right), matching Python `xos.ui.Text.alignment`.
+    pub alignment: (f32, f32),
+    /// Start-to-start spacing multipliers `(x, y)`, matching Python `xos.ui.Text.spacing`.
+    pub spacing: (f32, f32),
+}
+
+#[inline]
+fn glyph_bool_with_spans(
+    char_index: usize,
+    base: bool,
+    spans: &[(usize, usize, bool)],
+) -> bool {
+    spans
+        .iter()
+        .rev()
+        .find(|(s, e, _)| char_index >= *s && char_index < *e)
+        .map(|span| span.2)
+        .unwrap_or(base)
 }
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
@@ -160,6 +183,8 @@ pub struct UiTextRenderState {
     /// Per visible glyph (`character_may_appear_in_viewport`), normalized axis-aligned box: `[[x1,y1],[x2,y2]]` in [0,1]².
     /// Matches `(N, 2, 2)`. Omitted entirely when callers pass `include_hitboxes=false`.
     pub hitboxes: Vec<[[f32; 2]; 2]>,
+    /// Visual character index for each hitbox entry (same order as [`Self::hitboxes`]).
+    pub hitbox_char_indices: Vec<u32>,
     /// Per viewport-visible wrapped line, baseline segment in normalized coords: `[[x1,y1],[x2,y2]]`.
     /// Same ordering/length as [`Self::lines`].
     pub baselines: Vec<[[f32; 2]; 2]>,
@@ -232,6 +257,7 @@ pub fn collect_ui_text_render_state(
                     (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                 ],
             ]);
+            state.hitbox_char_indices.push(character.char_index as u32);
         }
     }
 
@@ -261,11 +287,15 @@ impl UiText {
         let font = shared_font()?;
         let mut rasterizer = TextRasterizer::new(font, self.size_px.max(1.0));
         rasterizer.set_text(self.text.clone());
+        rasterizer.set_spacing(self.spacing.0.max(0.0), self.spacing.1.max(0.0));
         rasterizer.glyph_scale_spans.clone_from(&self.scale_spans);
-        rasterizer.tick(box_width, box_height);
+        rasterizer.tick_aligned(box_width, box_height, TextLayoutAlign {
+            x: self.alignment.0.clamp(0.0, 1.0),
+            y: self.alignment.1.clamp(0.0, 1.0),
+        });
 
         let baseline_color = (100, 100, 100, 255);
-        for line in &rasterizer.lines {
+        for (line_idx, line) in rasterizer.lines.iter().enumerate() {
             if !line_band_intersects_doc_viewport(
                 line.baseline_y,
                 rasterizer.ascent,
@@ -284,19 +314,57 @@ impl UiText {
 
             let by = y1 + (line.baseline_y - sy).round() as i32;
             let y_norm = (by as f32 / frame_height as f32).clamp(0.0, 1.0);
-            state.baselines.push([
-                [
-                    (x1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
-                ],
-                [
-                    (x2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                    y_norm,
-                ],
-            ]);
-
-            if self.baselines && by >= y1 && by < y2 {
-                fill_rect_buffer(buffer, frame_width, frame_height, x1, by, x2, by + 1, baseline_color);
+            let line_chars: Vec<_> = rasterizer
+                .characters
+                .iter()
+                .filter(|c| c.line_index == line_idx)
+                .collect();
+            let mut has_enabled = false;
+            let mut all_enabled = true;
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for ch in rasterizer.characters.iter().filter(|c| c.line_index == line_idx) {
+                let enabled = glyph_bool_with_spans(ch.char_index, self.baselines, &self.baseline_spans);
+                if enabled {
+                    has_enabled = true;
+                    min_x = min_x.min(ch.x);
+                    max_x = max_x.max(ch.x + ch.metrics.advance_width);
+                } else {
+                    all_enabled = false;
+                }
+            }
+            if line_chars.is_empty() {
+                has_enabled = self.baselines;
+                all_enabled = self.baselines;
+            }
+            if has_enabled {
+                let (bx1, bx2) = if all_enabled {
+                    (x1, x2)
+                } else {
+                    (x1 + min_x.round() as i32, x1 + max_x.round() as i32)
+                };
+                state.baselines.push([
+                    [
+                        (bx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
+                    [
+                        (bx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
+                        y_norm,
+                    ],
+                ]);
+                if by >= y1 && by < y2 {
+                    fill_rect_buffer(
+                        buffer,
+                        frame_width,
+                        frame_height,
+                        bx1,
+                        by,
+                        bx2.max(bx1 + 1),
+                        by + 1,
+                        baseline_color,
+                    );
+                }
             }
         }
 
@@ -393,7 +461,11 @@ impl UiText {
             let gx2 = px + character.metrics.width as i32;
             let gy2 = py + character.metrics.height as i32;
 
-            if self.hitboxes && in_viewport {
+            let hitboxes_enabled =
+                glyph_bool_with_spans(character.char_index, self.hitboxes, &self.hitbox_spans);
+            // Always collect on-screen glyph geometry for interaction/state consumers.
+            // Debug hitbox visibility remains controlled by `hitboxes_enabled`.
+            if in_viewport {
                 state.hitboxes.push([
                     [
                         (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
@@ -404,6 +476,7 @@ impl UiText {
                         (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                     ],
                 ]);
+                state.hitbox_char_indices.push(character.char_index as u32);
             }
 
             if !in_viewport || py >= y2 {
@@ -438,7 +511,7 @@ impl UiText {
                 }
             }
 
-            if self.hitboxes && in_viewport {
+            if hitboxes_enabled && in_viewport {
                 let hitbox_color = (255, 0, 0, 255);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx2, gy1 + 1, hitbox_color);
                 fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy2 - 1, gx2, gy2, hitbox_color);
