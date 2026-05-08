@@ -1002,6 +1002,7 @@ class Text:
         self._blink_on = True
         self._blink_elapsed = 0.0
         self._blink_last_ts = None
+        self._last_native_cursor = None
         self._pointer_down_xy = None
         self._pointer_dragged = False
         self._kwargs = kwargs
@@ -1139,6 +1140,12 @@ class Text:
             vis += 1
         return n
 
+    def _reset_blink(self):
+        import time
+        self._blink_elapsed = 0.0
+        self._blink_on = True
+        self._blink_last_ts = float(time.monotonic())
+
     @property
     def focused(self):
         return self._effective_input_focus()
@@ -1247,6 +1254,9 @@ class Text:
                     cp = int(xos.ui._text_peek_cursor(nid))
                 except (ValueError, RuntimeError, OSError):
                     cp = 0
+                if self._last_native_cursor is None or int(self._last_native_cursor) != int(cp):
+                    self._reset_blink()
+                self._last_native_cursor = int(cp)
                 active = None
                 for r in self._markup_ranges(self.text):
                     lb, _rb, _lp, rp, inner_start, inner_end = r
@@ -1258,6 +1268,7 @@ class Text:
             else:
                 self._active_markup_range = None
                 self._show_markup_source = False
+                self._last_native_cursor = None
         return self._last_tick_state
 
     def on_events(self, app):
@@ -1283,6 +1294,8 @@ class Text:
                     self.is_focused = True
                 else:
                     self.is_focused = hit
+                if hit:
+                    self._reset_blink()
             mx0 = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
             my0 = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
             self._pointer_down_xy = (mx0, my0)
@@ -1362,6 +1375,18 @@ class Text:
                     )
                     try:
                         xos.ui._text_set_cursor(int(nid), int(raw_cursor))
+                        self._last_native_cursor = int(raw_cursor)
+                        self._reset_blink()
+                        # Keep styled-vs-source decision in sync immediately after click-set cursor
+                        # so we don't flash a mismatched frame.
+                        active = None
+                        for r in self._markup_ranges(self.text):
+                            lb, _rb, _lp, rp, inner_start, inner_end = r
+                            if inner_start >= inner_end or ((lb - 1) <= raw_cursor <= (rp + 1)):
+                                active = r
+                                break
+                        self._active_markup_range = active
+                        self._show_markup_source = active is not None
                     except (ValueError, RuntimeError, OSError):
                         pass
             self._pointer_down_xy = None
