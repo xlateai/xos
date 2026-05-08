@@ -183,6 +183,8 @@ pub struct UiTextRenderState {
     /// Per visible glyph (`character_may_appear_in_viewport`), normalized axis-aligned box: `[[x1,y1],[x2,y2]]` in [0,1]².
     /// Matches `(N, 2, 2)`. Omitted entirely when callers pass `include_hitboxes=false`.
     pub hitboxes: Vec<[[f32; 2]; 2]>,
+    /// Visual character index for each hitbox entry (same order as [`Self::hitboxes`]).
+    pub hitbox_char_indices: Vec<u32>,
     /// Per viewport-visible wrapped line, baseline segment in normalized coords: `[[x1,y1],[x2,y2]]`.
     /// Same ordering/length as [`Self::lines`].
     pub baselines: Vec<[[f32; 2]; 2]>,
@@ -255,6 +257,7 @@ pub fn collect_ui_text_render_state(
                     (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                 ],
             ]);
+            state.hitbox_char_indices.push(character.char_index as u32);
         }
     }
 
@@ -460,7 +463,9 @@ impl UiText {
 
             let hitboxes_enabled =
                 glyph_bool_with_spans(character.char_index, self.hitboxes, &self.hitbox_spans);
-            if hitboxes_enabled && in_viewport {
+            // Always collect on-screen glyph geometry for interaction/state consumers.
+            // Debug hitbox visibility remains controlled by `hitboxes_enabled`.
+            if in_viewport {
                 state.hitboxes.push([
                     [
                         (gx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
@@ -471,6 +476,7 @@ impl UiText {
                         (gy2 as f32 / frame_height as f32).clamp(0.0, 1.0),
                     ],
                 ]);
+                state.hitbox_char_indices.push(character.char_index as u32);
             }
 
             if !in_viewport || py >= y2 {

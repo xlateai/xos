@@ -9,6 +9,7 @@ use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
     insert_widget, onscreen_keyboard_top_y_norm, paint_native_embed_text_from_engine,
     peek_editor_visual_state, peek_embed_document_string, python_embed_set_document,
+    set_text_widget_cursor,
     pointer_mouse_in_shown_osk_strip, sync_embed_text_norm_rect, tick_text_widget,
 };
 use crate::python_api::rasterizer::{CURRENT_FRAME_BUFFER, CURRENT_FRAME_HEIGHT, CURRENT_FRAME_WIDTH};
@@ -478,6 +479,13 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             })
             .collect(),
     );
+    let hitbox_indices_py = vm.ctx.new_list(
+        render_state
+            .hitbox_char_indices
+            .iter()
+            .map(|v| vm.ctx.new_int(*v as usize).into())
+            .collect(),
+    );
     let baselines_py = vm.ctx.new_list(
         render_state
             .baselines
@@ -501,6 +509,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let state = vm.ctx.new_dict();
     state.set_item("lines", lines_py.into(), vm)?;
     state.set_item("hitboxes", hitboxes_py.into(), vm)?;
+    state.set_item("hitbox_char_indices", hitbox_indices_py.into(), vm)?;
     state.set_item("baselines", baselines_py.into(), vm)?;
     Ok(state.into())
 }
@@ -795,6 +804,24 @@ fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn text_set_cursor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(
+            "_text_set_cursor requires (native_id, cursor_position)".to_string(),
+        ));
+    }
+    let id: i64 = args_vec[0].clone().try_into_value(vm)?;
+    let cursor_position: usize = args_vec[1].clone().try_into_value(vm)?;
+    if id < 0 {
+        return Err(vm.new_value_error("native_id must be non-negative".to_string()));
+    }
+    match set_text_widget_cursor(id as u64, cursor_position) {
+        Ok(()) => Ok(vm.ctx.none()),
+        Err(e) => Err(vm.new_runtime_error(e.to_string())),
+    }
+}
+
 /// True during `on_events` when `mouse_*` corresponds to the visible on-screen keyboard strip (no Python focus churn).
 fn text_focus_skip_pointer_for_osk(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let blocked = with_callback_engine_state_mut(|s| pointer_mouse_in_shown_osk_strip(s)).unwrap_or(false);
@@ -895,6 +922,13 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_text_set_cursor",
+            vm.new_function("_text_set_cursor", text_set_cursor),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_text_peek_scroll",
             vm.new_function("_text_peek_scroll", text_peek_scroll),
             vm,
@@ -962,8 +996,14 @@ class Text:
         self.size = float(size)
         self._native_id = None
         self._last_tick_state = None
+        self._last_tick_state_dict = None
         self._active_markup_range = None
         self._show_markup_source = True
+        self._blink_on = True
+        self._blink_elapsed = 0.0
+        self._blink_last_ts = None
+        self._pointer_down_xy = None
+        self._pointer_dragged = False
         self._kwargs = kwargs
         self.selectable = kwargs.get("selectable", True)
         self.scrollable = kwargs.get("scrollable", True)
@@ -1030,6 +1070,75 @@ class Text:
                 return True
         return False
 
+    @staticmethod
+    def _rect_dist_sq(mx, my, x1, y1, x2, y2):
+        dx = 0.0 if x1 <= mx <= x2 else (x1 - mx if mx < x1 else mx - x2)
+        dy = 0.0 if y1 <= my <= y2 else (y1 - my if my < y1 else my - y2)
+        return dx * dx + dy * dy
+
+    @staticmethod
+    def _is_style_link_dest(dest):
+        d = str(dest).lower()
+        return ("color=" in d) or ("size=" in d) or ("hitboxes=" in d) or ("show_hitboxes=" in d) or ("baselines=" in d) or ("show_baselines=" in d)
+
+    def _map_visual_cursor_to_raw(self, text, visual_cursor, exclude_range=None, keep_directive_only_rows=False):
+        s = str(text)
+        n = len(s)
+        vc = int(max(0, visual_cursor))
+        i = 0
+        vis = 0
+        while i < n:
+            if vc <= vis:
+                return i
+            if exclude_range is not None:
+                xs, xe = exclude_range
+                if xs <= i <= xe:
+                    i += 1
+                    vis += 1
+                    continue
+            if i + 3 < n and s[i] == "!" and s[i + 1] == "[":
+                rb = s.find("](", i + 2)
+                rp = s.find(")", rb + 2) if rb != -1 else -1
+                if rb != -1 and rp != -1:
+                    dest = s[rb + 2:rp]
+                    if self._is_style_link_dest(dest):
+                        ls = s.rfind("\n", 0, i) + 1
+                        rs = s.find("\n", rp + 1)
+                        if rs == -1:
+                            rs = n
+                        left_has = any((not c.isspace()) for c in s[ls:i])
+                        right_has = any((not c.isspace()) for c in s[rp + 1:rs])
+                        line_empty_except_directive = not (left_has or right_has)
+                        token_end = rp + 1
+                        if line_empty_except_directive and (not keep_directive_only_rows):
+                            i = token_end
+                            if i < n and s[i] == "\n":
+                                i += 1
+                            continue
+                        token_len = token_end - i
+                        if vc <= vis + token_len:
+                            return i + (vc - vis)
+                        vis += token_len
+                        i = token_end
+                        continue
+            if s[i] == "[":
+                rb = s.find("](", i + 1)
+                rp = s.find(")", rb + 2) if rb != -1 else -1
+                if rb != -1 and rp != -1:
+                    dest = s[rb + 2:rp]
+                    if self._is_style_link_dest(dest):
+                        inner_start = i + 1
+                        inner_end = rb
+                        inner_len = max(0, inner_end - inner_start)
+                        if vc <= vis + inner_len:
+                            return inner_start + (vc - vis)
+                        vis += inner_len
+                        i = rp + 1
+                        continue
+            i += 1
+            vis += 1
+        return n
+
     @property
     def focused(self):
         return self._effective_input_focus()
@@ -1049,6 +1158,7 @@ class Text:
         self.size = float(value)
 
     def tick(self, app):
+        import time
         import xos
         if self._native_id is None:
             self._native_id = int(xos.ui._text_register(self, app))
@@ -1082,7 +1192,14 @@ class Text:
             float(self.x2),
             float(self.y2),
         )
-        caret = bool(self.show_cursor and eff)
+        now_ts = float(time.monotonic())
+        if self._blink_last_ts is None:
+            self._blink_last_ts = now_ts
+        dt = max(0.0, min(0.25, now_ts - float(self._blink_last_ts)))
+        self._blink_last_ts = now_ts
+        self._blink_elapsed = (float(self._blink_elapsed) + dt) % 1.0
+        self._blink_on = bool(self._blink_elapsed < 0.5)
+        caret = bool(self.show_cursor and eff and self._blink_on)
         xos.ui._text_tick(
             nid,
             float(self.size),
@@ -1166,11 +1283,89 @@ class Text:
                     self.is_focused = True
                 else:
                     self.is_focused = hit
+            mx0 = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+            my0 = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+            self._pointer_down_xy = (mx0, my0)
+            self._pointer_dragged = False
+        elif isinstance(ev, dict) and ev.get("kind") == "mouse_move":
+            if self._pointer_down_xy is not None:
+                mxm = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                mym = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                dx = mxm - float(self._pointer_down_xy[0])
+                dy = mym - float(self._pointer_down_xy[1])
+                if (dx * dx + dy * dy) > (7.0 * 7.0):
+                    self._pointer_dragged = True
         nid = getattr(self, "_native_id", None)
         if nid is None:
             self._native_id = int(xos.ui._text_register(self, app))
             nid = self._native_id
         xos.ui._text_dispatch(int(nid), app)
+        if (
+            isinstance(ev, dict)
+            and ev.get("kind") == "mouse_up"
+            and bool(self.editable)
+            and bool(self._effective_input_focus())
+            and (not bool(self._pointer_dragged))
+        ):
+            state = getattr(self, "_last_tick_state_dict", None)
+            hitboxes = state.get("hitboxes") if isinstance(state, dict) else None
+            hitbox_char_indices = state.get("hitbox_char_indices") if isinstance(state, dict) else None
+            if (
+                isinstance(hitboxes, list)
+                and isinstance(hitbox_char_indices, list)
+                and hitboxes
+                and len(hitboxes) == len(hitbox_char_indices)
+            ):
+                fd = getattr(app.frame, "_data", app.frame)
+                fw = float(fd["width"])
+                fh = float(fd["height"])
+                mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+                my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+                if xa <= mx < xb and ya <= my < yb:
+                    best_i = 0
+                    best_d = 1e30
+                    best_l = 0.0
+                    best_r = 0.0
+                    for i, hb in enumerate(hitboxes):
+                        try:
+                            x1n, y1n = float(hb[0][0]), float(hb[0][1])
+                            x2n, y2n = float(hb[1][0]), float(hb[1][1])
+                        except Exception:
+                            continue
+                        x1p, y1p = x1n * fw, y1n * fh
+                        x2p, y2p = x2n * fw, y2n * fh
+                        d = self._rect_dist_sq(mx, my, x1p, y1p, x2p, y2p)
+                        if d < best_d:
+                            best_d = d
+                            best_i = i
+                            best_l = x1p
+                            best_r = x2p
+                    try:
+                        visual_cursor = int(hitbox_char_indices[best_i])
+                    except Exception:
+                        visual_cursor = int(best_i)
+                    if abs(mx - best_r) < abs(mx - best_l):
+                        visual_cursor += 1
+                    exclusion = None
+                    if self._active_markup_range is not None:
+                        lb, _rb, _lp, rp, _is, _ie = self._active_markup_range
+                        exclusion = (int(lb), int(rp))
+                    raw_cursor = self._map_visual_cursor_to_raw(
+                        self.text,
+                        visual_cursor,
+                        exclusion,
+                        bool(self.editable and self._effective_input_focus()),
+                    )
+                    try:
+                        xos.ui._text_set_cursor(int(nid), int(raw_cursor))
+                    except (ValueError, RuntimeError, OSError):
+                        pass
+            self._pointer_down_xy = None
+            self._pointer_dragged = False
 
     def render(self, frame=None, color=None, hitboxes=None, baselines=None, size=None, font_size=None):
         import xos
@@ -1197,20 +1392,20 @@ class Text:
             extra = {}
             nid = getattr(self, "_native_id", None)
             eff = self._effective_input_focus()
-            # Editable widgets use styled parser path both focused and unfocused so
-            # cascaded directives (`![]()`) and inline styles apply live while editing.
+            # Editable widgets keep styled rendering so only the active token region can
+            # fall back to source while the rest stays styled. Read-only widgets use native visuals.
             use_native_visual = bool(not self.editable)
             text_for_render = self.text
             if nid is not None and use_native_visual:
                 extra["native_widget_id"] = int(nid)
-                extra["show_cursor"] = bool(self.show_cursor and eff)
+                extra["show_cursor"] = bool(self.show_cursor and eff and self._blink_on)
             elif eff:
                 # Fallback renderer: preserve caret visibility while editing.
                 try:
                     extra["cursor_position"] = int(xos.ui._text_peek_cursor(int(nid))) if nid is not None else 0
                 except (ValueError, RuntimeError, OSError):
                     extra["cursor_position"] = 0
-                extra["show_cursor"] = bool(self.show_cursor and eff)
+                extra["show_cursor"] = bool(self.show_cursor and eff and self._blink_on)
             if self.editable and (not use_native_visual) and nid is not None:
                 try:
                     extra["viewport_scroll_y"] = float(xos.ui._text_peek_scroll(int(nid)))
@@ -1239,6 +1434,7 @@ class Text:
                 spacing_y=float(self.spacing[1]),
                 **extra,
             )
+            self._last_tick_state_dict = state
             rendered_state = TextRenderState(state)
             self._last_tick_state = rendered_state
             return rendered_state
@@ -1305,10 +1501,12 @@ class TextRenderState:
         import xos
         self.lines = xos.tensor(state_dict["lines"], dtype=xos.int32)
         hb = state_dict["hitboxes"]
+        hi = state_dict.get("hitbox_char_indices", [])
         bl = state_dict["baselines"]
         n_hb = len(hb)
         n_bl = len(bl)
         self.hitboxes = xos.tensor(hb, (n_hb, 2, 2), dtype=xos.float32)
+        self.hitbox_char_indices = xos.tensor(hi, dtype=xos.int32)
         self.baselines = xos.tensor(bl, (n_bl, 2, 2), dtype=xos.float32)
 
 def text(text="", x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(255, 255, 255), hitboxes=False, baselines=False, size=24.0, font=None, **kwargs):
