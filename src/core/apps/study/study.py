@@ -37,6 +37,7 @@ class TextDemo(xos.Application):
             selectable=True,
             scrollable=True,
             show_cursor=False,
+            show_hitboxes=False,
             size=DEFAULT_FONT_SIZE * 1.85,
             alignment=(0.5, 1.0),
             spacing=(1.5, 1.45),
@@ -56,7 +57,7 @@ class TextDemo(xos.Application):
             size=DEFAULT_FONT_SIZE,
             alignment=(0.5, 0.5),
             spacing=(1.0, 1.05),
-            shortcuts=False,
+            shortcuts=True,
         )
 
         self.description = _boxed_text(
@@ -66,7 +67,7 @@ class TextDemo(xos.Application):
             0.40,
             1.0,
             1.0,
-            editable=True,
+            editable=False,
             selectable=True,
             scrollable=True,
             show_cursor=False,
@@ -124,7 +125,7 @@ class TextDemo(xos.Application):
 
         vocab_rect = xos.geom.rect.containing(ts_vocab.hitboxes)
         vocab_rect = xos.geom.rect.buffer(vocab_rect, 1.2)
-        xos.rasterizer.rects_filled(self.frame, vocab_rect, color=(*xos.color.LIME, 0.78))
+        xos.rasterizer.rects_filled(self.frame, vocab_rect, (*xos.color.LIME, 0.78))
 
         raw = getattr(self.guess_area, "text", "")
         if "\n" in raw or "\r" in raw:

@@ -28,7 +28,7 @@ use crate::engine::{
     apply_frame_view_zoom,
     f3_menu_handle_mouse_down, f3_menu_handle_mouse_move, f3_menu_handle_mouse_up, tick_f3_menu,
     tick_frame_delta, tick_frame_view_zoom, Application, EngineState, F3Menu, FrameState,
-    KeyboardState, MouseState, SafeRegionBoundingRectangle,
+    KeyboardModifiers, KeyboardState, MouseState, SafeRegionBoundingRectangle,
 };
 #[cfg(target_os = "ios")]
 use crate::engine::engine::CursorStyleSetter;
@@ -203,6 +203,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
         },
         keyboard: KeyboardState {
             onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+            modifiers: KeyboardModifiers::default(),
         },
         f3_menu: F3Menu::new(),
         ui_scale_percent: 100,

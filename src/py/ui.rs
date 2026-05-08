@@ -425,7 +425,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                             viewport_scroll_y,
                             cw,
                             ch,
-                            hitboxes,
+                            true,
                         );
                     }
                 } else {
@@ -438,7 +438,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                         viewport_scroll_y,
                         cw,
                         ch,
-                        hitboxes,
+                        true,
                     );
                 }
             }
@@ -640,7 +640,8 @@ fn text_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     t.read_only = !editable;
     t.set_document_text_py_ui(s);
     t.show_cursor = show_cursor;
-    t.show_debug_visuals = show_hitboxes || show_baselines;
+    t.show_hitbox_visuals = show_hitboxes;
+    t.show_baseline_visuals = show_baselines;
     t.py_selectable = selectable;
     t.py_scrollable = scrollable;
     t.py_allow_shortcuts = shortcuts;

@@ -346,9 +346,19 @@ pub struct MouseState {
     pub style: CursorStyleSetter,
 }
 
+/// Last-known host modifier keys (desktop / Web). Synced by each platform host before key routing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KeyboardModifiers {
+    pub shift: bool,
+    /// Command on macOS, Control on Windows/Linux — same notion as shortcut detection.
+    pub command: bool,
+    pub alt: bool,
+}
+
 #[derive(Debug)]
 pub struct KeyboardState {
     pub onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard,
+    pub modifiers: KeyboardModifiers,
 }
 
 #[derive(Debug)]

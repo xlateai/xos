@@ -124,6 +124,7 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_init(
             },
             keyboard: KeyboardState {
                 onscreen: xos::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+                modifiers: xos::engine::KeyboardModifiers::default(),
             },
             f3_menu: F3Menu::new(),
             ui_scale_percent: 100,

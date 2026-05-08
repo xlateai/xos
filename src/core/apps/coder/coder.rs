@@ -525,7 +525,8 @@ impl CoderApp {
         let mut code_app = TextApp::new();
         code_app.uses_parent_ui_scale = true;
         code_app.text_rasterizer.text = String::new();
-        code_app.show_debug_visuals = false; // Hide debug visuals in code editor
+        code_app.show_hitbox_visuals = false; // Hide debug visuals in code editor
+        code_app.show_baseline_visuals = false;
         // On iOS, start at top like terminal. On macOS, start at top too.
         code_app.scroll_y = 0.0;
         code_app.scroll_target = 0.0;
@@ -537,13 +538,15 @@ impl CoderApp {
         terminal_app.text_rasterizer.text = "".to_string();
         terminal_app.read_only = true; // Terminal is read-only
         terminal_app.show_cursor = false; // Hide cursor in terminal
-        terminal_app.show_debug_visuals = false; // Hide debug visuals in terminal
+        terminal_app.show_hitbox_visuals = false; // Hide debug visuals in terminal
+        terminal_app.show_baseline_visuals = false;
         
         // Create the console text app for interactive Python
         let mut console_app = TextApp::new();
         console_app.uses_parent_ui_scale = true;
         console_app.text_rasterizer.text = "".to_string();
-        console_app.show_debug_visuals = false; // Hide debug visuals in console
+        console_app.show_hitbox_visuals = false; // Hide debug visuals in console
+        console_app.show_baseline_visuals = false;
 
         // Initialize RustPython interpreter with xos module
         let interpreter = Interpreter::with_init(Default::default(), |vm| {
