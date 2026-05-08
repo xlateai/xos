@@ -1,4 +1,4 @@
-use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
+use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
 
 pub mod activations;
 pub mod layers;

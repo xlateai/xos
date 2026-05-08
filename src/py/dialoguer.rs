@@ -1,6 +1,6 @@
 #[cfg(not(target_os = "ios"))]
 use rustpython_vm::PyObjectRef;
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
 /// xos.dialoguer.select(prompt, items, default=0) - Show selection dialog
 #[cfg(target_os = "ios")]

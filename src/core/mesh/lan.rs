@@ -45,7 +45,8 @@ pub(super) fn lan_discover_coordinator(
         return Ok(None);
     };
     sock.set_broadcast(true).ok();
-    sock.set_read_timeout(Some(Duration::from_millis(RECV_MS))).ok();
+    sock.set_read_timeout(Some(Duration::from_millis(RECV_MS)))
+        .ok();
     let seek = json!({"v": 1, "mesh": mesh_id, "seek": true, "aid": expected_aid});
     let payload = seek.to_string();
     let bcast: SocketAddr = SocketAddr::from(([255, 255, 255, 255], udp_port));
@@ -146,7 +147,8 @@ pub(super) fn lan_discovery_responder_loop(
                         }
                     }
                 }
-                let reply = json!({"v": 1, "mesh": mesh_id.as_str(), "aid": account_aid, "tcp": tcp_port});
+                let reply =
+                    json!({"v": 1, "mesh": mesh_id.as_str(), "aid": account_aid, "tcp": tcp_port});
                 let _ = sock.send_to(reply.to_string().as_bytes(), src);
             }
             Err(_) => {}

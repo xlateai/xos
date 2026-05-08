@@ -14,7 +14,9 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding,
+};
 use rsa::rand_core::OsRng as RsaOsRng;
 use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 use rsa::{
@@ -134,12 +136,10 @@ pub fn auth_identity_dir() -> Result<PathBuf, AuthError> {
 pub fn whisper_model_backend_cache_dir(stem: &str, backend: &str) -> Result<PathBuf, AuthError> {
     let b = backend.trim().to_ascii_lowercase();
     match b.as_str() {
-        "burn" | "ct2" => Ok(
-            auth_data_dir()?
-                .join("models")
-                .join("whisper")
-                .join(format!("{}-{}", stem.trim(), b)),
-        ),
+        "burn" | "ct2" => Ok(auth_data_dir()?
+            .join("models")
+            .join("whisper")
+            .join(format!("{}-{}", stem.trim(), b))),
         _ => Err(AuthError::Io(
             "whisper_model_backend_cache_dir: backend must be \"burn\" or \"ct2\"".to_string(),
         )),
@@ -148,7 +148,10 @@ pub fn whisper_model_backend_cache_dir(stem: &str, backend: &str) -> Result<Path
 
 /// Legacy flat layout (`{data_dir}/models/whisper/{model_key}/`, no `-burn` suffix) — read-only migration.
 pub fn whisper_model_cache_dir(model_key: &str) -> Result<PathBuf, AuthError> {
-    Ok(auth_data_dir()?.join("models").join("whisper").join(model_key))
+    Ok(auth_data_dir()?
+        .join("models")
+        .join("whisper")
+        .join(model_key))
 }
 
 /// Move legacy `authentication.json` / `node_identity.json` from the data root into `auth/`.
@@ -354,7 +357,11 @@ fn generate_node_rsa() -> Result<(RsaPrivateKey, String), AuthError> {
     Ok((private, public_pem))
 }
 
-fn write_node_identity_file(node_name: &str, private: &RsaPrivateKey, public_pem: &str) -> Result<(), AuthError> {
+fn write_node_identity_file(
+    node_name: &str,
+    private: &RsaPrivateKey,
+    public_pem: &str,
+) -> Result<(), AuthError> {
     let private_pem = private
         .to_pkcs8_pem(LineEnding::LF)
         .map_err(|e| AuthError::Crypto(e.to_string()))?
@@ -396,7 +403,13 @@ pub fn migrate_legacy_identity_file() -> Result<(), AuthError> {
     Ok(())
 }
 
-fn derive_aes_key(password: &[u8], salt: &[u8], m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
+fn derive_aes_key(
+    password: &[u8],
+    salt: &[u8],
+    m: u32,
+    t: u32,
+    p: u32,
+) -> Result<[u8; 32], AuthError> {
     let params = Params::new(m, t, p, None).map_err(|e| AuthError::Crypto(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut out = [0u8; 32];
@@ -409,14 +422,18 @@ fn derive_aes_key(password: &[u8], salt: &[u8], m: u32, t: u32, p: u32) -> Resul
 /// Deterministic 16-byte salt from username (no random salt stored for v2).
 fn salt_for_username(username: &str) -> [u8; 16] {
     let h = Sha256::digest(format!("xos-auth-v2|{}", username.trim()).as_bytes());
-    h[..16]
-        .try_into()
-        .expect("sha256 first 16 bytes")
+    h[..16].try_into().expect("sha256 first 16 bytes")
 }
 
 /// 32-byte seed for ChaCha20 (`rand_core` 0.6 / compatible with `rsa` keygen):
 /// Argon2id(SHA256(password), salt(username)).
-fn derive_rsa_seed(password: &[u8], username: &str, m: u32, t: u32, p: u32) -> Result<[u8; 32], AuthError> {
+fn derive_rsa_seed(
+    password: &[u8],
+    username: &str,
+    m: u32,
+    t: u32,
+    p: u32,
+) -> Result<[u8; 32], AuthError> {
     let salt = salt_for_username(username);
     let password_hash = Sha256::digest(password);
     derive_aes_key(password_hash.as_ref(), &salt, m, t, p)
@@ -431,7 +448,8 @@ fn rsa_deterministic_from_password(
 ) -> Result<(RsaPrivateKey, String), AuthError> {
     let seed = derive_rsa_seed(password, username, m, t, p)?;
     let mut rng = ChaCha20Rng::from_seed(seed);
-    let private = RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| AuthError::Crypto(e.to_string()))?;
+    let private =
+        RsaPrivateKey::new(&mut rng, RSA_BITS).map_err(|e| AuthError::Crypto(e.to_string()))?;
     let public_pem = private
         .to_public_key()
         .to_public_key_pem(LineEnding::LF)
@@ -509,7 +527,11 @@ fn restore_file_from_backup(path: &PathBuf, backup: &Option<Vec<u8>>) {
 
 /// Replace existing `authentication.json` + `node_identity.json` atomically enough for CLI reset.
 /// The previous file contents are loaded first and restored on partial failure.
-pub fn reset_offline_identity(username: &str, password: &str, node_name: &str) -> Result<(), AuthError> {
+pub fn reset_offline_identity(
+    username: &str,
+    password: &str,
+    node_name: &str,
+) -> Result<(), AuthError> {
     let dir = auth_data_dir()?;
     fs::create_dir_all(&dir).map_err(|e| AuthError::Io(e.to_string()))?;
     migrate_legacy_identity_file()?;
@@ -643,11 +665,14 @@ pub fn load_identity() -> Result<UnlockedIdentity, AuthError> {
 /// Load per-machine LAN identity from `node_identity.json`.
 pub fn load_node_identity() -> Result<UnlockedNodeIdentity, AuthError> {
     migrate_legacy_identity_file()?;
-    let raw = fs::read_to_string(node_identity_json_path()?).map_err(|e| AuthError::Io(e.to_string()))?;
+    let raw =
+        fs::read_to_string(node_identity_json_path()?).map_err(|e| AuthError::Io(e.to_string()))?;
     let stored: StoredNodeIdentity =
         serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
     if stored.format != NODE_FORMAT_V1 {
-        return Err(AuthError::InvalidFile("unknown node identity format".to_string()));
+        return Err(AuthError::InvalidFile(
+            "unknown node identity format".to_string(),
+        ));
     }
     let rsa_private = RsaPrivateKey::from_pkcs8_pem(stored.private_key_pem.trim())
         .map_err(|e| AuthError::InvalidFile(e.to_string()))?;
@@ -658,9 +683,14 @@ pub fn load_node_identity() -> Result<UnlockedNodeIdentity, AuthError> {
     })
 }
 
-fn unlock_identity_encrypted_pkcs8(stored: StoredIdentityFile, password: &str) -> Result<UnlockedIdentity, AuthError> {
+fn unlock_identity_encrypted_pkcs8(
+    stored: StoredIdentityFile,
+    password: &str,
+) -> Result<UnlockedIdentity, AuthError> {
     if stored.format != AUTH_FORMAT_V1 && stored.format != AUTH_FORMAT_V3 {
-        return Err(AuthError::InvalidFile("unknown identity format".to_string()));
+        return Err(AuthError::InvalidFile(
+            "unknown identity format".to_string(),
+        ));
     }
 
     let salt = B64
@@ -699,9 +729,14 @@ fn unlock_identity_encrypted_pkcs8(stored: StoredIdentityFile, password: &str) -
     })
 }
 
-fn unlock_identity_v2(stored: StoredIdentityV2, password: &str) -> Result<UnlockedIdentity, AuthError> {
+fn unlock_identity_v2(
+    stored: StoredIdentityV2,
+    password: &str,
+) -> Result<UnlockedIdentity, AuthError> {
     if stored.format != AUTH_FORMAT_V2 {
-        return Err(AuthError::InvalidFile("unknown identity format".to_string()));
+        return Err(AuthError::InvalidFile(
+            "unknown identity format".to_string(),
+        ));
     }
 
     let (rsa_private, public_pem) = rsa_deterministic_from_password(
@@ -756,7 +791,9 @@ pub fn unlock_identity(password: &str) -> Result<UnlockedIdentity, AuthError> {
                 serde_json::from_str(&raw).map_err(|e| AuthError::InvalidFile(e.to_string()))?;
             unlock_identity_v2(stored, password)
         }
-        _ => Err(AuthError::InvalidFile("unknown identity format".to_string())),
+        _ => Err(AuthError::InvalidFile(
+            "unknown identity format".to_string(),
+        )),
     }
 }
 

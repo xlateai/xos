@@ -2,7 +2,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use rustpython_vm::PyObjectRef;
-use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn path_fs_exists(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -35,21 +35,23 @@ fn path_fs_makedirs(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             Ok(vm.ctx.none())
         } else {
             Err(vm.new_os_error(if exists_ok {
-                format!("cannot makedirs {:?}: exists and is not a directory", path_s)
+                format!(
+                    "cannot makedirs {:?}: exists and is not a directory",
+                    path_s
+                )
             } else {
                 format!("path already exists: {}", path_s)
             }))
         };
     }
-    std::fs::create_dir_all(p).map_err(|e| vm.new_os_error(format!("makedirs {:?}: {}", path_s, e)))?;
+    std::fs::create_dir_all(p)
+        .map_err(|e| vm.new_os_error(format!("makedirs {:?}: {}", path_s, e)))?;
     Ok(vm.ctx.none())
 }
 
 #[cfg(target_arch = "wasm32")]
 fn path_fs_makedirs(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Err(vm.new_runtime_error(
-        "xos.path: makedirs is not available on wasm builds".into(),
-    ))
+    Err(vm.new_runtime_error("xos.path: makedirs is not available on wasm builds".into()))
 }
 
 const DATAPATH_BODY: &str = r#"
@@ -98,7 +100,9 @@ fn inject_dotxos(
         let _ = scope.globals.set_item("_data_dir_str", f, vm);
     }
 
-    let ef = m.get_attr("__native_path_exists", vm).map_err(|_| "path.exists bind")?;
+    let ef = m
+        .get_attr("__native_path_exists", vm)
+        .map_err(|_| "path.exists bind")?;
     scope
         .globals
         .set_item("__native_path_exists", ef, vm)
@@ -112,8 +116,12 @@ fn inject_dotxos(
         .map_err(|_| "path globals makedirs")?;
 
     let full = format!("{}\n{}", DATAPATH_BODY, init_call);
-    vm.run_code_string(scope.clone(), full.as_str(), "<xos.path/dotxos>".to_string())
-        .map_err(|_| "xos.path/dotxos exec")?;
+    vm.run_code_string(
+        scope.clone(),
+        full.as_str(),
+        "<xos.path/dotxos>".to_string(),
+    )
+    .map_err(|_| "xos.path/dotxos exec")?;
     if let Ok(d) = scope.globals.get_item("dotxos", vm) {
         m.set_attr("dotxos", d, vm).map_err(|_| "set dotxos")?;
     }
@@ -146,7 +154,11 @@ pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     fn data_dir_py(vm: &VirtualMachine) -> PyResult {
         path_data(vm).map(|s| vm.ctx.new_str(s.as_str()).into())
     }
-    let _ = m.set_attr("_data_dir_str", vm.new_function("_data_dir_str", data_dir_py), vm);
+    let _ = m.set_attr(
+        "_data_dir_str",
+        vm.new_function("_data_dir_str", data_dir_py),
+        vm,
+    );
 
     let _ = inject_dotxos(vm, &m, "dotxos = _DataPath(str(_data_dir_str()))").expect("dotxos");
     m
@@ -164,7 +176,11 @@ pub fn make_path_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         }),
         vm,
     );
-    let _ = m.set_attr("code", vm.new_function("code", |vm: &VirtualMachine| vm.ctx.none()), vm);
+    let _ = m.set_attr(
+        "code",
+        vm.new_function("code", |vm: &VirtualMachine| vm.ctx.none()),
+        vm,
+    );
     let _ = m.set_attr(
         "_data_dir_str",
         vm.new_function("_data_dir_str", |vm: &VirtualMachine| -> PyResult {

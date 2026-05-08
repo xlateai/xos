@@ -1,36 +1,38 @@
-pub mod runtime;
-pub mod xos_module;
-pub mod random;
-pub mod engine;
-pub mod rasterizer;
-pub mod tensors;
-pub mod sensors;
+pub mod ai;
 pub mod audio;
-pub mod system;
-pub mod dialoguer;
-pub mod math;
-pub mod ops;
-pub mod colors;
-pub mod dtypes;
-pub mod regex;
-pub mod data;
-pub mod path;
-pub mod csv_api;
-pub mod ui;
-pub mod python_text;
-pub mod nn;
+pub mod auth;
 pub mod burn_train;
+pub mod colors;
+pub mod csv_api;
+pub mod data;
+pub mod dialoguer;
+pub mod dtypes;
+pub mod engine;
+pub mod geom;
+pub mod manager;
+pub mod math;
 pub mod mesh;
 pub mod mouse;
+pub mod nn;
+pub mod ops;
+pub mod path;
+pub mod python_text;
+pub mod random;
+pub mod rasterizer;
+pub mod regex;
+pub mod runtime;
+pub mod sensors;
+pub mod system;
+pub mod tensors;
 pub mod terminal;
-pub mod manager;
-pub mod auth;
-pub mod ai;
-pub mod geom;
+pub mod ui;
+pub mod xos_module;
 
-use rustpython_vm::{PyRef, VirtualMachine, builtins::PyModule};
+use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
 
-pub use runtime::{parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive};
+pub use runtime::{
+    parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive,
+};
 
 pub fn make_tensors_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.tensors", vm.ctx.new_dict(), None);

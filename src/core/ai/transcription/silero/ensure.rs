@@ -62,15 +62,16 @@ fn parse_manifest() -> Result<Manifest, String> {
 
 fn cache_path() -> Result<PathBuf, String> {
     let base = crate::auth::auth_data_dir().map_err(|e| e.to_string())?;
-    Ok(base.join("models").join("silero-vad").join("silero_vad.onnx"))
+    Ok(base
+        .join("models")
+        .join("silero-vad")
+        .join("silero_vad.onnx"))
 }
 
 fn bundled_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(root) = crate::find_xos_project_root() {
-        v.push(
-            root.join("src/core/ai/transcription/models/silero/silero_vad.onnx"),
-        );
+        v.push(root.join("src/core/ai/transcription/models/silero/silero_vad.onnx"));
     }
     v
 }

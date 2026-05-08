@@ -7,7 +7,7 @@
 
 use crate::engine::audio::AudioListener;
 use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushNoGap, MonoPcm, Quality};
-use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, function::FuncArgs};
+use rustpython_vm::{function::FuncArgs, PyObjectRef, PyResult, VirtualMachine};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -108,13 +108,7 @@ impl RecorderMp3 {
             } else {
                 None
             };
-            encode_pcm_chunk(
-                &mut self.enc,
-                &mut self.scratch_mp3,
-                &mut self.file,
-                l,
-                r,
-            )?;
+            encode_pcm_chunk(&mut self.enc, &mut self.scratch_mp3, &mut self.file, l, r)?;
             self.pending_l.drain(..PCM_CHUNK);
             if self.stereo {
                 self.pending_r.drain(..PCM_CHUNK);
@@ -184,13 +178,18 @@ pub fn recording_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
 
     let path = PathBuf::from(path_str.trim());
-    if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("mp3")) != Some(true) {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("mp3"))
+        != Some(true)
+    {
         return Err(vm.new_value_error("path must end with .mp3".to_string()));
     }
 
-    let listener_ptr_obj = mic_obj
-        .get_attr("_listener_ptr", vm)
-        .map_err(|_| vm.new_type_error("xos.audio.recording expects xos.audio.Microphone".to_string()))?;
+    let listener_ptr_obj = mic_obj.get_attr("_listener_ptr", vm).map_err(|_| {
+        vm.new_type_error("xos.audio.recording expects xos.audio.Microphone".to_string())
+    })?;
     let listener_ptr: usize = listener_ptr_obj.try_into_value(vm)?;
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
@@ -283,7 +282,8 @@ pub fn recording_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     if guard.is_none() {
         let enc = ensure_mp3_encoder(sr, ch).map_err(|e| vm.new_runtime_error(e))?;
-        let file = File::create(&rec.path).map_err(|e| vm.new_runtime_error(format!("create {}: {e}", rec.path.display())))?;
+        let file = File::create(&rec.path)
+            .map_err(|e| vm.new_runtime_error(format!("create {}: {e}", rec.path.display())))?;
         *guard = Some(RecorderMp3 {
             enc,
             file,
@@ -361,9 +361,7 @@ pub fn recording_finish(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .map_err(|_| vm.new_runtime_error("recording encoder lock poisoned".to_string()))?;
     if let Some(mut inner) = guard.take() {
-        inner
-            .finalize()
-            .map_err(|e| vm.new_runtime_error(e))?;
+        inner.finalize().map_err(|e| vm.new_runtime_error(e))?;
     }
 
     Ok(vm.ctx.none())

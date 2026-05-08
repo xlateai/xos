@@ -1,4 +1,4 @@
-use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
@@ -57,7 +57,9 @@ fn auth_is_logged_in(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn daemon_pid_path() -> Option<std::path::PathBuf> {
-    crate::auth::auth_data_dir().ok().map(|d| d.join("daemon.pid"))
+    crate::auth::auth_data_dir()
+        .ok()
+        .map(|d| d.join("daemon.pid"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,10 +126,30 @@ fn auth_daemon_online(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn make_auth_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.auth", vm.ctx.new_dict(), None);
     let _ = module.set_attr("username", vm.new_function("username", auth_username), vm);
-    let _ = module.set_attr("node_name", vm.new_function("node_name", auth_node_name), vm);
-    let _ = module.set_attr("node_uuid", vm.new_function("node_uuid", auth_node_uuid), vm);
-    let _ = module.set_attr("is_logged_in", vm.new_function("is_logged_in", auth_is_logged_in), vm);
-    let _ = module.set_attr("daemon_pid", vm.new_function("daemon_pid", auth_daemon_pid), vm);
-    let _ = module.set_attr("daemon_online", vm.new_function("daemon_online", auth_daemon_online), vm);
+    let _ = module.set_attr(
+        "node_name",
+        vm.new_function("node_name", auth_node_name),
+        vm,
+    );
+    let _ = module.set_attr(
+        "node_uuid",
+        vm.new_function("node_uuid", auth_node_uuid),
+        vm,
+    );
+    let _ = module.set_attr(
+        "is_logged_in",
+        vm.new_function("is_logged_in", auth_is_logged_in),
+        vm,
+    );
+    let _ = module.set_attr(
+        "daemon_pid",
+        vm.new_function("daemon_pid", auth_daemon_pid),
+        vm,
+    );
+    let _ = module.set_attr(
+        "daemon_online",
+        vm.new_function("daemon_online", auth_daemon_online),
+        vm,
+    );
     module
 }

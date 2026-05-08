@@ -9,12 +9,7 @@ use burn::tensor::grid::{meshgrid, GridOptions};
 use burn::tensor::Int;
 use burn::tensor::Tensor as BurnTensorAny;
 
-fn rgba_tensor(
-    device: &WgpuDevice,
-    h: usize,
-    w: usize,
-    c: [f32; 4],
-) -> BurnTensor<3> {
+fn rgba_tensor(device: &WgpuDevice, h: usize, w: usize, c: [f32; 4]) -> BurnTensor<3> {
     let r = BurnTensor::<3>::full([h, w, 1], c[0], device);
     let g = BurnTensor::<3>::full([h, w, 1], c[1], device);
     let b = BurnTensor::<3>::full([h, w, 1], c[2], device);
@@ -190,15 +185,7 @@ pub fn triangles(
             colors[i]
         };
         let j = i * 3;
-        fill_triangle(
-            frame,
-            w,
-            h,
-            points[j],
-            points[j + 1],
-            points[j + 2],
-            c,
-        );
+        fill_triangle(frame, w, h, points[j], points[j + 1], points[j + 2], c);
     }
     Ok(())
 }

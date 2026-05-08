@@ -2,16 +2,16 @@
 //! Python surface lives in `bootstrap.py` (included at compile time).
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-use crate::mesh::{MeshMode, MeshSession, Packet};
+use crate::auth::{has_identity, load_node_identity};
 use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
-use crate::python_api::runtime::format_python_exception;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-use crate::auth::{has_identity, load_node_identity};
+use crate::mesh::{MeshMode, MeshSession, Packet};
+use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
 use rustpython_vm::function::FuncArgs;
-use rustpython_vm::{PyRef, PyResult, VirtualMachine};
 use rustpython_vm::AsObject;
+use rustpython_vm::{PyRef, PyResult, VirtualMachine};
 
 const MESH_BOOTSTRAP: &str = include_str!("bootstrap.py");
 
@@ -29,9 +29,7 @@ fn py_to_json_inner(
     depth: u32,
 ) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
     if depth > 48 {
-        return Err(vm.new_value_error(
-            "mesh payload: nesting too deep (max 48)".to_string(),
-        ));
+        return Err(vm.new_value_error("mesh payload: nesting too deep (max 48)".to_string()));
     }
     if vm.is_none(&obj) {
         return Ok(serde_json::Value::Null);
@@ -43,11 +41,9 @@ fn py_to_json_inner(
         return Ok(serde_json::Value::Number(i.into()));
     }
     if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(
-            serde_json::Number::from_f64(f)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null),
-        );
+        return Ok(serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null));
     }
     if let Ok(s) = obj.clone().try_into_value::<String>(vm) {
         return Ok(serde_json::Value::String(s));
@@ -115,11 +111,7 @@ fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyOb
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
     let dict = vm.ctx.new_dict();
-    dict.set_item(
-        "from_rank",
-        vm.ctx.new_int(p.from_rank as isize).into(),
-        vm,
-    )?;
+    dict.set_item("from_rank", vm.ctx.new_int(p.from_rank as isize).into(), vm)?;
     dict.set_item("from_id", vm.ctx.new_str(p.from_id.as_str()).into(), vm)?;
     match &p.body {
         serde_json::Value::Object(o) => {
@@ -183,12 +175,11 @@ fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult 
         .and_then(|v| v.as_str())
         .ok_or_else(|| vm.new_runtime_error("remote_frame packet missing jpeg".to_string()))?;
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
-    let raw_jpeg = B64.decode(jpeg_b64.as_bytes()).map_err(|e| {
-        vm.new_runtime_error(format!("remote_frame: invalid base64: {e}"))
-    })?;
-    let img = image::load_from_memory(&raw_jpeg).map_err(|e| {
-        vm.new_runtime_error(format!("remote_frame: decode image: {e}"))
-    })?;
+    let raw_jpeg = B64
+        .decode(jpeg_b64.as_bytes())
+        .map_err(|e| vm.new_runtime_error(format!("remote_frame: invalid base64: {e}")))?;
+    let img = image::load_from_memory(&raw_jpeg)
+        .map_err(|e| vm.new_runtime_error(format!("remote_frame: decode image: {e}")))?;
     let rgba = img.to_rgba8();
     let w = rgba.width() as usize;
     let h = rgba.height() as usize;
@@ -279,17 +270,13 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
 fn mesh_connect(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    Err(vm.new_runtime_error(
-        "xos.mesh is not available on this target".to_string(),
-    ))
+    Err(vm.new_runtime_error("xos.mesh is not available on this target".to_string()))
 }
 
 fn mesh_rank(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
-        return Err(vm.new_runtime_error(
-            "mesh not connected; call xos.mesh.connect()".to_string(),
-        ));
+        return Err(vm.new_runtime_error("mesh not connected; call xos.mesh.connect()".to_string()));
     };
     Ok(vm.ctx.new_int(m.rank() as isize).into())
 }
@@ -297,14 +284,9 @@ fn mesh_rank(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn mesh_num_nodes(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
-        return Err(vm.new_runtime_error(
-            "mesh not connected; call xos.mesh.connect()".to_string(),
-        ));
+        return Err(vm.new_runtime_error("mesh not connected; call xos.mesh.connect()".to_string()));
     };
-    Ok(vm
-        .ctx
-        .new_int(m.current_num_nodes() as isize)
-        .into())
+    Ok(vm.ctx.new_int(m.current_num_nodes() as isize).into())
 }
 
 fn mesh_is_connected(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -316,9 +298,7 @@ fn mesh_is_connected(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
-        return Err(vm.new_runtime_error(
-            "mesh not connected; call xos.mesh.connect()".to_string(),
-        ));
+        return Err(vm.new_runtime_error("mesh not connected; call xos.mesh.connect()".to_string()));
     };
     let short = if m.node_id.len() >= 8 {
         format!("{}…", &m.node_id[..8])
@@ -339,9 +319,7 @@ fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn mesh_node_name(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
-        return Err(vm.new_runtime_error(
-            "mesh not connected; call xos.mesh.connect()".to_string(),
-        ));
+        return Err(vm.new_runtime_error("mesh not connected; call xos.mesh.connect()".to_string()));
     };
     Ok(vm.ctx.new_str(m.node_name.as_str()).into())
 }
@@ -350,9 +328,7 @@ fn mesh_node_name(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
-        return Err(vm.new_runtime_error(
-            "mesh not connected; call xos.mesh.connect()".to_string(),
-        ));
+        return Err(vm.new_runtime_error("mesh not connected; call xos.mesh.connect()".to_string()));
     };
     Ok(vm.ctx.new_str(m.node_id.as_str()).into())
 }
@@ -529,9 +505,9 @@ fn xos_input(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     match inner.read_line(wait) {
         Ok(Some(s)) => Ok(vm.ctx.new_str(s.as_str()).into()),
         Ok(None) => Ok(vm.ctx.none()),
-        Err(e) if e == INPUT_INTERRUPT => Err(vm.new_exception_empty(
-            vm.ctx.exceptions.keyboard_interrupt.to_owned(),
-        )),
+        Err(e) if e == INPUT_INTERRUPT => {
+            Err(vm.new_exception_empty(vm.ctx.exceptions.keyboard_interrupt.to_owned()))
+        }
         Err(e) => Err(vm.new_runtime_error(e)),
     }
 }
@@ -555,7 +531,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm.new_function("_mesh_is_connected", mesh_is_connected),
         vm,
     );
-    let _ = sub.set_attr("_mesh_prompt", vm.new_function("_mesh_prompt", mesh_prompt), vm);
+    let _ = sub.set_attr(
+        "_mesh_prompt",
+        vm.new_function("_mesh_prompt", mesh_prompt),
+        vm,
+    );
     let _ = sub.set_attr(
         "_mesh_node_name",
         vm.new_function("_mesh_node_name", mesh_node_name),
@@ -588,26 +568,34 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         sub.get_attr("_mesh_connect", vm).unwrap(),
         vm,
     );
-    let _ = scope.globals.set_item("_mesh_rank", sub.get_attr("_mesh_rank", vm).unwrap(), vm);
     let _ = scope
         .globals
-        .set_item("_mesh_num_nodes", sub.get_attr("_mesh_num_nodes", vm).unwrap(), vm);
+        .set_item("_mesh_rank", sub.get_attr("_mesh_rank", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_num_nodes",
+        sub.get_attr("_mesh_num_nodes", vm).unwrap(),
+        vm,
+    );
     let _ = scope.globals.set_item(
         "_mesh_is_connected",
         sub.get_attr("_mesh_is_connected", vm).unwrap(),
         vm,
     );
-    let _ = scope
-        .globals
-        .set_item("_mesh_prompt", sub.get_attr("_mesh_prompt", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_prompt",
+        sub.get_attr("_mesh_prompt", vm).unwrap(),
+        vm,
+    );
     let _ = scope.globals.set_item(
         "_mesh_node_name",
         sub.get_attr("_mesh_node_name", vm).unwrap(),
         vm,
     );
-    let _ = scope
-        .globals
-        .set_item("_mesh_node_id", sub.get_attr("_mesh_node_id", vm).unwrap(), vm);
+    let _ = scope.globals.set_item(
+        "_mesh_node_id",
+        sub.get_attr("_mesh_node_id", vm).unwrap(),
+        vm,
+    );
     let _ = scope.globals.set_item(
         "_mesh_broadcast_payload",
         sub.get_attr("_mesh_broadcast_payload", vm).unwrap(),
@@ -624,7 +612,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm,
     );
 
-    match vm.run_code_string(scope.clone(), MESH_BOOTSTRAP, "<xos.mesh/bootstrap.py>".to_string()) {
+    match vm.run_code_string(
+        scope.clone(),
+        MESH_BOOTSTRAP,
+        "<xos.mesh/bootstrap.py>".to_string(),
+    ) {
         Ok(_) => {
             if let Ok(connect_fn) = scope.globals.get_item("connect", vm) {
                 let _ = sub.set_attr("connect", connect_fn, vm);

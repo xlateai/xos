@@ -1,11 +1,11 @@
 use crate::engine::Application;
 
-/// Implementation lives under [`transcription`]; the CLI subcommand is `transcribe` via [`transcribe`].
-pub mod transcription;
-/// Text editor engine ([`text::TextApp`]) + Python UI entry (`text::launcher`, `text.py`).
-pub mod text;
 /// Python UI entry (`study::launcher`, `study.py`) for `xos app study`.
 pub mod study;
+/// Text editor engine ([`text::TextApp`]) + Python UI entry (`text::launcher`, `text.py`).
+pub mod text;
+/// Implementation lives under [`transcription`]; the CLI subcommand is `transcribe` via [`transcribe`].
+pub mod transcription;
 
 /// `xos app text` / `xos app study` — Python windowed apps (`text.py`, `study.py`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,8 +18,12 @@ pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn maybe_python_cli_app(_name: &str) -> Option<Box<dyn Application>> {
-    None
+pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
+    match name {
+        "text" => text::launcher::boxed_text_demo_app(),
+        "study" => study::launcher::boxed_study_app(),
+        _ => None,
+    }
 }
 
 #[macro_export]
@@ -97,22 +101,6 @@ macro_rules! define_apps {
         pub fn get_app(name: &str) -> Option<Box<dyn Application>> {
             if let Some(app) = $crate::apps::maybe_python_cli_app(name) {
                 return Some(app);
-            }
-            #[cfg(target_arch = "wasm32")]
-            if name == "text" {
-                let mut app = $crate::apps::text::TextApp::new();
-                let text = "xos text wasm runtime\n\ncompiled with `xos compile --wasm`\nlaunched with `xos app text --wasm`";
-                app.text_rasterizer.set_text(text.to_string());
-                app.cursor_position = text.chars().count();
-                return Some(Box::new(app));
-            }
-            #[cfg(target_arch = "wasm32")]
-            if name == "study" {
-                let mut app = $crate::apps::text::TextApp::new();
-                let text = "xos study wasm runtime\n\nThe native study app is Python/data-backed today, so this browser build is a placeholder until Python app launching is wired for wasm.\n\nTry `xos app text --wasm` or any Rust app name to exercise the wasm renderer.";
-                app.text_rasterizer.set_text(text.to_string());
-                app.cursor_position = text.chars().count();
-                return Some(Box::new(app));
             }
             match name {
                 $(

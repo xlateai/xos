@@ -1,8 +1,12 @@
 use crate::python_api::dtypes::DType;
-use crate::python_api::tensors::{Tensor, tensor_flat_data_list, tensor_shape_tuple};
-use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+use crate::python_api::tensors::{tensor_flat_data_list, tensor_shape_tuple, Tensor};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
-fn py_number_to_f32(value: rustpython_vm::PyObjectRef, vm: &VirtualMachine, name: &str) -> PyResult<f32> {
+fn py_number_to_f32(
+    value: rustpython_vm::PyObjectRef,
+    vm: &VirtualMachine,
+    name: &str,
+) -> PyResult<f32> {
     if let Ok(v) = value.clone().try_into_value::<f64>(vm) {
         return Ok(v as f32);
     }
@@ -42,7 +46,10 @@ fn containing(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "containing(): invalid rect tensor size; expected multiples of 4 values".to_string(),
         ));
     }
-    if !(shape == vec![2, 2] || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2) || flat.len() % 4 == 0) {
+    if !(shape == vec![2, 2]
+        || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2)
+        || flat.len() % 4 == 0)
+    {
         return Err(vm.new_type_error(
             "containing(): expected shape (2,2), (N,2,2), or flat length multiple of 4".to_string(),
         ));
@@ -95,7 +102,10 @@ fn buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let py_tensor = Tensor::new(Vec::new(), out_shape);
         return wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?.into(), vm);
     }
-    if !(shape == vec![2, 2] || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2) || flat.len() % 4 == 0) {
+    if !(shape == vec![2, 2]
+        || (shape.len() == 3 && shape[1] == 2 && shape[2] == 2)
+        || flat.len() % 4 == 0)
+    {
         return Err(vm.new_type_error(
             "buffer(): expected shape (2,2), (N,2,2), or flat length multiple of 4".to_string(),
         ));

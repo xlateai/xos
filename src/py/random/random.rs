@@ -1,4 +1,6 @@
-use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine, builtins::PyModule, PyRef, function::FuncArgs};
+use rustpython_vm::{
+    builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine,
+};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::OnceLock;
@@ -21,7 +23,7 @@ fn try_fill_random_metal(buffer: &mut [u8], low: f64, high: f64) -> bool {
     let metal_state = METAL_RANDOM_STATE.get_or_init(|| {
         let device = metal::Device::system_default()?;
         let command_queue = device.new_command_queue();
-        
+
         // Metal shader for random noise generation
         let shader_source = r#"
         #include <metal_stdlib>
@@ -54,23 +56,27 @@ fn try_fill_random_metal(buffer: &mut [u8], low: f64, high: f64) -> bool {
             buffer[gid] = uchar(clamp(value, 0.0f, 255.0f));
         }
         "#;
-        
-        let library = device.new_library_with_source(shader_source, &metal::CompileOptions::new()).ok()?;
+
+        let library = device
+            .new_library_with_source(shader_source, &metal::CompileOptions::new())
+            .ok()?;
         let function = library.get_function("fill_random", None).ok()?;
-        let pipeline = device.new_compute_pipeline_state_with_function(&function).ok()?;
-        
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&function)
+            .ok()?;
+
         Some(MetalRandomState {
             device,
             command_queue,
             pipeline,
         })
     });
-    
+
     let state = match metal_state.as_ref() {
         Some(s) => s,
         None => return false, // Metal not available
     };
-    
+
     // Create Metal buffer from our existing buffer
     let buffer_len = buffer.len();
     let metal_buffer = state.device.new_buffer_with_data(
@@ -78,41 +84,51 @@ fn try_fill_random_metal(buffer: &mut [u8], low: f64, high: f64) -> bool {
         buffer_len as u64,
         metal::MTLResourceOptions::StorageModeShared,
     );
-    
+
     // Prepare parameters
-    let seed: u32 = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() & 0xFFFFFFFF) as u32;
+    let seed: u32 =
+        ((crate::time::unix_seconds_f64() * 1_000_000_000.0) as u128 & 0xFFFFFFFF) as u32;
     let low_f32 = low as f32;
     let high_f32 = high as f32;
     let length = buffer_len as u32;
-    
+
     // Execute compute shader
     let command_buffer = state.command_queue.new_command_buffer();
     let encoder = command_buffer.new_compute_command_encoder();
-    
+
     encoder.set_compute_pipeline_state(&state.pipeline);
     encoder.set_buffer(0, Some(&metal_buffer), 0);
-    encoder.set_bytes(1, std::mem::size_of::<u32>() as u64, &seed as *const u32 as *const _);
-    encoder.set_bytes(2, std::mem::size_of::<f32>() as u64, &low_f32 as *const f32 as *const _);
-    encoder.set_bytes(3, std::mem::size_of::<f32>() as u64, &high_f32 as *const f32 as *const _);
-    encoder.set_bytes(4, std::mem::size_of::<u32>() as u64, &length as *const u32 as *const _);
-    
+    encoder.set_bytes(
+        1,
+        std::mem::size_of::<u32>() as u64,
+        &seed as *const u32 as *const _,
+    );
+    encoder.set_bytes(
+        2,
+        std::mem::size_of::<f32>() as u64,
+        &low_f32 as *const f32 as *const _,
+    );
+    encoder.set_bytes(
+        3,
+        std::mem::size_of::<f32>() as u64,
+        &high_f32 as *const f32 as *const _,
+    );
+    encoder.set_bytes(
+        4,
+        std::mem::size_of::<u32>() as u64,
+        &length as *const u32 as *const _,
+    );
+
     // Calculate thread group sizes
     let thread_group_size = metal::MTLSize::new(256, 1, 1);
-    let thread_groups = metal::MTLSize::new(
-        ((buffer_len + 255) / 256) as u64,
-        1,
-        1,
-    );
-    
+    let thread_groups = metal::MTLSize::new(((buffer_len + 255) / 256) as u64, 1, 1);
+
     encoder.dispatch_thread_groups(thread_groups, thread_group_size);
     encoder.end_encoding();
-    
+
     command_buffer.commit();
     command_buffer.wait_until_completed();
-    
+
     // Copy results back from Metal buffer to our buffer
     unsafe {
         std::ptr::copy_nonoverlapping(
@@ -121,12 +137,12 @@ fn try_fill_random_metal(buffer: &mut [u8], low: f64, high: f64) -> bool {
             buffer_len,
         );
     }
-    
+
     true
 }
 
 /// xos.random.uniform(low=0.0, high=1.0, shape=None, dtype=None) - returns a random float or array
-/// 
+///
 /// Extract f64 from Python int or float
 fn parse_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
     if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
@@ -143,7 +159,7 @@ fn parse_f64(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
 /// dtype can be specified (default: inferred from context - float32 for kernels, uint8 for images)
 fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
-    
+
     // Parse low parameter (default: 0.0) - accept int or float
     let low: f64 = if !args_vec.is_empty() {
         parse_f64(&args_vec[0], vm)?
@@ -152,7 +168,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         0.0
     };
-    
+
     // Parse high parameter (default: 1.0) - accept int or float
     let high: f64 = if args_vec.len() > 1 {
         parse_f64(&args_vec[1], vm)?
@@ -161,7 +177,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         1.0
     };
-    
+
     // Check if shape argument was provided (as 3rd positional arg or as kwarg)
     let shape_arg = if args_vec.len() > 2 && !vm.is_none(&args_vec[2]) {
         Some(&args_vec[2])
@@ -175,16 +191,13 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             }
         })
     };
-    
+
     // Check for dtype argument
-    let dtype_arg = args.kwargs.iter().find_map(|(k, v)| {
-        if k == "dtype" {
-            Some(v)
-        } else {
-            None
-        }
-    });
-    
+    let dtype_arg = args
+        .kwargs
+        .iter()
+        .find_map(|(k, v)| if k == "dtype" { Some(v) } else { None });
+
     // If no shape, return a single float
     if shape_arg.is_none() || vm.is_none(shape_arg.unwrap()) {
         #[cfg(target_arch = "wasm32")]
@@ -193,7 +206,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let value = low + random * (high - low);
             return Ok(vm.ctx.new_float(value).into());
         }
-        
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
@@ -202,18 +215,21 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             return Ok(vm.ctx.new_float(value).into());
         }
     }
-    
+
     // Shape provided - generate array of random values
     let shape_obj = shape_arg.unwrap();
-    let shape_tuple = shape_obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
+    let shape_tuple = shape_obj
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
         .ok_or_else(|| vm.new_type_error("shape must be a tuple".to_string()))?;
-    
-    let shape: Vec<usize> = shape_tuple.as_slice().iter()
+
+    let shape: Vec<usize> = shape_tuple
+        .as_slice()
+        .iter()
         .map(|s| s.clone().try_into_value::<i32>(vm).map(|i| i as usize))
         .collect::<Result<Vec<_>, _>>()?;
-    
+
     let total_elements: usize = shape.iter().product();
-    
+
     // Determine if we should generate floats or integers
     // Default: float32 (for audio compatibility), unless dtype explicitly specifies uint8
     let use_float = if let Some(dtype_obj) = dtype_arg {
@@ -233,11 +249,11 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         // Default to float32 for audio and general use
         true
     };
-    
+
     if use_float {
         // Generate random f32 values
         let random_data: Vec<f32>;
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             random_data = (0..total_elements)
@@ -247,7 +263,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 })
                 .collect();
         }
-        
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
@@ -259,26 +275,26 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 })
                 .collect();
         }
-        
+
         // Create xos.tensor backed by Rust memory
-        use crate::python_api::tensors::Tensor;
         use crate::python_api::dtypes::DType;
-        
+        use crate::python_api::tensors::Tensor;
+
         let py_tensor = Tensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::Float32)?;
-        
+
         // Wrap in _TensorWrapper for nice display and compatibility
         if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }
         }
-        
+
         Ok(dict.into())
     } else {
         // Generate random u8 values (0-255) for image data
         let random_data: Vec<f32>;
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             random_data = (0..total_elements)
@@ -289,7 +305,7 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 })
                 .collect();
         }
-        
+
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rand::Rng;
@@ -301,53 +317,60 @@ fn uniform(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 })
                 .collect();
         }
-        
+
         // Create xos.tensor backed by Rust memory (stored as f32, displayed as u8)
-        use crate::python_api::tensors::Tensor;
         use crate::python_api::dtypes::DType;
-        
+        use crate::python_api::tensors::Tensor;
+
         let py_tensor = Tensor::new(random_data, shape.clone());
         let dict = py_tensor.to_py_dict(vm, DType::UInt8)?;
-        
+
         // Wrap in _TensorWrapper for nice display and compatibility
         if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
             if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
                 return Ok(wrapped);
             }
         }
-        
+
         Ok(dict.into())
     }
 }
 
 /// xos.random.uniform_fill(array, low, high) - fill array directly with random values (ZERO COPY)
-/// 
+///
 /// Fills the frame buffer array directly with random values without any Python allocations.
 /// This is the fast path for operations like: array[:] = xos.random.uniform_fill(array, 0, 255)
 fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
-    
+
     if args_vec.len() != 3 {
         return Err(vm.new_type_error(format!(
             "uniform_fill() takes exactly 3 arguments ({} given)",
             args_vec.len()
         )));
     }
-    
+
     let _array_dict = &args_vec[0]; // Array dict (not used, we access buffer directly)
     let low: f64 = parse_f64(&args_vec[1], vm)?;
     let high: f64 = parse_f64(&args_vec[2], vm)?;
-    
+
     // Get the frame buffer from global context
-    let buffer_guard = crate::python_api::rasterizer::CURRENT_FRAME_BUFFER.lock().unwrap();
-    let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap();
-    let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap();
-    
-    let buffer_ptr = buffer_guard.as_ref()
-        .ok_or_else(|| {
-            vm.new_runtime_error("No frame buffer context set. uniform_fill must be called during tick().".to_string())
-        })?;
-    
+    let buffer_guard = crate::python_api::rasterizer::CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap();
+    let width = *crate::python_api::rasterizer::CURRENT_FRAME_WIDTH
+        .lock()
+        .unwrap();
+    let height = *crate::python_api::rasterizer::CURRENT_FRAME_HEIGHT
+        .lock()
+        .unwrap();
+
+    let buffer_ptr = buffer_guard.as_ref().ok_or_else(|| {
+        vm.new_runtime_error(
+            "No frame buffer context set. uniform_fill must be called during tick().".to_string(),
+        )
+    })?;
+
     let buffer_len = width * height * 4;
     // Access the inner pointer through pattern matching or deref
     let ptr = match buffer_ptr {
@@ -355,7 +378,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     };
     let buffer = unsafe { std::slice::from_raw_parts_mut(ptr, buffer_len) };
     drop(buffer_guard);
-    
+
     // Fill buffer directly with random values
     #[cfg(target_arch = "wasm32")]
     {
@@ -365,7 +388,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             *pixel = value.clamp(0.0, 255.0) as u8;
         }
     }
-    
+
     // Metal GPU path for iOS/macOS - 10x+ faster than CPU
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
@@ -377,28 +400,28 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
         // If Metal fails, fall through to CPU path
     }
-    
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         // OPTIMIZATION 1: Parallel CPU generation using rayon
         // OPTIMIZATION 2: Generate u64s and split into bytes for 8x fewer RNG calls
-        use rayon::prelude::*;
         use rand::Rng;
-        
+        use rayon::prelude::*;
+
         let scale = (high - low) / 255.0;
         let offset = low;
-        
+
         // Split buffer into chunks for parallel processing
         // Use chunk size that's multiple of 8 for u64 efficiency
         const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for good cache locality
-        
+
         buffer.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
             let mut rng = rand::rng();
-            
+
             // Process 8 bytes at a time using u64
             let chunks = chunk.len() / 8;
             let remainder = chunk.len() % 8;
-            
+
             for i in 0..chunks {
                 let random_u64: u64 = rng.random();
                 let bytes = random_u64.to_le_bytes();
@@ -409,7 +432,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                     chunk[start + j] = value.clamp(0.0, 255.0) as u8;
                 }
             }
-            
+
             // Handle remaining bytes
             if remainder > 0 {
                 let random_u64: u64 = rng.random();
@@ -423,7 +446,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             }
         });
     }
-    
+
     // Return sentinel dict to signal that data is already in buffer
     let sentinel = vm.ctx.new_dict();
     sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
@@ -489,7 +512,9 @@ fn choice(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Ok(s) = seq.clone().try_into_value::<String>(vm) {
         let chars: Vec<char> = s.chars().collect();
         if chars.is_empty() {
-            return Err(vm.new_index_error("choice() cannot choose from an empty sequence".to_string()));
+            return Err(
+                vm.new_index_error("choice() cannot choose from an empty sequence".to_string())
+            );
         }
 
         let sample_char = || -> char {
@@ -554,15 +579,26 @@ fn choice(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// Create the random submodule
 pub fn make_random_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("random", vm.ctx.new_dict(), None);
-    
+
     // Add uniform function
-    module.set_attr("uniform", vm.new_function("uniform", uniform), vm).unwrap();
-    module.set_attr("randint", vm.new_function("randint", randint), vm).unwrap();
-    module.set_attr("choice", vm.new_function("choice", choice), vm).unwrap();
-    
+    module
+        .set_attr("uniform", vm.new_function("uniform", uniform), vm)
+        .unwrap();
+    module
+        .set_attr("randint", vm.new_function("randint", randint), vm)
+        .unwrap();
+    module
+        .set_attr("choice", vm.new_function("choice", choice), vm)
+        .unwrap();
+
     // Add uniform_fill function (zero-copy direct fill)
-    module.set_attr("uniform_fill", vm.new_function("uniform_fill", uniform_fill), vm).unwrap();
-    
+    module
+        .set_attr(
+            "uniform_fill",
+            vm.new_function("uniform_fill", uniform_fill),
+            vm,
+        )
+        .unwrap();
+
     module
 }
-

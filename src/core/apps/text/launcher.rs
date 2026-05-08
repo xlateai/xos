@@ -1,8 +1,7 @@
 //! Python UI for `xos app text` / iOS **`text`**: prefers `text.py` on disk under the crate root,
 //! else [`include_str!`] embedded copy so binaries without checkout still run.
 
-#![cfg(not(target_arch = "wasm32"))]
-
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -15,10 +14,17 @@ use crate::python_api::runtime::execute_python_code;
 const TEXT_APP_PY_EMBED: &str = include_str!("text.py");
 
 fn text_app_source_and_logical_path() -> (String, String) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/text/text.py");
-    match std::fs::read_to_string(&path) {
-        Ok(s) => (s, path.to_string_lossy().to_string()),
-        Err(_) => (TEXT_APP_PY_EMBED.to_string(), "text/text.py".to_string()),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/text/text.py");
+        match std::fs::read_to_string(&path) {
+            Ok(s) => (s, path.to_string_lossy().to_string()),
+            Err(_) => (TEXT_APP_PY_EMBED.to_string(), "text/text.py".to_string()),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (TEXT_APP_PY_EMBED.to_string(), "text/text.py".to_string())
     }
 }
 
@@ -38,7 +44,9 @@ pub fn boxed_text_demo_app() -> Option<Box<dyn Application>> {
         execute_python_code(&interpreter, &code, &fname, None, Some(print_cb), &[]);
 
     if let Err(e) = run_result {
-        crate::print(&format!("❌ Failed to load text app Python ({fname}):\n{e}"));
+        crate::print(&format!(
+            "❌ Failed to load text app Python ({fname}):\n{e}"
+        ));
         return None;
     }
 

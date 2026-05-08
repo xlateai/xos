@@ -6,7 +6,7 @@
 use crate::python_api::dtypes::DType;
 use once_cell::sync::Lazy;
 use rustpython_vm::{
-    PyObjectRef, PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyTuple,
+    builtins::PyDict, builtins::PyList, builtins::PyTuple, PyObjectRef, PyResult, VirtualMachine,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,11 +32,7 @@ impl Tensor {
         if let Ok(mut reg) = TENSOR_REGISTRY.lock() {
             reg.insert(id, data.clone());
         }
-        Self {
-            id,
-            data,
-            shape,
-        }
+        Self { id, data, shape }
     }
 
     pub fn to_py_dict(&self, vm: &VirtualMachine, dtype: DType) -> PyResult<PyObjectRef> {
@@ -68,11 +64,7 @@ impl Tensor {
             })
             .collect();
         dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
-        dict.set_item(
-            "_rust_tensor",
-            vm.ctx.new_int(self.id as i64).into(),
-            vm,
-        )?;
+        dict.set_item("_rust_tensor", vm.ctx.new_int(self.id as i64).into(), vm)?;
 
         Ok(dict.into())
     }
@@ -136,7 +128,9 @@ pub fn tensor_flat_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult
             }
             if let Ok(vid_obj) = dict.get_item("_xos_viewport_id", vm) {
                 if let Ok(vid) = vid_obj.try_into_value::<i64>(vm) {
-                    if let Some(bytes) = crate::python_api::xos_module::standalone_frame_buffer_copy(vid.max(0) as u64) {
+                    if let Some(bytes) = crate::python_api::xos_module::standalone_frame_buffer_copy(
+                        vid.max(0) as u64,
+                    ) {
                         let out = bytes.into_iter().map(|b| b as f32).collect::<Vec<f32>>();
                         return Ok(out);
                     }

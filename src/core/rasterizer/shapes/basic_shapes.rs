@@ -50,7 +50,9 @@ pub fn draw_circle(
                 } else if edge_dist > -aa_range {
                     // In the anti-aliasing zone (inside or outside)
                     // Use smoothstep for smoother falloff: 3t^2 - 2t^3
-                    let t = ((edge_dist + aa_range) / (2.0 * aa_range)).max(0.0).min(1.0);
+                    let t = ((edge_dist + aa_range) / (2.0 * aa_range))
+                        .max(0.0)
+                        .min(1.0);
                     let smooth_alpha = t * t * (3.0 - 2.0 * t);
                     smooth_alpha
                 } else {

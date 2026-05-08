@@ -1,7 +1,7 @@
-use rustpython_vm::{AsObject, PyResult, VirtualMachine, function::FuncArgs, PyObjectRef};
 use crate::engine::audio;
-use std::sync::Mutex;
+use rustpython_vm::{function::FuncArgs, AsObject, PyObjectRef, PyResult, VirtualMachine};
 use std::collections::HashSet;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 // Global registry to track all active microphone pointers
@@ -14,13 +14,10 @@ fn get_active_microphones() -> &'static Mutex<HashSet<usize>> {
 /// xos.audio.get_input_devices() - Get all input (microphone) devices
 pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let all_devices = audio::devices();
-    
+
     // Filter to only input devices
-    let input_devices: Vec<_> = all_devices
-        .into_iter()
-        .filter(|d| d.is_input)
-        .collect();
-    
+    let input_devices: Vec<_> = all_devices.into_iter().filter(|d| d.is_input).collect();
+
     // Build device list by creating dicts manually
     let mut device_dicts = Vec::new();
     for (i, device) in input_devices.iter().enumerate() {
@@ -30,10 +27,11 @@ pub fn get_input_devices(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         dict.set_item(
             "label",
             vm.ctx.new_str(device.input_menu_label()).into(),
-            vm)?;
+            vm,
+        )?;
         device_dicts.push(dict.into());
     }
-    
+
     // Create list from the dicts
     let list = vm.ctx.new_list(device_dicts);
     Ok(list.into())
@@ -53,7 +51,11 @@ fn parse_mic_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "macos", target_os = "windows")
+))]
 #[allow(dead_code)]
 fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResult<f32> {
     if !args.args.is_empty() {
@@ -70,7 +72,11 @@ fn parse_system_buffer_duration(args: &FuncArgs, vm: &VirtualMachine) -> PyResul
 }
 
 /// Build `Microphone` Python object from a resolved [`audio::AudioDevice`].
-pub fn microphone_from_resolved_device(device: &audio::AudioDevice, buffer_duration: f32, vm: &VirtualMachine) -> PyResult {
+pub fn microphone_from_resolved_device(
+    device: &audio::AudioDevice,
+    buffer_duration: f32,
+    vm: &VirtualMachine,
+) -> PyResult {
     let listener = audio::AudioListener::new(device, buffer_duration)
         .map_err(|e| vm.new_runtime_error(format!("Failed to initialize microphone: {e}")))?;
     listener
@@ -140,7 +146,11 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             "xos.audio.system is only available on desktop (macOS / Linux / Windows)".to_string(),
         ));
     }
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "ios"),
+        any(target_os = "macos", target_os = "windows")
+    ))]
     {
         let buffer_duration = parse_system_buffer_duration(&args, vm)?;
         let device = audio::preferred_system_audio_input_device().ok_or_else(|| {
@@ -152,7 +162,11 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         microphone_from_resolved_device(&device, buffer_duration, vm)
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "linux"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        not(target_os = "ios"),
+        target_os = "linux"
+    ))]
     {
         let _ = args;
         Err(vm.new_runtime_error(
@@ -162,7 +176,8 @@ pub fn microphone_system(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 fn install_microphone_python_wrapper(listener_ptr: usize, vm: &VirtualMachine) -> PyResult {
-    let code = format!(r#"
+    let code = format!(
+        r#"
 class Microphone:
     '''Shared rolling capture ring for this device.
 
@@ -276,11 +291,13 @@ class Microphone:
             self._listener_ptr = 0
 
 _mic_instance = Microphone({})
-"#, listener_ptr);
-    
+"#,
+        listener_ptr
+    );
+
     let scope = vm.new_scope_with_builtins();
     vm.run_code_string(scope.clone(), &code, "<microphone>".to_string())?;
-    
+
     // Get the instance from the scope
     let instance = scope.globals.get_item("_mic_instance", vm)?;
     Ok(instance)
@@ -289,53 +306,55 @@ _mic_instance = Microphone({})
 /// Internal function to pause microphone recording (mic light OFF)
 pub fn microphone_pause(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Pause recording (mic light OFF)
-    listener.pause()
+    listener
+        .pause()
         .map_err(|e| vm.new_runtime_error(format!("Failed to pause microphone: {}", e)))?;
-    
+
     Ok(vm.ctx.none())
 }
 
 /// Internal function to resume microphone recording (mic light ON)
 pub fn microphone_record(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Resume recording (mic light ON)
-    listener.record()
+    listener
+        .record()
         .map_err(|e| vm.new_runtime_error(format!("Failed to resume microphone: {}", e)))?;
-    
+
     Ok(vm.ctx.none())
 }
 
 /// Internal function to get the microphone's sample rate
 pub fn microphone_get_sample_rate(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Get the sample rate
     let sample_rate = listener.buffer().sample_rate();
-    
+
     Ok(vm.ctx.new_int(sample_rate).into())
 }
 
@@ -343,102 +362,124 @@ pub fn microphone_get_sample_rate(args: FuncArgs, vm: &VirtualMachine) -> PyResu
 /// This matches Rust's get_samples_by_channel() - returns everything in the buffer
 pub fn microphone_get_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Get ALL samples from all channels (peek - does not drain)
     let all_samples = listener.get_samples_by_channel();
-    
+
     if all_samples.is_empty() {
         // Return empty array
         let dict = vm.ctx.new_dict();
         dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
-        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item(
+            "shape",
+            vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(),
+            vm,
+        )?;
         dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
         return Ok(dict.into());
     }
-    
+
     // Use the first channel (mono)
     let samples = &all_samples[0];
-    
+
     // Convert all samples to Python list
-    let batch: Vec<PyObjectRef> = samples.iter()
+    let batch: Vec<PyObjectRef> = samples
+        .iter()
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
-    
+
     let py_list = vm.ctx.new_list(batch);
-    
+
     // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
-    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()])
+            .into(),
+        vm,
+    )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    
+
     // Wrap in _TensorWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
+
     Ok(dict.into())
 }
 
 /// Internal function to get a batch of samples from the microphone (peek mode - does NOT drain)
 pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (listener_ptr, batch_size): (usize, usize) = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Get samples from all channels (peek - does not drain)
     let all_samples = listener.get_samples_by_channel();
-    
+
     if all_samples.is_empty() {
         // Return empty array
         let dict = vm.ctx.new_dict();
         dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
-        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item(
+            "shape",
+            vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(),
+            vm,
+        )?;
         dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
         return Ok(dict.into());
     }
-    
+
     // Use the first channel (mono)
     let samples = &all_samples[0];
-    
+
     // Take up to batch_size samples and convert to Python list
     let actual_size = samples.len().min(batch_size);
-    let batch: Vec<PyObjectRef> = samples.iter()
+    let batch: Vec<PyObjectRef> = samples
+        .iter()
         .take(actual_size)
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
-    
+
     let py_list = vm.ctx.new_list(batch);
-    
+
     // NOTE: We do NOT drain the buffer here! This is peek mode for visualization.
-    
+
     // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
-    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(actual_size as i32).into()]).into(), vm)?;
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![vm.ctx.new_int(actual_size as i32).into()])
+            .into(),
+        vm,
+    )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    
+
     // Wrap in _TensorWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
+
     Ok(dict.into())
 }
 
@@ -446,52 +487,63 @@ pub fn microphone_get_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// This matches Rust audio_relay.rs behavior - get everything available
 pub fn microphone_read_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Get current buffer size to drain everything
     let buffer_len = listener.buffer().len();
-    
+
     // Drain ALL samples from the buffer (FIFO consume operation)
     let all_samples = listener.buffer().drain_samples(buffer_len);
-    
+
     if all_samples.is_empty() {
         // Return empty array
         let dict = vm.ctx.new_dict();
         dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
-        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item(
+            "shape",
+            vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(),
+            vm,
+        )?;
         dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
         return Ok(dict.into());
     }
-    
+
     // Use the first channel (mono)
     let samples = &all_samples[0];
-    
+
     // Convert all drained samples to Python list
-    let batch: Vec<PyObjectRef> = samples.iter()
+    let batch: Vec<PyObjectRef> = samples
+        .iter()
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
-    
+
     let py_list = vm.ctx.new_list(batch);
-    
+
     // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
-    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()])
+            .into(),
+        vm,
+    )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    
+
     // Wrap in _TensorWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
+
     Ok(dict.into())
 }
 
@@ -499,77 +551,88 @@ pub fn microphone_read_all(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// This REMOVES samples from the buffer - use for audio relay to prevent repeats
 pub fn microphone_read_batch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let (listener_ptr, batch_size): (usize, usize) = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Drain samples from the buffer (FIFO consume operation)
     let all_samples = listener.buffer().drain_samples(batch_size);
-    
+
     if all_samples.is_empty() {
         // Return empty array
         let dict = vm.ctx.new_dict();
         dict.set_item("_data", vm.ctx.new_list(vec![]).into(), vm)?;
-        dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(), vm)?;
+        dict.set_item(
+            "shape",
+            vm.ctx.new_tuple(vec![vm.ctx.new_int(0).into()]).into(),
+            vm,
+        )?;
         dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
         return Ok(dict.into());
     }
-    
+
     // Use the first channel (mono)
     let samples = &all_samples[0];
-    
+
     // Convert all drained samples to Python list
-    let batch: Vec<PyObjectRef> = samples.iter()
+    let batch: Vec<PyObjectRef> = samples
+        .iter()
         .map(|&s| vm.ctx.new_float(s as f64).into())
         .collect();
-    
+
     let py_list = vm.ctx.new_list(batch);
-    
+
     // Create xos.Tensor dict
     let dict = vm.ctx.new_dict();
     dict.set_item("_data", py_list.into(), vm)?;
-    dict.set_item("shape", vm.ctx.new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()]).into(), vm)?;
+    dict.set_item(
+        "shape",
+        vm.ctx
+            .new_tuple(vec![vm.ctx.new_int(samples.len() as i32).into()])
+            .into(),
+        vm,
+    )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    
+
     // Wrap in _TensorWrapper for nice display
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
         if let Ok(wrapped) = wrapper_class.call((dict.clone(),), vm) {
             return Ok(wrapped);
         }
     }
-    
+
     Ok(dict.into())
 }
 
 /// Internal function to clear the microphone buffer
 pub fn microphone_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Err(vm.new_runtime_error("Invalid microphone pointer".to_string()));
     }
-    
+
     // Convert pointer back to reference
     let listener = unsafe { &*(listener_ptr as *const audio::AudioListener) };
-    
+
     // Clear the buffer
     listener.buffer().clear();
-    
+
     Ok(vm.ctx.none())
 }
 
 /// Internal function to clean up a microphone (drop the AudioListener)
 pub fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let listener_ptr: usize = args.bind(vm)?;
-    
+
     if listener_ptr == 0 {
         return Ok(vm.ctx.none());
     }
-    
+
     // Check if this pointer is still in the registry
     // If it's not, it was already cleaned up by cleanup_all_audio() - don't double-free!
     let was_in_registry = if let Ok(mut mics) = get_active_microphones().lock() {
@@ -577,24 +640,24 @@ pub fn microphone_cleanup(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     } else {
         false
     };
-    
+
     if !was_in_registry {
         // Already cleaned up by cleanup_all_audio() - skip to avoid double-free
         return Ok(vm.ctx.none());
     }
-    
+
     // Immediately destroy at iOS level
     #[cfg(target_os = "ios")]
     unsafe {
         let listener = &*(listener_ptr as *const audio::AudioListener);
         listener.destroy_now(); // Instant destroy!
     }
-    
+
     // Then drop Rust-side object (won't double-destroy due to flag)
     unsafe {
         let _ = Box::from_raw(listener_ptr as *mut audio::AudioListener);
     }
-    
+
     Ok(vm.ctx.none())
 }
 
@@ -612,7 +675,7 @@ pub fn cleanup_all_microphones_rust() {
     } else {
         vec![]
     };
-    
+
     // Immediately destroy at iOS level (instant mic light off)
     #[cfg(target_os = "ios")]
     {
@@ -625,7 +688,7 @@ pub fn cleanup_all_microphones_rust() {
             }
         }
     }
-    
+
     // Then drop the Rust-side objects (iOS cleanup is already done, won't double-destroy)
     for ptr in mic_ptrs {
         if ptr != 0 {
@@ -635,4 +698,3 @@ pub fn cleanup_all_microphones_rust() {
         }
     }
 }
-

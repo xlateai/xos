@@ -12,7 +12,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::lan::{check_join_interrupt, lan_discover_coordinator, lan_discovery_responder_loop, udp_port_for_mesh_id};
+use super::lan::{
+    check_join_interrupt, lan_discover_coordinator, lan_discovery_responder_loop,
+    udp_port_for_mesh_id,
+};
 use super::local::port_for_mesh_id;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -453,9 +456,7 @@ fn take_next_peer_slot(clients: &Mutex<Vec<Option<TcpStream>>>) -> (usize, u32, 
         g.resize_with(idx + 1, || None);
     }
     let somes = g.iter().filter(|oc| oc.is_some()).count();
-    let num_nodes_after = 1u32
-        .saturating_add(somes as u32)
-        .saturating_add(1);
+    let num_nodes_after = 1u32.saturating_add(somes as u32).saturating_add(1);
     let rank = idx as u32 + 1;
     (idx, rank, num_nodes_after)
 }
@@ -595,30 +596,26 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let lan = session.lan_host.clone();
-                thread::spawn(move || {
-                    loop {
-                        if sd.load(Ordering::SeqCst) != 0 {
-                            break;
-                        }
-                        let _ = if let Some(ref lh) = lan {
-                            host_send_heartbeat_lan(rank, &node_id, &clients, lh, &num_nodes)
-                        } else {
-                            host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes)
-                        };
-                        thread::sleep(HEARTBEAT_INTERVAL);
+                thread::spawn(move || loop {
+                    if sd.load(Ordering::SeqCst) != 0 {
+                        break;
                     }
+                    let _ = if let Some(ref lh) = lan {
+                        host_send_heartbeat_lan(rank, &node_id, &clients, lh, &num_nodes)
+                    } else {
+                        host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes)
+                    };
+                    thread::sleep(HEARTBEAT_INTERVAL);
                 });
             }
             #[cfg(target_arch = "wasm32")]
             {
-                thread::spawn(move || {
-                    loop {
-                        if sd.load(Ordering::SeqCst) != 0 {
-                            break;
-                        }
-                        let _ = host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes);
-                        thread::sleep(HEARTBEAT_INTERVAL);
+                thread::spawn(move || loop {
+                    if sd.load(Ordering::SeqCst) != 0 {
+                        break;
                     }
+                    let _ = host_send_heartbeat_plain(rank, &node_id, &clients, &num_nodes);
+                    thread::sleep(HEARTBEAT_INTERVAL);
                 });
             }
         }
@@ -629,28 +626,24 @@ fn attach_mesh_heartbeat(session: &MeshSession) {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let lan = session.lan_client.clone();
-                thread::spawn(move || {
-                    loop {
-                        if sd.load(Ordering::SeqCst) != 0 {
-                            break;
-                        }
-                        let rank = rank_a.load(Ordering::SeqCst);
-                        let _ = client_send_heartbeat(rank, &node_id, &stream, lan.as_ref());
-                        thread::sleep(HEARTBEAT_INTERVAL);
+                thread::spawn(move || loop {
+                    if sd.load(Ordering::SeqCst) != 0 {
+                        break;
                     }
+                    let rank = rank_a.load(Ordering::SeqCst);
+                    let _ = client_send_heartbeat(rank, &node_id, &stream, lan.as_ref());
+                    thread::sleep(HEARTBEAT_INTERVAL);
                 });
             }
             #[cfg(target_arch = "wasm32")]
             {
-                thread::spawn(move || {
-                    loop {
-                        if sd.load(Ordering::SeqCst) != 0 {
-                            break;
-                        }
-                        let rank = rank_a.load(Ordering::SeqCst);
-                        let _ = client_send_heartbeat_wasm(rank, &node_id, &stream);
-                        thread::sleep(HEARTBEAT_INTERVAL);
+                thread::spawn(move || loop {
+                    if sd.load(Ordering::SeqCst) != 0 {
+                        break;
                     }
+                    let rank = rank_a.load(Ordering::SeqCst);
+                    let _ = client_send_heartbeat_wasm(rank, &node_id, &stream);
+                    thread::sleep(HEARTBEAT_INTERVAL);
                 });
             }
         }
@@ -679,7 +672,11 @@ fn relay_post_json(
     path: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+    let url = format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
     let res = http
         .post(url)
         .json(body)
@@ -850,13 +847,11 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
     let rank = welcome
         .get("rank")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| "bad welcome: rank".to_string())?
-        as u32;
+        .ok_or_else(|| "bad welcome: rank".to_string())? as u32;
     let n = welcome
         .get("num_nodes")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| "bad welcome: num_nodes".to_string())?
-        as u32;
+        .ok_or_else(|| "bad welcome: num_nodes".to_string())? as u32;
     num_nodes.store(n, Ordering::SeqCst);
 
     let rank_a = Arc::new(AtomicU32::new(rank));
@@ -919,13 +914,11 @@ fn finish_client_connection(
     let rank = welcome
         .get("rank")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| "bad welcome: rank".to_string())?
-        as u32;
+        .ok_or_else(|| "bad welcome: rank".to_string())? as u32;
     let n = welcome
         .get("num_nodes")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| "bad welcome: num_nodes".to_string())?
-        as u32;
+        .ok_or_else(|| "bad welcome: num_nodes".to_string())? as u32;
     num_nodes.store(n, Ordering::SeqCst);
 
     let rank_a = Arc::new(AtomicU32::new(rank));
@@ -972,8 +965,8 @@ fn finish_client_connection(
 
 #[cfg(target_arch = "wasm32")]
 fn try_mesh_client_once(addr: SocketAddr) -> Result<MeshSession, String> {
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(120))
-        .map_err(|e| e.to_string())?;
+    let stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(120)).map_err(|e| e.to_string())?;
     let _ = stream.set_nodelay(true);
     finish_client_connection(stream)
 }
@@ -983,8 +976,8 @@ fn try_mesh_client_once(
     addr: SocketAddr,
     identity: Option<Arc<UnlockedNodeIdentity>>,
 ) -> Result<MeshSession, String> {
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(120))
-        .map_err(|e| e.to_string())?;
+    let stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(120)).map_err(|e| e.to_string())?;
     let _ = stream.set_nodelay(true);
     finish_client_connection(stream, identity)
 }
@@ -1084,10 +1077,7 @@ fn mesh_session_from_online_relay(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "relay connect missing session_id".to_string())?
         .to_string();
-    let rank = connect
-        .get("rank")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let rank = connect.get("rank").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let num_nodes = connect
         .get("num_nodes")
         .and_then(|v| v.as_u64())
@@ -1156,10 +1146,7 @@ fn mesh_session_from_online_relay(
                                 continue;
                             }
                             inbox_r.push(Packet {
-                                from_rank: m
-                                    .get("from_rank")
-                                    .and_then(|x| x.as_u64())
-                                    .unwrap_or(0)
+                                from_rank: m.get("from_rank").and_then(|x| x.as_u64()).unwrap_or(0)
                                     as u32,
                                 from_id: m
                                     .get("from_id")
@@ -1268,13 +1255,11 @@ impl MeshSession {
                         Err(_) => mesh_session_from_client_addr(loopback, None),
                     }
                 }
-                MeshMode::Lan => Err(
-                    "LAN mesh requires a local login identity. Run `xos login` first."
-                        .into(),
-                ),
+                MeshMode::Lan => {
+                    Err("LAN mesh requires a local login identity. Run `xos login` first.".into())
+                }
                 MeshMode::Online => Err(
-                    "Online mesh requires a local login identity. Run `xos login` first."
-                        .into(),
+                    "Online mesh requires a local login identity. Run `xos login` first.".into(),
                 ),
             }
         }
@@ -1294,7 +1279,9 @@ impl MeshSession {
         };
         match mode {
             MeshMode::Local => MeshSession::join(mesh_id, MeshMode::Local),
-            MeshMode::Online => mesh_session_from_online_relay(mesh_id, identity, account_aid.as_str()),
+            MeshMode::Online => {
+                mesh_session_from_online_relay(mesh_id, identity, account_aid.as_str())
+            }
             MeshMode::Lan => {
                 check_join_interrupt()?;
                 let scoped_mesh_id = mesh_id.to_string();
@@ -1411,7 +1398,14 @@ impl MeshSession {
                             (k, w)
                         };
                         let line = encrypt_mesh_line(&k.tx, &inner)?;
-                        relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lh, &self.num_nodes);
+                        relay_write_lan_best_effort(
+                            idx,
+                            w,
+                            line.as_bytes(),
+                            clients,
+                            lh,
+                            &self.num_nodes,
+                        );
                         return Ok(());
                     }
                     let targets: Vec<(usize, LanWireKeys, TcpStream)> = {
@@ -1435,7 +1429,14 @@ impl MeshSession {
                         let Ok(line) = encrypt_mesh_line(&k.tx, &inner) else {
                             continue;
                         };
-                        relay_write_lan_best_effort(idx, w, line.as_bytes(), clients, lh, &self.num_nodes);
+                        relay_write_lan_best_effort(
+                            idx,
+                            w,
+                            line.as_bytes(),
+                            clients,
+                            lh,
+                            &self.num_nodes,
+                        );
                     }
                     return Ok(());
                 }
@@ -1448,7 +1449,13 @@ impl MeshSession {
                     let Some(w) = clone_client_writer_at(clients, idx) else {
                         return Ok(());
                     };
-                    relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, &self.num_nodes);
+                    relay_write_plain_best_effort(
+                        idx,
+                        w,
+                        line.as_bytes(),
+                        clients,
+                        &self.num_nodes,
+                    );
                 } else {
                     let targets: Vec<(usize, TcpStream)> = {
                         let guard = clients.lock().unwrap();
@@ -1464,7 +1471,13 @@ impl MeshSession {
                         out
                     };
                     for (idx, w) in targets {
-                        relay_write_plain_best_effort(idx, w, line.as_bytes(), clients, &self.num_nodes);
+                        relay_write_plain_best_effort(
+                            idx,
+                            w,
+                            line.as_bytes(),
+                            clients,
+                            &self.num_nodes,
+                        );
                     }
                 }
                 Ok(())
@@ -1685,14 +1698,7 @@ fn host_accept_loop(
         let peer_keys = keys.clone();
         thread::spawn(move || {
             host_peer_reader_lan(
-                rank,
-                reader,
-                inbox_r,
-                clients_r,
-                lan_h,
-                num_r,
-                sd,
-                peer_keys,
+                rank, reader, inbox_r, clients_r, lan_h, num_r, sd, peer_keys,
             );
         });
     }
@@ -1710,7 +1716,12 @@ fn host_peer_reader(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).ok().filter(|&n| n > 0).is_none() {
+        if reader
+            .read_line(&mut line)
+            .ok()
+            .filter(|&n| n > 0)
+            .is_none()
+        {
             break;
         }
         if shutdown.load(Ordering::SeqCst) != 0 {
@@ -1875,7 +1886,12 @@ fn host_peer_reader_lan(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).ok().filter(|&n| n > 0).is_none() {
+        if reader
+            .read_line(&mut line)
+            .ok()
+            .filter(|&n| n > 0)
+            .is_none()
+        {
             break;
         }
         if shutdown.load(Ordering::SeqCst) != 0 {
@@ -1923,7 +1939,12 @@ fn client_read_loop(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).ok().filter(|&n| n > 0).is_none() {
+        if reader
+            .read_line(&mut line)
+            .ok()
+            .filter(|&n| n > 0)
+            .is_none()
+        {
             break;
         }
         if shutdown.load(Ordering::SeqCst) != 0 {
@@ -1974,7 +1995,12 @@ fn client_read_loop(
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).ok().filter(|&n| n > 0).is_none() {
+        if reader
+            .read_line(&mut line)
+            .ok()
+            .filter(|&n| n > 0)
+            .is_none()
+        {
             break;
         }
         if shutdown.load(Ordering::SeqCst) != 0 {

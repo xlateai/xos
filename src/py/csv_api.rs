@@ -1,9 +1,6 @@
 //! `xos.csv` — load UTF-8 CSV files with a header row; rows are dicts (`header → cell`).
 
-use rustpython_vm::{
-    builtins::PyModule,
-    PyRef, PyResult, VirtualMachine, function::FuncArgs,
-};
+use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
@@ -70,15 +67,16 @@ fn load_native(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn make_csv_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.csv", vm.ctx.new_dict(), None);
     module
-        .set_attr("_load_native", vm.new_function("_load_native", load_native), vm)
+        .set_attr(
+            "_load_native",
+            vm.new_function("_load_native", load_native),
+            vm,
+        )
         .unwrap();
 
     let scope = vm.new_scope_with_builtins();
     let load_fn = module.get_attr("_load_native", vm).unwrap();
-    scope
-        .globals
-        .set_item("_load_native", load_fn, vm)
-        .unwrap();
+    scope.globals.set_item("_load_native", load_fn, vm).unwrap();
 
     let py_code = r#"
 class CsvTable:

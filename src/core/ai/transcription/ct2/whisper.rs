@@ -11,9 +11,9 @@
 //!   Python sleeps (`transcribe.py`), while the Rust side targets ~100 Hz partial decode scheduling.
 #![cfg(all(feature = "whisper_ct2", not(target_arch = "wasm32")))]
 
-use std::path::PathBuf;
 use std::cell::RefCell;
-use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender};
 use std::thread;
 
 use ct2rs::sys::WhisperOptions;
@@ -32,7 +32,10 @@ thread_local! {
     static CT2_MODEL_CACHE: RefCell<Option<CachedCt2Model>> = const { RefCell::new(None) };
 }
 
-fn with_cached_whisper<T>(model_dir: &std::path::Path, f: impl FnOnce(&Ct2Whisper) -> Result<T, String>) -> Result<T, String> {
+fn with_cached_whisper<T>(
+    model_dir: &std::path::Path,
+    f: impl FnOnce(&Ct2Whisper) -> Result<T, String>,
+) -> Result<T, String> {
     let key = model_dir.display().to_string();
     CT2_MODEL_CACHE.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -247,12 +250,7 @@ pub fn transcribe_waveform_once(
         // One-shot path prioritizes accuracy over streaming latency.
         opts.beam_size = 5;
         let parts = whisper
-            .generate(
-                &pcm_16k,
-                Some(decode_lang),
-                false,
-                &opts,
-            )
+            .generate(&pcm_16k, Some(decode_lang), false, &opts)
             .map_err(|e| format!("Whisper CT2 generate: {e}"))?;
         Ok(cleanup_whisper_text(&parts.join(" ")))
     })

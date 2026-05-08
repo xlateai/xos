@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{HtmlCanvasElement, HtmlVideoElement, MediaStreamConstraints, MediaDevices, Navigator};
+use web_sys::{
+    HtmlCanvasElement, HtmlVideoElement, MediaDevices, MediaStreamConstraints, Navigator,
+};
 
 thread_local! {
     static VIDEO_ELEMENT: RefCell<Option<HtmlVideoElement>> = RefCell::new(None);
@@ -16,7 +18,8 @@ pub fn init_camera() {
     // constraints.video(&JsValue::TRUE);
     constraints.set_video(&JsValue::TRUE);
 
-    let promise = media_devices.get_user_media_with_constraints(&constraints)
+    let promise = media_devices
+        .get_user_media_with_constraints(&constraints)
         .expect("failed to request getUserMedia");
 
     let video_promise = wasm_bindgen_futures::JsFuture::from(promise);
@@ -32,12 +35,18 @@ pub fn init_camera() {
         };
 
         let document = window.document().unwrap();
-        let video = document.create_element("video").unwrap().unchecked_into::<HtmlVideoElement>();
+        let video = document
+            .create_element("video")
+            .unwrap()
+            .unchecked_into::<HtmlVideoElement>();
         video.set_autoplay(true);
         video.set_attribute("playsinline", "").unwrap(); // required on iOS
         video.set_src_object(Some(&stream));
 
-        let canvas = document.create_element("canvas").unwrap().unchecked_into::<HtmlCanvasElement>();
+        let canvas = document
+            .create_element("canvas")
+            .unwrap()
+            .unchecked_into::<HtmlCanvasElement>();
 
         VIDEO_ELEMENT.with(|v| *v.borrow_mut() = Some(video));
         CANVAS_ELEMENT.with(|c| *c.borrow_mut() = Some(canvas));
@@ -71,10 +80,14 @@ pub fn get_frame() -> Vec<u8> {
                 canvas.set_height(height);
 
                 let ctx = canvas
-                    .get_context("2d").unwrap().unwrap()
-                    .dyn_into::<web_sys::CanvasRenderingContext2d>().unwrap();
+                    .get_context("2d")
+                    .unwrap()
+                    .unwrap()
+                    .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                    .unwrap();
 
-                ctx.draw_image_with_html_video_element(video, 0.0, 0.0).unwrap();
+                ctx.draw_image_with_html_video_element(video, 0.0, 0.0)
+                    .unwrap();
 
                 let image_data = ctx
                     .get_image_data(0.0, 0.0, width as f64, height as f64)

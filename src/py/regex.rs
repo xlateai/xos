@@ -1,5 +1,7 @@
 use regex::Regex;
-use rustpython_vm::{PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyModule, function::FuncArgs};
+use rustpython_vm::{
+    builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine,
+};
 
 fn compile_regex(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
@@ -10,8 +12,7 @@ fn compile_regex(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         )));
     }
     let pattern: String = args_vec[0].clone().try_into_value(vm)?;
-    Regex::new(&pattern)
-        .map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
+    Regex::new(&pattern).map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
     Ok(vm.ctx.none())
 }
 
@@ -25,8 +26,8 @@ fn match_regex(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     let pattern: String = args_vec[0].clone().try_into_value(vm)?;
     let text: String = args_vec[1].clone().try_into_value(vm)?;
-    let re =
-        Regex::new(&pattern).map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
+    let re = Regex::new(&pattern)
+        .map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
     if let Some(caps) = re.captures(&text) {
         if let Some(m0) = caps.get(0) {
             if m0.start() != 0 {
@@ -59,7 +60,8 @@ fn regex_substitute(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let pattern: String = av[0].clone().try_into_value(vm)?;
     let replacement: String = av[1].clone().try_into_value(vm)?;
     let text: String = av[2].clone().try_into_value(vm)?;
-    let re = Regex::new(&pattern).map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
+    let re = Regex::new(&pattern)
+        .map_err(|e| vm.new_value_error(format!("invalid regex pattern: {e}")))?;
     let out = re.replace_all(&text, replacement.as_str());
     Ok(vm.ctx.new_str(out.as_ref()).into())
 }
@@ -73,7 +75,11 @@ pub fn make_regex_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr("_match", vm.new_function("_match", match_regex), vm)
         .unwrap();
     module
-        .set_attr("_substitute", vm.new_function("_substitute", regex_substitute), vm)
+        .set_attr(
+            "_substitute",
+            vm.new_function("_substitute", regex_substitute),
+            vm,
+        )
         .unwrap();
 
     let scope = vm.new_scope_with_builtins();

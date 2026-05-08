@@ -1,17 +1,18 @@
 //! Burn-backed autograd, MSE loss, and Adam for `xos.nn` (Autodiff + ndarray CPU backend).
 
-use burn::nn::LinearConfig;
+use crate::tensor::tensor::{tensor_flat_data_list, tensor_shape_tuple};
 use burn::nn::conv::Conv2dConfig;
+use burn::nn::LinearConfig;
 use burn::optim::adaptor::OptimizerAdaptor;
 use burn::optim::{AdamConfig, GradientsParams, Optimizer};
 use burn::tensor::backend::AutodiffBackend;
-use burn_autodiff::Autodiff;
 use burn::tensor::{Tensor, TensorData};
+use burn_autodiff::Autodiff;
 use burn_ndarray::NdArray;
 use once_cell::sync::Lazy;
-use crate::tensor::tensor::{tensor_flat_data_list, tensor_shape_tuple};
 use rustpython_vm::{
-    PyObjectRef, PyRef, PyResult, VirtualMachine, builtins::PyList, builtins::PyModule, function::FuncArgs,
+    builtins::PyList, builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult,
+    VirtualMachine,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -24,7 +25,8 @@ struct BurnRuntime {
     linears: HashMap<u64, burn::nn::Linear<TrainAD>>,
     conv2ds: HashMap<u64, burn::nn::conv::Conv2d<TrainAD>>,
     conv2d_divisors: HashMap<u64, f32>,
-    optimizers: HashMap<u64, OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD>>,
+    optimizers:
+        HashMap<u64, OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD>>,
     optim_linear: HashMap<u64, u64>,
     last_pred: HashMap<u64, Tensor<TrainAD, 2>>,
     last_loss: Option<Tensor<TrainAD, 1>>,
@@ -125,7 +127,9 @@ pub fn conv2d_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|v| v.clone().try_into_value::<bool>(vm).unwrap_or(true))
         .unwrap_or(true);
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let dev = device();
     let conv = Conv2dConfig::new([in_channels, out_channels], [k_h, k_w])
         .with_stride([s_h, s_w])
@@ -159,9 +163,21 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if dims.len() != 3 {
         return Err(vm.new_value_error("shape must be (H, W, C)".to_string()));
     }
-    let h = dims[0].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
-    let w = dims[1].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
-    let c = dims[2].clone().try_into_value::<i32>(vm).unwrap_or(1).max(1) as usize;
+    let h = dims[0]
+        .clone()
+        .try_into_value::<i32>(vm)
+        .unwrap_or(1)
+        .max(1) as usize;
+    let w = dims[1]
+        .clone()
+        .try_into_value::<i32>(vm)
+        .unwrap_or(1)
+        .max(1) as usize;
+    let c = dims[2]
+        .clone()
+        .try_into_value::<i32>(vm)
+        .unwrap_or(1)
+        .max(1) as usize;
 
     let mut flat: Vec<f32> = Vec::new();
     fn flatten(obj: &PyObjectRef, out: &mut Vec<f32>, vm: &VirtualMachine) -> PyResult<()> {
@@ -190,7 +206,9 @@ pub fn conv2d_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     let id: i64 = args_vec[0].clone().try_into_value(vm)?;
 
-    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let conv = rt
         .conv2ds
         .get(&(id as u64))
@@ -207,13 +225,21 @@ pub fn conv2d_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item(
         "shape",
         vm.ctx
-            .new_tuple(shape_vec.iter().map(|&s| vm.ctx.new_int(s as i64).into()).collect())
+            .new_tuple(
+                shape_vec
+                    .iter()
+                    .map(|&s| vm.ctx.new_int(s as i64).into())
+                    .collect(),
+            )
             .into(),
         vm,
     )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
-    let py_data: Vec<PyObjectRef> = flat_out.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+    let py_data: Vec<PyObjectRef> = flat_out
+        .iter()
+        .map(|&f| vm.ctx.new_float(f as f64).into())
+        .collect();
     dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
     dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
 
@@ -240,12 +266,23 @@ pub fn conv2d_forward_tensor(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     conv2d_forward_impl(id as u64, flat, h, w, c, vm)
 }
 
-fn conv2d_forward_impl(id: u64, flat: Vec<f32>, h: usize, w: usize, c: usize, vm: &VirtualMachine) -> PyResult {
+fn conv2d_forward_impl(
+    id: u64,
+    flat: Vec<f32>,
+    h: usize,
+    w: usize,
+    c: usize,
+    vm: &VirtualMachine,
+) -> PyResult {
     let expected = h * w * c;
     if flat.len() != expected {
         return Err(vm.new_value_error(format!(
             "conv2d_forward shape mismatch: got {} values, expected {} for shape ({}, {}, {})",
-            flat.len(), expected, h, w, c
+            flat.len(),
+            expected,
+            h,
+            w,
+            c
         )));
     }
 
@@ -261,7 +298,9 @@ fn conv2d_forward_impl(id: u64, flat: Vec<f32>, h: usize, w: usize, c: usize, vm
         }
     }
 
-    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let conv = rt
         .conv2ds
         .get(&id)
@@ -370,7 +409,9 @@ pub fn linear_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let d_in = d_in.max(1) as usize;
     let d_out = d_out.max(1) as usize;
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let dev = device();
     let config = LinearConfig::new(d_in, d_out).with_bias(bias);
     let linear = config.init::<TrainAD>(&dev);
@@ -406,7 +447,9 @@ pub fn linear_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         flatten(x, &mut flat, vm)?;
     }
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let d_in = rt
         .linears
         .get(&(id as u64))
@@ -439,19 +482,23 @@ pub fn linear_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item(
         "shape",
         vm.ctx
-            .new_tuple(shape_vec.iter().map(|&s| vm.ctx.new_int(s as i64).into()).collect())
+            .new_tuple(
+                shape_vec
+                    .iter()
+                    .map(|&s| vm.ctx.new_int(s as i64).into())
+                    .collect(),
+            )
             .into(),
         vm,
     )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
-    let py_data: Vec<PyObjectRef> = flat_out.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+    let py_data: Vec<PyObjectRef> = flat_out
+        .iter()
+        .map(|&f| vm.ctx.new_float(f as f64).into())
+        .collect();
     dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
-    dict.set_item(
-        "_rust_tensor",
-        vm.ctx.new_int(0i64).into(),
-        vm,
-    )?;
+    dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
 
     wrap_tensor_dict(dict.into(), vm)
 }
@@ -465,7 +512,9 @@ pub fn linear_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
     let id: i64 = args_vec[0].clone().try_into_value(vm)?;
 
-    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let linear = rt
         .linears
         .get(&(id as u64))
@@ -482,13 +531,21 @@ pub fn linear_weights(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     dict.set_item(
         "shape",
         vm.ctx
-            .new_tuple(shape_vec.iter().map(|&s| vm.ctx.new_int(s as i64).into()).collect())
+            .new_tuple(
+                shape_vec
+                    .iter()
+                    .map(|&s| vm.ctx.new_int(s as i64).into())
+                    .collect(),
+            )
             .into(),
         vm,
     )?;
     dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
     dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
-    let py_data: Vec<PyObjectRef> = flat_out.iter().map(|&f| vm.ctx.new_float(f as f64).into()).collect();
+    let py_data: Vec<PyObjectRef> = flat_out
+        .iter()
+        .map(|&f| vm.ctx.new_float(f as f64).into())
+        .collect();
     dict.set_item("_data", vm.ctx.new_list(py_data).into(), vm)?;
     dict.set_item("_rust_tensor", vm.ctx.new_int(0i64).into(), vm)?;
 
@@ -522,7 +579,9 @@ pub fn mse_loss(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         flatten(x, &mut target_flat, vm)?;
     }
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let pred = rt
         .last_pred
         .get(&(linear_id as u64))
@@ -551,12 +610,16 @@ pub fn mse_loss(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 pub fn loss_item(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     Ok(vm.ctx.new_float(rt.last_loss_scalar).into())
 }
 
 pub fn loss_backward(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let loss = rt
         .last_loss
         .take()
@@ -600,7 +663,9 @@ pub fn adam_init(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|v| v.clone().try_into_value::<f64>(vm).unwrap_or(1e-8) as f32)
         .unwrap_or(1e-8);
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     if !rt.linears.contains_key(&(linear_id as u64)) {
         return Err(vm.new_value_error("unknown linear_id".to_string()));
     }
@@ -609,7 +674,8 @@ pub fn adam_init(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .with_beta_1(b1)
         .with_beta_2(b2)
         .with_epsilon(eps);
-    let optim: OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD> = config.init();
+    let optim: OptimizerAdaptor<burn::optim::Adam, burn::nn::Linear<TrainAD>, TrainAD> =
+        config.init();
 
     let oid = next_id(&mut rt);
     rt.optimizers.insert(oid, optim);
@@ -630,7 +696,9 @@ pub fn adam_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .map(|v| v.clone().try_into_value::<f64>(vm).unwrap_or(0.001))
         .unwrap_or(0.001);
 
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     let linear_id = *rt
         .optim_linear
         .get(&(optim_id as u64))
@@ -656,7 +724,9 @@ pub fn adam_step(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 pub fn adam_zero_grad(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
-    let mut rt = RUNTIME.lock().map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
+    let mut rt = RUNTIME
+        .lock()
+        .map_err(|_| vm.new_runtime_error("burn runtime lock".to_string()))?;
     rt.last_grads = None;
     rt.last_loss = None;
     Ok(vm.ctx.none())
@@ -664,40 +734,67 @@ pub fn adam_zero_grad(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
 pub fn register_burn_module(parent: &PyRef<PyModule>, vm: &VirtualMachine) {
     let burn = vm.new_module("_burn", vm.ctx.new_dict(), None);
-    burn
-        .set_attr("conv2d_register", vm.new_function("conv2d_register", conv2d_register), vm)
+    burn.set_attr(
+        "conv2d_register",
+        vm.new_function("conv2d_register", conv2d_register),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "conv2d_forward",
+        vm.new_function("conv2d_forward", conv2d_forward),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "conv2d_forward_tensor",
+        vm.new_function("conv2d_forward_tensor", conv2d_forward_tensor),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "conv2d_weights",
+        vm.new_function("conv2d_weights", conv2d_weights),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "linear_register",
+        vm.new_function("linear_register", linear_register),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "linear_forward",
+        vm.new_function("linear_forward", linear_forward),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr(
+        "linear_weights",
+        vm.new_function("linear_weights", linear_weights),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr("mse_loss", vm.new_function("mse_loss", mse_loss), vm)
         .unwrap();
-    burn
-        .set_attr("conv2d_forward", vm.new_function("conv2d_forward", conv2d_forward), vm)
+    burn.set_attr("loss_item", vm.new_function("loss_item", loss_item), vm)
         .unwrap();
-    burn
-        .set_attr(
-            "conv2d_forward_tensor",
-            vm.new_function("conv2d_forward_tensor", conv2d_forward_tensor),
-            vm,
-        )
+    burn.set_attr(
+        "loss_backward",
+        vm.new_function("loss_backward", loss_backward),
+        vm,
+    )
+    .unwrap();
+    burn.set_attr("adam_init", vm.new_function("adam_init", adam_init), vm)
         .unwrap();
-    burn
-        .set_attr("conv2d_weights", vm.new_function("conv2d_weights", conv2d_weights), vm)
+    burn.set_attr("adam_step", vm.new_function("adam_step", adam_step), vm)
         .unwrap();
-    burn
-        .set_attr("linear_register", vm.new_function("linear_register", linear_register), vm)
-        .unwrap();
-    burn
-        .set_attr("linear_forward", vm.new_function("linear_forward", linear_forward), vm)
-        .unwrap();
-    burn
-        .set_attr("linear_weights", vm.new_function("linear_weights", linear_weights), vm)
-        .unwrap();
-    burn.set_attr("mse_loss", vm.new_function("mse_loss", mse_loss), vm).unwrap();
-    burn.set_attr("loss_item", vm.new_function("loss_item", loss_item), vm).unwrap();
-    burn
-        .set_attr("loss_backward", vm.new_function("loss_backward", loss_backward), vm)
-        .unwrap();
-    burn.set_attr("adam_init", vm.new_function("adam_init", adam_init), vm).unwrap();
-    burn.set_attr("adam_step", vm.new_function("adam_step", adam_step), vm).unwrap();
-    burn
-        .set_attr("adam_zero_grad", vm.new_function("adam_zero_grad", adam_zero_grad), vm)
-        .unwrap();
+    burn.set_attr(
+        "adam_zero_grad",
+        vm.new_function("adam_zero_grad", adam_zero_grad),
+        vm,
+    )
+    .unwrap();
     parent.set_attr("_burn", burn, vm).unwrap();
 }

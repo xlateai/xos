@@ -64,15 +64,7 @@ pub fn draw_circles_cpu_instances(
     instances: &[(f32, f32, f32, [u8; 4])],
 ) {
     for &(cx, cy, r, c) in instances {
-        draw_circle_cpu(
-            buffer,
-            width,
-            height,
-            cx,
-            cy,
-            r,
-            (c[0], c[1], c[2], c[3]),
-        );
+        draw_circle_cpu(buffer, width, height, cx, cy, r, (c[0], c[1], c[2], c[3]));
     }
 }
 

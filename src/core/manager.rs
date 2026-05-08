@@ -1,15 +1,15 @@
 #[cfg(not(target_arch = "wasm32"))]
-use crate::mesh::{MeshMode, MeshSession};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::auth::{has_identity, load_node_identity};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::mesh::{MeshMode, MeshSession};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::AtomicU64;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, LazyLock, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
@@ -209,7 +209,11 @@ fn finalize_proc_session(session: MeshSession, label: &str) -> Option<Arc<MeshSe
     }
     remember_snapshot(self_snapshot(&session, label));
     emit_hello(&session, label);
-    let mode = if session.is_lan_transport() { "lan" } else { "local" };
+    let mode = if session.is_lan_transport() {
+        "lan"
+    } else {
+        "local"
+    };
     register_mesh(PROC_MESH_ID, mode);
     Some(session)
 }

@@ -1,4 +1,4 @@
-use burn::tensor::{ElementConversion, Tensor, activation::relu, backend::Backend};
+use burn::tensor::{activation::relu, backend::Backend, ElementConversion, Tensor};
 
 use super::helper::*;
 

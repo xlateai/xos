@@ -1,13 +1,7 @@
 /// Niche shape drawing functions for specific use cases
 
 /// Apply a simple box blur to a buffer
-fn apply_box_blur(
-    src: &[u8],
-    dst: &mut [u8],
-    width: u32,
-    height: u32,
-    radius: i32,
-) {
+fn apply_box_blur(src: &[u8], dst: &mut [u8], width: u32, height: u32, radius: i32) {
     let radius = radius.max(1);
 
     for y in 0..height as i32 {
@@ -85,8 +79,10 @@ pub fn draw_play_button(
                 let px_f = px as f32 + 0.5;
                 let py_f = py as f32 + 0.5;
 
-                let edge_ab = (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
-                let edge_bc = (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
+                let edge_ab =
+                    (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
+                let edge_bc =
+                    (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
                 let edge_ca = (left_x - tip_x) * (py_f - tip_y) - (top_y - tip_y) * (px_f - tip_x);
 
                 let inside = (edge_ab >= 0.0 && edge_bc >= 0.0 && edge_ca >= 0.0)
@@ -107,7 +103,13 @@ pub fn draw_play_button(
         }
 
         let mut blurred_buffer = vec![0u8; temp_size];
-        apply_box_blur(&temp_buffer, &mut blurred_buffer, region_width, region_height, 1);
+        apply_box_blur(
+            &temp_buffer,
+            &mut blurred_buffer,
+            region_width,
+            region_height,
+            1,
+        );
 
         for py in min_y..=max_y {
             for px in min_x..=max_x {
@@ -123,12 +125,15 @@ pub fn draw_play_button(
                         let bg_g = buffer[main_idx + 1] as f32;
                         let bg_b = buffer[main_idx + 2] as f32;
 
-                        buffer[main_idx + 0] =
-                            ((blurred_buffer[temp_idx + 0] as f32 * alpha) + (bg_r * (1.0 - alpha))) as u8;
-                        buffer[main_idx + 1] =
-                            ((blurred_buffer[temp_idx + 1] as f32 * alpha) + (bg_g * (1.0 - alpha))) as u8;
-                        buffer[main_idx + 2] =
-                            ((blurred_buffer[temp_idx + 2] as f32 * alpha) + (bg_b * (1.0 - alpha))) as u8;
+                        buffer[main_idx + 0] = ((blurred_buffer[temp_idx + 0] as f32 * alpha)
+                            + (bg_r * (1.0 - alpha)))
+                            as u8;
+                        buffer[main_idx + 1] = ((blurred_buffer[temp_idx + 1] as f32 * alpha)
+                            + (bg_g * (1.0 - alpha)))
+                            as u8;
+                        buffer[main_idx + 2] = ((blurred_buffer[temp_idx + 2] as f32 * alpha)
+                            + (bg_b * (1.0 - alpha)))
+                            as u8;
                         buffer[main_idx + 3] = 0xff;
                     }
                 }
@@ -144,8 +149,10 @@ pub fn draw_play_button(
                 let px_f = px as f32 + 0.5;
                 let py_f = py as f32 + 0.5;
 
-                let edge_ab = (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
-                let edge_bc = (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
+                let edge_ab =
+                    (left_x - left_x) * (py_f - top_y) - (bottom_y - top_y) * (px_f - left_x);
+                let edge_bc =
+                    (tip_x - left_x) * (py_f - bottom_y) - (tip_y - bottom_y) * (px_f - left_x);
                 let edge_ca = (left_x - tip_x) * (py_f - tip_y) - (top_y - tip_y) * (px_f - tip_x);
 
                 let inside = (edge_ab >= 0.0 && edge_bc >= 0.0 && edge_ca >= 0.0)

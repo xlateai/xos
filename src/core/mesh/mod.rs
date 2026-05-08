@@ -3,11 +3,11 @@
 //! Layout: [`mesh`] session module holds transport + [`MeshSession`]; [`nodes`] / [`wire`] /
 //! [`graph`] are shared types. The `xos app mesh` runner lives in [`crate::apps::mesh`].
 
+pub mod graph;
+mod lan;
 #[cfg(not(target_arch = "wasm32"))]
 mod lan_crypto;
-mod lan;
 mod local;
-pub mod graph;
 pub mod mesh;
 pub mod nodes;
 pub mod relay;

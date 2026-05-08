@@ -20,11 +20,7 @@ pub fn standard_target_root(project_root: &Path) -> PathBuf {
 pub fn release_xos_executable(project_root: &Path) -> PathBuf {
     standard_target_root(project_root)
         .join("release")
-        .join(if cfg!(windows) {
-            "xos.exe"
-        } else {
-            "xos"
-        })
+        .join(if cfg!(windows) { "xos.exe" } else { "xos" })
 }
 
 /// Default Cargo `bin` directory (`xos`, `xpy` on PATH).
@@ -42,7 +38,11 @@ fn cargo_bin_dir_hint() -> String {
     }
     #[cfg(not(windows))]
     if let Ok(home) = std::env::var("HOME") {
-        return Path::new(&home).join(".cargo").join("bin").display().to_string();
+        return Path::new(&home)
+            .join(".cargo")
+            .join("bin")
+            .display()
+            .to_string();
     }
     "~/.cargo/bin".to_string()
 }
@@ -135,7 +135,9 @@ fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
         "   Fresh binaries: {}",
         standard_target_root(project_root).join("release").display()
     );
-    eprintln!("   Fix: close every running `xos` / `xpy` (and shells that started them), then run:");
+    eprintln!(
+        "   Fix: close every running `xos` / `xpy` (and shells that started them), then run:"
+    );
     eprintln!("   xos compile");
     eprintln!("   Or: cargo install --path {}", project_root.display());
 }
@@ -205,11 +207,7 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
             Ok(Some(status)) => {
                 let stderr_text = reader.join().unwrap_or_default();
                 if status.success() {
-                    print!(
-                        "\r📁 Compiling xos in {}... ✓{}\n",
-                        path_str,
-                        " ".repeat(8)
-                    );
+                    print!("\r📁 Compiling xos in {}... ✓{}\n", path_str, " ".repeat(8));
                     let _ = io::stdout().flush();
                     return true;
                 }
@@ -257,10 +255,7 @@ fn run_release_compile_and_update_cargo_bin(project_root: &Path, quiet: bool) ->
     }
 
     if !quiet {
-        println!(
-            "📁 Copying xos/xpy → {} ...",
-            cargo_bin_dir_hint()
-        );
+        println!("📁 Copying xos/xpy → {} ...", cargo_bin_dir_hint());
     }
 
     let dest = PathBuf::from(cargo_bin_dir_hint());
@@ -286,7 +281,10 @@ pub fn find_project_root() -> PathBuf {
 
 /// Run `cargo clean` for each isolated target dir (`target/standard`, `target/ios`, `target/wasm`).
 pub fn run_cargo_clean(project_root: &Path) -> bool {
-    println!("🧹 cargo clean (parallel target dirs) in {}...", project_root.display());
+    println!(
+        "🧹 cargo clean (parallel target dirs) in {}...",
+        project_root.display()
+    );
 
     let rel_dirs = ["target/standard", "target/ios", "target/wasm"];
 
@@ -302,7 +300,9 @@ pub fn run_cargo_clean(project_root: &Path) -> bool {
             .status()
             .map_err(|e| e.to_string())?;
         if !status.success() {
-            return Err(format!("cargo clean --target-dir {rel_dir} failed ({status})."));
+            return Err(format!(
+                "cargo clean --target-dir {rel_dir} failed ({status})."
+            ));
         }
         Ok(())
     }
@@ -376,11 +376,6 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
     init()
       .then(() => console.log("xos wasm: initialized"))
       .catch((error) => console.error("xos wasm: failed to initialize", error));
-    window.addEventListener("resize", () => {
-      const canvas = document.getElementById("xos-canvas");
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    });
     window.addEventListener("contextmenu", (event) => event.preventDefault());
   </script>
 </body>
@@ -480,19 +475,27 @@ pub fn compile_wasm(clean: bool) -> bool {
     }
 
     println!("🕸️  Building wasm output...");
-    eprintln!("    Running wasm-pack with the same app-runtime build path used by `xos app --wasm`.");
+    eprintln!(
+        "    Running wasm-pack with the same app-runtime build path used by `xos app --wasm`."
+    );
 
     let output_dir = wasm_target_dir.join(WASM_MAIN_OUTPUT_DIR_NAME);
     let pkg_dir = output_dir.join("pkg");
 
     if output_dir.exists() {
         if let Err(e) = fs::remove_dir_all(&output_dir) {
-            eprintln!("❌ failed to clear output directory {}: {e}", output_dir.display());
+            eprintln!(
+                "❌ failed to clear output directory {}: {e}",
+                output_dir.display()
+            );
             return false;
         }
     }
     if let Err(e) = fs::create_dir_all(&output_dir) {
-        eprintln!("❌ failed to create output directory {}: {e}", output_dir.display());
+        eprintln!(
+            "❌ failed to create output directory {}: {e}",
+            output_dir.display()
+        );
         return false;
     }
 

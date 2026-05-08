@@ -1,6 +1,11 @@
 use crate::python_api::dtypes::DType;
-use crate::python_api::tensors::{create_tensor_from_data, tensor_flat_data_list, tensor_shape_tuple};
-use rustpython_vm::{PyResult, VirtualMachine, builtins::PyDict, builtins::PyList, builtins::PyTuple, function::FuncArgs};
+use crate::python_api::tensors::{
+    create_tensor_from_data, tensor_flat_data_list, tensor_shape_tuple,
+};
+use rustpython_vm::{
+    builtins::PyDict, builtins::PyList, builtins::PyTuple, function::FuncArgs, PyResult,
+    VirtualMachine,
+};
 
 use super::{wrap_tensor_dict, Conv2d, Module};
 
@@ -48,8 +53,12 @@ impl Conv2d for Conv2dLayer {
                             for ic in 0..c {
                                 let src_idx = (iy * w + ix) * c + ic;
                                 let v = src[src_idx];
-                                let kidx = (((oc * c + ic) * self.kernel_h + ky) * self.kernel_w + kx) as u32;
-                                let wv = ((kidx.wrapping_mul(1103515245).wrapping_add(12345) % 97) as f32 - 48.0) / 128.0;
+                                let kidx = (((oc * c + ic) * self.kernel_h + ky) * self.kernel_w
+                                    + kx) as u32;
+                                let wv = ((kidx.wrapping_mul(1103515245).wrapping_add(12345) % 97)
+                                    as f32
+                                    - 48.0)
+                                    / 128.0;
                                 acc += v * wv;
                             }
                         }
@@ -165,9 +174,7 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let shape = tensor_shape_tuple(input_obj, vm)?;
     if shape.len() != 3 {
-        return Err(vm.new_value_error(
-            "Conv2d.forward expects input shape (H, W, C)".to_string(),
-        ));
+        return Err(vm.new_value_error("Conv2d.forward expects input shape (H, W, C)".to_string()));
     }
     let h = shape[0];
     let w = shape[1];
@@ -195,7 +202,11 @@ pub fn conv2d_forward(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let out = layer.forward_conv2d(&src, h, w, c);
 
-    let py_tensor = create_tensor_from_data(out, vec![out_h, out_w, layer.out_channels()], DType::Float32);
+    let py_tensor = create_tensor_from_data(
+        out,
+        vec![out_h, out_w, layer.out_channels()],
+        DType::Float32,
+    );
     wrap_tensor_dict(py_tensor.to_py_dict(vm, DType::Float32)?, vm)
 }
 
@@ -218,8 +229,16 @@ pub fn conv2d_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     if let Some(v) = args.kwargs.get("stride") {
         obj.set_item("stride", v.clone(), vm)?;
     }
-    obj.set_item("forward", vm.new_function("forward", conv2d_forward).into(), vm)?;
-    obj.set_item("__call__", vm.new_function("__call__", conv2d_call).into(), vm)?;
+    obj.set_item(
+        "forward",
+        vm.new_function("forward", conv2d_forward).into(),
+        vm,
+    )?;
+    obj.set_item(
+        "__call__",
+        vm.new_function("__call__", conv2d_call).into(),
+        vm,
+    )?;
     Ok(obj.into())
 }
 

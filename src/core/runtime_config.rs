@@ -33,10 +33,7 @@ pub fn load_or_init_runtime_config() -> Result<RuntimeConfig, String> {
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     match serde_json::from_str::<RuntimeConfig>(&raw) {
         Ok(cfg) => Ok(cfg),
-        Err(e) => Err(format!(
-            "invalid runtime config at {}: {e}",
-            path.display()
-        )),
+        Err(e) => Err(format!("invalid runtime config at {}: {e}", path.display())),
     }
 }
 

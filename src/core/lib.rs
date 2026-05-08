@@ -4,20 +4,20 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, thread};
-use tiny_http::{Server, Response};
+use tiny_http::{Response, Server};
 use webbrowser;
 
+pub mod ai;
+pub mod apps;
+pub mod engine;
+pub mod manager;
+pub mod mesh;
 pub mod random;
+pub mod tensor;
 pub mod time;
 pub mod tuneable;
-pub mod ai;
-pub mod engine;
-pub mod video;
-pub mod apps;
-pub mod mesh;
-pub mod manager;
 pub mod ui;
-pub mod tensor;
+pub mod video;
 
 #[path = "../py/mod.rs"]
 pub mod python_api;
@@ -46,15 +46,14 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     {
         return true;
     }
-    if path
-        .join("src")
-        .join("ios")
-        .join("build-ios.sh")
-        .exists()
-    {
+    if path.join("src").join("ios").join("build-ios.sh").exists() {
         return true;
     }
-    path.join("src").join("core").join("apps").join("ball.rs").exists()
+    path.join("src")
+        .join("core")
+        .join("apps")
+        .join("ball.rs")
+        .exists()
 }
 
 /// If `exe` is `.../target/{release|debug}/xos(.exe)`, or
@@ -121,8 +120,7 @@ pub fn find_xos_project_root() -> Result<PathBuf, String> {
         }
     }
 
-    let mut current =
-        std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
+    let mut current = std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
     loop {
         if is_xos_project_root(&current) {
             return Ok(current);
@@ -147,34 +145,34 @@ pub mod py_engine {
     // Python application wrapper - TODO: Reimplement with proper rustpython API
     // This is a placeholder for now since the API migration is complex
     use crate::engine::{Application, EngineState};
-    
+
     pub struct PyApplicationWrapper {
         // Placeholder - will be reimplemented
     }
-    
+
     impl PyApplicationWrapper {
         pub fn new_from_source(_source: &str, _app_class_name: String) -> Result<Self, String> {
             Err("Python application wrapper not yet implemented with rustpython".to_string())
         }
     }
-    
+
     impl Application for PyApplicationWrapper {
         fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
             Err("Not implemented".to_string())
         }
-        
+
         fn tick(&mut self, _state: &mut EngineState) {
             // No-op
         }
-        
+
         fn on_mouse_down(&mut self, _state: &mut EngineState) {
             // No-op
         }
-        
+
         fn on_mouse_up(&mut self, _state: &mut EngineState) {
             // No-op
         }
-        
+
         fn on_mouse_move(&mut self, _state: &mut EngineState) {
             // No-op
         }
@@ -261,20 +259,17 @@ fn build_wasm(app_name: &str) {
     command
         .current_dir(&project_root)
         .env("GAME_SELECTION", app_name)
-        .args([
-            "build",
-            "--target",
-            "web",
-            "--out-dir",
-            &out_dir_arg,
-        ]);
+        .args(["build", "--target", "web", "--out-dir", &out_dir_arg]);
 
     let status = command.status().expect("Failed to run wasm-pack");
     if !status.success() {
         panic!("WASM build failed");
     }
 
-    println!("✅ WASM built to {} with app: {app_name}", out_dir.display());
+    println!(
+        "✅ WASM built to {} with app: {app_name}",
+        out_dir.display()
+    );
 }
 
 fn xos_project_root_or_exit() -> PathBuf {
@@ -358,8 +353,9 @@ fn start_web_server(static_dir: PathBuf) {
         match fs::read(&path) {
             Ok(data) => {
                 let content_type = mime_type(&path);
-                let response = Response::from_data(data)
-                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap());
+                let response = Response::from_data(data).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type).unwrap(),
+                );
                 let _ = request.respond(response);
             }
             Err(e) => {
@@ -382,7 +378,9 @@ fn launch_expo() {
             .join("react-native-embedder"),
     );
 
-    let status = cmd.status().expect("Failed to launch Expo. Is it installed?");
+    let status = cmd
+        .status()
+        .expect("Failed to launch Expo. Is it installed?");
     if !status.success() {
         panic!("Expo failed to launch.");
     }
@@ -418,7 +416,6 @@ pub fn run_game(game: &str, wasm: bool, react_native: bool) {
     }
 }
 
-
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -432,7 +429,7 @@ pub fn version() -> &'static str {
 pub fn print(message: &str) {
     // Log to coder terminal first (if enabled)
     crate::apps::coder::logging::log_to_coder(message);
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(message));
@@ -442,7 +439,7 @@ pub fn print(message: &str) {
     {
         crate::engine::ios_ffi::log_to_ios(message);
     }
-    
+
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     {
         std::println!("{}", message);
@@ -463,7 +460,7 @@ pub fn launch_ios_app(app_name: &str) {
     #[cfg(not(target_os = "ios"))]
     {
         use std::process::{Command, Stdio};
-        
+
         let project_root = match find_xos_project_root() {
             Ok(p) => p,
             Err(e) => {
@@ -471,17 +468,23 @@ pub fn launch_ios_app(app_name: &str) {
                 std::process::exit(1);
             }
         };
-        
-        let launch_script = project_root.join("src").join("ios").join("launch-device.sh");
-        
+
+        let launch_script = project_root
+            .join("src")
+            .join("ios")
+            .join("launch-device.sh");
+
         if !launch_script.exists() {
-            eprintln!("❌ launch-device.sh not found at: {}", launch_script.display());
+            eprintln!(
+                "❌ launch-device.sh not found at: {}",
+                launch_script.display()
+            );
             eprintln!("   Expected location: src/ios/launch-device.sh");
             std::process::exit(1);
         }
-        
+
         println!("📱 Deploying app '{}' to iOS device...", app_name);
-        
+
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
         cmd.current_dir(project_root.join("src").join("ios"));
@@ -489,7 +492,7 @@ pub fn launch_ios_app(app_name: &str) {
         cmd.env("XOS_APP_NAME", app_name);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
-        
+
         let status = cmd.status().expect("Failed to run launch-device.sh");
         if !status.success() {
             eprintln!("❌ iOS deployment failed");
@@ -497,7 +500,6 @@ pub fn launch_ios_app(app_name: &str) {
         }
     }
 }
-
 
 use clap::Parser;
 
@@ -511,8 +513,6 @@ struct XosAppArgs {
     #[arg(long = "react-native")]
     react_native: bool,
 }
-
-
 
 pub fn run<T: engine::Application + 'static>(app: T) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -547,4 +547,3 @@ pub fn run<T: engine::Application + 'static>(app: T) {
         }
     }
 }
-

@@ -2,15 +2,16 @@ use burn::{
     config::Config,
     module::{Module, Param},
     nn::{
-        self, PaddingConfig1d,
+        self,
         attention::{MhaInput, MultiHeadAttention, MultiHeadAttentionConfig},
         conv::{Conv1d, Conv1dConfig},
+        PaddingConfig1d,
     },
-    tensor::{Bool, Distribution, FloatDType, Int, Tensor, backend::Backend, module::embedding},
+    tensor::{backend::Backend, module::embedding, Bool, Distribution, FloatDType, Int, Tensor},
 };
 
 use super::custom_kernels::{
-    CustomKernelsBackend, fused_single_query_attn, layer_norm_mixed, softmax_mixed,
+    fused_single_query_attn, layer_norm_mixed, softmax_mixed, CustomKernelsBackend,
 };
 
 #[derive(Config, Debug)]

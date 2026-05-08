@@ -74,11 +74,7 @@ pub struct UiText {
 }
 
 #[inline]
-fn glyph_bool_with_spans(
-    char_index: usize,
-    base: bool,
-    spans: &[(usize, usize, bool)],
-) -> bool {
+fn glyph_bool_with_spans(char_index: usize, base: bool, spans: &[(usize, usize, bool)]) -> bool {
     spans
         .iter()
         .rev()
@@ -89,11 +85,8 @@ fn glyph_bool_with_spans(
 
 /// Caret x and baseline y in the same layout space as [`TextRasterizer::characters`] (after `tick`).
 fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32) {
-    let line_info_with_idx = r
-        .lines
-        .iter()
-        .enumerate()
-        .find(|(_, line)| {
+    let line_info_with_idx =
+        r.lines.iter().enumerate().find(|(_, line)| {
             line.start_index <= cursor_position && cursor_position <= line.end_index
         });
 
@@ -116,7 +109,8 @@ fn cursor_xy_in_layout(r: &TextRasterizer, cursor_position: usize) -> (f32, f32)
                 if character.char_index == cursor_position {
                     found_char = Some(character);
                     break;
-                } else if character.char_index > cursor_position && character.line_index == line_idx {
+                } else if character.char_index > cursor_position && character.line_index == line_idx
+                {
                     char_after = Some(character);
                     break;
                 }
@@ -265,7 +259,12 @@ pub fn collect_ui_text_render_state(
 }
 
 impl UiText {
-    pub fn render(&self, buffer: &mut [u8], frame_width: usize, frame_height: usize) -> Result<UiTextRenderState, String> {
+    pub fn render(
+        &self,
+        buffer: &mut [u8],
+        frame_width: usize,
+        frame_height: usize,
+    ) -> Result<UiTextRenderState, String> {
         let mut state = UiTextRenderState::default();
         if frame_width == 0 || frame_height == 0 {
             return Ok(state);
@@ -289,10 +288,14 @@ impl UiText {
         rasterizer.set_text(self.text.clone());
         rasterizer.set_spacing(self.spacing.0.max(0.0), self.spacing.1.max(0.0));
         rasterizer.glyph_scale_spans.clone_from(&self.scale_spans);
-        rasterizer.tick_aligned(box_width, box_height, TextLayoutAlign {
-            x: self.alignment.0.clamp(0.0, 1.0),
-            y: self.alignment.1.clamp(0.0, 1.0),
-        });
+        rasterizer.tick_aligned(
+            box_width,
+            box_height,
+            TextLayoutAlign {
+                x: self.alignment.0.clamp(0.0, 1.0),
+                y: self.alignment.1.clamp(0.0, 1.0),
+            },
+        );
 
         let baseline_color = (100, 100, 100, 255);
         for (line_idx, line) in rasterizer.lines.iter().enumerate() {
@@ -323,8 +326,13 @@ impl UiText {
             let mut all_enabled = true;
             let mut min_x = f32::MAX;
             let mut max_x = f32::MIN;
-            for ch in rasterizer.characters.iter().filter(|c| c.line_index == line_idx) {
-                let enabled = glyph_bool_with_spans(ch.char_index, self.baselines, &self.baseline_spans);
+            for ch in rasterizer
+                .characters
+                .iter()
+                .filter(|c| c.line_index == line_idx)
+            {
+                let enabled =
+                    glyph_bool_with_spans(ch.char_index, self.baselines, &self.baseline_spans);
                 if enabled {
                     has_enabled = true;
                     min_x = min_x.min(ch.x);
@@ -344,14 +352,8 @@ impl UiText {
                     (x1 + min_x.round() as i32, x1 + max_x.round() as i32)
                 };
                 state.baselines.push([
-                    [
-                        (bx1 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
-                    [
-                        (bx2 as f32 / frame_width as f32).clamp(0.0, 1.0),
-                        y_norm,
-                    ],
+                    [(bx1 as f32 / frame_width as f32).clamp(0.0, 1.0), y_norm],
+                    [(bx2 as f32 / frame_width as f32).clamp(0.0, 1.0), y_norm],
                 ]);
                 if by >= y1 && by < y2 {
                     fill_rect_buffer(
@@ -368,7 +370,9 @@ impl UiText {
             }
         }
 
-        if let Some((start_idx, end_idx)) = normalized_selection(self.selection_start, self.selection_end) {
+        if let Some((start_idx, end_idx)) =
+            normalized_selection(self.selection_start, self.selection_end)
+        {
             if end_idx > start_idx {
                 let mut line_selections: HashMap<usize, (f32, f32, f32)> = HashMap::new();
                 for character in &rasterizer.characters {
@@ -452,7 +456,8 @@ impl UiText {
         }
 
         for character in &rasterizer.characters {
-            let in_viewport = character_may_appear_in_viewport(character, box_width, sy, box_height);
+            let in_viewport =
+                character_may_appear_in_viewport(character, box_width, sy, box_height);
 
             let px = x1 + character.x.round() as i32;
             let py = y1 + (character.y - sy).round() as i32;
@@ -501,22 +506,63 @@ impl UiText {
                     let inv_alpha = 1.0 - alpha;
 
                     let base_rgb = (self.color.0, self.color.1, self.color.2);
-                    let (cr, cg, cb) =
-                        ui_markup::glyph_rgb_with_spans(character.char_index, base_rgb, &self.color_spans);
+                    let (cr, cg, cb) = ui_markup::glyph_rgb_with_spans(
+                        character.char_index,
+                        base_rgb,
+                        &self.color_spans,
+                    );
 
                     buffer[idx] = (cr as f32 * alpha + buffer[idx] as f32 * inv_alpha) as u8;
-                    buffer[idx + 1] = (cg as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
-                    buffer[idx + 2] = (cb as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
+                    buffer[idx + 1] =
+                        (cg as f32 * alpha + buffer[idx + 1] as f32 * inv_alpha) as u8;
+                    buffer[idx + 2] =
+                        (cb as f32 * alpha + buffer[idx + 2] as f32 * inv_alpha) as u8;
                     buffer[idx + 3] = 0xff;
                 }
             }
 
             if hitboxes_enabled && in_viewport {
                 let hitbox_color = (255, 0, 0, 255);
-                fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx2, gy1 + 1, hitbox_color);
-                fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy2 - 1, gx2, gy2, hitbox_color);
-                fill_rect_buffer(buffer, frame_width, frame_height, gx1, gy1, gx1 + 1, gy2, hitbox_color);
-                fill_rect_buffer(buffer, frame_width, frame_height, gx2 - 1, gy1, gx2, gy2, hitbox_color);
+                fill_rect_buffer(
+                    buffer,
+                    frame_width,
+                    frame_height,
+                    gx1,
+                    gy1,
+                    gx2,
+                    gy1 + 1,
+                    hitbox_color,
+                );
+                fill_rect_buffer(
+                    buffer,
+                    frame_width,
+                    frame_height,
+                    gx1,
+                    gy2 - 1,
+                    gx2,
+                    gy2,
+                    hitbox_color,
+                );
+                fill_rect_buffer(
+                    buffer,
+                    frame_width,
+                    frame_height,
+                    gx1,
+                    gy1,
+                    gx1 + 1,
+                    gy2,
+                    hitbox_color,
+                );
+                fill_rect_buffer(
+                    buffer,
+                    frame_width,
+                    frame_height,
+                    gx2 - 1,
+                    gy1,
+                    gx2,
+                    gy2,
+                    hitbox_color,
+                );
             }
         }
 
@@ -577,9 +623,16 @@ impl UiText {
 }
 
 #[inline]
-fn normalized_selection(selection_start: Option<usize>, selection_end: Option<usize>) -> Option<(usize, usize)> {
+fn normalized_selection(
+    selection_start: Option<usize>,
+    selection_end: Option<usize>,
+) -> Option<(usize, usize)> {
     let (start, end) = (selection_start?, selection_end?);
-    Some(if start <= end { (start, end) } else { (end, start) })
+    Some(if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    })
 }
 
 pub fn save_undo_state(
@@ -618,7 +671,11 @@ pub fn delete_selection(
     true
 }
 
-pub fn copy_selection(text: &str, selection_start: Option<usize>, selection_end: Option<usize>) -> Option<String> {
+pub fn copy_selection(
+    text: &str,
+    selection_start: Option<usize>,
+    selection_end: Option<usize>,
+) -> Option<String> {
     let (start_idx, end_idx) = normalized_selection(selection_start, selection_end)?;
     let text_chars: Vec<char> = text.chars().collect();
     let end_idx = end_idx.min(text_chars.len());
@@ -659,7 +716,8 @@ pub fn paste_at_cursor(
     selection_end: &mut Option<usize>,
     clipboard_fallback: &str,
 ) -> Option<String> {
-    let clipboard_text = crate::clipboard::get_contents().unwrap_or_else(|| clipboard_fallback.to_string());
+    let clipboard_text =
+        crate::clipboard::get_contents().unwrap_or_else(|| clipboard_fallback.to_string());
     if clipboard_text.is_empty() {
         return None;
     }

@@ -51,7 +51,9 @@ fn looks_like_zip(bytes: &[u8]) -> bool {
 fn looks_like_html(bytes: &[u8]) -> bool {
     let head = bytes.get(..256).unwrap_or(bytes);
     head.windows(5).any(|w| w.eq_ignore_ascii_case(b"<html"))
-        || head.windows(9).any(|w| w.eq_ignore_ascii_case(b"<!doctype"))
+        || head
+            .windows(9)
+            .any(|w| w.eq_ignore_ascii_case(b"<!doctype"))
 }
 
 /// Hidden form field on the first HTML hop for large files.
@@ -71,7 +73,9 @@ fn parse_drive_confirm_token(html: &str) -> Option<String> {
 /// Second (or third) HTML hop: “Google Drive can’t scan this file…” — real file is behind this `href`.
 fn parse_uc_download_href(html: &str) -> Option<String> {
     let needle = r#"id="uc-download-link""#;
-    let i = html.find(needle).or_else(|| html.find("id='uc-download-link'"))?;
+    let i = html
+        .find(needle)
+        .or_else(|| html.find("id='uc-download-link'"))?;
     let window = &html[i..(i + 3000).min(html.len())];
     let href_start = window.find(r#"href=""#).or_else(|| window.find("href='"))?;
     let quote = if window[href_start..].starts_with("href=\"") {
@@ -119,9 +123,7 @@ fn google_drive_download_bytes(file_id: &str) -> Result<Vec<u8>, String> {
         }
         // Large-file first page: hidden confirm token.
         if let Some(confirm) = parse_drive_confirm_token(&html) {
-            url = format!(
-                "https://drive.google.com/uc?export=download&id={id}&confirm={confirm}"
-            );
+            url = format!("https://drive.google.com/uc?export=download&id={id}&confirm={confirm}");
             continue;
         }
 
@@ -139,7 +141,11 @@ fn google_drive_download_bytes(file_id: &str) -> Result<Vec<u8>, String> {
 }
 
 fn resolve_zip_bytes(entry: &Ct2ZipSource) -> Result<Vec<u8>, String> {
-    if let Some(id) = entry.google_drive_file_id.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    if let Some(id) = entry
+        .google_drive_file_id
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
     {
         return google_drive_download_bytes(id);
     }
@@ -176,10 +182,10 @@ fn resolve_zip_bytes(entry: &Ct2ZipSource) -> Result<Vec<u8>, String> {
 }
 
 fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(out_dir).map_err(|e| format!("create_dir_all {}: {e}", out_dir.display()))?;
+    fs::create_dir_all(out_dir)
+        .map_err(|e| format!("create_dir_all {}: {e}", out_dir.display()))?;
     let cursor = Cursor::new(bytes);
-    let mut archive =
-        ZipArchive::new(cursor).map_err(|e| format!("open zip archive: {e}"))?;
+    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("open zip archive: {e}"))?;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -190,7 +196,8 @@ fn extract_zip_to_dir(bytes: &[u8], out_dir: &Path) -> Result<(), String> {
         };
         let outpath = out_dir.join(&rel);
         if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath).map_err(|e| format!("mkdir {}: {e}", outpath.display()))?;
+            fs::create_dir_all(&outpath)
+                .map_err(|e| format!("mkdir {}: {e}", outpath.display()))?;
         } else {
             if let Some(parent) = outpath.parent() {
                 fs::create_dir_all(parent)
@@ -286,9 +293,8 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
         if s.is_dir() {
             copy_dir_all(&s, &t)?;
         } else {
-            fs::copy(&s, &t).map_err(|e| {
-                format!("copy {} -> {}: {e}", s.display(), t.display())
-            })?;
+            fs::copy(&s, &t)
+                .map_err(|e| format!("copy {} -> {}: {e}", s.display(), t.display()))?;
         }
     }
     Ok(())
@@ -311,9 +317,8 @@ fn place_extracted_dir(staging: &Path, out_dir: &Path) -> Result<(), String> {
         })?;
     }
     if out_dir.exists() {
-        fs::remove_dir_all(out_dir).map_err(|e| {
-            format!("remove existing model dir {}: {e}", out_dir.display())
-        })?;
+        fs::remove_dir_all(out_dir)
+            .map_err(|e| format!("remove existing model dir {}: {e}", out_dir.display()))?;
     }
     match fs::rename(staging, out_dir) {
         Ok(()) => Ok(()),
@@ -342,8 +347,8 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
         return Ok(());
     }
 
-    let manifest: Manifest =
-        serde_json::from_str(MANIFEST).map_err(|e| format!("whisper_ct2_download_links.json: {e}"))?;
+    let manifest: Manifest = serde_json::from_str(MANIFEST)
+        .map_err(|e| format!("whisper_ct2_download_links.json: {e}"))?;
     let entry = manifest.get(cache_folder_name).ok_or_else(|| {
         format!(
             "no entry '{cache_folder_name}' in src/core/ai/transcription/ct2/whisper_ct2_download_links.json — \
@@ -388,9 +393,7 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
     fs::create_dir_all(&staging)
         .map_err(|e| format!("create temp staging {}: {e}", staging.display()))?;
 
-    eprintln!(
-        "[xos-whisper-ct2] Downloading pre-converted weights for {cache_folder_name}…"
-    );
+    eprintln!("[xos-whisper-ct2] Downloading pre-converted weights for {cache_folder_name}…");
     let zip_bytes = resolve_zip_bytes(entry)?;
 
     eprintln!(

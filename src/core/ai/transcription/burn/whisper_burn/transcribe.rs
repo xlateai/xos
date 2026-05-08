@@ -10,9 +10,9 @@ use burn::{
     backend::ndarray::NdArray,
     module::Module,
     tensor::{
-        ElementConversion, Int, Tensor,
         activation::{log_softmax, softmax},
         backend::Backend,
+        ElementConversion, Int, Tensor,
     },
 };
 use mt19937::MT19937;
@@ -57,9 +57,7 @@ fn debug_f32_latent_summary(label: &str, xs: &[f32]) -> String {
         .sum::<f64>()
         / n as f64;
     let std = var.sqrt() as f32;
-    format!(
-        "{label}:n={n} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
-    )
+    format!("{label}:n={n} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}")
 }
 
 /// Flatten any-rank float tensor to `Vec<f32>` for host-side debug (syncs GPU).
@@ -111,9 +109,7 @@ fn debug_tensor_value_stats(what: &str, data: &[f32]) -> String {
             }
         }
         let std = (acc / count_fin as f64).sqrt() as f32;
-        format!(
-            "n={count_fin} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}"
-        )
+        format!("n={count_fin} mean={mean:.4} std={std:.4} min={min_v:.4} max={max_v:.4}")
     };
     format!(
         "{what} | elem_count={} || nonfinite: nan={} +inf={} -inf={} || finite_stats: {}",
@@ -736,7 +732,12 @@ fn transcribe_inner<B: CustomKernelsBackend, F: FnMut(usize, usize) -> bool>(
             // Same idea as `whisper.rs` `transcribe_waveform_with_intermediates`: reductions on the
             // live tensor force a coherent device read; compare to flattened-buffer stats below.
             let enc_sum = encoder_output.clone().sum().into_scalar().elem::<f32>();
-            let enc_abs_max = encoder_output.clone().abs().max().into_scalar().elem::<f32>();
+            let enc_abs_max = encoder_output
+                .clone()
+                .abs()
+                .max()
+                .into_scalar()
+                .elem::<f32>();
             let enc_v = debug_pull_tensor_flat_f32(encoder_output.clone());
             eprintln!(
                 "[whisper encode] seek={} encoder_output (after full AudioEncoder, including ln_post) dim={enc_dims:?} elem_count={enc_elems} (= batch×enc_time×d_model; NOT mel reshaped — mel was [1,80,3000])\n             device_scalar_preflight: sum={enc_sum:.6} abs_max={enc_abs_max:.6} (large mismatch vs finite_stats min/max → suspect WGPU host readback; both huge → real activations)\n             {}",
@@ -3163,10 +3164,7 @@ fn decode_segment_candidate<B: CustomKernelsBackend>(
             "[whisper decode] text skip_special=true : {:?}",
             skip.trim()
         );
-        eprintln!(
-            "[whisper decode] text skip_special=false: {:?}",
-            keep
-        );
+        eprintln!("[whisper decode] text skip_special=false: {:?}", keep);
     }
 
     let mut sum_logprobs_subset = 0.0;

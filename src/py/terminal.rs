@@ -1,7 +1,7 @@
 use rustpython_vm::{
-    PyRef, PyResult, VirtualMachine,
     builtins::{PyDict, PyList, PyModule, PyTuple},
     function::FuncArgs,
+    PyRef, PyResult, VirtualMachine,
 };
 use std::io::Write;
 
@@ -19,7 +19,7 @@ fn platform_size() -> Option<(i32, i32)> {
     use winapi::um::handleapi::INVALID_HANDLE_VALUE;
     use winapi::um::processenv::GetStdHandle;
     use winapi::um::winbase::STD_OUTPUT_HANDLE;
-    use winapi::um::wincon::{CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo};
+    use winapi::um::wincon::{GetConsoleScreenBufferInfo, CONSOLE_SCREEN_BUFFER_INFO};
 
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -160,11 +160,16 @@ fn get_frame(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     tensor_ctor.call((tensor_data_obj,), vm)
 }
 
-fn shape_from_obj(shape_obj: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult<(usize, usize, usize)> {
+fn shape_from_obj(
+    shape_obj: rustpython_vm::PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<(usize, usize, usize)> {
     if let Some(t) = shape_obj.downcast_ref::<PyTuple>() {
         let items = t.as_slice();
         if items.len() != 3 {
-            return Err(vm.new_value_error("terminal frame tensor shape must be (width, height, channels)".to_string()));
+            return Err(vm.new_value_error(
+                "terminal frame tensor shape must be (width, height, channels)".to_string(),
+            ));
         }
         let w: usize = items[0].clone().try_into_value(vm)?;
         let h: usize = items[1].clone().try_into_value(vm)?;
@@ -174,14 +179,17 @@ fn shape_from_obj(shape_obj: rustpython_vm::PyObjectRef, vm: &VirtualMachine) ->
     if let Some(l) = shape_obj.downcast_ref::<PyList>() {
         let items = l.borrow_vec();
         if items.len() != 3 {
-            return Err(vm.new_value_error("terminal frame tensor shape must be (width, height, channels)".to_string()));
+            return Err(vm.new_value_error(
+                "terminal frame tensor shape must be (width, height, channels)".to_string(),
+            ));
         }
         let w: usize = items[0].clone().try_into_value(vm)?;
         let h: usize = items[1].clone().try_into_value(vm)?;
         let c: usize = items[2].clone().try_into_value(vm)?;
         return Ok((w, h, c));
     }
-    Err(vm.new_type_error("terminal frame tensor shape must be a tuple/list of length 3".to_string()))
+    Err(vm
+        .new_type_error("terminal frame tensor shape must be a tuple/list of length 3".to_string()))
 }
 
 /// Render a terminal frame tensor.
@@ -199,16 +207,22 @@ fn set_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         _ => frame_obj,
     };
     let Some(frame_data) = frame_data_obj.downcast_ref::<PyDict>() else {
-        return Err(vm.new_type_error("set_frame(frame): frame must be xos.Tensor-backed".to_string()));
+        return Err(
+            vm.new_type_error("set_frame(frame): frame must be xos.Tensor-backed".to_string())
+        );
     };
 
     let shape_obj = frame_data.get_item("shape", vm)?;
     let (width, height, channels) = shape_from_obj(shape_obj, vm)?;
     if channels < 2 {
-        return Err(vm.new_value_error("terminal frame tensor requires at least 2 channels".to_string()));
+        return Err(
+            vm.new_value_error("terminal frame tensor requires at least 2 channels".to_string())
+        );
     }
     if width == 0 || height == 0 {
-        return Err(vm.new_value_error("terminal frame tensor width/height must be > 0".to_string()));
+        return Err(
+            vm.new_value_error("terminal frame tensor width/height must be > 0".to_string())
+        );
     }
     let (cur_w, cur_h) = terminal_size();
     let expected_w = cur_w.max(1) as usize;

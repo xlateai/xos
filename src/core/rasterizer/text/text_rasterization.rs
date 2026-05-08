@@ -62,7 +62,13 @@ pub struct LineInfo {
 
 /// Loose document-space vertical band around a wrapped line (matches [`TextApp::paint_viewport`] glyph culling).
 #[inline]
-pub fn line_doc_vertical_band(baseline_y: f32, ascent: f32, descent: f32, line_gap: f32, font_size: f32) -> (f32, f32) {
+pub fn line_doc_vertical_band(
+    baseline_y: f32,
+    ascent: f32,
+    descent: f32,
+    line_gap: f32,
+    font_size: f32,
+) -> (f32, f32) {
     let line_pad_y = line_gap * 0.5 + font_size * 0.15;
     let top = baseline_y - ascent - line_pad_y;
     let bottom = baseline_y + descent.abs() + line_pad_y;
@@ -350,8 +356,7 @@ impl TextRasterizer {
         // matches X (where `advance * sx` scales the entire advance), not just the metric `line_gap` sliver.
         let line_gap_unscaled = |max_scale_on_line: f32| -> f32 {
             let px = (fs * max_scale_on_line).max(0.5);
-            font
-                .horizontal_line_metrics(px)
+            font.horizontal_line_metrics(px)
                 .map(|m| m.line_gap)
                 .unwrap_or(body_line_gap)
         };
@@ -582,7 +587,10 @@ impl TextRasterizer {
 
     #[inline]
     pub fn line_leading_caret_x(&self, line_idx: usize) -> f32 {
-        self.line_caret_start_x.get(line_idx).copied().unwrap_or(0.0)
+        self.line_caret_start_x
+            .get(line_idx)
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// When the engine default font family changes (e.g. F3 menu), replace [`Self::font`] and line metrics.
@@ -607,4 +615,3 @@ impl TextRasterizer {
         self.line_gap = metrics.line_gap;
     }
 }
-
