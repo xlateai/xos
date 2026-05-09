@@ -202,7 +202,12 @@ mod wasm {
     }
 
     pub fn read_to_string(path: &str) -> Result<String, String> {
-        get_item(KIND_FILE, path).ok_or_else(|| format!("file not found: {path}"))
+        if let Some(value) = get_item(KIND_FILE, path) {
+            return Ok(value);
+        }
+        let norm = normalize(path);
+        let url = format!("/{norm}");
+        fetch_text_blocking(&url)
     }
 
     pub fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -215,22 +220,22 @@ mod wasm {
     }
 
     pub fn fetch_text_blocking(url: &str) -> Result<String, String> {
-        let xhr = web_sys::XmlHttpRequest::new()
-            .map_err(|e| format!("data.download: XMLHttpRequest: {e:?}"))?;
+        let xhr =
+            web_sys::XmlHttpRequest::new().map_err(|e| format!("xos.fs: XMLHttpRequest: {e:?}"))?;
         xhr.open_with_async("GET", url, false)
-            .map_err(|e| format!("data.download: open {url}: {e:?}"))?;
+            .map_err(|e| format!("xos.fs: open {url}: {e:?}"))?;
         xhr.send()
-            .map_err(|e| format!("data.download: request failed for {url}: {e:?}"))?;
+            .map_err(|e| format!("xos.fs: request failed for {url}: {e:?}"))?;
 
         let status = xhr
             .status()
-            .map_err(|e| format!("data.download: status for {url}: {e:?}"))?;
+            .map_err(|e| format!("xos.fs: status for {url}: {e:?}"))?;
         if !(200..300).contains(&status) {
-            return Err(format!("data.download: HTTP {status} for {url}"));
+            return Err(format!("xos.fs: HTTP {status} for {url}"));
         }
         xhr.response_text()
-            .map_err(|e| format!("data.download: response text for {url}: {e:?}"))?
-            .ok_or_else(|| format!("data.download: empty response for {url}"))
+            .map_err(|e| format!("xos.fs: response text for {url}: {e:?}"))?
+            .ok_or_else(|| format!("xos.fs: empty response for {url}"))
     }
 }
 

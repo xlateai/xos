@@ -309,10 +309,30 @@ fn ensure_compiled_wasm_output(static_dir: &Path) {
 }
 
 fn launch_browser(app_name: &str) {
-    let url = format!("http://localhost:8080/?app={app_name}");
+    launch_browser_query(&format!("app={app_name}"));
+}
+
+fn launch_browser_query(query: &str) {
+    let url = format!("http://localhost:8080/?{query}");
     thread::spawn(move || {
         let _ = webbrowser::open(&url);
     });
+}
+
+fn percent_encode_query_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            b => {
+                out.push('%');
+                out.push_str(&format!("{b:02X}"));
+            }
+        }
+    }
+    out
 }
 
 fn mime_type(path: &Path) -> &'static str {
@@ -415,6 +435,34 @@ pub fn run_game(game: &str, wasm: bool, react_native: bool) {
             start().unwrap();
         }
     }
+}
+
+pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
+    println!(
+        "🕸️  Launching '{}' with xpy wasm mode...",
+        file_path.display()
+    );
+    let project_root = xos_project_root_or_exit();
+    let static_dir = wasm_compile_output_dir(&project_root);
+    ensure_compiled_wasm_output(&static_dir);
+    let source = match std_fs::read_to_string(file_path) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!(
+                "❌ failed to read python source {}: {e}",
+                file_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let query = format!(
+        "app=xpy&filename={}&code={}&xpy_flags={}",
+        percent_encode_query_component(&file_path.to_string_lossy()),
+        percent_encode_query_component(&source),
+        percent_encode_query_component(&flags.join("\n")),
+    );
+    launch_browser_query(&query);
+    start_web_server(static_dir);
 }
 
 pub fn version() -> &'static str {

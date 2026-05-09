@@ -163,6 +163,9 @@ enum Commands {
     Py {
         /// Python file to execute (if not provided, starts interactive console)
         file: Option<PathBuf>,
+        /// Launch the Python file in the current precompiled wasm browser runtime.
+        #[arg(long = "wasm", alias = "web")]
+        wasm: bool,
         /// Script flags after the file (e.g. `--record` → `xos.flags.record`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
@@ -893,11 +896,25 @@ fn main() {
         Some(Commands::Rs { app }) => {
             run_app_command(app);
         }
-        Some(Commands::Py { file, rest }) => {
+        Some(Commands::Py { file, wasm, rest }) => {
             if let Some(file_path) = file {
                 let path_to_run = resolved_python_file.unwrap_or(file_path);
+                let mut rest = rest;
+                let wasm = wasm
+                    || rest
+                        .iter()
+                        .position(|arg| arg == "--wasm" || arg == "--web")
+                        .map(|idx| {
+                            rest.remove(idx);
+                            true
+                        })
+                        .unwrap_or(false);
                 let flags = parse_script_cli_flags(&rest);
-                run_python_app(&path_to_run, &flags);
+                if wasm {
+                    xos::run_python_wasm_file(&path_to_run, &flags);
+                } else {
+                    run_python_app(&path_to_run, &flags);
+                }
             } else {
                 run_python_interactive();
             }
