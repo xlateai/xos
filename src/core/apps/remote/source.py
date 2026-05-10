@@ -13,14 +13,14 @@ class RemoteSourceApp(xos.Application):
         self.mesh = constants.get_mesh()
 
     def tick(self):
-        print(self.t)
+        # print(self.t)
         # xos.device.get_device_frame()
         # BALL_APP.tick()
         # print(BALL_APP.frame)
         # self.mesh.broadcast(id="frame", frame=BALL_APP.frame)
 
         device_frame = xos.system.monitors[0].get_frame()
-        print(device_frame.tensor.shape)
+        # print(device_frame.tensor.shape)
 
         # if self.t % 10 == 0:
         self.mesh.broadcast(id="frame", frame=device_frame)
