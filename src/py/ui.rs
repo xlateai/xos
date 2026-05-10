@@ -1141,11 +1141,29 @@ pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRe
         .globals
         .set_item("_VIEWPORT_HEIGHT", vh_ax, vm)
         .unwrap();
+    let vmax_ax = coordinates.get_attr("VIEWPORT_MAX_DIMENSION", vm).unwrap();
+    let vmin_ax = coordinates.get_attr("VIEWPORT_MIN_DIMENSION", vm).unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_MAX_DIMENSION", vmax_ax, vm)
+        .unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_MIN_DIMENSION", vmin_ax, vm)
+        .unwrap();
 
     let py_text_code = r#"
 
 def _axis_basis(axis, fw, fh):
-    return float(fh) if axis is _VIEWPORT_HEIGHT else float(fw)
+    fw = float(fw)
+    fh = float(fh)
+    if axis is _VIEWPORT_HEIGHT:
+        return fh
+    if axis is _VIEWPORT_MAX_DIMENSION:
+        return fw if fw >= fh else fh
+    if axis is _VIEWPORT_MIN_DIMENSION:
+        return fw if fw <= fh else fh
+    return fw
 
 
 def _validate_coordinate_system(cs):
@@ -1153,11 +1171,17 @@ def _validate_coordinate_system(cs):
         raise TypeError(
             "coordinate_system must be a 4-tuple (axis for x1, y1, x2, y2 coefficient scaling)"
         )
+    _axes = (
+        _VIEWPORT_WIDTH,
+        _VIEWPORT_HEIGHT,
+        _VIEWPORT_MAX_DIMENSION,
+        _VIEWPORT_MIN_DIMENSION,
+    )
     for i, a in enumerate(cs):
-        if a is not _VIEWPORT_WIDTH and a is not _VIEWPORT_HEIGHT:
+        if not any(a is x for x in _axes):
             raise TypeError(
-                "coordinate_system[%d] must be xos.coordinates.VIEWPORT_WIDTH or VIEWPORT_HEIGHT"
-                % (i,)
+                "coordinate_system[%d] must be one of xos.coordinates.VIEWPORT_* axis tokens "
+                "(WIDTH, HEIGHT, MAX_DIMENSION, MIN_DIMENSION)" % (i,)
             )
 
 

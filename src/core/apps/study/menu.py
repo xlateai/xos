@@ -1,7 +1,7 @@
 import xos
 
 MENU_LEFT_EDGE_EXTENSION = 0.3
-MENU_BUTTON_WIDTH = 0.1
+MENU_BUTTON_WIDTH = 0.05
 
 MENU_BUTTON_CLOSED_VERTS = (
     0.0,
@@ -18,10 +18,10 @@ MENU_BUTTON_OPEN_VERTS = (
 )
 
 MENU_BUTTON_COORDINATE_SYSTEM = (
-    xos.coordinates.VIEWPORT_HEIGHT,
-    xos.coordinates.VIEWPORT_HEIGHT,
-    xos.coordinates.VIEWPORT_HEIGHT,
-    xos.coordinates.VIEWPORT_HEIGHT,
+    xos.coordinates.VIEWPORT_MAX_DIMENSION,
+    xos.coordinates.VIEWPORT_MAX_DIMENSION,
+    xos.coordinates.VIEWPORT_MAX_DIMENSION,
+    xos.coordinates.VIEWPORT_MAX_DIMENSION,
 )
 
 
@@ -68,7 +68,7 @@ class Menu:
             self.menu_background,
         )
 
-    def tick(self, app):
+    def update_button_verts(self):
         if self.is_open:
             self.menu_background.x1 = MENU_LEFT_EDGE_EXTENSION
             self.menu_button.verts = MENU_BUTTON_OPEN_VERTS
@@ -77,6 +77,9 @@ class Menu:
             self.menu_button.verts = MENU_BUTTON_CLOSED_VERTS
 
         self.menu_button_background.verts = self.menu_button.verts
+
+    def tick(self, app):
+        self.update_button_verts()
 
     def render(self, app):
         self.buttons.render(app)

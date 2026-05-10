@@ -1,4 +1,4 @@
-//! `xos.coordinates` — axis tokens for per-edge layout (`VIEWPORT_WIDTH` / `VIEWPORT_HEIGHT`).
+//! `xos.coordinates` — axis tokens for per-edge layout (width / height / min/max side).
 
 use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
 
@@ -25,6 +25,30 @@ class _ViewportHeight:
 
 
 VIEWPORT_HEIGHT = _ViewportHeight()
+
+
+class _ViewportMaxDimension:
+    """Coefficient scales with ``max(width, height)`` — largest viewport side."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "VIEWPORT_MAX_DIMENSION"
+
+
+VIEWPORT_MAX_DIMENSION = _ViewportMaxDimension()
+
+
+class _ViewportMinDimension:
+    """Coefficient scales with ``min(width, height)`` — smallest viewport side."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "VIEWPORT_MIN_DIMENSION"
+
+
+VIEWPORT_MIN_DIMENSION = _ViewportMinDimension()
 "#;
 
 /// Build `xos.coordinates` (singleton axis markers). Used by `xos.ui` layout.
@@ -38,7 +62,11 @@ pub fn make_coordinates_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     );
     let vw = scope.globals.get_item("VIEWPORT_WIDTH", vm).unwrap();
     let vh = scope.globals.get_item("VIEWPORT_HEIGHT", vm).unwrap();
+    let vmax = scope.globals.get_item("VIEWPORT_MAX_DIMENSION", vm).unwrap();
+    let vmin = scope.globals.get_item("VIEWPORT_MIN_DIMENSION", vm).unwrap();
     module.set_attr("VIEWPORT_WIDTH", vw, vm).unwrap();
     module.set_attr("VIEWPORT_HEIGHT", vh, vm).unwrap();
+    module.set_attr("VIEWPORT_MAX_DIMENSION", vmax, vm).unwrap();
+    module.set_attr("VIEWPORT_MIN_DIMENSION", vmin, vm).unwrap();
     module
 }
