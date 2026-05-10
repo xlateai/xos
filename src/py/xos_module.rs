@@ -1212,6 +1212,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 
+    crate::python_api::json_api::register_json(&module, vm);
+
     // Add color palette submodule (single source of truth in py/colors.rs)
     let color_module = crate::python_api::colors::make_color_module(vm);
     module.set_attr("color", color_module, vm).unwrap();

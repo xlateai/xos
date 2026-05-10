@@ -65,6 +65,19 @@ pub fn clear_frame_buffer_context() {
     *CURRENT_FRAME_BUFFER.lock().unwrap() = None;
 }
 
+/// Copy active RGBA framebuffer when `width` / `height` match the bound context (used by `xos.json` / mesh).
+pub(crate) fn copy_active_frame_rgba_if_match(width: usize, height: usize) -> Option<Vec<u8>> {
+    let w = *CURRENT_FRAME_WIDTH.lock().ok()?;
+    let h = *CURRENT_FRAME_HEIGHT.lock().ok()?;
+    if w != width || h != height {
+        return None;
+    }
+    let buf_guard = CURRENT_FRAME_BUFFER.lock().ok()?;
+    let ptr = buf_guard.as_ref()?.0;
+    let len = width.checked_mul(height)?.checked_mul(4)?;
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+}
+
 /// xos.rasterizer.circles() - efficiently draw circles directly on the Rust frame buffer
 ///
 /// Usage: xos.rasterizer.circles(frame, positions, radii, color)

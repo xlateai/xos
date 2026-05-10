@@ -10,6 +10,8 @@ pub mod dialoguer;
 pub mod dtypes;
 pub mod engine;
 pub mod geom;
+pub(crate) mod json_codec;
+pub mod json_api;
 pub mod manager;
 pub mod math;
 pub mod mesh;

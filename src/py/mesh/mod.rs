@@ -7,8 +7,9 @@ use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mesh::{MeshMode, MeshSession, Packet};
+use crate::python_api::json_codec::{json_value_to_py, py_to_json_value};
 use crate::python_api::runtime::format_python_exception;
-use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
+use rustpython_vm::builtins::{PyDict, PyModule};
 use rustpython_vm::function::FuncArgs;
 use rustpython_vm::AsObject;
 use rustpython_vm::{PyRef, PyResult, VirtualMachine};
@@ -20,92 +21,12 @@ pub(crate) fn py_to_json(
     vm: &VirtualMachine,
     obj: rustpython_vm::PyObjectRef,
 ) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
-    py_to_json_inner(vm, obj, 0)
-}
-
-fn py_to_json_inner(
-    vm: &VirtualMachine,
-    obj: rustpython_vm::PyObjectRef,
-    depth: u32,
-) -> Result<serde_json::Value, rustpython_vm::builtins::PyBaseExceptionRef> {
-    if depth > 48 {
-        return Err(vm.new_value_error("mesh payload: nesting too deep (max 48)".to_string()));
-    }
-    if vm.is_none(&obj) {
-        return Ok(serde_json::Value::Null);
-    }
-    if let Ok(b) = obj.clone().try_into_value::<bool>(vm) {
-        return Ok(serde_json::Value::Bool(b));
-    }
-    if let Ok(i) = obj.clone().try_into_value::<i64>(vm) {
-        return Ok(serde_json::Value::Number(i.into()));
-    }
-    if let Ok(f) = obj.clone().try_into_value::<f64>(vm) {
-        return Ok(serde_json::Number::from_f64(f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null));
-    }
-    if let Ok(s) = obj.clone().try_into_value::<String>(vm) {
-        return Ok(serde_json::Value::String(s));
-    }
-    if let Some(list) = obj.downcast_ref::<PyList>() {
-        let mut arr = Vec::with_capacity(list.borrow_vec().len());
-        for item in list.borrow_vec().iter() {
-            arr.push(py_to_json_inner(vm, item.clone(), depth + 1)?);
-        }
-        return Ok(serde_json::Value::Array(arr));
-    }
-    if let Some(tup) = obj.downcast_ref::<PyTuple>() {
-        let mut arr = Vec::with_capacity(tup.as_slice().len());
-        for item in tup.as_slice().iter() {
-            arr.push(py_to_json_inner(vm, item.clone(), depth + 1)?);
-        }
-        return Ok(serde_json::Value::Array(arr));
-    }
-    // Direct `PyDict` iteration — no `list(dict.items())` allocation (see rustpython `IntoIterator for &PyDict`).
-    if let Some(dict) = obj.downcast_ref::<PyDict>() {
-        let mut map = serde_json::Map::new();
-        for (key, value) in dict {
-            let key_str = key.str(vm)?.to_string();
-            map.insert(key_str, py_to_json_inner(vm, value, depth + 1)?);
-        }
-        return Ok(serde_json::Value::Object(map));
-    }
-
-    Err(vm.new_type_error(
-        "mesh payload must be JSON-serializable: use None, bool, int, float, str, list, tuple, or dict"
-            .to_string(),
-    ))
+    py_to_json_value(vm, obj, 0)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyObjectRef {
-    match v {
-        serde_json::Value::Null => vm.ctx.none(),
-        serde_json::Value::Bool(b) => vm.ctx.new_bool(*b).into(),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                vm.ctx.new_int(i).into()
-            } else if let Some(f) = n.as_f64() {
-                vm.ctx.new_float(f).into()
-            } else {
-                vm.ctx.new_str(n.to_string()).into()
-            }
-        }
-        serde_json::Value::String(s) => vm.ctx.new_str(s.as_str()).into(),
-        serde_json::Value::Array(a) => {
-            let items: Vec<rustpython_vm::PyObjectRef> =
-                a.iter().map(|x| json_to_py(vm, x)).collect();
-            vm.ctx.new_list(items).into()
-        }
-        serde_json::Value::Object(o) => {
-            let d = vm.ctx.new_dict();
-            for (k, val) in o {
-                let _ = d.set_item(k, json_to_py(vm, val), vm);
-            }
-            d.into()
-        }
-    }
+fn mesh_json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> PyResult {
+    json_value_to_py(vm, v)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,11 +37,11 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
     match &p.body {
         serde_json::Value::Object(o) => {
             for (k, v) in o {
-                dict.set_item(k.as_str(), json_to_py(vm, v), vm)?;
+                dict.set_item(k.as_str(), mesh_json_to_py(vm, v)?, vm)?;
             }
         }
         _ => {
-            dict.set_item("value", json_to_py(vm, &p.body), vm)?;
+            dict.set_item("value", mesh_json_to_py(vm, &p.body)?, vm)?;
         }
     }
     Ok(dict.into())
@@ -184,31 +105,7 @@ fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult 
     let w = rgba.width() as usize;
     let h = rgba.height() as usize;
     let raw = rgba.into_raw();
-    let py_bytes = vm.ctx.new_bytes(raw);
-
-    let tensor_dict = vm.ctx.new_dict();
-    tensor_dict.set_item(
-        "shape",
-        vm.ctx
-            .new_tuple(vec![
-                vm.ctx.new_int(h as isize).into(),
-                vm.ctx.new_int(w as isize).into(),
-                vm.ctx.new_int(4isize).into(),
-            ])
-            .into(),
-        vm,
-    )?;
-    tensor_dict.set_item("dtype", vm.ctx.new_str("uint8").into(), vm)?;
-    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
-    tensor_dict.set_item("_data", py_bytes.into(), vm)?;
-
-    let frame_dict = vm.ctx.new_dict();
-    frame_dict.set_item("width", vm.ctx.new_int(w as isize).into(), vm)?;
-    frame_dict.set_item("height", vm.ctx.new_int(h as isize).into(), vm)?;
-    frame_dict.set_item("tensor", tensor_dict.into(), vm)?;
-
-    let frame_cls = vm.builtins.get_attr("Frame", vm)?;
-    frame_cls.call((frame_dict.clone(),), vm)
+    crate::python_api::json_codec::py_frame_from_rgba_bytes(vm, w, h, raw)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
