@@ -6,11 +6,16 @@ class RemoteSourceApp(xos.Application):
     headless: bool = True
 
     def __init__(self):
-        self.mesh = xos.mesh.connect(id=MESH_CHANNEL, mode=MODE)
+        super().__init__()
+
+        self.mesh = xos.mesh.connect(id=utils.MESH_CHANNEL, mode=utils.MODE)
 
     def tick(self):
-        packet = self.mesh.receive(id="frame", wait=False, latest_only=False)
+        print(self.t)
+        # xos.device.get_device_frame()
+
+        self.mesh.broadcast(id="frame", frame="test")
 
 
 if __name__ == "__main__":
-    RemoteViewerApp().run()
+    RemoteSourceApp().run()
