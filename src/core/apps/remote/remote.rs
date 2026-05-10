@@ -10,7 +10,7 @@
     not(target_os = "ios"),
     any(target_os = "windows", target_os = "macos")
 ))]
-const STREAM_MAX_W: u32 = 1280;
+pub(crate) const STREAM_MAX_W: u32 = 1280;
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -136,7 +136,8 @@ mod win {
         out
     }
 
-    pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
+    /// Full virtual desktop, downscaled width ≤ [`STREAM_MAX_W`], RGBA8 row-major (premultiplied bgr→rgb opaque).
+    pub(super) fn capture_virtual_scaled_rgba() -> Option<(Vec<u8>, u32, u32)> {
         let (vx, vy, vw, vh) = virtual_screen_bounds();
         if vw <= 0 || vh <= 0 {
             return None;
@@ -156,11 +157,16 @@ mod win {
             rgba[si + 2] = small[si];
             rgba[si + 3] = 255;
         }
-        let img = image::RgbaImage::from_raw(tw as u32, th as u32, rgba)?;
+        Some((rgba, tw as u32, th as u32))
+    }
+
+    pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
+        let (rgba, tw, th) = capture_virtual_scaled_rgba()?;
+        let img = image::RgbaImage::from_raw(tw, th, rgba)?;
         let dyn_img = image::DynamicImage::ImageRgba8(img);
         let mut buf = Cursor::new(Vec::new());
         dyn_img.write_to(&mut buf, image::ImageFormat::Jpeg).ok()?;
-        Some((buf.into_inner(), tw as u32, th as u32))
+        Some((buf.into_inner(), tw, th))
     }
 
     pub fn apply_remote_input(
@@ -332,6 +338,77 @@ mod mac {
     }
 }
 
+/// Per-display metadata + scaled RGBA for `xos.system.monitors` (macOS / ScreenCaptureKit-backed).
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    target_os = "macos"
+))]
+pub(crate) mod monitors_mac {
+    use super::STREAM_MAX_W;
+    use xcap::Monitor;
+
+    pub struct Row {
+        pub width: u32,
+        pub height: u32,
+        pub x: i32,
+        pub y: i32,
+        pub refresh_rate: f64,
+        pub is_primary: bool,
+        pub name: String,
+        pub native_id: String,
+    }
+
+    pub fn list_rows() -> Vec<Row> {
+        let Ok(monitors) = Monitor::all() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for m in monitors {
+            let Ok(w) = m.width() else { continue };
+            let Ok(h) = m.height() else { continue };
+            let Ok(x) = m.x() else { continue };
+            let Ok(y) = m.y() else { continue };
+            let refresh_rate = m.frequency().ok().map(|hz| hz as f64).unwrap_or(0.0);
+            let is_primary = m.is_primary().unwrap_or(false);
+            let name = m.name().unwrap_or_default();
+            let native_id = match m.id() {
+                Ok(v) => v.to_string(),
+                Err(_) => String::new(),
+            };
+            out.push(Row {
+                width: w,
+                height: h,
+                x,
+                y,
+                refresh_rate,
+                is_primary,
+                name,
+                native_id,
+            });
+        }
+        out
+    }
+
+    pub fn capture_scaled_rgba(index: usize) -> Option<(Vec<u8>, u32, u32)> {
+        let monitors = Monitor::all().ok()?;
+        let m = monitors.into_iter().nth(index)?;
+        let rgba = m.capture_image().ok()?;
+        let vw = rgba.width();
+        let vh = rgba.height();
+        if vw == 0 || vh == 0 {
+            return None;
+        }
+        let scale = (STREAM_MAX_W as f32 / vw as f32).min(1.0f32);
+        let tw = ((vw as f32) * scale).round().max(1.0) as u32;
+        let th = ((vh as f32) * scale).round().max(1.0) as u32;
+        let dyn_img = image::DynamicImage::ImageRgba8(rgba);
+        let resized = dyn_img.resize_exact(tw, th, image::imageops::FilterType::Triangle);
+        let rgba_img = resized.to_rgba8();
+        Some((rgba_img.into_raw(), tw, th))
+    }
+}
+
 #[cfg(all(
     not(target_arch = "wasm32"),
     not(target_os = "ios"),
@@ -345,6 +422,22 @@ pub fn capture_scaled_jpeg() -> Option<(Vec<u8>, u32, u32)> {
     #[cfg(target_os = "macos")]
     {
         mac::capture_scaled_jpeg()
+    }
+}
+
+/// Windows desktop as a single pseudo-monitor (whole virtual desktop; index `0` only).
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    target_os = "windows"
+))]
+pub(crate) mod monitors_win {
+    pub fn bounds() -> (i32, i32, i32, i32) {
+        super::win::virtual_screen_bounds()
+    }
+
+    pub fn capture_scaled_rgba() -> Option<(Vec<u8>, u32, u32)> {
+        super::win::capture_virtual_scaled_rgba()
     }
 }
 
