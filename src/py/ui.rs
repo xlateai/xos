@@ -2128,9 +2128,9 @@ class Group:
 
 
 class VideoViewport:
-    """Blit a mesh ``remote_frame`` decode (``xos.Frame``) into a normalized rect; ``blit`` fills letterbox with black."""
+    """Decode stream pixels into this widget rectangle: ``xos.Frame``, ``xos.Tensor`` (uint8 H×W×4), aspect-fit centered, letterboxed black."""
 
-    __slots__ = ("x1", "y1", "x2", "y2", "last_fit")
+    __slots__ = ("x1", "y1", "x2", "y2", "last_fit", "_stream_frame")
 
     def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
         self.x1 = float(x1)
@@ -2138,6 +2138,21 @@ class VideoViewport:
         self.x2 = float(x2)
         self.y2 = float(y2)
         self.last_fit = (0.0, 0.0, float("nan"), float("nan"))
+        self._stream_frame = None
+
+    def set_frame(self, frame_or_tensor=None, *, frame=None, tensor=None):
+        """Remember the latest stream image (``Frame`` or ``tensor`` field). Call ``tick()`` to draw."""
+        s = tensor if tensor is not None else frame_or_tensor if frame is None else frame
+        self._stream_frame = s
+
+    def tick(self, app):
+        sf = self._stream_frame
+        if sf is not None:
+            return self.blit(app, sf)
+        return None
+
+    def render(self, app=None):
+        return None
 
     def blit(self, app, stream_frame):
         import xos

@@ -36,16 +36,15 @@ class RemoteViewerApp(xos.Application):
         # self.status.tick(self)
         # self.status.render(self)
 
-        # self.video.tick(self)
-        # self.video.render(self)
-
         packet = self.mesh.receive(id="frame", wait=False, latest_only=True)
         if packet:
             frame = packet.frame
             print(frame.tensor)
-            # self.video.update(frame)  # both should work
-            self.video.set_frame(frame.tensor)
-            # self.video.frame = packet
+            # Frame or Tensor: both aspect-fit into the video rect (bytes path avoids a full copy)
+            self.video.set_frame(frame)
+            # self.video.set_frame(frame.tensor)
+
+        self.video.tick(self)
 
         # print(self.t)
 
