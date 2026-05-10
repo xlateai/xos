@@ -1,6 +1,21 @@
 MENU_LEFT_EDGE_EXTENSION = 0.3
 MENU_BUTTON_WIDTH = 0.1
 
+MENU_BUTTON_CLOSED_VERTS = (
+    0.0,
+    0.0,
+    0.1,
+    0.1,
+)
+
+MENU_BUTTON_OPEN_VERTS = (
+    MENU_LEFT_EDGE_EXTENSION + 0.0,
+    0.0,
+    MENU_LEFT_EDGE_EXTENSION + 0.1,
+    MENU_BUTTON_WIDTH,
+)
+
+
 
 class Menu:
 
@@ -13,15 +28,12 @@ class Menu:
 
     def setup_buttons(self):
         self.menu_button = xos.ui.button(
-            0.0,
-            0.0,
-            0.1,
-            0.1,
+            *MENU_BUTTON_CLOSED_VERTS,
             on_press=self.toggle_menu,
         )
 
         self.menu_button_background = xos.ui.rect(
-            color=xos.color.BLACK,
+            color=xos.color.LIME,
             # alpha=0.5,
         )
 
@@ -45,6 +57,13 @@ class Menu:
         )
 
     def tick(self, app):
+        if self.is_open:
+            self.menu_background.x1 = MENU_LEFT_EDGE_EXTENSION
+            self.menu_button.verts = MENU_BUTTON_OPEN_VERTS
+        else:
+            self.menu_background.x1 = 0.0
+            self.menu_button.verts = MENU_BUTTON_CLOSED_VERTS
+
         self.menu_button_background.set_verts(*self.menu_button.verts)
 
     def render(self, app):
@@ -63,11 +82,7 @@ class Menu:
 
 
     def toggle_menu(self):
-        # TODO: make it so that the edges stay aligned and such
-        # set_verts will be useful, and the calculations of those
-        # normalized edge coordinates will also be helpful
-
-        raise NotImplementedError("toggle_menu is not implemented")
+        self.is_open = not self.is_open
 
     def on_events(self, app):
         self.buttons.on_events(app)
