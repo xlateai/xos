@@ -905,6 +905,34 @@ fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
+fn onscreen_keyboard_show(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    if with_tick_engine_state_mut(|state| state.keyboard.onscreen.show()).is_some() {
+        return Ok(vm.ctx.none());
+    }
+    if with_callback_engine_state_mut(|state| state.keyboard.onscreen.show()).is_some() {
+        return Ok(vm.ctx.none());
+    }
+    Err(vm.new_runtime_error(
+        "onscreen keyboard: no engine context (use OnScreenKeyboard.show() which defers until tick)"
+            .to_string(),
+    ))
+}
+
+fn onscreen_keyboard_hide(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    if with_tick_engine_state_mut(|state| state.keyboard.onscreen.hide()).is_some() {
+        return Ok(vm.ctx.none());
+    }
+    if with_callback_engine_state_mut(|state| state.keyboard.onscreen.hide()).is_some() {
+        return Ok(vm.ctx.none());
+    }
+    Err(vm.new_runtime_error(
+        "onscreen keyboard: no engine context (use OnScreenKeyboard.hide() which defers until tick)"
+            .to_string(),
+    ))
+}
+
 /// Normalized Y of the on-screen keyboard’s top edge (`[0,1]`, same space as `Text.y1` / `Text.y2`).
 fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let _ = args;
@@ -1022,6 +1050,20 @@ pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRe
         .set_attr(
             "_onscreen_keyboard_top_norm",
             vm.new_function("_onscreen_keyboard_top_norm", onscreen_keyboard_top_norm),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_onscreen_keyboard_show",
+            vm.new_function("_onscreen_keyboard_show", onscreen_keyboard_show),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_onscreen_keyboard_hide",
+            vm.new_function("_onscreen_keyboard_hide", onscreen_keyboard_hide),
             vm,
         )
         .unwrap();
@@ -1221,9 +1263,41 @@ class OnScreenKeyboard:
     def __init__(self):
         # Normalized Y of keyboard top (`[0,1]`), same as `Text.y1`/`y2`. Updated each `tick` after OSK layout.
         self.y1 = 1.0
+        self._pending_visible = None
+
+    def show(self):
+        """Show the on-screen keyboard (engine-backed). Safe from `__init__` before first tick."""
+        import xos
+        try:
+            xos.ui._onscreen_keyboard_show()
+            self._pending_visible = None
+        except RuntimeError:
+            self._pending_visible = True
+
+    def hide(self):
+        """Hide the on-screen keyboard."""
+        import xos
+        try:
+            xos.ui._onscreen_keyboard_hide()
+            self._pending_visible = None
+        except RuntimeError:
+            self._pending_visible = False
 
     def tick(self, app):
         import xos
+        pv = self._pending_visible
+        if pv is True:
+            try:
+                xos.ui._onscreen_keyboard_show()
+                self._pending_visible = None
+            except RuntimeError:
+                pass
+        elif pv is False:
+            try:
+                xos.ui._onscreen_keyboard_hide()
+                self._pending_visible = None
+            except RuntimeError:
+                pass
         xos.ui._onscreen_keyboard_tick()
         try:
             self.y1 = float(xos.ui._onscreen_keyboard_top_norm())

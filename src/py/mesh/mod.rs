@@ -8,7 +8,8 @@ use crate::mesh::terminal::INPUT_INTERRUPT;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mesh::{MeshMode, MeshSession, Packet};
 use crate::python_api::json_codec::{
-    json_value_to_py, py_to_json_value, try_mesh_frame_rgba_arc_for_broadcast,
+    decode_mesh_jpeg_bytes_best_effort, json_value_to_py, py_to_json_value,
+    try_mesh_frame_rgba_arc_for_broadcast,
 };
 use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::{PyDict, PyModule};
@@ -116,12 +117,8 @@ fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult 
     let raw_jpeg = B64
         .decode(jpeg_b64.as_bytes())
         .map_err(|e| vm.new_runtime_error(format!("remote_frame: invalid base64: {e}")))?;
-    let img = image::load_from_memory(&raw_jpeg)
+    let (w, h, raw) = decode_mesh_jpeg_bytes_best_effort(&raw_jpeg)
         .map_err(|e| vm.new_runtime_error(format!("remote_frame: decode image: {e}")))?;
-    let rgba = img.to_rgba8();
-    let w = rgba.width() as usize;
-    let h = rgba.height() as usize;
-    let raw = rgba.into_raw();
     crate::python_api::json_codec::py_frame_from_rgba_bytes(vm, w, h, raw)
 }
 

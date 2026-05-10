@@ -530,10 +530,20 @@ pub struct Inbox {
 
 /// Cap per `kind` so fast producers (e.g. video) cannot build an unbounded decoded queue
 /// while a slower consumer only shows `latest_only` — each push is already fully decoded.
-const INBOX_KIND_MAX_PACKETS: usize = 4;
+const INBOX_KIND_MAX_PACKETS_DEFAULT: usize = 4;
+/// Video frames: keep only the newest packet in-flight so LAN viewers do not sit behind a backlog.
+const INBOX_KIND_MAX_PACKETS_VIDEO: usize = 1;
 
 struct InboxInner {
     queues: HashMap<String, VecDeque<Packet>>,
+}
+
+#[inline]
+fn inbox_max_packets_for_kind(kind: &str) -> usize {
+    match kind {
+        "frame" | "remote_frame" => INBOX_KIND_MAX_PACKETS_VIDEO,
+        _ => INBOX_KIND_MAX_PACKETS_DEFAULT,
+    }
 }
 
 impl Inbox {
@@ -548,8 +558,9 @@ impl Inbox {
 
     fn push(&self, p: Packet) {
         let mut g = self.inner.lock().unwrap();
+        let max = inbox_max_packets_for_kind(&p.kind);
         let q = g.queues.entry(p.kind.clone()).or_default();
-        while q.len() >= INBOX_KIND_MAX_PACKETS {
+        while q.len() >= max {
             q.pop_front();
         }
         q.push_back(p);

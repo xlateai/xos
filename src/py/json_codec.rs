@@ -10,6 +10,9 @@ use rustpython_vm::{
 };
 use serde_json::{json, Map, Number, Value};
 use std::sync::Arc;
+use zune_core::colorspace::ColorSpace;
+use zune_core::options::DecoderOptions;
+use zune_jpeg::JpegDecoder;
 
 const MAX_DEPTH: u32 = 48;
 
@@ -17,7 +20,52 @@ const MAX_DEPTH: u32 = 48;
 pub(crate) const XOS_JSON_FRAME: &str = "__xos_json_frame";
 
 /// JPEG payload for mesh-serialized `Frame`: smaller + faster encode than high quality (latency-first).
-const MESH_FRAME_JPEG_QUALITY: u8 = 62;
+const MESH_FRAME_JPEG_QUALITY: u8 = 56;
+
+/// Fast mesh JPEG → RGBA (critical for iOS LAN viewer latency vs `image::load_from_memory`).
+#[inline]
+pub(crate) fn decode_mesh_jpeg_to_rgba(jpeg: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut decoder = JpegDecoder::new_with_options(jpeg, options);
+    let buf = decoder
+        .decode()
+        .map_err(|e| format!("zune-jpeg: {e}"))?;
+    let (w, h) = decoder
+        .dimensions()
+        .ok_or_else(|| "jpeg: missing dimensions".to_string())?;
+    let expect = w
+        .checked_mul(h)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| "jpeg: dimensions overflow".to_string())?;
+    if buf.len() != expect {
+        return Err(format!(
+            "jpeg: RGBA length {} ≠ {}×{}×4",
+            buf.len(),
+            w,
+            h
+        ));
+    }
+    Ok((w, h, buf))
+}
+
+/// Prefer [`decode_mesh_jpeg_to_rgba`]; fall back to `image` for exotic JPEGs.
+#[inline]
+pub(crate) fn decode_mesh_jpeg_bytes_best_effort(
+    jpeg: &[u8],
+) -> Result<(usize, usize, Vec<u8>), String> {
+    match decode_mesh_jpeg_to_rgba(jpeg) {
+        Ok(t) => Ok(t),
+        Err(z_err) => {
+            let img = image::load_from_memory(jpeg).map_err(|e| format!("{z_err}; {e}"))?;
+            let rgba = img.to_rgba8();
+            Ok((
+                rgba.width() as usize,
+                rgba.height() as usize,
+                rgba.into_raw(),
+            ))
+        }
+    }
+}
 
 #[inline]
 fn rgba_to_jpeg_xos_wire(w: usize, h: usize, rgba: &[u8]) -> Result<Value, ()> {
@@ -277,18 +325,15 @@ pub(crate) fn try_decode_xos_json_frame_object(
                 ))));
             }
         };
-        let img = match image::load_from_memory(&raw_jpeg) {
-            Ok(img) => img,
+        let (w, h, rgba) = match decode_mesh_jpeg_bytes_best_effort(&raw_jpeg) {
+            Ok(t) => t,
             Err(e) => {
-                return Some(Err(vm.new_runtime_error(format!(
-                    "{XOS_JSON_FRAME}: decode jpeg: {e}"
-                ))));
+                return Some(Err(
+                    vm.new_runtime_error(format!("{XOS_JSON_FRAME}: decode jpeg: {e}"))
+                ));
             }
         };
-        let rgba = img.to_rgba8();
-        let w = rgba.width() as usize;
-        let h = rgba.height() as usize;
-        return Some(py_frame_from_rgba_bytes(vm, w, h, rgba.into_raw()));
+        return Some(py_frame_from_rgba_bytes(vm, w, h, rgba));
     }
     let w = b.get("w").and_then(|x| x.as_u64()).or_else(|| b.get("width").and_then(|x| x.as_u64()))?
         as usize;

@@ -40,6 +40,8 @@ uuid = { version = "1", features = ["v4"] }
 # (`can't find crate for ...`) for Burn/CubeCL — see profile.release.package.* below.
 darling = "0.21.3"
 variadics_please = "1"
+zune-core = { version = "0.4", default-features = false, features = ["std"] }
+zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
 
 # -------------------------------------------------------------------
 # Unix TTY size (`ioctl` TIOCGWINSZ) for xos.terminal.* on macOS/Linux/*BSD

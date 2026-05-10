@@ -182,54 +182,68 @@ impl Application for IosRemoteApp {
                 if let Some(jpeg_b64) = packet.body.get("jpeg").and_then(|v| v.as_str()) {
                     use base64::{engine::general_purpose::STANDARD as B64, Engine};
                     if let Ok(bytes) = B64.decode(jpeg_b64.as_bytes()) {
-                        if let Ok(img) = image::load_from_memory(&bytes) {
-                            let rgba = img.to_rgba8();
-                            let sw = rgba.width() as usize;
-                            let sh = rgba.height() as usize;
-                            let buffer = state.frame_buffer_mut();
-                            buffer.fill(0);
-                            let (dx0, dy0, dw, dh) = aspect_fit_rect(sw, sh, dst_w, dst_h);
-                            let dw = dw.max(1);
-                            let dh = dh.max(1);
-                            let scaled = image::imageops::resize(
-                                &rgba,
-                                dw as u32,
-                                dh as u32,
-                                image::imageops::FilterType::Nearest,
-                            );
-                            let src_raw = scaled.as_raw();
-                            let cw = scaled.width() as usize;
-                            let ch = scaled.height() as usize;
-                            for y in 0..ch.min(dh) {
-                                let sx0 = y.saturating_mul(cw).saturating_mul(4);
-                                let row_len = cw.saturating_mul(4);
-                                if sx0 + row_len > src_raw.len() {
-                                    break;
+                        if let Ok((sw_u, sh_u, raw_dec)) =
+                            crate::python_api::json_codec::decode_mesh_jpeg_bytes_best_effort(
+                                &bytes,
+                            )
+                        {
+                            if let Some(rgba) = image::RgbaImage::from_raw(
+                                sw_u as u32,
+                                sh_u as u32,
+                                raw_dec,
+                            ) {
+                                let sw = rgba.width() as usize;
+                                let sh = rgba.height() as usize;
+                                let buffer = state.frame_buffer_mut();
+                                buffer.fill(0);
+                                let (dx0, dy0, dw, dh) =
+                                    aspect_fit_rect(sw, sh, dst_w, dst_h);
+                                let dw = dw.max(1);
+                                let dh = dh.max(1);
+                                let scaled = image::imageops::resize(
+                                    &rgba,
+                                    dw as u32,
+                                    dh as u32,
+                                    image::imageops::FilterType::Nearest,
+                                );
+                                let src_raw = scaled.as_raw();
+                                let cw = scaled.width() as usize;
+                                let ch = scaled.height() as usize;
+                                for y in 0..ch.min(dh) {
+                                    let sx0 = y.saturating_mul(cw).saturating_mul(4);
+                                    let row_len = cw.saturating_mul(4);
+                                    if sx0 + row_len > src_raw.len() {
+                                        break;
+                                    }
+                                    let dy = dy0.saturating_add(y);
+                                    if dy >= dst_h {
+                                        break;
+                                    }
+                                    let di0 = dy
+                                        .saturating_mul(dst_w)
+                                        .saturating_add(dx0)
+                                        .saturating_mul(4);
+                                    if di0 + row_len <= buffer.len() {
+                                        buffer[di0..di0 + row_len]
+                                            .copy_from_slice(&src_raw[sx0..sx0 + row_len]);
+                                    }
                                 }
-                                let dy = dy0.saturating_add(y);
-                                if dy >= dst_h {
-                                    break;
+                                s.has_frame = true;
+                                s.last_src_w = sw;
+                                s.last_src_h = sh;
+                                let now = Instant::now();
+                                if let Some(prev) = s.last_remote_frame_at.replace(now) {
+                                    let dt = now.duration_since(prev).as_secs_f32().max(1e-4);
+                                    let inst = 1.0 / dt;
+                                    s.remote_fps_ema = if s.remote_fps_ema <= 1e-6 {
+                                        inst
+                                    } else {
+                                        s.remote_fps_ema * 0.82 + inst * 0.18
+                                    };
                                 }
-                                let di0 = dy.saturating_mul(dst_w).saturating_add(dx0).saturating_mul(4);
-                                if di0 + row_len <= buffer.len() {
-                                    buffer[di0..di0 + row_len]
-                                        .copy_from_slice(&src_raw[sx0..sx0 + row_len]);
-                                }
+                                state.f3_fps_label_override =
+                                    Some(s.remote_fps_ema.clamp(0.0, 120.0));
                             }
-                            s.has_frame = true;
-                            s.last_src_w = sw;
-                            s.last_src_h = sh;
-                            let now = Instant::now();
-                            if let Some(prev) = s.last_remote_frame_at.replace(now) {
-                                let dt = now.duration_since(prev).as_secs_f32().max(1e-4);
-                                let inst = 1.0 / dt;
-                                s.remote_fps_ema = if s.remote_fps_ema <= 1e-6 {
-                                    inst
-                                } else {
-                                    s.remote_fps_ema * 0.82 + inst * 0.18
-                                };
-                            }
-                            state.f3_fps_label_override = Some(s.remote_fps_ema.clamp(0.0, 120.0));
                         }
                     }
                 }

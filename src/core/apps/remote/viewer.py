@@ -15,7 +15,7 @@ class RemoteViewerApp(xos.Application):
     def __init__(self):
         super().__init__()
 
-        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE, udp=constants.USE_UDP)
+        self.mesh = constants.get_mesh()
         # self.status = xos.ui.text(
         #     "Connecting...",
         #     x1=0.0,
@@ -32,7 +32,13 @@ class RemoteViewerApp(xos.Application):
             y2=1.0,
         )
 
+        self.keyboard = xos.ui.onscreen_keyboard()
+        self.keyboard.show()
+
     def tick(self):
+        self.keyboard.tick(self)
+        self.video.y2 = self.keyboard.y1
+
         # self.status.tick(self)
         # self.status.render(self)
 
@@ -47,6 +53,9 @@ class RemoteViewerApp(xos.Application):
         self.video.tick(self)
 
         # print(self.t)
+
+    def on_events(self):
+        self.keyboard.on_events(self)
 
 
 
