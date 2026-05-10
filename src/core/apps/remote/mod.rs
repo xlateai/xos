@@ -12,6 +12,7 @@
 
 pub mod launcher;
 pub(crate) mod monitors;
+pub(crate) mod monitor_stream;
 mod remote;
 
 #[cfg(all(

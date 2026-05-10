@@ -170,7 +170,9 @@ fn system_monitor_get_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     ))]
     {
         let idx = system_monitor_first_arg_usize(&args, vm)?;
-        let Some((rgba, w, h)) = monitors::system_monitor_capture_scaled_rgba(idx) else {
+        let Some((rgba, w, h)) = crate::apps::remote::monitor_stream::snapshot(idx)
+            .or_else(|| monitors::system_monitor_capture_scaled_rgba(idx))
+        else {
             return Err(vm.new_runtime_error(
                 "monitor get_frame failed (bad index, permissions, or capture driver)".into(),
             ));

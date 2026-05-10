@@ -20,7 +20,8 @@ class RemoteSourceApp(xos.Application):
         # self.mesh.broadcast(id="frame", frame=BALL_APP.frame)
 
         device_frame = xos.system.monitors[0].get_frame()
-        self.mesh.broadcast(id="frame", frame=device_frame)
+        print(device_frame.tensor)
+        # self.mesh.broadcast(id="frame", frame=device_frame)
 
 
 if __name__ == "__main__":

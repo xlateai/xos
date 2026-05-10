@@ -62,7 +62,9 @@ class Monitor:
     def get_frame(self):
         """Captured RGBA **Frame**, same downscale policy as LAN ``remote_frame`` streams.
 
-        Implemented on desktop macOS / Windows / Linux stubs (empty list) today; absent on WASM / iOS.
+        On native macOS/Windows capture runs on a background thread; each call returns the latest
+        completed snapshot without blocking on ``capture_image``. Implemented on desktop only;
+        Linux list is empty; absent on WASM / iOS.
         """
         return _system_monitor_get_frame(self._index)
 
