@@ -8,7 +8,13 @@ use rustpython_vm::{
     function::FuncArgs,
     PyObjectRef, PyRef, PyResult, VirtualMachine,
 };
+use std::cell::RefCell;
 use std::sync::Mutex;
+
+thread_local! {
+    /// Reused full-frame scratch for `blur()` to avoid an 8 MB+ allocation every tick.
+    static BLUR_FRAME_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
 
 fn py_number_to_f32(
     value: rustpython_vm::PyObjectRef,
@@ -1320,16 +1326,19 @@ fn blur_framebuffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     let len = width.saturating_mul(height).saturating_mul(4);
     let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, len) };
-    let mut scratch_a = vec![0u8; len];
-    let mut scratch_b = vec![0u8; len];
-    crate::rasterizer::blur::blur_rgba_framebuffer(
-        dst,
-        width,
-        height,
-        pct as f32,
-        &mut scratch_a,
-        &mut scratch_b,
-    );
+    BLUR_FRAME_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        if scratch.len() < len {
+            scratch.resize(len, 0);
+        }
+        crate::rasterizer::blur::blur_rgba_framebuffer(
+            dst,
+            width,
+            height,
+            pct as f32,
+            &mut scratch[..len],
+        );
+    });
     Ok(vm.ctx.none())
 }
 
