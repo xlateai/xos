@@ -25,6 +25,8 @@ MENU_BUTTON_COORDINATE_SYSTEM = (
 )
 
 
+MENU_BACKGROUND_COLOR = (0, 10, 0)
+
 
 class Menu:
 
@@ -60,7 +62,7 @@ class Menu:
             0.0,
             0.0,
             1.0,
-            color=xos.color.BLACK,
+            color=MENU_BACKGROUND_COLOR,
             coordinate_system=MENU_BUTTON_COORDINATE_SYSTEM,
             # alpha=0.5,
         )
@@ -83,6 +85,8 @@ class Menu:
         self.update_button_verts()
 
     def render(self, app):
+        if self.is_open:
+            xos.rasterizer.blur(app.frame, 0.05)
         self.buttons.render(app)
         self.menu_display.render(app)
 
