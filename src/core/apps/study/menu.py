@@ -11,10 +11,6 @@ class Menu:
         self.menu_display = self.setup_display()
 
 
-    def toggle_menu(self):
-        raise NotImplementedError("toggle_menu is not implemented")
-
-
     def setup_buttons(self):
         self.menu_button = xos.ui.button(
             0.0,
@@ -48,11 +44,31 @@ class Menu:
             self.menu_background,
         )
 
-    def tick(self):
+    def tick(self, app):
         self.menu_button_background.set_verts(*self.menu_button.verts)
 
-    def render(self):
-        pass
+    def render(self, app):
+        self.buttons.render(app)
+        self.menu_display.render(app)
 
-    # def on_events(self, app):
-        # self.buttons.on_events(app)
+    # def _show_menu(self):
+    #     self.menu_visible = not self.menu_visible
+
+    #     if self.menu_visible:
+    #         self.menu_background.x1 = MENU_LEFT_EDGE_EXTENSION
+    #         self.menu_button.x1 = MENU_LEFT_EDGE_EXTENSION
+    #         self.menu_button.x2 = MENU_LEFT_EDGE_EXTENSION
+    #     else:
+    #         self.menu_background.x1 = 0.0
+
+
+    def toggle_menu(self):
+        # TODO: make it so that the edges stay aligned and such
+        # set_verts will be useful, and the calculations of those
+        # normalized edge coordinates will also be helpful
+
+        raise NotImplementedError("toggle_menu is not implemented")
+
+    def on_events(self, app):
+        self.buttons.on_events(app)
+        self.menu_display.on_events(app)

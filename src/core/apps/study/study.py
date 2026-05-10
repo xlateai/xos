@@ -1,6 +1,7 @@
 import xos
 
 import study_data
+import menu
 
 DEFAULT_FONT_SIZE = 52.0
 
@@ -79,15 +80,7 @@ class TextDemo(xos.Application):
         self.text = xos.ui.group(self.vocab_display, self.guess_area, self.description)
         self._bootstrap_round()
 
-    # def _show_menu(self):
-    #     self.menu_visible = not self.menu_visible
-
-    #     if self.menu_visible:
-    #         self.menu_background.x1 = MENU_LEFT_EDGE_EXTENSION
-    #         self.menu_button.x1 = MENU_LEFT_EDGE_EXTENSION
-    #         self.menu_button.x2 = MENU_LEFT_EDGE_EXTENSION
-    #     else:
-    #         self.menu_background.x1 = 0.0
+        self.menu = menu.Menu()
 
     def _headline(self, row):
         if not row:
@@ -149,9 +142,14 @@ class TextDemo(xos.Application):
 
         self.text.render(self)
 
+        # TODO somehow make the tick render thing better? its decent though.
+        self.menu.tick(self.)
+        self.menu.render(self)
+
     def on_events(self):
         self.text.on_events(self)
         self.keyboard.on_events(self)
+        self.menu.on_events(self)
 
 
 def _first_line(s: str) -> str:
