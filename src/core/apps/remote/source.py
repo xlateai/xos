@@ -1,6 +1,9 @@
 import xos
 import utils
 
+import ball
+
+BALL_APP = ball.BallDemo()
 
 class RemoteSourceApp(xos.Application):
     headless: bool = True
@@ -15,6 +18,8 @@ class RemoteSourceApp(xos.Application):
         # xos.device.get_device_frame()
 
         self.mesh.broadcast(id="frame", frame="test")
+
+        BALL_APP.tick()
 
 
 if __name__ == "__main__":
