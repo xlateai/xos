@@ -1,39 +1,58 @@
+MENU_LEFT_EDGE_EXTENSION = 0.3
+MENU_BUTTON_WIDTH = 0.1
 
 
+class Menu:
+
+    def __init__(self):
+        self.is_open = False
+
+        self.buttons = self.setup_buttons()
+        self.menu_display = self.setup_display()
 
 
+    def toggle_menu(self):
+        raise NotImplementedError("toggle_menu is not implemented")
 
-def get_buttons():
-    menu_button = xos.ui.button(
-        0.0,
-        0.0,
-        0.1,
-        0.1,
-        on_press=self._show_menu,
-    )
 
-    menu_button_background = xos.ui.rect(
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        color=xos.color.BLACK,
-        # alpha=0.5,
-    )
+    def setup_buttons(self):
+        self.menu_button = xos.ui.button(
+            0.0,
+            0.0,
+            0.1,
+            0.1,
+            on_press=self.toggle_menu,
+        )
 
-    return xos.ui.group(
-        menu_button,
-        menu_button_background,
-    )
+        self.menu_button_background = xos.ui.rect(
+            color=xos.color.BLACK,
+            # alpha=0.5,
+        )
 
-def get_menu():
-    background = xos.ui.rect(
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        color=xos.color.BLACK,
-        # alpha=0.5,
-    )
+        return xos.ui.group(
+            self.menu_button,
+            self.menu_button_background,
+        )
 
-    return xos.ui.group(background)
+    def setup_display(self):
+        self.menu_background = xos.ui.rect(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            color=xos.color.BLACK,
+            # alpha=0.5,
+        )
+
+        return xos.ui.group(
+            self.menu_background,
+        )
+
+    def tick(self):
+        self.menu_button_background.set_verts(*self.menu_button.verts)
+
+    def render(self):
+        pass
+
+    # def on_events(self, app):
+        # self.buttons.on_events(app)
