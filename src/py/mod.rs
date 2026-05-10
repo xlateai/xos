@@ -2,6 +2,7 @@ pub mod ai;
 pub mod audio;
 pub mod auth;
 pub mod burn_train;
+pub mod coordinates;
 pub mod colors;
 pub mod csv_api;
 pub mod data;
