@@ -297,6 +297,9 @@ pub fn run_daemon_forever() -> Result<(), String> {
     };
     xos::manager::register_mesh(GLOBAL_MESH_ID, global_mode);
 
+    #[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", target_os = "windows")))]
+    crate::daemon_remote::spawn();
+
     while running.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(500));
     }

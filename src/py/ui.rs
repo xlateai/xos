@@ -2127,6 +2127,37 @@ class Group:
         return tuple(out)
 
 
+class VideoViewport:
+    """Blit a mesh ``remote_frame`` decode (``xos.Frame``) into a normalized rect; ``blit`` fills letterbox with black."""
+
+    __slots__ = ("x1", "y1", "x2", "y2", "last_fit")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+        self.last_fit = (0.0, 0.0, float("nan"), float("nan"))
+
+    def blit(self, app, stream_frame):
+        import xos
+
+        x1, y1, x2, y2 = app.safe_region.renormalize(self.x1, self.y1, self.x2, self.y2)
+        fx, fy, fw, fh = xos.rasterizer._frame_blit_aspect_fit_norm_rect(
+            stream_frame,
+            float(x1),
+            float(y1),
+            float(x2),
+            float(y2),
+        )
+        self.last_fit = (float(fx), float(fy), float(fw), float(fh))
+        return self.last_fit
+
+
+def video(x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+    return VideoViewport(x1, y1, x2, y2)
+
+
 def group(*children):
     return Group(*children)
 
@@ -2186,6 +2217,12 @@ def onscreen_keyboard():
     }
     if let Ok(grp_fn) = scope.globals.get_item("group", vm) {
         module.set_attr("group", grp_fn, vm).unwrap();
+    }
+    if let Ok(vv_cls) = scope.globals.get_item("VideoViewport", vm) {
+        module.set_attr("VideoViewport", vv_cls, vm).unwrap();
+    }
+    if let Ok(vfn) = scope.globals.get_item("video", vm) {
+        module.set_attr("video", vfn, vm).unwrap();
     }
     if let Ok(rect_fn) = scope.globals.get_item("rect", vm) {
         module.set_attr("rect", rect_fn, vm).unwrap();

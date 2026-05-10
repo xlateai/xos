@@ -1,6 +1,9 @@
 mod compile;
 mod daemon;
 
+#[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", target_os = "windows")))]
+mod daemon_remote;
+
 use clap::{CommandFactory, Parser, Subcommand};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;

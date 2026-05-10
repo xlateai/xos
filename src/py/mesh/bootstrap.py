@@ -59,6 +59,10 @@ class Mesh:
         """Input prompt prefix with live ``n=`` / ``rank=`` (call each loop iteration)."""
         return self._call(_mesh_prompt)
 
+    def disconnect(self):
+        """Drop the singleton mesh session (next ``connect`` attaches fresh)."""
+        _mesh_disconnect()
+
     def broadcast(self, **kwargs):
         kind = kwargs.pop("id")
         self._call(_mesh_broadcast_payload, kind, kwargs)
@@ -99,6 +103,11 @@ class _MeshNode:
     def send(self, **kwargs):
         kind = kwargs.pop("id")
         self._mesh.send(id=kind, to=self._rank, **kwargs)
+
+
+def disconnect():
+    """Clear the singleton mesh session (fresh join on the next ``connect``)."""
+    _mesh_disconnect()
 
 
 def connect(id="default", mode="local"):

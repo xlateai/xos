@@ -1260,6 +1260,158 @@ fn blit_rgba_stretch(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: us
     }
 }
 
+fn norm_xyxy_to_px(
+    nx1: f64,
+    ny1: f64,
+    nx2: f64,
+    ny2: f64,
+    frame_w: u32,
+    frame_h: u32,
+) -> (usize, usize, usize, usize) {
+    let nw = frame_w as f64;
+    let nh = frame_h as f64;
+    let xa = nx1.min(nx2).clamp(0.0, 1.0);
+    let ya = ny1.min(ny2).clamp(0.0, 1.0);
+    let xb = nx1.max(nx2).clamp(0.0, 1.0);
+    let yb = ny1.max(ny2).clamp(0.0, 1.0);
+    let bx0 = (xa * nw).floor() as usize;
+    let by0 = (ya * nh).floor() as usize;
+    let bx1 = (xb * nw).ceil() as usize;
+    let by1 = (yb * nh).ceil() as usize;
+    let bw = bx1.saturating_sub(bx0).max(1);
+    let bh = by1.saturating_sub(by0).max(1);
+    (bx0, by0, bw, bh)
+}
+
+fn aspect_fit_wh(sw: usize, sh: usize, bw: usize, bh: usize) -> (usize, usize, usize, usize) {
+    let sx = sw.max(1) as f64;
+    let sy = sh.max(1) as f64;
+    let bx = bw.max(1) as f64;
+    let by = bh.max(1) as f64;
+    let scale = (bx / sx).min(by / sy);
+    let fw = (sx * scale).floor().max(1.0) as usize;
+    let fh = (sy * scale).floor().max(1.0) as usize;
+    let ox = bw.saturating_sub(fw) / 2;
+    let oy = bh.saturating_sub(fh) / 2;
+    (ox, oy, fw, fh)
+}
+
+fn fill_rgba_rect(
+    dst: &mut [u8],
+    fw: usize,
+    fh: usize,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    rgba: [u8; 4],
+) {
+    for row in 0..h {
+        let y = y0.saturating_add(row);
+        if y >= fh {
+            break;
+        }
+        for col in 0..w {
+            let x = x0.saturating_add(col);
+            if x >= fw {
+                break;
+            }
+            let di = (y * fw + x).saturating_mul(4);
+            if di + 3 < dst.len() {
+                dst[di..di + 4].copy_from_slice(&rgba);
+            }
+        }
+    }
+}
+
+fn blit_rgba_resize_into_rect(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dst: &mut [u8],
+    frame_w: usize,
+    frame_h: usize,
+    ax0: usize,
+    ay0: usize,
+    dw: usize,
+    dh: usize,
+) {
+    if src.len() != sw * sh * 4 {
+        return;
+    }
+    for dy in 0..dh {
+        let y = ay0.saturating_add(dy);
+        if y >= frame_h {
+            break;
+        }
+        let sy = dy * sh / dh.max(1);
+        for dx in 0..dw {
+            let x = ax0.saturating_add(dx);
+            if x >= frame_w {
+                break;
+            }
+            let sx = dx * sw / dw.max(1);
+            let si = (sy * sw + sx).saturating_mul(4);
+            let di = (y * frame_w + x).saturating_mul(4);
+            if si + 3 < src.len() && di + 3 < dst.len() {
+                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+    }
+}
+
+/// Aspect-fit a decoded remote ``Frame`` into a normalized sub-rectangle of the active framebuffer.
+/// Returns ``(fit_x, fit_y, fit_w, fit_h)`` in **pixel** coordinates for pointer mapping.
+fn frame_blit_aspect_fit_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 5 {
+        return Err(vm.new_type_error(
+            "_frame_blit_aspect_fit_norm_rect(frame, nx1, ny1, nx2, ny2): 5 args".to_string(),
+        ));
+    }
+    let nx1: f64 = args_vec[1].clone().try_into_value(vm)?;
+    let ny1: f64 = args_vec[2].clone().try_into_value(vm)?;
+    let nx2: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let ny2: f64 = args_vec[4].clone().try_into_value(vm)?;
+    let frame_obj = args_vec[0].clone();
+
+    let (sw, sh, src_rgba) = frame_object_to_rgba(vm, frame_obj)?;
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
+    let nw = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let nh = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let nw_u32 = u32::try_from(nw).unwrap_or(u32::MAX);
+    let nh_u32 = u32::try_from(nh).unwrap_or(u32::MAX);
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error(
+            "_frame_blit_aspect_fit_norm_rect: no active framebuffer (tick an Application)".to_string(),
+        )
+    })?;
+    let fw = nw;
+    let fh = nh;
+    let dst_len = fw.saturating_mul(fh).saturating_mul(4);
+    let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, dst_len) };
+
+    let (bx0, by0, bw, bh) = norm_xyxy_to_px(nx1, ny1, nx2, ny2, nw_u32, nh_u32);
+    fill_rgba_rect(dst, fw, fh, bx0, by0, bw, bh, [0, 0, 0, 255]);
+    let (ox, oy, fit_w, fit_h) = aspect_fit_wh(sw, sh, bw, bh);
+    let ax0 = bx0.saturating_add(ox);
+    let ay0 = by0.saturating_add(oy);
+    blit_rgba_resize_into_rect(&src_rgba, sw, sh, dst, fw, fh, ax0, ay0, fit_w, fit_h);
+
+    let tup = vm.ctx.new_tuple(vec![
+        vm.ctx.new_float(ax0 as f64).into(),
+        vm.ctx.new_float(ay0 as f64).into(),
+        vm.ctx.new_float(fit_w as f64).into(),
+        vm.ctx.new_float(fit_h as f64).into(),
+    ]);
+    Ok(tup.into())
+}
+
 fn frame_object_to_rgba(
     vm: &VirtualMachine,
     frame_obj: PyObjectRef,
@@ -1417,6 +1569,16 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr(
             "frame_in_frame",
             vm.new_function("frame_in_frame", frame_in_frame),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_frame_blit_aspect_fit_norm_rect",
+            vm.new_function(
+                "_frame_blit_aspect_fit_norm_rect",
+                frame_blit_aspect_fit_norm_rect,
+            ),
             vm,
         )
         .unwrap();

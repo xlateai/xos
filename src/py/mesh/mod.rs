@@ -1,11 +1,11 @@
 //! `xos.mesh` and `xos.input` — mesh (`local` / `lan`) + terminal line editor (Rust-backed).
 //! Python surface lives in `bootstrap.py` (included at compile time).
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::auth::{has_identity, load_node_identity};
 use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::mesh::{MeshMode, MeshSession, Packet};
 use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::{PyDict, PyList, PyModule, PyTuple};
@@ -78,7 +78,7 @@ fn py_to_json_inner(
     ))
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyObjectRef {
     match v {
         serde_json::Value::Null => vm.ctx.none(),
@@ -108,7 +108,7 @@ fn json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> rustpython_vm::PyOb
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
     let dict = vm.ctx.new_dict();
     dict.set_item("from_rank", vm.ctx.new_int(p.from_rank as isize).into(), vm)?;
@@ -126,7 +126,7 @@ fn packet_to_py(vm: &VirtualMachine, p: &Packet) -> PyResult {
     Ok(dict.into())
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn preprocess_remote_frame_send(
     vm: &VirtualMachine,
     id: &str,
@@ -167,7 +167,7 @@ fn preprocess_remote_frame_send(
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult {
     let jpeg_b64 = p
         .body
@@ -211,7 +211,7 @@ fn remote_frame_packet_to_py_frame(vm: &VirtualMachine, p: &Packet) -> PyResult 
     frame_cls.call((frame_dict.clone(),), vm)
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let mesh_id: String = if let Some(s) = args.args.first() {
         s.clone().try_into_value(vm)?
@@ -268,7 +268,7 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 fn mesh_connect(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("xos.mesh is not available on this target".to_string()))
 }
@@ -293,6 +293,11 @@ fn mesh_is_connected(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let connected = g.as_ref().map(|m| m.is_connected()).unwrap_or(false);
     Ok(vm.ctx.new_bool(connected).into())
+}
+
+fn mesh_disconnect(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    *MESH.lock().unwrap() = None;
+    Ok(vm.ctx.none())
 }
 
 fn mesh_prompt(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
@@ -324,7 +329,7 @@ fn mesh_node_name(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(m.node_name.as_str()).into())
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
@@ -333,12 +338,12 @@ fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(m.node_id.as_str()).into())
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 fn mesh_node_id(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("mesh not available".to_string()))
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn mesh_broadcast_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let id: String = args
         .args
@@ -361,12 +366,12 @@ fn mesh_broadcast_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 fn mesh_broadcast_payload(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("mesh not available".to_string()))
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn mesh_send_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let id: String = args
         .args
@@ -402,12 +407,12 @@ fn mesh_send_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 fn mesh_send_payload(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("mesh not available".to_string()))
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn mesh_receive(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let id: String = args
         .args
@@ -461,7 +466,7 @@ fn mesh_receive(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_list(out).into())
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+#[cfg(target_arch = "wasm32")]
 fn mesh_receive(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error("mesh not available".to_string()))
 }
@@ -532,6 +537,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm,
     );
     let _ = sub.set_attr(
+        "_mesh_disconnect",
+        vm.new_function("_mesh_disconnect", mesh_disconnect),
+        vm,
+    );
+    let _ = sub.set_attr(
         "_mesh_prompt",
         vm.new_function("_mesh_prompt", mesh_prompt),
         vm,
@@ -582,6 +592,11 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm,
     );
     let _ = scope.globals.set_item(
+        "_mesh_disconnect",
+        sub.get_attr("_mesh_disconnect", vm).unwrap(),
+        vm,
+    );
+    let _ = scope.globals.set_item(
         "_mesh_prompt",
         sub.get_attr("_mesh_prompt", vm).unwrap(),
         vm,
@@ -620,6 +635,9 @@ pub fn register_mesh(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         Ok(_) => {
             if let Ok(connect_fn) = scope.globals.get_item("connect", vm) {
                 let _ = sub.set_attr("connect", connect_fn, vm);
+            }
+            if let Ok(disconnect_fn) = scope.globals.get_item("disconnect", vm) {
+                let _ = sub.set_attr("disconnect", disconnect_fn, vm);
             }
         }
         Err(py_exc) => {

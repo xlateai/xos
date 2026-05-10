@@ -285,7 +285,7 @@ fn bilinear_rgb(small: &[u8], sw: usize, sh: usize, sx: f64, sy: f64) -> (u8, u8
     let ty = sy - y0 as f64;
 
     #[inline]
-    fn ix(buf: &[u8], px: usize, py: usize, stride_px: usize) -> usize {
+    fn ix(_buf: &[u8], px: usize, py: usize, stride_px: usize) -> usize {
         (py * stride_px + px) * 4
     }
 

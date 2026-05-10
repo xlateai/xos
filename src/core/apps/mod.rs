@@ -4,6 +4,8 @@ use crate::engine::Application;
 pub mod study;
 /// Text editor engine ([`text::TextApp`]) + Python UI entry (`text::launcher`, `text.py`).
 pub mod text;
+/// LAN remote viewer (`remote/launcher.rs`, `remote.py`) + desktop capture helpers (`remote/remote.rs`).
+pub mod remote;
 /// Implementation lives under [`transcription`]; the CLI subcommand is `transcribe` via [`transcribe`].
 pub mod transcription;
 #[cfg(target_arch = "wasm32")]
@@ -15,6 +17,7 @@ pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
     match name {
         "text" => text::launcher::boxed_text_demo_app(),
         "study" => study::launcher::boxed_study_app(),
+        "remote" => remote::launcher::boxed_remote_app(),
         _ => None,
     }
 }
@@ -24,6 +27,7 @@ pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
     match name {
         "text" => text::launcher::boxed_text_demo_app(),
         "study" => study::launcher::boxed_study_app(),
+        "remote" => remote::launcher::boxed_remote_app(),
         "xpy" => xpy::launcher::boxed_xpy_app(),
         _ => None,
     }
@@ -71,6 +75,15 @@ macro_rules! define_apps {
                 #[arg(long)]
                 ios: bool,
             },
+            #[command(name = "remote", about = "")]
+            RemoteCli {
+                #[arg(long = "wasm", alias = "web")]
+                wasm: bool,
+                #[arg(long = "react-native")]
+                react_native: bool,
+                #[arg(long)]
+                ios: bool,
+            },
         }
 
         pub fn run_app_command(app: AppCommands) {
@@ -98,6 +111,13 @@ macro_rules! define_apps {
                         $crate::run_game("study", wasm, react_native);
                     }
                 }
+                AppCommands::RemoteCli { wasm, react_native, ios } => {
+                    if ios {
+                        $crate::launch_ios_app("remote");
+                    } else {
+                        $crate::run_game("remote", wasm, react_native);
+                    }
+                }
             }
         }
 
@@ -120,7 +140,7 @@ macro_rules! define_apps {
                     stringify!($file),
                 )*
             ];
-            for extra in ["text", "study"] {
+            for extra in ["text", "study", "remote"] {
                 if !names.iter().any(|n| *n == extra) {
                     names.push(extra);
                 }
@@ -156,7 +176,6 @@ define_apps! {
     AudioRelay => audio_relay::AudioRelay,
     TextMesh => text_mesh::TextMeshApp,
     Overlay => overlay::OverlayApp,
-    Remote => remote::RemoteApp,
     IosRemote => ios_remote::IosRemoteApp,
     Mesh => mesh::MeshApp,
     Hang => hang::HangApp,
