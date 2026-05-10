@@ -1892,9 +1892,12 @@ class UiButton(_NormRect):
         if not isinstance(ev, dict):
             return
         kind = ev.get("kind")
-        btn = str(ev.get("button", "") or "")
-        is_left = bool(ev.get("is_left", btn == "left"))
-        if not is_left:
+        btn_raw = ev.get("button")
+        btn_s = str(btn_raw) if btn_raw is not None else ""
+        # Routed ``mouse_up`` uses current ``state.mouse.is_left_clicking``, which is already False
+        # after release, so ``is_left`` alone is unreliable; prefer ``button``.
+        primary = btn_s == "left" or (kind == "mouse_down" and bool(ev.get("is_left", False)))
+        if not primary:
             return
         mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
         my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
