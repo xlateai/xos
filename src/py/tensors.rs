@@ -4,7 +4,142 @@ use crate::python_api::dtypes::DType;
 pub use crate::tensor::tensor::{
     create_tensor_from_data, py_number_to_f64, tensor_flat_data_list, tensor_shape_tuple, Tensor,
 };
-use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
+use rustpython_vm::builtins::{PyBytes, PyDict, PyList, PyModule};
+use rustpython_vm::{function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine};
+
+/// One pass over uint8 RGBA / tensor bytes—min, max, arithmetic mean (as f64).
+#[inline]
+fn u8_slice_min_max_mean(b: &[u8]) -> Option<(f64, f64, f64)> {
+    if b.is_empty() {
+        return None;
+    }
+    let mut min_b = u8::MAX;
+    let mut max_b = 0u8;
+    let mut sum: u64 = 0;
+    for &x in b {
+        min_b = min_b.min(x);
+        max_b = max_b.max(x);
+        sum += x as u64;
+    }
+    let n = b.len() as f64;
+    Some((min_b as f64, max_b as f64, sum as f64 / n))
+}
+
+fn pyobject_to_f64_flat(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<f64> {
+    if let Ok(v) = obj.clone().try_into_value::<f64>(vm) {
+        return Ok(v);
+    }
+    if let Ok(v) = obj.clone().try_into_value::<i64>(vm) {
+        return Ok(v as f64);
+    }
+    if let Ok(v) = obj.clone().try_into_value::<bool>(vm) {
+        return Ok(if v { 1.0 } else { 0.0 });
+    }
+    Err(vm.new_type_error(
+        "Tensor reduction: flat storage has non-numeric element".to_string(),
+    ))
+}
+
+fn pylist_min_max_mean(lst: &PyList, vm: &VirtualMachine) -> PyResult<Option<(f64, f64, f64)>> {
+    let v = lst.borrow_vec();
+    if v.is_empty() {
+        return Ok(None);
+    }
+    let mut min_v = 0.0f64;
+    let mut max_v = 0.0f64;
+    let mut sum = 0.0f64;
+    let mut first = true;
+    for obj in v.iter() {
+        let x = pyobject_to_f64_flat(obj, vm)?;
+        if first {
+            min_v = x;
+            max_v = x;
+            first = false;
+        } else {
+            min_v = min_v.min(x);
+            max_v = max_v.max(x);
+        }
+        sum += x;
+    }
+    Ok(Some((min_v, max_v, sum / (v.len() as f64))))
+}
+
+fn tensor_min_max_mean_triplet(obj: PyObjectRef, vm: &VirtualMachine) -> PyResult<(f64, f64, f64)> {
+    let inner = vm
+        .get_attribute_opt(obj, "_data")?
+        .ok_or_else(|| vm.new_type_error("Tensor reduction: missing ._data".into()))?;
+    let td = inner
+        .downcast_ref::<PyDict>()
+        .ok_or_else(|| vm.new_type_error("Tensor reduction: ._data must be dict".into()))?;
+
+    if !td.contains_key("_data", vm) {
+        return Err(vm.new_value_error(
+            "cannot reduce an empty Tensor (no flat _data buffer)".to_string(),
+        ));
+    }
+
+    let storage = td.get_item("_data", vm)?;
+
+    if let Ok(pref) = storage.clone().downcast::<PyBytes>() {
+        let b = pref.as_bytes();
+        return u8_slice_min_max_mean(b).ok_or_else(|| {
+            vm.new_value_error(
+                "zero-size array to reduction operation which has no identity".to_string(),
+            )
+        });
+    }
+
+    if let Some(lst) = storage.downcast_ref::<PyList>() {
+        return pylist_min_max_mean(lst, vm)?.ok_or_else(|| {
+            vm.new_value_error(
+                "zero-size array to reduction operation which has no identity".to_string(),
+            )
+        });
+    }
+
+    Err(vm.new_type_error(
+        "Tensor reduction: expected flat _data as bytes or list".to_string(),
+    ))
+}
+
+fn first_arg_tensor(args: &FuncArgs, vm: &VirtualMachine, name: &str) -> PyResult<PyObjectRef> {
+    args.args
+        .first()
+        .cloned()
+        .ok_or_else(|| vm.new_type_error(format!("{name}() expects a Tensor argument")))
+}
+
+/// ``(min, max, mean)`` as float64 scalars in one native pass (for ``Tensor.__str__``).
+pub fn tensor_min_max_mean(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let obj = first_arg_tensor(&args, vm, "_tensor_min_max_mean")?;
+    let (mn, mx, av) = tensor_min_max_mean_triplet(obj, vm)?;
+    Ok(vm
+        .ctx
+        .new_tuple(vec![
+            vm.ctx.new_float(mn).into(),
+            vm.ctx.new_float(mx).into(),
+            vm.ctx.new_float(av).into(),
+        ])
+        .into())
+}
+
+pub fn tensor_min(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let obj = first_arg_tensor(&args, vm, "_tensor_min")?;
+    let (mn, _, _) = tensor_min_max_mean_triplet(obj, vm)?;
+    Ok(vm.ctx.new_float(mn).into())
+}
+
+pub fn tensor_max(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let obj = first_arg_tensor(&args, vm, "_tensor_max")?;
+    let (_, mx, _) = tensor_min_max_mean_triplet(obj, vm)?;
+    Ok(vm.ctx.new_float(mx).into())
+}
+
+pub fn tensor_mean(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let obj = first_arg_tensor(&args, vm, "_tensor_mean")?;
+    let (_, _, av) = tensor_min_max_mean_triplet(obj, vm)?;
+    Ok(vm.ctx.new_float(av).into())
+}
 
 fn wrap_tensor_dict(dict: rustpython_vm::PyObjectRef, vm: &VirtualMachine) -> PyResult {
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {

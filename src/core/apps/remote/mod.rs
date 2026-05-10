@@ -4,11 +4,20 @@
 //! - **Windows**: GDI capture + `SetCursorPos` / `mouse_event` on the streamer.
 //! - **macOS**: screen capture + mouse on the streamer (grant **Screen Recording** for the `xos` binary).
 //!
-//! Implementation: [`remote::RemoteApp`]. Python-facing sketch: `remote.py`.
+//! Desktop capture + synthetic pointer helpers for the `xos-remote` mesh — used by the daemon
+//! background thread (see the `daemon_remote` module in the `xos` binary) and by Python
+//! `xos.mesh`.
+//!
+//! **`xos app remote`** loads `launcher.rs` + `remote.py`.
 
+pub mod launcher;
 mod remote;
 
-pub use remote::RemoteApp;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(target_os = "windows", target_os = "macos")
+))]
+pub use remote::apply_remote_input;
 
 #[cfg(all(
     not(target_arch = "wasm32"),

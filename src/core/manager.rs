@@ -179,6 +179,7 @@ fn reconnect_proc_session(label: &str) -> Option<Arc<MeshSession>> {
                         MeshMode::Lan,
                         Arc::clone(&id),
                         None,
+                        false,
                     ) {
                         Ok(s) => return finalize_proc_session(s, label),
                         Err(_) => {

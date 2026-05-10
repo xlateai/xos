@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -52,6 +52,15 @@ const RELAY_DEFAULT: &str = "http://xos.xlate.ai:47333";
 const ONLINE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[cfg(not(target_arch = "wasm32"))]
 const ONLINE_POLL_FAIL_GRACE: u32 = 5;
+
+/// Latest-wins queue for [`MeshSession::broadcast_json`] (one pending payload per `kind`).
+/// Drained on a background thread so Python / the app tick loop does not block on TCP backpressure.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct CoalesceBroadcastLane {
+    pending: Mutex<HashMap<String, serde_json::Value>>,
+    cv: Condvar,
+}
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
     WireEnvelope {
@@ -499,6 +508,10 @@ pub struct Inbox {
     cv: Condvar,
 }
 
+/// Cap per `kind` so fast producers (e.g. video) cannot build an unbounded decoded queue
+/// while a slower consumer only shows `latest_only` — each push is already fully decoded.
+const INBOX_KIND_MAX_PACKETS: usize = 4;
+
 struct InboxInner {
     queues: HashMap<String, VecDeque<Packet>>,
 }
@@ -515,7 +528,11 @@ impl Inbox {
 
     fn push(&self, p: Packet) {
         let mut g = self.inner.lock().unwrap();
-        g.queues.entry(p.kind.clone()).or_default().push_back(p);
+        let q = g.queues.entry(p.kind.clone()).or_default();
+        while q.len() >= INBOX_KIND_MAX_PACKETS {
+            q.pop_front();
+        }
+        q.push_back(p);
         drop(g);
         self.cv.notify_all();
     }
@@ -570,6 +587,9 @@ pub struct MeshSession {
     /// Session keys for encrypted LAN client role.
     #[cfg(not(target_arch = "wasm32"))]
     lan_client: Option<LanWireKeys>,
+    /// When set (Python `xos.mesh.connect` only), `broadcast_json` enqueues and a worker runs `send_impl`.
+    #[cfg(not(target_arch = "wasm32"))]
+    coalesce_broadcast: Option<Arc<CoalesceBroadcastLane>>,
 }
 
 enum MeshRole {
@@ -702,6 +722,7 @@ fn mesh_session_from_host_listener(
     lan_discovery_mesh_id: Option<&str>,
     identity: Option<Arc<UnlockedNodeIdentity>>,
     max_total_nodes: Option<u32>,
+    coordinator_mesh_udp: bool,
 ) -> Result<MeshSession, String> {
     listener.set_nonblocking(false).map_err(|e| e.to_string())?;
     let tcp_port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -750,6 +771,7 @@ fn mesh_session_from_host_listener(
             id_c,
             lan_h,
             max_total_nodes,
+            coordinator_mesh_udp,
         );
     });
 
@@ -769,6 +791,7 @@ fn mesh_session_from_host_listener(
         shutdown,
         lan_host,
         lan_client: None,
+        coalesce_broadcast: None,
     };
     attach_mesh_heartbeat(&session);
     Ok(session)
@@ -884,6 +907,7 @@ fn finish_client_connection(stream: TcpStream) -> Result<MeshSession, String> {
 fn finish_client_connection(
     stream: TcpStream,
     identity: Option<Arc<UnlockedNodeIdentity>>,
+    mesh_udp: bool,
 ) -> Result<MeshSession, String> {
     let inbox = Arc::new(Inbox::new());
     let num_nodes = Arc::new(AtomicU32::new(1));
@@ -895,7 +919,7 @@ fn finish_client_connection(
     let _ = stream.set_nodelay(true);
 
     let (lan_client, mut reader, stream) = if let Some(id) = identity.as_ref() {
-        let (keys, reader, stream) = client_handshake(stream, id.as_ref())?;
+        let (keys, reader, stream) = client_handshake(stream, id.as_ref(), mesh_udp)?;
         (Some(keys), reader, stream)
     } else {
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -958,6 +982,7 @@ fn finish_client_connection(
         shutdown,
         lan_client,
         lan_host: None,
+        coalesce_broadcast: None,
     };
     attach_mesh_heartbeat(&session);
     Ok(session)
@@ -975,11 +1000,12 @@ fn try_mesh_client_once(addr: SocketAddr) -> Result<MeshSession, String> {
 fn try_mesh_client_once(
     addr: SocketAddr,
     identity: Option<Arc<UnlockedNodeIdentity>>,
+    mesh_udp: bool,
 ) -> Result<MeshSession, String> {
     let stream =
         TcpStream::connect_timeout(&addr, Duration::from_millis(120)).map_err(|e| e.to_string())?;
     let _ = stream.set_nodelay(true);
-    finish_client_connection(stream, identity)
+    finish_client_connection(stream, identity, mesh_udp)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1018,6 +1044,7 @@ fn mesh_session_from_client_addr(addr: SocketAddr) -> Result<MeshSession, String
 fn mesh_session_from_client_addr(
     addr: SocketAddr,
     identity: Option<Arc<UnlockedNodeIdentity>>,
+    mesh_udp: bool,
 ) -> Result<MeshSession, String> {
     const ATTEMPTS: u32 = 24;
     const CONNECT_MS: u64 = 120;
@@ -1029,7 +1056,7 @@ fn mesh_session_from_client_addr(
         match TcpStream::connect_timeout(&addr, Duration::from_millis(CONNECT_MS)) {
             Ok(stream) => {
                 let _ = stream.set_nodelay(true);
-                match finish_client_connection(stream, identity.clone()) {
+                match finish_client_connection(stream, identity.clone(), mesh_udp) {
                     Ok(s) => return Ok(s),
                     Err(e) => {
                         last_err = Some(e);
@@ -1107,6 +1134,7 @@ fn mesh_session_from_online_relay(
         shutdown: Arc::clone(&shutdown),
         lan_host: None,
         lan_client: None,
+        coalesce_broadcast: None,
     };
 
     let inbox_r = Arc::clone(&inbox);
@@ -1251,8 +1279,14 @@ impl MeshSession {
                 MeshMode::Local => {
                     let loopback = SocketAddr::from(([127, 0, 0, 1], port));
                     match TcpListener::bind(loopback) {
-                        Ok(listener) => mesh_session_from_host_listener(listener, None, None, None),
-                        Err(_) => mesh_session_from_client_addr(loopback, None),
+                        Ok(listener) => mesh_session_from_host_listener(
+                            listener,
+                            None,
+                            None,
+                            None,
+                            false,
+                        ),
+                        Err(_) => mesh_session_from_client_addr(loopback, None, false),
                     }
                 }
                 MeshMode::Lan => {
@@ -1271,8 +1305,15 @@ impl MeshSession {
         mode: MeshMode,
         identity: Arc<UnlockedNodeIdentity>,
         max_total_nodes: Option<u32>,
+        mesh_udp: bool,
     ) -> Result<Self, String> {
         require_authorized_non_local_mesh(mode)?;
+        if mesh_udp && mode != MeshMode::Lan {
+            return Err(
+                "mesh join: udp=True is only supported for MeshMode::Lan (use xos.mesh.connect)"
+                    .into(),
+            );
+        }
         let account_aid = {
             let auth = load_identity().map_err(|e| e.to_string())?;
             node_id_from_public_pem(auth.public_pem.as_str()).map_err(|e| e.to_string())?
@@ -1291,7 +1332,11 @@ impl MeshSession {
                 // 2) UDP discovery for remote peers (e.g. Mac on the LAN).
                 // 3) Otherwise bind 0.0.0.0 and become coordinator.
                 let loopback = SocketAddr::from(([127, 0, 0, 1], scoped_port));
-                if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
+                if let Ok(s) = try_mesh_client_once(
+                    loopback,
+                    Some(Arc::clone(&identity)),
+                    mesh_udp,
+                ) {
                     return Ok(s);
                 }
                 if let Some(remote) = lan_discover_coordinator(
@@ -1299,7 +1344,11 @@ impl MeshSession {
                     scoped_port,
                     Some(account_aid.as_str()),
                 )? {
-                    return mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)));
+                    return mesh_session_from_client_addr(
+                        remote,
+                        Some(Arc::clone(&identity)),
+                        mesh_udp,
+                    );
                 }
                 let any = SocketAddr::from(([0, 0, 0, 0], scoped_port));
                 match TcpListener::bind(any) {
@@ -1308,10 +1357,15 @@ impl MeshSession {
                         Some(scoped_mesh_id.as_str()),
                         Some(identity),
                         max_total_nodes,
+                        mesh_udp,
                     ),
                     Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                         thread::sleep(Duration::from_millis(80));
-                        if let Ok(s) = try_mesh_client_once(loopback, Some(Arc::clone(&identity))) {
+                        if let Ok(s) = try_mesh_client_once(
+                            loopback,
+                            Some(Arc::clone(&identity)),
+                            mesh_udp,
+                        ) {
                             Ok(s)
                         } else if let Some(remote) = lan_discover_coordinator(
                             scoped_mesh_id.as_str(),
@@ -1319,9 +1373,17 @@ impl MeshSession {
                             Some(account_aid.as_str()),
                         )?
                         {
-                            mesh_session_from_client_addr(remote, Some(Arc::clone(&identity)))
+                            mesh_session_from_client_addr(
+                                remote,
+                                Some(Arc::clone(&identity)),
+                                mesh_udp,
+                            )
                         } else {
-                            mesh_session_from_client_addr(loopback, Some(Arc::clone(&identity)))
+                            mesh_session_from_client_addr(
+                                loopback,
+                                Some(Arc::clone(&identity)),
+                                mesh_udp,
+                            )
                         }
                     }
                     Err(e) => Err(format!(
@@ -1346,7 +1408,71 @@ impl MeshSession {
     }
 
     pub fn broadcast_json(&self, kind: &str, payload: serde_json::Value) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref lane) = self.coalesce_broadcast {
+            lane.pending
+                .lock()
+                .unwrap()
+                .insert(kind.to_string(), payload);
+            lane.cv.notify_one();
+            return Ok(());
+        }
         self.send_impl(None, kind, payload)
+    }
+
+    /// Turn on coalesced broadcast (Python `mesh.connect` path). Must call
+    /// [`MeshSession::spawn_coalesced_broadcast_worker`] after wrapping in `Arc`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn enable_coalesced_broadcast(&mut self) {
+        self.coalesce_broadcast = Some(Arc::new(CoalesceBroadcastLane::default()));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn spawn_coalesced_broadcast_worker(sess: Arc<MeshSession>) {
+        let Some(lane) = sess.coalesce_broadcast.as_ref().cloned() else {
+            return;
+        };
+        let weak_session: Weak<MeshSession> = Arc::downgrade(&sess);
+        let shutdown = Arc::clone(&sess.shutdown);
+        thread::spawn(move || {
+            MeshSession::coalesce_broadcast_worker_loop(weak_session, lane, shutdown);
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn coalesce_broadcast_worker_loop(
+        weak_session: Weak<MeshSession>,
+        lane: Arc<CoalesceBroadcastLane>,
+        shutdown: Arc<AtomicU32>,
+    ) {
+        loop {
+            let batch: Vec<(String, serde_json::Value)> = {
+                let mut map = lane.pending.lock().unwrap();
+                loop {
+                    if shutdown.load(Ordering::SeqCst) != 0 {
+                        return;
+                    }
+                    if weak_session.upgrade().is_none() {
+                        return;
+                    }
+                    if !map.is_empty() {
+                        break std::mem::take(&mut *map)
+                            .into_iter()
+                            .collect();
+                    }
+                    map = lane.cv.wait(map).unwrap();
+                }
+            };
+            let Some(sess) = weak_session.upgrade() else {
+                return;
+            };
+            for (kind, payload) in batch {
+                if shutdown.load(Ordering::SeqCst) != 0 {
+                    return;
+                }
+                let _ = sess.send_impl(None, &kind, payload);
+            }
+        }
     }
 
     pub fn send_to_json(
@@ -1527,6 +1653,10 @@ impl Drop for MeshSession {
     fn drop(&mut self) {
         self.shutdown.fetch_add(1, Ordering::SeqCst);
         #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref lane) = self.coalesce_broadcast {
+            lane.cv.notify_all();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if let MeshRole::OnlineClient { relay } = &self.role {
             let _ = relay_post_json(
                 &relay.http,
@@ -1603,6 +1733,7 @@ fn host_accept_loop(
     identity: Option<Arc<UnlockedNodeIdentity>>,
     lan_host: Option<Arc<Mutex<Vec<Option<LanWireKeys>>>>>,
     max_total_nodes: Option<u32>,
+    coordinator_mesh_udp: bool,
 ) {
     for conn in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) != 0 {
@@ -1653,7 +1784,9 @@ fn host_accept_loop(
 
         let id = identity.as_ref().unwrap();
         let lh = lan_host.as_ref().unwrap();
-        let Ok((keys, reader, write_half)) = server_handshake(stream, id.as_ref()) else {
+        let Ok((keys, reader, write_half)) =
+            server_handshake(stream, id.as_ref(), coordinator_mesh_udp)
+        else {
             continue;
         };
 

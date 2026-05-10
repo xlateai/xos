@@ -145,7 +145,8 @@ fn queue_and_send_input(
 impl Application for IosRemoteApp {
     fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> {
         let id = Arc::new(load_node_identity().map_err(|e| format!("{e}"))?);
-        let mesh = MeshSession::join_with_identity(IOS_REMOTE_MESH_ID, MeshMode::Lan, id, None)?;
+        let mesh =
+            MeshSession::join_with_identity(IOS_REMOTE_MESH_ID, MeshMode::Lan, id, None, false)?;
         self.session = Some(IosRemoteSession {
             mesh,
             pending_scroll: 0.0,

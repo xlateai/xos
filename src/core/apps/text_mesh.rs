@@ -209,6 +209,7 @@ impl TextMeshApp {
             self.mode,
             Arc::new(node_identity),
             None,
+            false,
         )?
         };
         #[cfg(target_arch = "wasm32")]

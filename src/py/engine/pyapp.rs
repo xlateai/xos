@@ -630,19 +630,72 @@ class Tensor:
     def tuple(self):
         """Same as ``list()`` but with tuples at each nesting level."""
         return _nested_list_to_tuple(self.list())
-    
+
+    def min(self, axis=None, out=None, keepdims=False, **kwargs):
+        """Global minimum (numpy-style signature); reductions run in Rust. ``axis`` / ``out`` / ``keepdims`` … not implemented yet."""
+        if kwargs:
+            raise TypeError(
+                "Tensor.min() got unexpected keyword arguments: "
+                + ", ".join(sorted(kwargs.keys()))
+            )
+        if axis is not None:
+            raise NotImplementedError("Tensor.min(axis=...) is not implemented yet")
+        if out is not None:
+            raise NotImplementedError("Tensor.min(out=...) is not implemented yet")
+        if keepdims:
+            raise NotImplementedError("Tensor.min(keepdims=True) is not implemented yet")
+        import xos
+
+        return xos._tensor_min(self)
+
+    def max(self, axis=None, out=None, keepdims=False, **kwargs):
+        """Global maximum (numpy-style); reductions run in Rust."""
+        if kwargs:
+            raise TypeError(
+                "Tensor.max() got unexpected keyword arguments: "
+                + ", ".join(sorted(kwargs.keys()))
+            )
+        if axis is not None:
+            raise NotImplementedError("Tensor.max(axis=...) is not implemented yet")
+        if out is not None:
+            raise NotImplementedError("Tensor.max(out=...) is not implemented yet")
+        if keepdims:
+            raise NotImplementedError("Tensor.max(keepdims=True) is not implemented yet")
+        import xos
+
+        return xos._tensor_max(self)
+
+    def mean(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """Arithmetic mean over the flat buffer (numpy-style ``axis=None`` default); reductions run in Rust."""
+        if kwargs:
+            raise TypeError(
+                "Tensor.mean() got unexpected keyword arguments: "
+                + ", ".join(sorted(kwargs.keys()))
+            )
+        if axis is not None:
+            raise NotImplementedError("Tensor.mean(axis=...) is not implemented yet")
+        if dtype is not None:
+            raise NotImplementedError("Tensor.mean(dtype=...) is not implemented yet")
+        if out is not None:
+            raise NotImplementedError("Tensor.mean(out=...) is not implemented yet")
+        if keepdims:
+            raise NotImplementedError("Tensor.mean(keepdims=True) is not implemented yet")
+        import xos
+
+        return xos._tensor_mean(self)
+
     def __str__(self):
-        # For regular tensors (not frame tensors), compute statistics
-        if '_data' in self._data:
-            data_list = self._data['_data']
-            if data_list and len(data_list) > 0:
-                min_val = min(data_list)
-                max_val = max(data_list)
-                mean_val = sum(data_list) / len(data_list)
-                return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, min={min_val:.3f}, max={max_val:.3f}, mean={mean_val:.3f})"
+        if "_data" not in self._data:
+            return f"xos.Tensor(shape={self.shape}, dtype=u8)"
+        import xos
+
+        try:
+            mn, mx, av = xos._tensor_min_max_mean(self)
+        except ValueError:
             return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, empty)"
-        # For frame tensors (no _data field)
-        return f"xos.Tensor(shape={self.shape}, dtype=u8)"
+        except TypeError:
+            return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, <opaque flat storage>)"
+        return f"xos.Tensor(shape={self.shape}, dtype={self.dtype}, min={float(mn):.3f}, max={float(mx):.3f}, mean={float(av):.3f})"
     
     def __repr__(self):
         return self.__str__()

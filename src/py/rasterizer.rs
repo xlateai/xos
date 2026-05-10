@@ -4,9 +4,10 @@ use crate::rasterizer::text::fonts::{self, FontFamily};
 use crate::rasterizer::text::text_rasterization::TextRasterizer;
 use fontdue::Font;
 use rustpython_vm::{
-    builtins::{PyBytes, PyDict, PyList, PyModule},
+    builtins::{PyBytes, PyDict, PyList, PyModule, PyTuple, PyType},
     function::FuncArgs,
-    PyObjectRef, PyRef, PyResult, VirtualMachine,
+    AsObject,
+    Py, PyObjectRef, PyRef, PyResult, VirtualMachine,
 };
 use std::cell::RefCell;
 use std::sync::Mutex;
@@ -14,6 +15,209 @@ use std::sync::Mutex;
 thread_local! {
     /// Reused full-frame scratch for `blur()` to avoid an 8 MB+ allocation every tick.
     static BLUR_FRAME_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
+
+/// RGBA for `video` / aspect-fit blit: [`Self::Borrowed`] avoids allocating when `_data` is `bytes`.
+pub(crate) enum ViewportRgbaSource {
+    Borrowed(PyRef<PyBytes>),
+    Owned(Vec<u8>),
+}
+
+impl ViewportRgbaSource {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            ViewportRgbaSource::Borrowed(b) => b.as_bytes(),
+            ViewportRgbaSource::Owned(v) => v.as_slice(),
+        }
+    }
+}
+
+#[inline]
+fn is_builtin_frame(vm: &VirtualMachine, obj: &PyObjectRef) -> PyResult<bool> {
+    let Ok(cls_obj) = vm.builtins.get_attr("Frame", vm) else {
+        return Ok(false);
+    };
+    let Some(cls) = cls_obj.downcast_ref::<PyType>() else {
+        return Ok(false);
+    };
+    Ok(obj.fast_isinstance(cls))
+}
+
+#[inline]
+fn is_builtin_tensor(vm: &VirtualMachine, obj: &PyObjectRef) -> PyResult<bool> {
+    let Ok(cls_obj) = vm.builtins.get_attr("Tensor", vm) else {
+        return Ok(false);
+    };
+    let Some(cls) = cls_obj.downcast_ref::<PyType>() else {
+        return Ok(false);
+    };
+    Ok(obj.fast_isinstance(cls))
+}
+
+fn read_hwc_triplet(tuple_or_list: PyObjectRef, vm: &VirtualMachine) -> PyResult<(usize, usize, usize)> {
+    if let Some(t) = tuple_or_list.downcast_ref::<PyTuple>() {
+        let sl = t.as_slice();
+        if sl.len() < 3 {
+            return Err(vm.new_value_error(
+                "tensor shape expects at least three dimensions [H,W,C]".to_string(),
+            ));
+        }
+        let h = sl[0].clone().try_into_value::<i64>(vm)? as usize;
+        let w = sl[1].clone().try_into_value::<i64>(vm)? as usize;
+        let c = sl[2].clone().try_into_value::<i64>(vm)? as usize;
+        return Ok((h, w, c));
+    }
+    if let Some(lst) = tuple_or_list.downcast_ref::<PyList>() {
+        let v = lst.borrow_vec();
+        if v.len() < 3 {
+            return Err(vm.new_value_error(
+                "tensor shape list expects three entries [H,W,C]".to_string(),
+            ));
+        }
+        let h = v[0].clone().try_into_value::<i64>(vm)? as usize;
+        let w = v[1].clone().try_into_value::<i64>(vm)? as usize;
+        let c = v[2].clone().try_into_value::<i64>(vm)? as usize;
+        return Ok((h, w, c));
+    }
+    Err(vm.new_type_error(
+        "tensor.shape must be a tuple or list of at least three ints".to_string(),
+    ))
+}
+
+fn rgba_tensor_dict(
+    td: &Py<PyDict>,
+    outer_h: usize,
+    outer_w: usize,
+    vm: &VirtualMachine,
+) -> PyResult<ViewportRgbaSource> {
+    let need = outer_h
+        .saturating_mul(outer_w)
+        .saturating_mul(4);
+
+    let data_obj = if let Ok(o) = td.get_item("_data", vm) {
+        o
+    } else if let Ok(o) = td.get_item("data", vm) {
+        o
+    } else {
+        return Err(vm.new_type_error(
+            "tensor dict RGBA expects key '_data' or 'data'".to_string(),
+        ));
+    };
+
+    if let Ok(pref_bytes) = data_obj.clone().downcast::<PyBytes>() {
+        let sl = pref_bytes.as_bytes();
+        if sl.len() != need {
+            return Err(vm.new_value_error(format!(
+                "RGBA bytes length {} does not match {}×{}×4",
+                sl.len(),
+                outer_h,
+                outer_w
+            )));
+        }
+        return Ok(ViewportRgbaSource::Borrowed(pref_bytes));
+    }
+
+    let Ok(pref_list) = data_obj.clone().downcast::<PyList>() else {
+        return Err(vm.new_type_error(
+            "tensor `_data` for video must be PyBytes or flat list[u8]".to_string(),
+        ));
+    };
+
+    let items = pref_list.borrow_vec();
+    if items.len() != need {
+        return Err(vm.new_value_error(format!(
+            "tensor list length {} does not match {}×{}×4",
+            items.len(),
+            outer_h,
+            outer_w
+        )));
+    }
+    let mut out = Vec::with_capacity(need);
+    for it in items.iter() {
+        let v: i32 = it.clone().try_into_value(vm)?;
+        out.push(v.clamp(0, 255) as u8);
+    }
+    Ok(ViewportRgbaSource::Owned(out))
+}
+
+/// Resolve [`Frame`], [`Tensor`], or duck-typed dicts to `[W,H]` and RGBA for video blits.
+///
+/// Uses [`ViewportRgbaSource::Borrowed`] when `_data` is `bytes`, so resized blits do not allocate a full-frame copy on that path.
+pub(crate) fn resolve_viewport_rgba(
+    vm: &VirtualMachine,
+    obj: PyObjectRef,
+) -> PyResult<(usize, usize, ViewportRgbaSource)> {
+    let bad_type = vm.new_type_error(
+        "video/set_frame expects xos.Frame or xos.Tensor with uint8 RGBA (shape H×W×4)".to_string(),
+    );
+
+    if is_builtin_frame(vm, &obj)? {
+        let inner = vm.get_attribute_opt(obj.clone(), "_data")?.ok_or_else(|| {
+            vm.new_type_error("Frame._data missing".to_string())
+        })?;
+        let fd = inner
+            .downcast_ref::<PyDict>()
+            .ok_or_else(|| vm.new_type_error("Frame._data must be dict".to_string()))?;
+        let width: usize = fd.get_item("width", vm)?.clone().try_into_value(vm)?;
+        let height: usize = fd.get_item("height", vm)?.clone().try_into_value(vm)?;
+        let tensor = fd.get_item("tensor", vm)?;
+        let tdict = tensor
+            .downcast_ref::<PyDict>()
+            .ok_or_else(|| vm.new_type_error("Frame.tensor must be dict".to_string()))?;
+        let px = rgba_tensor_dict(tdict, height, width, vm)?;
+        return Ok((width, height, px));
+    }
+
+    if is_builtin_tensor(vm, &obj)? {
+        let inner = vm
+            .get_attribute_opt(obj.clone(), "_data")?
+            .ok_or_else(|| vm.new_attribute_error("Tensor._data missing".to_string()))?;
+        let td = inner
+            .downcast_ref::<PyDict>()
+            .ok_or_else(|| vm.new_type_error("Tensor._data must be dict".to_string()))?;
+        return rgba_from_standalone_tensor_dict(vm, td);
+    }
+
+    if let Some(inner) = vm.get_attribute_opt(obj.clone(), "_data")? {
+        if let Some(fd) = inner.downcast_ref::<PyDict>() {
+            if fd.contains_key("width", vm)
+                && fd.contains_key("height", vm)
+                && fd.contains_key("tensor", vm)
+            {
+                let width: usize = fd.get_item("width", vm)?.clone().try_into_value(vm)?;
+                let height: usize = fd.get_item("height", vm)?.clone().try_into_value(vm)?;
+                let tensor = fd.get_item("tensor", vm)?;
+                let tdict = tensor
+                    .downcast_ref::<PyDict>()
+                    .ok_or_else(|| vm.new_type_error("tensor field must be dict".to_string()))?;
+                let px = rgba_tensor_dict(tdict, height, width, vm)?;
+                return Ok((width, height, px));
+            }
+            if fd.contains_key("shape", vm) {
+                return rgba_from_standalone_tensor_dict(vm, fd);
+            }
+        }
+    }
+
+    Err(bad_type)
+}
+
+fn rgba_from_standalone_tensor_dict(
+    vm: &VirtualMachine,
+    d: &Py<PyDict>,
+) -> PyResult<(usize, usize, ViewportRgbaSource)> {
+    let shape_o = d.get_item("shape", vm)?;
+    let (h, w, c) = read_hwc_triplet(shape_o, vm)?;
+    if c != 4 {
+        return Err(vm.new_value_error(
+            "viewport video expects RGBA tensor (last dim = 4)".to_string(),
+        ));
+    }
+    rgba_tensor_dict(d, h, w, vm).map(|src| {
+        debug_assert!(src.as_slice().len() == h * w * 4);
+        (w, h, src)
+    })
 }
 
 fn py_number_to_f32(
@@ -63,6 +267,19 @@ pub fn set_frame_buffer_context(buffer: &mut [u8], width: usize, height: usize) 
 /// Called by PyApp after tick to clear the frame buffer pointer
 pub fn clear_frame_buffer_context() {
     *CURRENT_FRAME_BUFFER.lock().unwrap() = None;
+}
+
+/// Copy active RGBA framebuffer when `width` / `height` match the bound context (used by `xos.json` / mesh).
+pub(crate) fn copy_active_frame_rgba_if_match(width: usize, height: usize) -> Option<Vec<u8>> {
+    let w = *CURRENT_FRAME_WIDTH.lock().ok()?;
+    let h = *CURRENT_FRAME_HEIGHT.lock().ok()?;
+    if w != width || h != height {
+        return None;
+    }
+    let buf_guard = CURRENT_FRAME_BUFFER.lock().ok()?;
+    let ptr = buf_guard.as_ref()?.0;
+    let len = width.checked_mul(height)?.checked_mul(4)?;
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
 }
 
 /// xos.rasterizer.circles() - efficiently draw circles directly on the Rust frame buffer
@@ -1260,41 +1477,198 @@ fn blit_rgba_stretch(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: us
     }
 }
 
-fn frame_object_to_rgba(
-    vm: &VirtualMachine,
-    frame_obj: PyObjectRef,
-) -> PyResult<(usize, usize, Vec<u8>)> {
-    let data_obj = match vm.get_attribute_opt(frame_obj.clone(), "_data") {
-        Ok(Some(d)) => d,
-        Ok(None) | Err(_) => frame_obj,
-    };
-    let dict = data_obj.downcast_ref::<PyDict>().ok_or_else(|| {
-        vm.new_type_error(
-            "frame_in_frame: src must be a Frame (e.g. mesh remote_frame)".to_string(),
-        )
-    })?;
-    let width: usize = dict.get_item("width", vm)?.clone().try_into_value(vm)?;
-    let height: usize = dict.get_item("height", vm)?.clone().try_into_value(vm)?;
-    let tensor = dict.get_item("tensor", vm)?;
-    let tdict = tensor.downcast_ref::<PyDict>().ok_or_else(|| {
-        vm.new_type_error("frame_in_frame: expected tensor dict on Frame".to_string())
-    })?;
-    let data_obj = tdict.get_item("_data", vm)?;
-    if let Some(bytes) = data_obj.downcast_ref::<PyBytes>() {
-        let s = bytes.as_bytes();
-        if s.len() != width * height * 4 {
-            return Err(
-                vm.new_value_error("frame tensor byte length mismatch (expect RGBA)".to_string())
-            );
-        }
-        return Ok((width, height, s.to_vec()));
-    }
-    Err(vm.new_type_error(
-        "frame_in_frame: tensor _data must be bytes (decoded remote frame)".to_string(),
-    ))
+fn norm_xyxy_to_px(
+    nx1: f64,
+    ny1: f64,
+    nx2: f64,
+    ny2: f64,
+    frame_w: u32,
+    frame_h: u32,
+) -> (usize, usize, usize, usize) {
+    let nw = frame_w as f64;
+    let nh = frame_h as f64;
+    let xa = nx1.min(nx2).clamp(0.0, 1.0);
+    let ya = ny1.min(ny2).clamp(0.0, 1.0);
+    let xb = nx1.max(nx2).clamp(0.0, 1.0);
+    let yb = ny1.max(ny2).clamp(0.0, 1.0);
+    let bx0 = (xa * nw).floor() as usize;
+    let by0 = (ya * nh).floor() as usize;
+    let bx1 = (xb * nw).ceil() as usize;
+    let by1 = (yb * nh).ceil() as usize;
+    let bw = bx1.saturating_sub(bx0).max(1);
+    let bh = by1.saturating_sub(by0).max(1);
+    (bx0, by0, bw, bh)
 }
 
-/// Stretch-blit a source [`Frame`] (RGBA bytes) into the active engine framebuffer.
+fn aspect_fit_wh(sw: usize, sh: usize, bw: usize, bh: usize) -> (usize, usize, usize, usize) {
+    let sx = sw.max(1) as f64;
+    let sy = sh.max(1) as f64;
+    let bx = bw.max(1) as f64;
+    let by = bh.max(1) as f64;
+    let scale = (bx / sx).min(by / sy);
+    let fw = (sx * scale).floor().max(1.0) as usize;
+    let fh = (sy * scale).floor().max(1.0) as usize;
+    let ox = bw.saturating_sub(fw) / 2;
+    let oy = bh.saturating_sub(fh) / 2;
+    (ox, oy, fw, fh)
+}
+
+fn fill_rgba_rect(
+    dst: &mut [u8],
+    fw: usize,
+    fh: usize,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    rgba: [u8; 4],
+) {
+    for row in 0..h {
+        let y = y0.saturating_add(row);
+        if y >= fh {
+            break;
+        }
+        for col in 0..w {
+            let x = x0.saturating_add(col);
+            if x >= fw {
+                break;
+            }
+            let di = (y * fw + x).saturating_mul(4);
+            if di + 3 < dst.len() {
+                dst[di..di + 4].copy_from_slice(&rgba);
+            }
+        }
+    }
+}
+
+fn blit_rgba_resize_into_rect(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dst: &mut [u8],
+    frame_w: usize,
+    frame_h: usize,
+    ax0: usize,
+    ay0: usize,
+    dw: usize,
+    dh: usize,
+) {
+    let req = sw.saturating_mul(sh).saturating_mul(4);
+    if src.len() != req || dw == 0 || dh == 0 {
+        return;
+    }
+
+    // 1:1 copy into the framebuffer (nearest-neighbour when dims match fitted rect).
+    if sw == dw
+        && sh == dh
+        && ax0.saturating_add(dw) <= frame_w
+        && ay0.saturating_add(dh) <= frame_h
+    {
+        let row_bytes = dw.saturating_mul(4);
+        for row in 0..sh {
+            let si = row.saturating_mul(sw).saturating_mul(4);
+            let di = (ay0.saturating_add(row))
+                .saturating_mul(frame_w)
+                .saturating_add(ax0)
+                .saturating_mul(4);
+            dst[di..di + row_bytes].copy_from_slice(&src[si..si + row_bytes]);
+        }
+        return;
+    }
+
+    // Precompute maps once (old code recomputed sx for every destination row).
+    let dh_d = dh.max(1);
+    let dw_d = dw.max(1);
+    let sx_cap = sw.saturating_sub(1);
+    let sy_cap = sh.saturating_sub(1);
+
+    let mut sx_map = Vec::with_capacity(dw);
+    for dx in 0..dw {
+        let sx = (dx.saturating_mul(sw)) / dw_d;
+        sx_map.push(sx.min(sx_cap));
+    }
+    let mut sy_map = Vec::with_capacity(dh);
+    for dy in 0..dh {
+        let sy = (dy.saturating_mul(sh)) / dh_d;
+        sy_map.push(sy.min(sy_cap));
+    }
+
+    for dy in 0..dh {
+        let y = ay0.saturating_add(dy);
+        if y >= frame_h {
+            break;
+        }
+        let sy = sy_map[dy];
+        let src_row = sy.saturating_mul(sw).saturating_mul(4);
+        let di_row = y.saturating_mul(frame_w).saturating_add(ax0).saturating_mul(4);
+        for dx in 0..dw {
+            let x = ax0.saturating_add(dx);
+            if x >= frame_w {
+                break;
+            }
+            let sx = sx_map[dx];
+            let si = src_row.saturating_add(sx.saturating_mul(4));
+            let di = di_row.saturating_add(dx.saturating_mul(4));
+            if si + 3 < src.len() && di + 3 < dst.len() {
+                dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+    }
+}
+
+/// Aspect-fit an ``xos.Frame`` or ``xos.Tensor`` (uint8 RGBA) into a normalized sub-rectangle of the active framebuffer.
+/// Returns ``(fit_x, fit_y, fit_w, fit_h)`` in **pixel** coordinates for pointer mapping.
+fn frame_blit_aspect_fit_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 5 {
+        return Err(vm.new_type_error(
+            "_frame_blit_aspect_fit_norm_rect(frame_or_tensor, nx1, ny1, nx2, ny2): 5 args".to_string(),
+        ));
+    }
+    let nx1: f64 = args_vec[1].clone().try_into_value(vm)?;
+    let ny1: f64 = args_vec[2].clone().try_into_value(vm)?;
+    let nx2: f64 = args_vec[3].clone().try_into_value(vm)?;
+    let ny2: f64 = args_vec[4].clone().try_into_value(vm)?;
+    let frame_obj = args_vec[0].clone();
+
+    let (sw, sh, src_px) = resolve_viewport_rgba(vm, frame_obj)?;
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
+    let nw = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let nh = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let nw_u32 = u32::try_from(nw).unwrap_or(u32::MAX);
+    let nh_u32 = u32::try_from(nh).unwrap_or(u32::MAX);
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error(
+            "_frame_blit_aspect_fit_norm_rect: no active framebuffer (tick an Application)".to_string(),
+        )
+    })?;
+    let fw = nw;
+    let fh = nh;
+    let dst_len = fw.saturating_mul(fh).saturating_mul(4);
+    let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, dst_len) };
+
+    let (bx0, by0, bw, bh) = norm_xyxy_to_px(nx1, ny1, nx2, ny2, nw_u32, nh_u32);
+    fill_rgba_rect(dst, fw, fh, bx0, by0, bw, bh, [0, 0, 0, 255]);
+    let (ox, oy, fit_w, fit_h) = aspect_fit_wh(sw, sh, bw, bh);
+    let ax0 = bx0.saturating_add(ox);
+    let ay0 = by0.saturating_add(oy);
+    blit_rgba_resize_into_rect(src_px.as_slice(), sw, sh, dst, fw, fh, ax0, ay0, fit_w, fit_h);
+
+    let tup = vm.ctx.new_tuple(vec![
+        vm.ctx.new_float(ax0 as f64).into(),
+        vm.ctx.new_float(ay0 as f64).into(),
+        vm.ctx.new_float(fit_w as f64).into(),
+        vm.ctx.new_float(fit_h as f64).into(),
+    ]);
+    Ok(tup.into())
+}
+
+/// Stretch-blit a source [`Frame`] or [`Tensor`] (RGBA) into the active engine framebuffer.
 /// xos.rasterizer.blur(frame, percent) — frosted RGB blur on the active framebuffer (RGB only; alpha preserved).
 ///
 /// **`percent`** strength:
@@ -1348,7 +1722,7 @@ fn frame_in_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         return Err(vm.new_type_error("frame_in_frame(dst, src) expects 2 arguments".to_string()));
     }
     let src = args_vec[1].clone();
-    let (sw, sh, src_rgba) = frame_object_to_rgba(vm, src)?;
+    let (sw, sh, src_px) = resolve_viewport_rgba(vm, src)?;
 
     let buffer_ptr_opt = CURRENT_FRAME_BUFFER
         .lock()
@@ -1365,7 +1739,7 @@ fn frame_in_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     })?;
     let dst_len = dst_w.saturating_mul(dst_h).saturating_mul(4);
     let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, dst_len) };
-    blit_rgba_stretch(&src_rgba, sw, sh, dst, dst_w, dst_h);
+    blit_rgba_stretch(src_px.as_slice(), sw, sh, dst, dst_w, dst_h);
     Ok(vm.ctx.none())
 }
 
@@ -1417,6 +1791,16 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .set_attr(
             "frame_in_frame",
             vm.new_function("frame_in_frame", frame_in_frame),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_frame_blit_aspect_fit_norm_rect",
+            vm.new_function(
+                "_frame_blit_aspect_fit_norm_rect",
+                frame_blit_aspect_fit_norm_rect,
+            ),
             vm,
         )
         .unwrap();

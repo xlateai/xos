@@ -1212,6 +1212,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module.set_attr("frame", frame_module, vm).unwrap();
 
+    crate::python_api::json_api::register_json(&module, vm);
+
     // Add color palette submodule (single source of truth in py/colors.rs)
     let color_module = crate::python_api::colors::make_color_module(vm);
     module.set_attr("color", color_module, vm).unwrap();
@@ -1288,6 +1290,37 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr("clip", tensors_module.get_attr("clip", vm).unwrap(), vm)
+        .unwrap();
+    module
+        .set_attr(
+            "_tensor_min",
+            vm.new_function("_tensor_min", crate::python_api::tensors::tensor_min),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_tensor_max",
+            vm.new_function("_tensor_max", crate::python_api::tensors::tensor_max),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_tensor_mean",
+            vm.new_function("_tensor_mean", crate::python_api::tensors::tensor_mean),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_tensor_min_max_mean",
+            vm.new_function(
+                "_tensor_min_max_mean",
+                crate::python_api::tensors::tensor_min_max_mean,
+            ),
+            vm,
+        )
         .unwrap();
 
     crate::python_api::burn_train::register_burn_module(&module, vm);
