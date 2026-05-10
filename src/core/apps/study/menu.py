@@ -6,8 +6,8 @@ MENU_BUTTON_WIDTH = 0.1
 MENU_BUTTON_CLOSED_VERTS = (
     0.0,
     0.0,
-    0.1,
-    0.1,
+    MENU_BUTTON_WIDTH,
+    MENU_BUTTON_WIDTH,
 )
 
 MENU_BUTTON_OPEN_VERTS = (
@@ -15,6 +15,13 @@ MENU_BUTTON_OPEN_VERTS = (
     0.0,
     MENU_LEFT_EDGE_EXTENSION + 0.1,
     MENU_BUTTON_WIDTH,
+)
+
+MENU_BUTTON_COORDINATE_SYSTEM = (
+    xos.coordinates.VIEWPORT_HEIGHT,
+    xos.coordinates.VIEWPORT_HEIGHT,
+    xos.coordinates.VIEWPORT_HEIGHT,
+    xos.coordinates.VIEWPORT_HEIGHT,
 )
 
 
@@ -31,12 +38,14 @@ class Menu:
     def setup_buttons(self):
         self.menu_button = xos.ui.button(
             *MENU_BUTTON_CLOSED_VERTS,
+            coordinate_system=MENU_BUTTON_COORDINATE_SYSTEM,
             on_press=self.toggle_menu,
         )
 
         self.menu_button_background = xos.ui.rect(
             *MENU_BUTTON_CLOSED_VERTS,
             color=xos.color.LIME,
+            coordinate_system=MENU_BUTTON_COORDINATE_SYSTEM,
             # alpha=0.5,
         )
 
