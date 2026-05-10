@@ -774,6 +774,10 @@ impl ApplicationHandler for AppStateWrapper {
                 paused_base_w: 0,
                 paused_base_h: 0,
             });
+            if let Some(st) = &self.app_state {
+                // Paint ASAP so the compositor gets a framebuffer right after startup.
+                st.window.request_redraw();
+            }
         }
     }
 
