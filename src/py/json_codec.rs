@@ -15,6 +15,40 @@ const MAX_DEPTH: u32 = 48;
 /// Wire key for encoded frames (nested inside a JSON object, e.g. `{"pic": {<this>}}`).
 pub(crate) const XOS_JSON_FRAME: &str = "__xos_json_frame";
 
+/// JPEG payload for mesh-serialized `Frame`: far smaller than RGBA base64 (~10×+ less wire + crypto).
+const MESH_FRAME_JPEG_QUALITY: u8 = 78;
+
+#[inline]
+fn rgba_to_jpeg_xos_wire(w: usize, h: usize, rgba: &[u8]) -> Result<Value, ()> {
+    let w_u = u32::try_from(w).map_err(|_| ())?;
+    let h_u = u32::try_from(h).map_err(|_| ())?;
+    let Some(image_rgba) = image::RgbaImage::from_raw(w_u, h_u, rgba.to_vec()) else {
+        return Err(());
+    };
+    let source = image::DynamicImage::ImageRgba8(image_rgba);
+    let mut jpeg_bytes = Vec::new();
+    {
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg_bytes,
+            MESH_FRAME_JPEG_QUALITY,
+        );
+        enc.encode_image(&source).map_err(|_| ())?;
+    }
+    let b64 = B64.encode(&jpeg_bytes);
+    Ok(json!({
+        XOS_JSON_FRAME: { "w": w, "h": h, "jpeg_b64": b64 }
+    }))
+}
+
+fn frame_rgba_to_wire_json(w: usize, h: usize, rgba: &[u8]) -> Value {
+    rgba_to_jpeg_xos_wire(w, h, rgba).unwrap_or_else(|_| {
+        let b64 = B64.encode(rgba);
+        json!({
+            XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
+        })
+    })
+}
+
 #[inline]
 fn type_error(vm: &VirtualMachine, msg: impl Into<String>) -> PyBaseExceptionRef {
     vm.new_type_error(msg.into())
@@ -108,10 +142,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
         if let Some(bytes) = blob.downcast_ref::<PyBytes>() {
             let s = bytes.as_bytes();
             if s.len() == need {
-                let b64 = B64.encode(s);
-                return Ok(json!({
-                    XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
-                }));
+                return Ok(frame_rgba_to_wire_json(w, h, s));
             }
         }
     }
@@ -123,10 +154,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
                 crate::python_api::xos_module::standalone_frame_buffer_copy(vid.max(0) as u64)
             {
                 if buf.len() == need {
-                    let b64 = B64.encode(&buf);
-                    return Ok(json!({
-                        XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
-                    }));
+                    return Ok(frame_rgba_to_wire_json(w, h, &buf));
                 }
             }
         }
@@ -135,10 +163,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
     // 3) Active raster tick buffer (dimensions must match this Frame)
     if let Some(buf) = crate::python_api::rasterizer::copy_active_frame_rgba_if_match(w, h) {
         if buf.len() == need {
-            let b64 = B64.encode(&buf);
-            return Ok(json!({
-                XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
-            }));
+            return Ok(frame_rgba_to_wire_json(w, h, &buf));
         }
     }
 
@@ -152,10 +177,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
                     let v: i32 = item.clone().try_into_value(vm)?;
                     raw.push(v.clamp(0, 255) as u8);
                 }
-                let b64 = B64.encode(&raw);
-                return Ok(json!({
-                    XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
-                }));
+                return Ok(frame_rgba_to_wire_json(w, h, &raw));
             }
         }
     }
@@ -174,17 +196,46 @@ pub(crate) fn try_decode_xos_json_frame_object(
     }
     let body = map.get(XOS_JSON_FRAME)?;
     let b = body.as_object()?;
+    if let Some(jpeg_s) = b
+        .get("jpeg_b64")
+        .and_then(|x| x.as_str())
+        .or_else(|| b.get("jpeg").and_then(|x| x.as_str()))
+    {
+        let raw_jpeg = match B64.decode(jpeg_s.as_bytes()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return Some(Err(vm.new_runtime_error(format!(
+                    "{XOS_JSON_FRAME}: invalid jpeg base64 ({e})"
+                ))));
+            }
+        };
+        let img = match image::load_from_memory(&raw_jpeg) {
+            Ok(img) => img,
+            Err(e) => {
+                return Some(Err(vm.new_runtime_error(format!(
+                    "{XOS_JSON_FRAME}: decode jpeg: {e}"
+                ))));
+            }
+        };
+        let rgba = img.to_rgba8();
+        let w = rgba.width() as usize;
+        let h = rgba.height() as usize;
+        return Some(py_frame_from_rgba_bytes(vm, w, h, rgba.into_raw()));
+    }
     let w = b.get("w").and_then(|x| x.as_u64()).or_else(|| b.get("width").and_then(|x| x.as_u64()))?
         as usize;
     let h = b.get("h").and_then(|x| x.as_u64()).or_else(|| b.get("height").and_then(|x| x.as_u64()))?
         as usize;
-    let enc = b.get("rgba_b64").and_then(|x| x.as_str()).or_else(|| b.get("b64").and_then(|x| x.as_str()))?;
+    let enc =
+        b.get("rgba_b64")
+            .and_then(|x| x.as_str())
+            .or_else(|| b.get("b64").and_then(|x| x.as_str()))?;
     let raw = match B64.decode(enc.as_bytes()) {
         Ok(bytes) => bytes,
         Err(e) => {
             return Some(Err(vm.new_runtime_error(format!(
                 "{XOS_JSON_FRAME}: invalid base64 ({e})"
-            ))))
+            ))));
         }
     };
     Some(py_frame_from_rgba_bytes(vm, w, h, raw))
