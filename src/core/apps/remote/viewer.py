@@ -15,7 +15,7 @@ class RemoteViewerApp(xos.Application):
     def __init__(self):
         super().__init__()
 
-        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE, udp=constants.USE_UDP)
+        self.mesh = constants.get_mesh()
         # self.status = xos.ui.text(
         #     "Connecting...",
         #     x1=0.0,

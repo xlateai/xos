@@ -1,4 +1,5 @@
 import xos
+import constants
 
 
 class RemoteApp(xos.Application):
@@ -7,6 +8,7 @@ class RemoteApp(xos.Application):
     def __init__(self):
         super().__init__()
 
+        self.mesh = constants.get_mesh()
         self.text = xos.ui.text(
             "Hello, World!",
             x1=0.0,
