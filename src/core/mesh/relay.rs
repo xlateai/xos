@@ -499,6 +499,10 @@ pub struct Inbox {
     cv: Condvar,
 }
 
+/// Cap per `kind` so fast producers (e.g. video) cannot build an unbounded decoded queue
+/// while a slower consumer only shows `latest_only` — each push is already fully decoded.
+const INBOX_KIND_MAX_PACKETS: usize = 4;
+
 struct InboxInner {
     queues: HashMap<String, VecDeque<Packet>>,
 }
@@ -515,7 +519,11 @@ impl Inbox {
 
     fn push(&self, p: Packet) {
         let mut g = self.inner.lock().unwrap();
-        g.queues.entry(p.kind.clone()).or_default().push_back(p);
+        let q = g.queues.entry(p.kind.clone()).or_default();
+        while q.len() >= INBOX_KIND_MAX_PACKETS {
+            q.pop_front();
+        }
+        q.push_back(p);
         drop(g);
         self.cv.notify_all();
     }

@@ -39,9 +39,9 @@ class RemoteViewerApp(xos.Application):
         packet = self.mesh.receive(id="frame", wait=False, latest_only=True)
         if packet:
             frame = packet.frame
-            print(frame.tensor)
-            # Frame or Tensor: both aspect-fit into the video rect (bytes path avoids a full copy)
+            # print(frame.tensor)   # repr uses one Rust reduction pass; Tensor.min/max/mean are native too
             self.video.set_frame(frame)
+            print(self.t)
             # self.video.set_frame(frame.tensor)
 
         self.video.tick(self)

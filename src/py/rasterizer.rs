@@ -1553,23 +1553,62 @@ fn blit_rgba_resize_into_rect(
     dw: usize,
     dh: usize,
 ) {
-    if src.len() != sw * sh * 4 {
+    let req = sw.saturating_mul(sh).saturating_mul(4);
+    if src.len() != req || dw == 0 || dh == 0 {
         return;
     }
+
+    // 1:1 copy into the framebuffer (nearest-neighbour when dims match fitted rect).
+    if sw == dw
+        && sh == dh
+        && ax0.saturating_add(dw) <= frame_w
+        && ay0.saturating_add(dh) <= frame_h
+    {
+        let row_bytes = dw.saturating_mul(4);
+        for row in 0..sh {
+            let si = row.saturating_mul(sw).saturating_mul(4);
+            let di = (ay0.saturating_add(row))
+                .saturating_mul(frame_w)
+                .saturating_add(ax0)
+                .saturating_mul(4);
+            dst[di..di + row_bytes].copy_from_slice(&src[si..si + row_bytes]);
+        }
+        return;
+    }
+
+    // Precompute maps once (old code recomputed sx for every destination row).
+    let dh_d = dh.max(1);
+    let dw_d = dw.max(1);
+    let sx_cap = sw.saturating_sub(1);
+    let sy_cap = sh.saturating_sub(1);
+
+    let mut sx_map = Vec::with_capacity(dw);
+    for dx in 0..dw {
+        let sx = (dx.saturating_mul(sw)) / dw_d;
+        sx_map.push(sx.min(sx_cap));
+    }
+    let mut sy_map = Vec::with_capacity(dh);
+    for dy in 0..dh {
+        let sy = (dy.saturating_mul(sh)) / dh_d;
+        sy_map.push(sy.min(sy_cap));
+    }
+
     for dy in 0..dh {
         let y = ay0.saturating_add(dy);
         if y >= frame_h {
             break;
         }
-        let sy = dy * sh / dh.max(1);
+        let sy = sy_map[dy];
+        let src_row = sy.saturating_mul(sw).saturating_mul(4);
+        let di_row = y.saturating_mul(frame_w).saturating_add(ax0).saturating_mul(4);
         for dx in 0..dw {
             let x = ax0.saturating_add(dx);
             if x >= frame_w {
                 break;
             }
-            let sx = dx * sw / dw.max(1);
-            let si = (sy * sw + sx).saturating_mul(4);
-            let di = (y * frame_w + x).saturating_mul(4);
+            let sx = sx_map[dx];
+            let si = src_row.saturating_add(sx.saturating_mul(4));
+            let di = di_row.saturating_add(dx.saturating_mul(4));
             if si + 3 < src.len() && di + 3 < dst.len() {
                 dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
             }
