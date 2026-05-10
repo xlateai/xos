@@ -11,6 +11,7 @@
 //! **`xos app remote`** loads `launcher.rs` + `remote.py`.
 
 pub mod launcher;
+pub(crate) mod monitors;
 mod remote;
 
 #[cfg(all(
