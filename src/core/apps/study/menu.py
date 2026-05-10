@@ -86,7 +86,7 @@ class Menu:
 
     def render(self, app):
         if self.is_open:
-            xos.rasterizer.blur(app.frame, 0.05)
+            xos.rasterizer.blur(app.frame, 0.1)
         self.buttons.render(app)
         self.menu_display.render(app)
 
