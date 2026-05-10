@@ -33,6 +33,7 @@ class Menu:
         )
 
         self.menu_button_background = xos.ui.rect(
+            *MENU_BUTTON_CLOSED_VERTS,
             color=xos.color.LIME,
             # alpha=0.5,
         )
@@ -64,7 +65,7 @@ class Menu:
             self.menu_background.x1 = 0.0
             self.menu_button.verts = MENU_BUTTON_CLOSED_VERTS
 
-        self.menu_button_background.set_verts(*self.menu_button.verts)
+        self.menu_button_background.verts = self.menu_button.verts
 
     def render(self, app):
         self.buttons.render(app)
