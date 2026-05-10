@@ -8,7 +8,13 @@ use rustpython_vm::{
     function::FuncArgs,
     PyObjectRef, PyRef, PyResult, VirtualMachine,
 };
+use std::cell::RefCell;
 use std::sync::Mutex;
+
+thread_local! {
+    /// Reused full-frame scratch for `blur()` to avoid an 8 MB+ allocation every tick.
+    static BLUR_FRAME_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+}
 
 fn py_number_to_f32(
     value: rustpython_vm::PyObjectRef,
@@ -1289,6 +1295,53 @@ fn frame_object_to_rgba(
 }
 
 /// Stretch-blit a source [`Frame`] (RGBA bytes) into the active engine framebuffer.
+/// xos.rasterizer.blur(frame, percent) — frosted RGB blur on the active framebuffer (RGB only; alpha preserved).
+///
+/// **`percent`** strength:
+/// - **`0…100`**: literal percentage of max blur (`100` = strongest glass).
+/// - **`(0, 1]`**: treated as a **0–1 fraction × 100** (`0.4` ⇒ 40 %, `1.0` ⇒ 100 %).
+/// **`0`**: no-op (fast path).
+fn blur_framebuffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let args_vec = args.args;
+    if args_vec.len() != 2 {
+        return Err(vm.new_type_error(
+            "blur(frame, percent) expects 2 arguments (frame, percent)".to_string(),
+        ));
+    }
+
+    let pct: f64 = args_vec[1].clone().try_into_value(vm)?;
+
+    let buffer_ptr_opt = CURRENT_FRAME_BUFFER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|ptr| ptr.0);
+    let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
+    let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
+    let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
+        vm.new_runtime_error(
+            "No frame buffer context set. blur() must run during Application.tick().".to_string(),
+        )
+    })?;
+
+    let len = width.saturating_mul(height).saturating_mul(4);
+    let dst = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, len) };
+    BLUR_FRAME_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        if scratch.len() < len {
+            scratch.resize(len, 0);
+        }
+        crate::rasterizer::blur::blur_rgba_framebuffer(
+            dst,
+            width,
+            height,
+            pct as f32,
+            &mut scratch[..len],
+        );
+    });
+    Ok(vm.ctx.none())
+}
+
 fn frame_in_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() != 2 {
@@ -1366,6 +1419,9 @@ pub fn make_rasterizer_module(vm: &VirtualMachine) -> PyRef<PyModule> {
             vm.new_function("frame_in_frame", frame_in_frame),
             vm,
         )
+        .unwrap();
+    module
+        .set_attr("blur", vm.new_function("blur", blur_framebuffer), vm)
         .unwrap();
     module
 }

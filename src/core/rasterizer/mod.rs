@@ -7,6 +7,7 @@ use crate::engine::FrameState;
 use crate::tensor::burn_raster;
 
 mod cache;
+pub mod blur;
 pub mod shapes;
 pub mod text;
 pub use cache::RasterCache;

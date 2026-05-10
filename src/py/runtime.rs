@@ -424,6 +424,8 @@ pub fn run_python_interactive() {
 pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
     #[cfg(not(target_arch = "wasm32"))]
     use crate::python_api::engine::pyapp::PyApp;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::python_api::staged_native_python_app::{source_declares_headless_window_app, StagedNativePythonApp};
     let resolved_file_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.clone());
@@ -441,55 +443,71 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
         }
     };
 
-    // Create interpreter with xos module
-    let interpreter = Interpreter::with_init(Default::default(), |vm| {
-        vm.add_native_module(
-            "xos".to_owned(),
-            Box::new(crate::python_api::xos_module::make_module),
-        );
-    });
-
     let print_cb: PrintCallback = Arc::new(|s: &str| {
         print!("{}", s);
         let _ = io::stdout().flush();
     });
 
-    // Execute the code
-    let (result, output, app_instance, _) = execute_python_code(
-        &interpreter,
-        &code,
-        &resolved_file_path.to_string_lossy(),
-        None,
-        Some(print_cb),
-        script_flags,
-    );
-
-    // Handle errors
-    if let Err(error_msg) = result {
-        if !output.is_empty() {
-            let _ = io::stdout().flush();
+    #[cfg(not(target_arch = "wasm32"))]
+    if !source_declares_headless_window_app(&code) {
+        match crate::engine::start_native(Box::new(StagedNativePythonApp::new(
+            resolved_file_path.clone(),
+            code.clone(),
+            script_flags.to_vec(),
+            print_cb.clone(),
+        ))) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("❌ Engine error: {e}");
+                std::process::exit(1);
+            }
         }
-        eprintln!("{}", error_msg);
-        std::process::exit(1);
     }
 
-    if let Some(app_instance) = app_instance {
-        let headless = interpreter.enter(|vm| {
-            vm.get_attribute_opt(app_instance.clone(), "headless")
-                .ok()
-                .flatten()
-                .and_then(|obj| obj.try_into_value::<bool>(vm).ok())
-                .unwrap_or(false)
+    // Headless heuristic match, or WASM: interpreter before engine (prior behavior).
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Create interpreter with xos module
+        let interpreter = Interpreter::with_init(Default::default(), |vm| {
+            vm.add_native_module(
+                "xos".to_owned(),
+                Box::new(crate::python_api::xos_module::make_module),
+            );
         });
 
-        if headless {
-            interpreter.enter(|vm| {
-                let _ = app_instance.set_attr("screen", vm.ctx.new_bool(true), vm);
-            });
+        let (result, output, app_instance, _) = execute_python_code(
+            &interpreter,
+            &code,
+            &resolved_file_path.to_string_lossy(),
+            None,
+            Some(print_cb.clone()),
+            script_flags,
+        );
+
+        if let Err(error_msg) = result {
+            if !output.is_empty() {
+                let _ = io::stdout().flush();
+            }
+            eprintln!("{}", error_msg);
+            std::process::exit(1);
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        {
+        if let Some(app_instance) = app_instance {
+            let headless = interpreter.enter(|vm| {
+                vm.get_attribute_opt(app_instance.clone(), "headless")
+                    .ok()
+                    .flatten()
+                    .and_then(|obj| obj.try_into_value::<bool>(vm).ok())
+                    .unwrap_or(false)
+            });
+
+            if headless {
+                interpreter.enter(|vm| {
+                    let _ = app_instance.set_attr("screen", vm.ctx.new_bool(true), vm);
+                });
+            }
+
             let pyapp = PyApp::new(interpreter, app_instance);
             let result = if headless {
                 crate::engine::start_headless_native(Box::new(pyapp), 800, 600)
@@ -500,14 +518,38 @@ pub fn run_python_app(file_path: &PathBuf, script_flags: &[String]) {
                 eprintln!("❌ Engine error: {}", e);
                 std::process::exit(1);
             }
+            return;
         }
+    }
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            eprintln!("❌ WASM not supported for Python apps yet");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let interpreter = Interpreter::with_init(Default::default(), |vm| {
+            vm.add_native_module(
+                "xos".to_owned(),
+                Box::new(crate::python_api::xos_module::make_module),
+            );
+        });
+
+        let (result, output, app_instance, _) = execute_python_code(
+            &interpreter,
+            &code,
+            &resolved_file_path.to_string_lossy(),
+            None,
+            Some(print_cb),
+            script_flags,
+        );
+
+        if let Err(error_msg) = result {
+            if !output.is_empty() {
+                let _ = io::stdout().flush();
+            }
+            eprintln!("{}", error_msg);
             std::process::exit(1);
         }
-    } else {
-        // eprintln!("ℹ️  Python script completed (no xos app launched)");
+
+        let _ = (interpreter, app_instance, output);
+        eprintln!("❌ WASM not supported for Python apps yet");
+        std::process::exit(1);
     }
 }

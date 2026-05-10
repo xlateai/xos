@@ -1306,8 +1306,13 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let path_module = crate::python_api::path::make_path_module(vm);
     module.set_attr("path", path_module, vm).unwrap();
 
+    let coordinates_module = crate::python_api::coordinates::make_coordinates_module(vm);
+    module
+        .set_attr("coordinates", coordinates_module.clone(), vm)
+        .unwrap();
+
     // Add the ui submodule
-    let ui_module = crate::python_api::ui::make_ui_module(vm);
+    let ui_module = crate::python_api::ui::make_ui_module(vm, coordinates_module);
     module.set_attr("ui", ui_module, vm).unwrap();
 
     // Add the dtypes module and expose dtype constants

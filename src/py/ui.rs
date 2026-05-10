@@ -71,9 +71,9 @@ fn py_number_to_f64(
     Err(vm.new_type_error(format!("{name} must be int or float")))
 }
 
-/// xos.ui.button() - create and draw a button
+/// xos.ui._paint_button() - immediate-mode button paint (pixels; used by ui_demo legacy path)
 ///
-/// Usage: xos.ui.button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
+/// Usage: xos.ui._paint_button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
 /// - x: x position in pixels
 /// - y: y position in pixels
 /// - width: button width in pixels
@@ -85,11 +85,11 @@ fn py_number_to_f64(
 /// - text_color: optional (r, g, b) tuple for text color
 ///
 /// Returns: None (draws directly to frame buffer)
-fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+fn paint_button_immediate(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 || args_vec.len() > 9 {
         return Err(vm.new_type_error(format!(
-            "button() takes 6 to 9 arguments ({} given)",
+            "_paint_button() takes 6 to 9 arguments ({} given)",
             args_vec.len()
         )));
     }
@@ -988,10 +988,14 @@ fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
-pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
+pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module
-        .set_attr("button", vm.new_function("button", button), vm)
+        .set_attr(
+            "_paint_button",
+            vm.new_function("_paint_button", paint_button_immediate),
+            vm,
+        )
         .unwrap();
     module
         .set_attr(
@@ -1122,7 +1126,97 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .globals
         .set_item("_text_render", text_render_fn, vm)
         .unwrap();
+    let paint_btn_fn = module.get_attr("_paint_button", vm).unwrap();
+    scope
+        .globals
+        .set_item("_paint_button", paint_btn_fn, vm)
+        .unwrap();
+    let vw_ax = coordinates.get_attr("VIEWPORT_WIDTH", vm).unwrap();
+    let vh_ax = coordinates.get_attr("VIEWPORT_HEIGHT", vm).unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_WIDTH", vw_ax, vm)
+        .unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_HEIGHT", vh_ax, vm)
+        .unwrap();
+    let vmax_ax = coordinates.get_attr("VIEWPORT_MAX_DIMENSION", vm).unwrap();
+    let vmin_ax = coordinates.get_attr("VIEWPORT_MIN_DIMENSION", vm).unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_MAX_DIMENSION", vmax_ax, vm)
+        .unwrap();
+    scope
+        .globals
+        .set_item("_VIEWPORT_MIN_DIMENSION", vmin_ax, vm)
+        .unwrap();
+
     let py_text_code = r#"
+
+def _axis_basis(axis, fw, fh):
+    fw = float(fw)
+    fh = float(fh)
+    if axis is _VIEWPORT_HEIGHT:
+        return fh
+    if axis is _VIEWPORT_MAX_DIMENSION:
+        return fw if fw >= fh else fh
+    if axis is _VIEWPORT_MIN_DIMENSION:
+        return fw if fw <= fh else fh
+    return fw
+
+
+def _validate_coordinate_system(cs):
+    if not isinstance(cs, (tuple, list)) or len(cs) != 4:
+        raise TypeError(
+            "coordinate_system must be a 4-tuple (axis for x1, y1, x2, y2 coefficient scaling)"
+        )
+    _axes = (
+        _VIEWPORT_WIDTH,
+        _VIEWPORT_HEIGHT,
+        _VIEWPORT_MAX_DIMENSION,
+        _VIEWPORT_MIN_DIMENSION,
+    )
+    for i, a in enumerate(cs):
+        if not any(a is x for x in _axes):
+            raise TypeError(
+                "coordinate_system[%d] must be one of xos.coordinates.VIEWPORT_* axis tokens "
+                "(WIDTH, HEIGHT, MAX_DIMENSION, MIN_DIMENSION)" % (i,)
+            )
+
+
+def _coef_to_normalized_rect(x1, y1, x2, y2, coord_sys, fw, fh):
+    fw = float(fw)
+    fh = float(fh)
+    b0 = _axis_basis(coord_sys[0], fw, fh)
+    b1 = _axis_basis(coord_sys[1], fw, fh)
+    b2 = _axis_basis(coord_sys[2], fw, fh)
+    b3 = _axis_basis(coord_sys[3], fw, fh)
+    nx1 = float(x1) * b0 / fw
+    ny1 = float(y1) * b1 / fh
+    nx2 = float(x2) * b2 / fw
+    ny2 = float(y2) * b3 / fh
+    return nx1, ny1, nx2, ny2
+
+
+def _frame_wh_from_any(app_or_frame):
+    """``(fw, fh)`` from an ``Application``, ``Frame``, or dict-like with width/height."""
+    if app_or_frame is None:
+        return 1.0, 1.0
+    fr = getattr(app_or_frame, "frame", app_or_frame)
+    fd = getattr(fr, "_data", fr)
+    try:
+        return float(fd["width"]), float(fd["height"])
+    except Exception:
+        return 1.0, 1.0
+
+
+def _default_coordinate_system():
+    """Coefficient ``x1``/``x2`` scale by width; ``y1``/``y2`` by height."""
+
+    return (_VIEWPORT_WIDTH, _VIEWPORT_HEIGHT, _VIEWPORT_WIDTH, _VIEWPORT_HEIGHT)
+
+
 class OnScreenKeyboard:
     def __init__(self):
         # Normalized Y of keyboard top (`[0,1]`), same as `Text.y1`/`y2`. Updated each `tick` after OSK layout.
@@ -1169,6 +1263,9 @@ class Text:
         self.y1 = y1
         self.x2 = x2
         self.y2 = y2
+        _cs = kwargs.pop("coordinate_system", None)
+        self.coordinate_system = _cs if _cs is not None else _default_coordinate_system()
+        _validate_coordinate_system(self.coordinate_system)
         self.color = color
         legacy_show_hitboxes = kwargs.get("show_hitboxes", False)
         legacy_show_baselines = kwargs.get("show_baselines", False)
@@ -1325,6 +1422,26 @@ class Text:
     def font_size(self, value):
         self.size = float(value)
 
+    def _layout_norm_xyxy(self, app_or_frame):
+        fw, fh = _frame_wh_from_any(app_or_frame)
+        return _coef_to_normalized_rect(
+            self.x1, self.y1, self.x2, self.y2, self.coordinate_system, fw, fh
+        )
+
+    def _text_bounds_pixel_axis_aligned(self, app_or_frame):
+        fw, fh = _frame_wh_from_any(app_or_frame)
+        px1 = float(self.x1) * _axis_basis(self.coordinate_system[0], fw, fh)
+        py1 = float(self.y1) * _axis_basis(self.coordinate_system[1], fw, fh)
+        px2 = float(self.x2) * _axis_basis(self.coordinate_system[2], fw, fh)
+        py2 = float(self.y2) * _axis_basis(self.coordinate_system[3], fw, fh)
+        x_lo, x_hi = sorted((px1, px2))
+        y_lo, y_hi = sorted((py1, py2))
+        if x_hi <= x_lo:
+            x_hi = x_lo + 1.0
+        if y_hi <= y_lo:
+            y_hi = y_lo + 1.0
+        return x_lo, y_lo, x_hi, y_hi
+
     def tick(self, app):
         import xos
         if self._native_id is None:
@@ -1352,12 +1469,13 @@ class Text:
                     xos.ui._text_set_document(nid, str(self.text), True)
                 except (ValueError, RuntimeError, OSError):
                     pass
+        nx1, ny1, nx2, ny2 = self._layout_norm_xyxy(app)
         xos.ui._text_sync_norm_rect(
             nid,
-            float(self.x1),
-            float(self.y1),
-            float(self.x2),
-            float(self.y2),
+            float(nx1),
+            float(ny1),
+            float(nx2),
+            float(ny2),
         )
         now_ts = float(xos.time.monotonic())
         if self._blink_last_ts is None:
@@ -1384,10 +1502,10 @@ class Text:
         }
         state = xos.ui._text_render(
             self.text,
-            self.x1,
-            self.y1,
-            self.x2,
-            self.y2,
+            nx1,
+            ny1,
+            nx2,
+            ny2,
             self.color,
             hitboxes=bool(self.hitboxes),
             baselines=bool(self.baselines),
@@ -1464,19 +1582,11 @@ class Text:
         if isinstance(ev, dict) and ev.get("kind") == "mouse_down":
             # OSK taps share screen X with text columns; don't move focus — same band as [`TextApp::on_mouse_down`].
             if not xos.ui._text_skip_focus_for_osk_pointer():
-                fd = getattr(app.frame, "_data", app.frame)
-                fw = float(fd["width"])
-                fh = float(fd["height"])
-                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
-                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
-                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
-                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
-                vw = max(1, xb - xa)
-                vh = max(1, yb - ya)
+                x_lo, y_lo, x_hi, y_hi = self._text_bounds_pixel_axis_aligned(app)
                 # Prefer routed event coordinates (same frame as native hit-testing); fall back to app.mouse.
                 mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
                 my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
-                hit = xa <= mx < xa + vw and ya <= my < ya + vh
+                hit = x_lo <= mx < x_hi and y_lo <= my < y_hi
                 if getattr(self, "_sticky_focus", False):
                     self.is_focused = True
                 else:
@@ -1521,16 +1631,11 @@ class Text:
                 and hitboxes
                 and len(hitboxes) == len(hitbox_char_indices)
             ):
-                fd = getattr(app.frame, "_data", app.frame)
-                fw = float(fd["width"])
-                fh = float(fd["height"])
+                fw, fh = _frame_wh_from_any(app)
                 mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
                 my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
-                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
-                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
-                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
-                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
-                if xa <= mx < xb and ya <= my < yb:
+                x_lo, y_lo, x_hi, y_hi = self._text_bounds_pixel_axis_aligned(app)
+                if x_lo <= mx < x_hi and y_lo <= my < y_hi:
                     best_i = 0
                     best_d = 1e30
                     best_l = 0.0
@@ -1622,16 +1727,11 @@ class Text:
                 and hitboxes
                 and len(hitboxes) == len(hitbox_char_indices)
             ):
-                fd = getattr(app.frame, "_data", app.frame)
-                fw = float(fd["width"])
-                fh = float(fd["height"])
+                fw, fh = _frame_wh_from_any(app)
                 mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
                 my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
-                xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
-                ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
-                xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
-                yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
-                if xa <= mx < xb and ya <= my < yb:
+                x_lo, y_lo, x_hi, y_hi = self._text_bounds_pixel_axis_aligned(app)
+                if x_lo <= mx < x_hi and y_lo <= my < y_hi:
                     best_i = 0
                     best_d = 1e30
                     best_l = 0.0
@@ -1753,12 +1853,24 @@ class Text:
                 extra["active_markup_end"] = int(rp)
             if self.editable:
                 extra["keep_directive_only_rows"] = bool(eff)
+            if frame is not None:
+                rx1, ry1, rx2, ry2 = self._layout_norm_xyxy(frame)
+            else:
+                rx1, ry1, rx2, ry2 = _coef_to_normalized_rect(
+                    self.x1,
+                    self.y1,
+                    self.x2,
+                    self.y2,
+                    self.coordinate_system,
+                    1.0,
+                    1.0,
+                )
             state = _text_render(
                 text_for_render,
-                self.x1,
-                self.y1,
-                self.x2,
-                self.y2,
+                rx1,
+                ry1,
+                rx2,
+                ry2,
                 resolved_color,
                 # Always compute and return full render geometry.
                 bool(resolved_hitboxes),
@@ -1777,6 +1889,192 @@ class Text:
         finally:
             if bound:
                 xos.frame._end_standalone()
+
+class _NormRect:
+    """Coefficients ``x1,y1,x2,y2``; each scales with viewport width or height per ``coordinate_system``."""
+
+    __slots__ = ("x1", "y1", "x2", "y2", "coordinate_system")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, coordinate_system=None):
+        self.coordinate_system = (
+            coordinate_system if coordinate_system is not None else _default_coordinate_system()
+        )
+        _validate_coordinate_system(self.coordinate_system)
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+
+    def _norm_rect_xyxy(self, app_or_frame):
+        fw, fh = _frame_wh_from_any(app_or_frame)
+        return _coef_to_normalized_rect(
+            self.x1, self.y1, self.x2, self.y2, self.coordinate_system, fw, fh
+        )
+
+    def _hit_pixel_rect(self, app_or_frame):
+        fw, fh = _frame_wh_from_any(app_or_frame)
+        px1 = float(self.x1) * _axis_basis(self.coordinate_system[0], fw, fh)
+        py1 = float(self.y1) * _axis_basis(self.coordinate_system[1], fw, fh)
+        px2 = float(self.x2) * _axis_basis(self.coordinate_system[2], fw, fh)
+        py2 = float(self.y2) * _axis_basis(self.coordinate_system[3], fw, fh)
+        x_lo, x_hi = sorted((px1, px2))
+        y_lo, y_hi = sorted((py1, py2))
+        if x_hi <= x_lo:
+            x_hi = x_lo + 1.0
+        if y_hi <= y_lo:
+            y_hi = y_lo + 1.0
+        return x_lo, y_lo, x_hi, y_hi
+
+    @property
+    def verts(self):
+        return (float(self.x1), float(self.y1), float(self.x2), float(self.y2))
+
+    @verts.setter
+    def verts(self, v):
+        if not isinstance(v, (tuple, list)) or len(v) != 4:
+            raise TypeError("verts must be a sequence of four numbers (x1, y1, x2, y2)")
+        self.x1, self.y1, self.x2, self.y2 = (
+            float(v[0]),
+            float(v[1]),
+            float(v[2]),
+            float(v[3]),
+        )
+
+
+class UiRect(_NormRect):
+    """Filled rectangle; ``render`` converts coeffs → normalized box for ``xos.rasterizer.rects_filled``."""
+
+    __slots__ = ("color", "alpha")
+
+    def __init__(
+        self,
+        x1=0.0,
+        y1=0.0,
+        x2=1.0,
+        y2=1.0,
+        color=(128, 128, 128),
+        alpha=None,
+        coordinate_system=None,
+    ):
+        super().__init__(x1, y1, x2, y2, coordinate_system=coordinate_system)
+        self.color = tuple(color)
+        if alpha is None:
+            if len(self.color) == 4:
+                a = float(self.color[3])
+                self.alpha = (a / 255.0) if a > 1.0001 else float(a)
+            else:
+                self.alpha = 1.0
+        else:
+            self.alpha = float(alpha)
+
+    def tick(self, app):
+        return None
+
+    def on_events(self, app):
+        pass
+
+    def render(self, app=None):
+        import xos
+
+        if app is None:
+            return None
+        frame = getattr(app, "frame", None)
+        if frame is None:
+            return None
+        c = tuple(self.color)
+        rgb = tuple(float(x) for x in c[:3])
+        nx1, ny1, nx2, ny2 = self._norm_rect_xyxy(app)
+        box = xos.tensor(
+            [float(nx1), float(ny1), float(nx2), float(ny2)],
+            shape=(2, 2),
+        )
+        xos.rasterizer.rects_filled(frame, box, rgb, alpha=float(self.alpha))
+        return None
+
+
+class UiButton(_NormRect):
+    """Invisible hit-target; invokes ``on_press`` on completed left clicks inside ``verts``."""
+
+    __slots__ = ("_on_press", "_press_armed")
+
+    def __init__(self, x1, y1, x2, y2, on_press, coordinate_system=None):
+        super().__init__(x1, y1, x2, y2, coordinate_system=coordinate_system)
+        if on_press is None or not callable(on_press):
+            raise TypeError("on_press must be a callable")
+        self._on_press = on_press
+        self._press_armed = False
+
+    def _hit_test_px(self, app, mx, my):
+        x_lo, y_lo, x_hi, y_hi = self._hit_pixel_rect(app)
+        mx = float(mx)
+        my = float(my)
+        return x_lo <= mx < x_hi and y_lo <= my < y_hi
+
+    def tick(self, app):
+        return None
+
+    def render(self, app=None):
+        return None
+
+    def on_events(self, app):
+        ev = getattr(app, "_xos_event", None)
+        if not isinstance(ev, dict):
+            return
+        kind = ev.get("kind")
+        btn_raw = ev.get("button")
+        btn_s = str(btn_raw) if btn_raw is not None else ""
+        # Routed ``mouse_up`` uses current ``state.mouse.is_left_clicking``, which is already False
+        # after release, so ``is_left`` alone is unreliable; prefer ``button``.
+        primary = btn_s == "left" or (kind == "mouse_down" and bool(ev.get("is_left", False)))
+        if not primary:
+            return
+        mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+        my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+        if kind == "mouse_down":
+            self._press_armed = self._hit_test_px(app, mx, my)
+        elif kind == "mouse_up":
+            if self._press_armed and self._hit_test_px(app, mx, my):
+                self._on_press()
+            self._press_armed = False
+
+
+def rect(x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(128, 128, 128), alpha=None, **kwargs):
+    """Create ``UiRect``; extra kwargs are ignored for forward compatibility."""
+    kwargs.pop("editable", None)
+    a = kwargs.pop("alpha", alpha)
+    cs = kwargs.pop("coordinate_system", None)
+    return UiRect(x1, y1, x2, y2, color=color, alpha=a, coordinate_system=cs)
+
+
+def button(*args, on_press=None, **kwargs):
+    """Widget: ``button(x1, y1, x2, y2, on_press=callable)``. Legacy: 6–9 positional args → ``_paint_button``."""
+
+    op = on_press if on_press is not None else kwargs.pop("on_press", None)
+    if op is not None:
+        kwargs.pop("on_press", None)
+        cs = kwargs.pop("coordinate_system", None)
+        if len(args) != 4:
+            raise TypeError("button expects (x1, y1, x2, y2) positional args when using on_press")
+        if kwargs:
+            bad = ", ".join(sorted(kwargs.keys()))
+            raise TypeError("button(widget) got unexpected keyword arguments: " + bad)
+        return UiButton(
+            float(args[0]),
+            float(args[1]),
+            float(args[2]),
+            float(args[3]),
+            op,
+            coordinate_system=cs,
+        )
+    if kwargs:
+        bad = ", ".join(sorted(kwargs.keys()))
+        raise TypeError("immediate paint button does not accept keyword arguments: " + bad)
+    if len(args) < 6 or len(args) > 9:
+        raise TypeError(
+            "button(...) expected widget (x1, y1, x2, y2, on_press=...) or legacy 6..9 positional args"
+        )
+    return _paint_button(*args[:9])
+
 
 class Group:
     """Sequential widget container: forwards tick() / on_events() to children (e.g. several Text editors)."""
@@ -1825,7 +2123,7 @@ class Group:
         out = []
         for c in self._children:
             if hasattr(c, "render"):
-                out.append(c.render())
+                out.append(c.render(app))
         return tuple(out)
 
 
@@ -1888,6 +2186,18 @@ def onscreen_keyboard():
     }
     if let Ok(grp_fn) = scope.globals.get_item("group", vm) {
         module.set_attr("group", grp_fn, vm).unwrap();
+    }
+    if let Ok(rect_fn) = scope.globals.get_item("rect", vm) {
+        module.set_attr("rect", rect_fn, vm).unwrap();
+    }
+    if let Ok(btn_fn) = scope.globals.get_item("button", vm) {
+        module.set_attr("button", btn_fn, vm).unwrap();
+    }
+    if let Ok(ui_rect) = scope.globals.get_item("UiRect", vm) {
+        module.set_attr("UiRect", ui_rect, vm).unwrap();
+    }
+    if let Ok(ui_btn) = scope.globals.get_item("UiButton", vm) {
+        module.set_attr("UiButton", ui_btn, vm).unwrap();
     }
 
     module
