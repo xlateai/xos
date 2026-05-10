@@ -1,5 +1,5 @@
 import xos
-import utils
+import constants
 
 import ball
 
@@ -11,15 +11,17 @@ class RemoteSourceApp(xos.Application):
     def __init__(self):
         super().__init__()
 
-        self.mesh = xos.mesh.connect(id=utils.MESH_CHANNEL, mode=utils.MODE)
+        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE)
 
     def tick(self):
         print(self.t)
         # xos.device.get_device_frame()
 
-        self.mesh.broadcast(id="frame", frame="test")
 
         BALL_APP.tick()
+
+        print(BALL_APP.frame)
+        self.mesh.broadcast(id="frame", frame=BALL_APP.frame)
 
 
 if __name__ == "__main__":

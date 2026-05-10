@@ -6,7 +6,7 @@ Tap a desktop host row, control it from the viewport above the on-screen keyboar
 """
 
 import xos
-import utils
+import constants
 
 
 class RemoteViewerApp(xos.Application):
@@ -15,7 +15,7 @@ class RemoteViewerApp(xos.Application):
     def __init__(self):
         super().__init__()
 
-        self.mesh = xos.mesh.connect(id=utils.MESH_CHANNEL, mode=utils.MODE)
+        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE)
         # self.status = xos.ui.text(
         #     "Connecting...",
         #     x1=0.0,
