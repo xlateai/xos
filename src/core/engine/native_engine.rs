@@ -26,7 +26,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel},
 };
@@ -296,8 +296,15 @@ impl ApplicationHandler for AppState {
                         self.size.width,
                         self.size.height,
                     );
+                    self.tick_and_render_frame();
+                    return;
                 }
-                self.tick_and_render_frame();
+                // Unpaused realtime path: stepping + present happens from `about_to_wait` under
+                // [`ControlFlow::Poll`]. Handling another full tick here would duplicate Python/sim
+                // each compositor repaint (~≤ display Hz), which capped mesh viewers far below stream rate.
+                if self.engine_state.paused {
+                    self.tick_and_render_frame();
+                }
             }
             WindowEvent::Resized(new_size) => {
                 if new_size.width == 0 || new_size.height == 0 {
@@ -667,9 +674,10 @@ impl ApplicationHandler for AppState {
             }
         }
 
-        // Keep continuous redraw only while running; paused mode is event-driven to avoid busy CPU usage.
+        // Stepping + GPU present directly here so frame delivery is not tied to sporadic compositor
+        // `RedrawRequested` cadence (~30–60 Hz on many platforms despite vsync-disabled surfaces).
         if !self.engine_state.paused {
-            self.window.request_redraw();
+            self.tick_and_render_frame();
         }
     }
 }
@@ -685,6 +693,9 @@ struct AppStateWrapper {
 impl ApplicationHandler for AppStateWrapper {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.app_state.is_none() {
+            // Default `Wait` idles until input/compositor wakes the loop → low viewer tick FPS.
+            event_loop.set_control_flow(ControlFlow::Poll);
+
             let attrs = match self.launch_mode {
                 NativeLaunchMode::Windowed => window_attributes_windowed(),
                 NativeLaunchMode::Overlay => overlay_window_attributes(event_loop),
