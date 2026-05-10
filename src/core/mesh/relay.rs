@@ -55,11 +55,31 @@ const ONLINE_POLL_FAIL_GRACE: u32 = 5;
 
 /// Latest-wins queue for [`MeshSession::broadcast_json`] (one pending payload per `kind`).
 /// Drained on a background thread so Python / the app tick loop does not block on TCP backpressure.
+/// [`PendingBroadcast::RgbaFrame`] defers JPEG + JSON to this thread (keeps `broadcast(frame=…)` off the hot tick).
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
+enum PendingBroadcast {
+    Json(serde_json::Value),
+    RgbaFrame {
+        rgba: Arc<Vec<u8>>,
+        w: u32,
+        h: u32,
+    },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct CoalesceBroadcastLane {
-    pending: Mutex<HashMap<String, serde_json::Value>>,
+    pending: Mutex<HashMap<String, PendingBroadcast>>,
     cv: Condvar,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for CoalesceBroadcastLane {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            cv: Condvar::new(),
+        }
+    }
 }
 
 fn heartbeat_envelope(rank: u32, node_id: &str) -> WireEnvelope {
@@ -1410,13 +1430,35 @@ impl MeshSession {
     pub fn broadcast_json(&self, kind: &str, payload: serde_json::Value) -> Result<(), String> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref lane) = self.coalesce_broadcast {
-            lane.pending
-                .lock()
-                .unwrap()
-                .insert(kind.to_string(), payload);
+            lane.pending.lock().unwrap().insert(
+                kind.to_string(),
+                PendingBroadcast::Json(payload),
+            );
             lane.cv.notify_one();
             return Ok(());
         }
+        self.send_impl(None, kind, payload)
+    }
+
+    /// Enqueue raw RGBA (`w`×`h`×4): mesh worker builds JPEG wire JSON (non-blocking on interpreter).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn broadcast_deferred_rgba_frame(
+        &self,
+        kind: &str,
+        w: u32,
+        h: u32,
+        rgba: Arc<Vec<u8>>,
+    ) -> Result<(), String> {
+        if let Some(ref lane) = self.coalesce_broadcast {
+            lane.pending.lock().unwrap().insert(
+                kind.to_string(),
+                PendingBroadcast::RgbaFrame { rgba, w, h },
+            );
+            lane.cv.notify_one();
+            return Ok(());
+        }
+        let payload =
+            crate::python_api::json_codec::mesh_broadcast_body_from_rgba(w, h, rgba.as_slice());
         self.send_impl(None, kind, payload)
     }
 
@@ -1446,7 +1488,7 @@ impl MeshSession {
         shutdown: Arc<AtomicU32>,
     ) {
         loop {
-            let batch: Vec<(String, serde_json::Value)> = {
+            let batch: Vec<(String, PendingBroadcast)> = {
                 let mut map = lane.pending.lock().unwrap();
                 loop {
                     if shutdown.load(Ordering::SeqCst) != 0 {
@@ -1466,10 +1508,16 @@ impl MeshSession {
             let Some(sess) = weak_session.upgrade() else {
                 return;
             };
-            for (kind, payload) in batch {
+            for (kind, pend) in batch {
                 if shutdown.load(Ordering::SeqCst) != 0 {
                     return;
                 }
+                let payload = match pend {
+                    PendingBroadcast::Json(v) => v,
+                    PendingBroadcast::RgbaFrame { rgba, w, h } => {
+                        crate::python_api::json_codec::mesh_broadcast_body_from_rgba(w, h, rgba.as_slice())
+                    }
+                };
                 let _ = sess.send_impl(None, &kind, payload);
             }
         }

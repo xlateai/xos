@@ -9,14 +9,15 @@ use rustpython_vm::{
     builtins::PyBaseExceptionRef, PyObjectRef, PyResult, VirtualMachine,
 };
 use serde_json::{json, Map, Number, Value};
+use std::sync::Arc;
 
 const MAX_DEPTH: u32 = 48;
 
 /// Wire key for encoded frames (nested inside a JSON object, e.g. `{"pic": {<this>}}`).
 pub(crate) const XOS_JSON_FRAME: &str = "__xos_json_frame";
 
-/// JPEG payload for mesh-serialized `Frame`: far smaller than RGBA base64 (~10×+ less wire + crypto).
-const MESH_FRAME_JPEG_QUALITY: u8 = 78;
+/// JPEG payload for mesh-serialized `Frame`: smaller + faster encode than high quality (latency-first).
+const MESH_FRAME_JPEG_QUALITY: u8 = 62;
 
 #[inline]
 fn rgba_to_jpeg_xos_wire(w: usize, h: usize, rgba: &[u8]) -> Result<Value, ()> {
@@ -40,13 +41,80 @@ fn rgba_to_jpeg_xos_wire(w: usize, h: usize, rgba: &[u8]) -> Result<Value, ()> {
     }))
 }
 
-fn frame_rgba_to_wire_json(w: usize, h: usize, rgba: &[u8]) -> Value {
+pub(crate) fn frame_rgba_to_mesh_wire_value(w: usize, h: usize, rgba: &[u8]) -> Value {
     rgba_to_jpeg_xos_wire(w, h, rgba).unwrap_or_else(|_| {
         let b64 = B64.encode(rgba);
         json!({
             XOS_JSON_FRAME: { "w": w, "h": h, "rgba_b64": b64 }
         })
     })
+}
+
+/// Wire body `{"frame": …}` built from RGBA slice (caller runs off the interpreter thread).
+pub(crate) fn mesh_broadcast_body_from_rgba(w: u32, h: u32, rgba: &[u8]) -> Value {
+    let inner = frame_rgba_to_mesh_wire_value(w as usize, h as usize, rgba);
+    json!({ "frame": inner })
+}
+
+/// Fast path for coalesced `broadcast(id=\"frame\", frame=…)`: tensor must be contiguous `tensor._data` PyBytes RGBA matching `width×height×4`.
+pub(crate) fn try_mesh_frame_rgba_arc_for_broadcast(
+    vm: &VirtualMachine,
+    id: &str,
+    payload_obj: &PyObjectRef,
+) -> PyResult<Option<(Arc<Vec<u8>>, u32, u32)>> {
+    if id != "frame" {
+        return Ok(None);
+    }
+    let Some(dict) = payload_obj.downcast_ref::<PyDict>() else {
+        return Ok(None);
+    };
+    if !dict.contains_key("frame", vm) {
+        return Ok(None);
+    }
+    for (key, _) in dict {
+        if key.str(vm)?.to_string() != "frame" {
+            return Ok(None);
+        }
+    }
+    let fo = dict.get_item("frame", vm)?;
+    if !is_builtin_frame(vm, &fo)? {
+        return Ok(None);
+    }
+    let Some(inner) = vm.get_attribute_opt(fo.clone(), "_data")? else {
+        return Ok(None);
+    };
+    let frame_dict = inner
+        .downcast_ref::<PyDict>()
+        .ok_or_else(|| type_error(vm, "Frame._data must be a dict"))?;
+
+    let w: usize = frame_dict
+        .get_item("width", vm)?
+        .clone()
+        .try_into_value::<i64>(vm)? as usize;
+    let h: usize = frame_dict
+        .get_item("height", vm)?
+        .clone()
+        .try_into_value::<i64>(vm)? as usize;
+    let need = w
+        .checked_mul(h)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| vm.new_value_error("Frame: width×height overflow".to_string()))?;
+
+    let tensor_any = frame_dict.get_item("tensor", vm)?;
+    let tensor_dict = tensor_any
+        .downcast_ref::<PyDict>()
+        .ok_or_else(|| type_error(vm, "Frame.tensor must be a dict"))?;
+
+    if let Ok(blob) = tensor_dict.get_item("_data", vm) {
+        if let Some(bytes) = blob.downcast_ref::<PyBytes>() {
+            let s = bytes.as_bytes();
+            if s.len() == need {
+                return Ok(Some((Arc::new(s.to_vec()), w as u32, h as u32)));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 #[inline]
@@ -142,7 +210,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
         if let Some(bytes) = blob.downcast_ref::<PyBytes>() {
             let s = bytes.as_bytes();
             if s.len() == need {
-                return Ok(frame_rgba_to_wire_json(w, h, s));
+                return Ok(frame_rgba_to_mesh_wire_value(w, h, s));
             }
         }
     }
@@ -154,7 +222,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
                 crate::python_api::xos_module::standalone_frame_buffer_copy(vid.max(0) as u64)
             {
                 if buf.len() == need {
-                    return Ok(frame_rgba_to_wire_json(w, h, &buf));
+                    return Ok(frame_rgba_to_mesh_wire_value(w, h, &buf));
                 }
             }
         }
@@ -163,7 +231,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
     // 3) Active raster tick buffer (dimensions must match this Frame)
     if let Some(buf) = crate::python_api::rasterizer::copy_active_frame_rgba_if_match(w, h) {
         if buf.len() == need {
-            return Ok(frame_rgba_to_wire_json(w, h, &buf));
+            return Ok(frame_rgba_to_mesh_wire_value(w, h, &buf));
         }
     }
 
@@ -177,7 +245,7 @@ pub(crate) fn frame_rgba_to_json_value(vm: &VirtualMachine, obj: &PyObjectRef) -
                     let v: i32 = item.clone().try_into_value(vm)?;
                     raw.push(v.clamp(0, 255) as u8);
                 }
-                return Ok(frame_rgba_to_wire_json(w, h, &raw));
+                return Ok(frame_rgba_to_mesh_wire_value(w, h, &raw));
             }
         }
     }

@@ -4,13 +4,8 @@
 //! - **Windows**: GDI capture + `SetCursorPos` / `mouse_event`.
 //! - **macOS**: [`xcap`] + [`enigo`] (grant **Screen Recording** for the `xos` binary).
 
-/// Max width after downscale before JPEG encode.
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "ios"),
-    any(target_os = "windows", target_os = "macos")
-))]
-pub(crate) const STREAM_MAX_W: u32 = 1280;
+/// LAN remote stream width cap (height scales).
+pub(crate) const STREAM_MAX_W: u32 = 960;
 
 #[cfg(target_os = "windows")]
 mod win {

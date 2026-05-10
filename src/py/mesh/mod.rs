@@ -7,7 +7,9 @@ use crate::mesh::state::{LINE_EDITOR, MESH};
 use crate::mesh::terminal::INPUT_INTERRUPT;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::mesh::{MeshMode, MeshSession, Packet};
-use crate::python_api::json_codec::{json_value_to_py, py_to_json_value};
+use crate::python_api::json_codec::{
+    json_value_to_py, py_to_json_value, try_mesh_frame_rgba_arc_for_broadcast,
+};
 use crate::python_api::runtime::format_python_exception;
 use rustpython_vm::builtins::{PyDict, PyModule};
 use rustpython_vm::function::FuncArgs;
@@ -27,6 +29,21 @@ pub(crate) fn py_to_json(
 #[cfg(not(target_arch = "wasm32"))]
 fn mesh_json_to_py(vm: &VirtualMachine, v: &serde_json::Value) -> PyResult {
     json_value_to_py(vm, v)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn mesh_frame_latest_packet_dict(vm: &VirtualMachine, p: &Packet) -> PyResult {
+    if let serde_json::Value::Object(ref map) = p.body {
+        if let Some(frame_v) = map.get("frame") {
+            let frame_py = json_value_to_py(vm, frame_v)?;
+            let dict = vm.ctx.new_dict();
+            dict.set_item("from_rank", vm.ctx.new_int(p.from_rank as isize).into(), vm)?;
+            dict.set_item("from_id", vm.ctx.new_str(p.from_id.as_str()).into(), vm)?;
+            dict.set_item("frame", frame_py, vm)?;
+            return Ok(dict.into());
+        }
+    }
+    packet_to_py(vm, p)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -269,6 +286,19 @@ fn mesh_broadcast_payload(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .get(1)
         .ok_or_else(|| vm.new_type_error("broadcast requires payload dict".to_string()))?
         .clone();
+
+    if let Some((pixels, w, h)) =
+        try_mesh_frame_rgba_arc_for_broadcast(vm, &id, &payload_obj)?
+    {
+        let g = MESH.lock().unwrap();
+        let Some(m) = g.as_ref() else {
+            return Err(vm.new_runtime_error("mesh not connected".to_string()));
+        };
+        m.broadcast_deferred_rgba_frame(&id, w, h, pixels)
+            .map_err(|e| vm.new_runtime_error(e))?;
+        return Ok(vm.ctx.none());
+    }
+
     let payload = py_to_json(vm, payload_obj)?;
     let g = MESH.lock().unwrap();
     let Some(m) = g.as_ref() else {
@@ -368,6 +398,9 @@ fn mesh_receive(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let one = packs.into_iter().next().unwrap();
         if id == "remote_frame" {
             return remote_frame_packet_to_py_frame(vm, &one);
+        }
+        if id == "frame" {
+            return mesh_frame_latest_packet_dict(vm, &one);
         }
         return packet_to_py(vm, &one);
     }
