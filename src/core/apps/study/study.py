@@ -4,6 +4,9 @@ import study_data
 
 DEFAULT_FONT_SIZE = 52.0
 
+MENU_LEFT_EDGE_EXTENSION = 0.3
+MENU_BUTTON_WIDTH = 0.1
+
 
 def _boxed_text(app, text, x1, y1, x2, y2, **kwargs):
     x1, y1, x2, y2 = app.safe_region.renormalize(x1, y1, x2, y2)
@@ -76,8 +79,20 @@ class TextDemo(xos.Application):
             spacing=(1.0, 1.45),
         )
 
+        
+
         self.text = xos.ui.group(self.vocab_display, self.guess_area, self.description)
         self._bootstrap_round()
+
+    def _show_menu(self):
+        self.menu_visible = not self.menu_visible
+
+        if self.menu_visible:
+            self.menu_background.x1 = MENU_LEFT_EDGE_EXTENSION
+            self.menu_button.x1 = MENU_LEFT_EDGE_EXTENSION
+            self.menu_button.x2 = MENU_LEFT_EDGE_EXTENSION
+        else:
+            self.menu_background.x1 = 0.0
 
     def _headline(self, row):
         if not row:
