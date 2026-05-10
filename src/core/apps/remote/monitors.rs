@@ -18,8 +18,7 @@ pub struct MonitorDescriptor {
 }
 
 fn stream_dims(native_w: u32, native_h: u32) -> (u32, u32) {
-    // Match `remote.rs` STREAM_MAX_W (duplicate so Linux/other targets still compile this module).
-    const STREAM_MAX_W: u32 = 1280;
+    let STREAM_MAX_W = crate::apps::remote::remote::STREAM_MAX_W;
     let vw = native_w.max(1);
     let vh = native_h.max(1);
     let scale = (STREAM_MAX_W as f32 / vw as f32).min(1.0f32);

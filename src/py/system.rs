@@ -1,5 +1,4 @@
 use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
-use rustpython_vm::AsObject;
 
 use crate::apps::remote::monitors::{self, MonitorDescriptor};
 use crate::python_api::json_codec::py_frame_from_rgba_bytes;
