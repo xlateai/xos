@@ -138,7 +138,15 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         }
     };
 
-    let session = if mode == MeshMode::Lan || mode == MeshMode::Online {
+    let mesh_udp: bool = if let Some(s) = args.args.get(2) {
+        s.clone().try_into_value(vm)?
+    } else if let Some(s) = args.kwargs.get("udp") {
+        s.clone().try_into_value(vm)?
+    } else {
+        false
+    };
+
+    let mut session = if mode == MeshMode::Lan || mode == MeshMode::Online {
         if !has_identity() {
             return Err(vm.new_runtime_error(
                 "xos.mesh.connect(mode='lan'|'online') requires a local login identity. Run `xos login` first."
@@ -149,8 +157,13 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             vm.new_runtime_error(format!("could not load node identity: {e}"))
         })?;
         let id = std::sync::Arc::new(unlocked);
-        MeshSession::join_with_identity(&mesh_id, mode, id, None)
+        MeshSession::join_with_identity(&mesh_id, mode, id, None, mesh_udp)
     } else {
+        if mesh_udp {
+            return Err(vm.new_value_error(
+                "xos.mesh.connect: udp=True is only supported for mode='lan'".to_string(),
+            ));
+        }
         MeshSession::join(&mesh_id, mode)
     }
     .map_err(|e| {
@@ -160,8 +173,11 @@ fn mesh_connect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             vm.new_runtime_error(e)
         }
     })?;
+    session.enable_coalesced_broadcast();
+    let session = std::sync::Arc::new(session);
+    MeshSession::spawn_coalesced_broadcast_worker(std::sync::Arc::clone(&session));
     crate::manager::register_mesh(&mesh_id, &mode_str);
-    *MESH.lock().unwrap() = Some(std::sync::Arc::new(session));
+    *MESH.lock().unwrap() = Some(session);
     Ok(vm.ctx.none())
 }
 

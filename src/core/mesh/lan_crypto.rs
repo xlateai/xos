@@ -3,7 +3,7 @@
 use crate::auth::{
     load_identity, node_id_from_public_pem, rsa_sign, rsa_verify, UnlockedNodeIdentity,
 };
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hkdf::Hkdf;
@@ -39,6 +39,9 @@ fn expect_node_id(nid: &str, pk_pem: &str) -> Result<(), String> {
 #[derive(Serialize, Deserialize)]
 struct HsClientHello {
     hs: u32,
+    /// When `Some(true)`, joiner requests the UDP mesh data plane (**must match** coordinator).
+    #[serde(default)]
+    mesh_udp: Option<bool>,
     /// Friendly machine name.
     nn: String,
     /// Account identity fingerprint (SHA256(SPKI DER) of account public key).
@@ -54,6 +57,8 @@ struct HsClientHello {
 #[derive(Serialize, Deserialize)]
 struct HsServerHello {
     hs: u32,
+    #[serde(default)]
+    mesh_udp: Option<bool>,
     nn: String,
     /// Account identity fingerprint (must match client `aid`).
     #[serde(default)]
@@ -111,6 +116,7 @@ fn hkdf_server(shared: &[u8]) -> Result<LanWireKeys, String> {
 pub fn client_handshake(
     stream: TcpStream,
     id: &UnlockedNodeIdentity,
+    mesh_udp: bool,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
     let aid = local_account_fingerprint()?;
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
@@ -124,6 +130,7 @@ pub fn client_handshake(
     let nid = id.node_id();
     let hello = HsClientHello {
         hs: HS_VER,
+        mesh_udp: Some(mesh_udp),
         nn: id.node_name.clone(),
         aid: Some(aid.clone()),
         nid,
@@ -152,6 +159,16 @@ pub fn client_handshake(
         }
     } else if srv.hs >= HS_VER {
         return Err("LAN handshake: account identity mismatch (different login)".to_string());
+    }
+    let srv_mesh_udp = srv.mesh_udp.unwrap_or(false);
+    if srv_mesh_udp != mesh_udp {
+        return Err(if mesh_udp {
+            "mesh udp mismatch: joiner requested udp=True but coordinator did not agree (every node must use xos.mesh.connect(..., udp=True))"
+                .to_string()
+        } else {
+            "mesh udp mismatch: coordinator requested udp=True but joiner connected with udp=False"
+                .to_string()
+        });
     }
     expect_node_id(&srv.nid, &srv.pk)?;
     let ec_s_bytes = B64.decode(&srv.ec).map_err(|e| e.to_string())?;
@@ -200,6 +217,7 @@ pub fn client_handshake(
 pub fn server_handshake(
     stream: TcpStream,
     id: &UnlockedNodeIdentity,
+    coordinator_mesh_udp: bool,
 ) -> Result<(LanWireKeys, BufReader<TcpStream>, TcpStream), String> {
     let aid = local_account_fingerprint()?;
     let mut write_half = stream.try_clone().map_err(|e| e.to_string())?;
@@ -221,6 +239,18 @@ pub fn server_handshake(
     } else if cli.hs >= HS_VER {
         return Err("LAN handshake: account identity mismatch (different login)".to_string());
     }
+    let joiner_udp = cli.mesh_udp.unwrap_or(false);
+    if joiner_udp != coordinator_mesh_udp {
+        return Err(if coordinator_mesh_udp {
+            format!(
+                "mesh udp mismatch: joiner udp={joiner_udp} but coordinator binds with udp=True (all nodes must use udp=True)"
+            )
+        } else {
+            format!(
+                "mesh udp mismatch: joiner udp={joiner_udp} but coordinator binds with udp=False"
+            )
+        });
+    }
     expect_node_id(&cli.nid, &cli.pk)?;
     let pk_c = RsaPublicKey::from_public_key_pem(cli.pk.as_str()).map_err(|e| e.to_string())?;
     let ec_c_bytes = B64.decode(&cli.ec).map_err(|e| e.to_string())?;
@@ -237,6 +267,7 @@ pub fn server_handshake(
 
     let hello = HsServerHello {
         hs: HS_VER,
+        mesh_udp: Some(coordinator_mesh_udp),
         nn: id.node_name.clone(),
         aid: Some(aid),
         nid: id.node_id(),
@@ -323,4 +354,91 @@ pub fn decrypt_mesh_line(cipher: &Aes256Gcm, line: &str) -> Result<String, Strin
         format!("LAN mesh decrypt failed (wrong AES key or corrupt ciphertext): {e}")
     })?;
     String::from_utf8(plain).map_err(|e| e.to_string())
+}
+
+/// Max plaintext bytes per UDP mesh datagram before AES-GCM (fits in one IPv4 UDP payload).
+pub const MESH_UDP_PAYLOAD_CHUNK: usize = 48 * 1024;
+
+const MUDP_MAGIC: [u8; 4] = *b"XMU1";
+const MUDP_HDR: usize = 4 + 8 + 4 + 4;
+
+/// One AES-GCM datagram: `magic | msg_id | idx | total | nonce | ciphertext`.
+pub fn mesh_udp_encrypt_chunk(
+    cipher: &Aes256Gcm,
+    msg_id: u64,
+    idx: u32,
+    total: u32,
+    plain: &[u8],
+) -> Result<Vec<u8>, String> {
+    let nonce = Aes256Gcm::generate_nonce(&mut AesOsRng);
+    let mut hdr = [0u8; MUDP_HDR];
+    hdr[0..4].copy_from_slice(&MUDP_MAGIC);
+    hdr[4..12].copy_from_slice(&msg_id.to_le_bytes());
+    hdr[12..16].copy_from_slice(&idx.to_le_bytes());
+    hdr[16..20].copy_from_slice(&total.to_le_bytes());
+    let ct = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plain,
+                aad: &hdr,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(MUDP_HDR + 12 + ct.len());
+    out.extend_from_slice(&hdr);
+    out.extend_from_slice(nonce.as_slice());
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Returns `(msg_id, idx, total, plaintext_chunk)` or error if not a valid mesh UDP frame.
+pub fn mesh_udp_try_decrypt_chunk(
+    cipher: &Aes256Gcm,
+    buf: &[u8],
+) -> Result<(u64, u32, u32, Vec<u8>), String> {
+    if buf.len() < MUDP_HDR + 12 + 16 {
+        return Err("short mesh UDP packet".to_string());
+    }
+    if buf[0..4] != MUDP_MAGIC {
+        return Err("bad mesh UDP magic".to_string());
+    }
+    let hdr = &buf[0..MUDP_HDR];
+    let msg_id = u64::from_le_bytes(buf[4..12].try_into().map_err(|_| "msg_id")?);
+    let idx = u32::from_le_bytes(buf[12..16].try_into().map_err(|_| "idx")?);
+    let total = u32::from_le_bytes(buf[16..20].try_into().map_err(|_| "total")?);
+    if total == 0 || idx >= total {
+        return Err("bad mesh UDP fragment indices".to_string());
+    }
+    let nonce = Nonce::from_slice(&buf[20..32]);
+    let ct = &buf[32..];
+    let plain = cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: ct,
+                aad: hdr,
+            },
+        )
+        .map_err(|e| format!("mesh UDP decrypt: {e}"))?;
+    Ok((msg_id, idx, total, plain))
+}
+
+/// Split a full wire JSON line into AES-GCM UDP datagrams sharing `msg_id`.
+pub fn mesh_udp_encrypt_inner(cipher: &Aes256Gcm, inner: &str) -> Result<Vec<Vec<u8>>, String> {
+    let b = inner.as_bytes();
+    let n = b.len();
+    let n_chunks = n.div_ceil(MESH_UDP_PAYLOAD_CHUNK);
+    let total = n_chunks.max(1) as u32;
+    let mut msg_id = [0u8; 8];
+    getrandom::fill(&mut msg_id).map_err(|e| format!("{e:?}"))?;
+    let msg_id = u64::from_le_bytes(msg_id);
+    let mut out = Vec::with_capacity(total as usize);
+    for i in 0..total {
+        let start = (i as usize) * MESH_UDP_PAYLOAD_CHUNK;
+        let end = (start + MESH_UDP_PAYLOAD_CHUNK).min(n);
+        let chunk = if start < n { &b[start..end] } else { &[] };
+        out.push(mesh_udp_encrypt_chunk(cipher, msg_id, i, total, chunk)?);
+    }
+    Ok(out)
 }

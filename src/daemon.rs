@@ -274,6 +274,7 @@ pub fn run_daemon_forever() -> Result<(), String> {
                         MeshMode::Lan,
                         Arc::clone(&id),
                         None,
+                        false,
                     ) {
                         Ok(s) => {
                             lan_session = Some(s);

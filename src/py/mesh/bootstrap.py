@@ -23,14 +23,15 @@ def _wrap_receive_result(r):
 
 
 class Mesh:
-    def __init__(self, mesh_id, mode):
+    def __init__(self, mesh_id, mode, udp=False):
         self._mesh_id = mesh_id
         self._mode = mode
+        self._udp = bool(udp)
 
     def _ensure_connected(self):
         if _mesh_is_connected():
             return
-        _mesh_connect(self._mesh_id, self._mode)
+        _mesh_connect(self._mesh_id, self._mode, self._udp)
 
     def _call(self, fn, *args):
         self._ensure_connected()
@@ -110,14 +111,24 @@ def disconnect():
     _mesh_disconnect()
 
 
-def connect(id="default", mode="local"):
+def connect(id="default", mode="local", udp=False):
     """Join a mesh. ``id`` selects the logical room (TCP + UDP discovery ports). ``mode`` is
     ``local``, ``lan``, or ``online``. For ``lan``/``online``, run
     ``xos login --offline`` first so ``authentication.json`` and ``node_identity.json`` exist;
     both use the per-machine node keypair from ``node_identity.json`` (no password prompt).
+
+    ``udp``: when True (``lan`` only), the join handshake requires every node to agree; both
+    coordinator and joiners must pass ``udp=True``. Payload transport still uses the existing
+    encrypted TCP channel until a separate UDP data plane is enabled.
+
+    ``broadcast()`` posts to a background coalescing queue (latest payload wins per message id) so
+    the main loop does not wait on TCP writes; ``send(..., to=...)`` stays synchronous.
     """
     mode = (mode or "local").lower()
     if mode not in ("local", "lan", "online"):
         raise ValueError("xos.mesh.connect: mode must be 'local', 'lan', or 'online'")
-    _mesh_connect(id, mode)
-    return Mesh(id, mode)
+    udp = bool(udp)
+    if udp and mode != "lan":
+        raise ValueError("xos.mesh.connect: udp=True is only supported for mode='lan'")
+    _mesh_connect(id, mode, udp)
+    return Mesh(id, mode, udp)

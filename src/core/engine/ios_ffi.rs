@@ -392,6 +392,7 @@ fn try_connect_ios_remote_mesh() -> Result<Arc<MeshSession>, String> {
         MeshMode::Lan,
         Arc::new(node_identity),
         None,
+        false,
     )?;
     Ok(Arc::new(session))
 }

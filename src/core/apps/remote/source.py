@@ -11,7 +11,7 @@ class RemoteSourceApp(xos.Application):
     def __init__(self):
         super().__init__()
 
-        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE)
+        self.mesh = xos.mesh.connect(id=constants.MESH_CHANNEL, mode=constants.MODE, udp=constants.USE_UDP)
 
     def tick(self):
         print(self.t)

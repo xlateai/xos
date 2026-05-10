@@ -52,6 +52,7 @@ fn run_outer() -> Result<(), String> {
             MeshMode::Lan,
             Arc::clone(&identity),
             Some(2),
+            false,
         ) {
             Ok(s) => s,
             Err(e) => {

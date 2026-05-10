@@ -19,6 +19,16 @@ pub(super) fn check_join_interrupt() -> Result<(), String> {
     }
 }
 
+/// UDP port for LAN mesh encrypted payloads (**not** discovery). Below discovery range (35000..).
+pub(super) fn udp_hub_port_for_mesh(mesh_id: &str) -> u16 {
+    let mut h: u32 = 0xCAFE_F00D;
+    for b in mesh_id.bytes() {
+        h ^= u32::from(b).wrapping_mul(0x10001);
+        h = h.rotate_left(7).wrapping_add(0x9E37_79B1);
+    }
+    30_000u16.wrapping_add((h.wrapping_rem(4_900)) as u16)
+}
+
 /// UDP port for LAN discovery (separate from TCP). Peers broadcast `seek` here; coordinator replies.
 pub(super) fn udp_port_for_mesh_id(mesh_id: &str) -> u16 {
     let mut h: u32 = 0x811C_9DC5;
