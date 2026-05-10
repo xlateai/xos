@@ -10,7 +10,7 @@ import constants
 
 
 class RemoteViewerApp(xos.Application):
-    headless: bool = True
+    headless: bool = False
 
     def __init__(self):
         super().__init__()
@@ -25,12 +25,12 @@ class RemoteViewerApp(xos.Application):
         #     size=36.0,
         #     color=xos.color.CYAN,
         # )
-        # self.video = xos.ui.video(
-        #     x1=0.0,
-        #     y1=0.0,
-        #     x2=1.0,
-        #     y2=1.0,
-        # )
+        self.video = xos.ui.video(
+            x1=0.0,
+            y1=0.0,
+            x2=1.0,
+            y2=1.0,
+        )
 
     def tick(self):
         # self.status.tick(self)
@@ -41,7 +41,10 @@ class RemoteViewerApp(xos.Application):
 
         packet = self.mesh.receive(id="frame", wait=False, latest_only=True)
         if packet:
-            print(packet.frame)
+            frame = packet.frame
+            print(frame.tensor)
+            # self.video.update(frame)  # both should work
+            self.video.set_frame(frame.tensor)
             # self.video.frame = packet
 
         # print(self.t)
