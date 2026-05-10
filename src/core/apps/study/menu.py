@@ -13,7 +13,7 @@ MENU_BUTTON_CLOSED_VERTS = (
 MENU_BUTTON_OPEN_VERTS = (
     MENU_LEFT_EDGE_EXTENSION + 0.0,
     0.0,
-    MENU_LEFT_EDGE_EXTENSION + 0.1,
+    MENU_LEFT_EDGE_EXTENSION + MENU_BUTTON_WIDTH,
     MENU_BUTTON_WIDTH,
 )
 
@@ -61,6 +61,7 @@ class Menu:
             0.0,
             1.0,
             color=xos.color.BLACK,
+            coordinate_system=MENU_BUTTON_COORDINATE_SYSTEM,
             # alpha=0.5,
         )
 
