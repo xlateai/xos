@@ -143,7 +143,7 @@ class TextDemo(xos.Application):
         self.text.render(self)
 
         # TODO somehow make the tick render thing better? its decent though.
-        self.menu.tick(self.)
+        self.menu.tick(self)
         self.menu.render(self)
 
     def on_events(self):

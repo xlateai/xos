@@ -1,3 +1,5 @@
+import xos
+
 MENU_LEFT_EDGE_EXTENSION = 0.3
 MENU_BUTTON_WIDTH = 0.1
 

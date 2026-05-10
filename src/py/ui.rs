@@ -71,9 +71,9 @@ fn py_number_to_f64(
     Err(vm.new_type_error(format!("{name} must be int or float")))
 }
 
-/// xos.ui.button() - create and draw a button
+/// xos.ui._paint_button() - immediate-mode button paint (pixels; used by ui_demo legacy path)
 ///
-/// Usage: xos.ui.button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
+/// Usage: xos.ui._paint_button(x, y, width, height, text, is_hovered, bg_color, hover_color, text_color)
 /// - x: x position in pixels
 /// - y: y position in pixels
 /// - width: button width in pixels
@@ -85,11 +85,11 @@ fn py_number_to_f64(
 /// - text_color: optional (r, g, b) tuple for text color
 ///
 /// Returns: None (draws directly to frame buffer)
-fn button(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+fn paint_button_immediate(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let args_vec = args.args;
     if args_vec.len() < 6 || args_vec.len() > 9 {
         return Err(vm.new_type_error(format!(
-            "button() takes 6 to 9 arguments ({} given)",
+            "_paint_button() takes 6 to 9 arguments ({} given)",
             args_vec.len()
         )));
     }
@@ -991,7 +991,11 @@ fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module
-        .set_attr("button", vm.new_function("button", button), vm)
+        .set_attr(
+            "_paint_button",
+            vm.new_function("_paint_button", paint_button_immediate),
+            vm,
+        )
         .unwrap();
     module
         .set_attr(
@@ -1121,6 +1125,11 @@ pub fn make_ui_module(vm: &VirtualMachine) -> PyRef<PyModule> {
     scope
         .globals
         .set_item("_text_render", text_render_fn, vm)
+        .unwrap();
+    let paint_btn_fn = module.get_attr("_paint_button", vm).unwrap();
+    scope
+        .globals
+        .set_item("_paint_button", paint_btn_fn, vm)
         .unwrap();
     let py_text_code = r#"
 class OnScreenKeyboard:
@@ -1778,6 +1787,154 @@ class Text:
             if bound:
                 xos.frame._end_standalone()
 
+class _NormRect:
+    """Normalized axis-aligned rectangle: ``x1, y1, x2, y2`` in ``[0, 1]`` (same convention as ``Text``)."""
+
+    __slots__ = ("x1", "y1", "x2", "y2")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0):
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+
+    @property
+    def verts(self):
+        return (float(self.x1), float(self.y1), float(self.x2), float(self.y2))
+
+    @verts.setter
+    def verts(self, v):
+        if not isinstance(v, (tuple, list)) or len(v) != 4:
+            raise TypeError("verts must be a sequence of four numbers (x1, y1, x2, y2)")
+        self.x1, self.y1, self.x2, self.y2 = (
+            float(v[0]),
+            float(v[1]),
+            float(v[2]),
+            float(v[3]),
+        )
+
+
+class UiRect(_NormRect):
+    """Filled rectangle in normalized coords; ``render`` draws via ``xos.rasterizer.rects_filled``."""
+
+    __slots__ = ("color", "alpha")
+
+    def __init__(self, x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(128, 128, 128), alpha=None):
+        super().__init__(x1, y1, x2, y2)
+        self.color = tuple(color)
+        if alpha is None:
+            if len(self.color) == 4:
+                a = float(self.color[3])
+                self.alpha = (a / 255.0) if a > 1.0001 else float(a)
+            else:
+                self.alpha = 1.0
+        else:
+            self.alpha = float(alpha)
+
+    def tick(self, app):
+        return None
+
+    def on_events(self, app):
+        pass
+
+    def render(self, app=None):
+        import xos
+
+        if app is None:
+            return None
+        frame = getattr(app, "frame", None)
+        if frame is None:
+            return None
+        c = tuple(self.color)
+        rgb = tuple(float(x) for x in c[:3])
+        box = xos.tensor(
+            [float(self.x1), float(self.y1), float(self.x2), float(self.y2)],
+            shape=(2, 2),
+        )
+        xos.rasterizer.rects_filled(frame, box, rgb, alpha=float(self.alpha))
+        return None
+
+
+class UiButton(_NormRect):
+    """Invisible hit-target; invokes ``on_press`` on completed left clicks inside ``verts``."""
+
+    __slots__ = ("_on_press", "_press_armed")
+
+    def __init__(self, x1, y1, x2, y2, on_press):
+        super().__init__(x1, y1, x2, y2)
+        if on_press is None or not callable(on_press):
+            raise TypeError("on_press must be a callable")
+        self._on_press = on_press
+        self._press_armed = False
+
+    def _hit_test_px(self, app, mx, my):
+        fd = getattr(app.frame, "_data", app.frame)
+        fw = float(fd["width"])
+        fh = float(fd["height"])
+        xa = int(round(min(1.0, max(0.0, float(self.x1))) * fw))
+        ya = int(round(min(1.0, max(0.0, float(self.y1))) * fh))
+        xb = int(round(min(1.0, max(0.0, float(self.x2))) * fw))
+        yb = int(round(min(1.0, max(0.0, float(self.y2))) * fh))
+        vw = max(1, xb - xa)
+        vh = max(1, yb - ya)
+        mx = float(mx)
+        my = float(my)
+        return xa <= mx < xa + vw and ya <= my < ya + vh
+
+    def tick(self, app):
+        return None
+
+    def render(self, app=None):
+        return None
+
+    def on_events(self, app):
+        ev = getattr(app, "_xos_event", None)
+        if not isinstance(ev, dict):
+            return
+        kind = ev.get("kind")
+        btn = str(ev.get("button", "") or "")
+        is_left = bool(ev.get("is_left", btn == "left"))
+        if not is_left:
+            return
+        mx = float(ev["x"]) if "x" in ev else float(app.mouse["x"])
+        my = float(ev["y"]) if "y" in ev else float(app.mouse["y"])
+        if kind == "mouse_down":
+            self._press_armed = self._hit_test_px(app, mx, my)
+        elif kind == "mouse_up":
+            if self._press_armed and self._hit_test_px(app, mx, my):
+                self._on_press()
+            self._press_armed = False
+
+
+def rect(x1=0.0, y1=0.0, x2=1.0, y2=1.0, color=(128, 128, 128), alpha=None, **kwargs):
+    """Create a normalized ``UiRect``; extra kwargs are ignored for forward compatibility."""
+    kwargs.pop("editable", None)
+    a = kwargs.pop("alpha", alpha)
+    return UiRect(x1, y1, x2, y2, color=color, alpha=a)
+
+
+def button(*args, on_press=None, **kwargs):
+    """Widget: ``button(x1, y1, x2, y2, on_press=callable)``. Legacy: 6–9 positional args → ``_paint_button``."""
+
+    op = on_press if on_press is not None else kwargs.pop("on_press", None)
+    if op is not None:
+        kwargs.pop("on_press", None)
+        if len(args) != 4:
+            raise TypeError("button expects (x1, y1, x2, y2) positional args when using on_press")
+        if kwargs:
+            bad = ", ".join(sorted(kwargs.keys()))
+            raise TypeError("button(widget) got unexpected keyword arguments: " + bad)
+        return UiButton(float(args[0]), float(args[1]), float(args[2]), float(args[3]), op)
+    if kwargs:
+        bad = ", ".join(sorted(kwargs.keys()))
+        raise TypeError("immediate paint button does not accept keyword arguments: " + bad)
+    if len(args) < 6 or len(args) > 9:
+        raise TypeError(
+            "button(...) expected widget (x1, y1, x2, y2, on_press=...) or legacy 6..9 positional args"
+        )
+    return _paint_button(*args[:9])
+
+
 class Group:
     """Sequential widget container: forwards tick() / on_events() to children (e.g. several Text editors)."""
 
@@ -1825,7 +1982,7 @@ class Group:
         out = []
         for c in self._children:
             if hasattr(c, "render"):
-                out.append(c.render())
+                out.append(c.render(app))
         return tuple(out)
 
 
@@ -1888,6 +2045,18 @@ def onscreen_keyboard():
     }
     if let Ok(grp_fn) = scope.globals.get_item("group", vm) {
         module.set_attr("group", grp_fn, vm).unwrap();
+    }
+    if let Ok(rect_fn) = scope.globals.get_item("rect", vm) {
+        module.set_attr("rect", rect_fn, vm).unwrap();
+    }
+    if let Ok(btn_fn) = scope.globals.get_item("button", vm) {
+        module.set_attr("button", btn_fn, vm).unwrap();
+    }
+    if let Ok(ui_rect) = scope.globals.get_item("UiRect", vm) {
+        module.set_attr("UiRect", ui_rect, vm).unwrap();
+    }
+    if let Ok(ui_btn) = scope.globals.get_item("UiButton", vm) {
+        module.set_attr("UiButton", ui_btn, vm).unwrap();
     }
 
     module
