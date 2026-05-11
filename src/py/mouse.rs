@@ -23,5 +23,10 @@ pub fn register_mouse(module: &PyRef<PyModule>, vm: &VirtualMachine) {
         vm.new_function("apply_remote_input", mouse_apply_remote_input),
         vm,
     );
+    let _ = sub.set_attr(
+        "control",
+        vm.new_function("control", mouse_apply_remote_input),
+        vm,
+    );
     let _ = module.set_attr("mouse", sub, vm);
 }

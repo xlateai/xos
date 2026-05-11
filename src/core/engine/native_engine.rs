@@ -230,6 +230,10 @@ impl AppState {
             let height = self.size.height;
             let mouse_x = self.engine_state.mouse.x;
             let mouse_y = self.engine_state.mouse.y;
+            let mouse_dx = self.engine_state.mouse.dx;
+            let mouse_dy = self.engine_state.mouse.dy;
+            let mouse_left = self.engine_state.mouse.is_left_clicking;
+            let mouse_right = self.engine_state.mouse.is_right_clicking;
             let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
             let (buffer, keyboard) = {
                 let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
@@ -237,7 +241,18 @@ impl AppState {
                     &mut self.engine_state.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
-            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+            keyboard.tick(
+                buffer,
+                width,
+                height,
+                mouse_x,
+                mouse_y,
+                mouse_dx,
+                mouse_dy,
+                mouse_left,
+                mouse_right,
+                &safe_region,
+            );
         }
 
         tick_f3_menu(&mut self.engine_state);

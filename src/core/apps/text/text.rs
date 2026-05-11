@@ -860,28 +860,23 @@ impl TextApp {
         }
 
         if is_trackpad_mode && is_keyboard_shown {
-            // One shared laser across Python embed widgets: draw only from the focused editor.
-            if !(self.python_viewport.is_some() && !self.py_input_focused) {
-                if let (Some(laser_x), Some(laser_y)) =
-                    (self.trackpad_laser_x, self.trackpad_laser_y)
-                {
-                    let dot_radius = 6.0;
-                    let dot_x_i = laser_x.round() as i32;
-                    let dot_y_i = laser_y.round() as i32;
+            if let (Some(laser_x), Some(laser_y)) = (self.trackpad_laser_x, self.trackpad_laser_y) {
+                let dot_radius = 6.0;
+                let dot_x_i = laser_x.round() as i32;
+                let dot_y_i = laser_y.round() as i32;
 
-                    for dy in -(dot_radius as i32)..=(dot_radius as i32) {
-                        for dx in -(dot_radius as i32)..=(dot_radius as i32) {
-                            let distance = ((dx * dx + dy * dy) as f32).sqrt();
-                            if distance <= dot_radius {
-                                let x = dot_x_i + dx;
-                                let y = dot_y_i + dy;
-                                if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
-                                    let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
-                                    buffer[idx + 0] = 255;
-                                    buffer[idx + 1] = 0;
-                                    buffer[idx + 2] = 0;
-                                    buffer[idx + 3] = 255;
-                                }
+                for dy in -(dot_radius as i32)..=(dot_radius as i32) {
+                    for dx in -(dot_radius as i32)..=(dot_radius as i32) {
+                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                        if distance <= dot_radius {
+                            let x = dot_x_i + dx;
+                            let y = dot_y_i + dy;
+                            if x >= 0 && x < width as i32 && y >= 0 && y < height as i32 {
+                                let idx = ((y as u32 * width as u32 + x as u32) * 4) as usize;
+                                buffer[idx + 0] = 255;
+                                buffer[idx + 1] = 0;
+                                buffer[idx + 2] = 0;
+                                buffer[idx + 3] = 255;
                             }
                         }
                     }
@@ -918,10 +913,7 @@ impl TextApp {
 
         let vp_m = self.viewport_metrics(engine);
         if is_trackpad_mode && is_keyboard_shown {
-            // One shared laser across Python embed widgets; ensure coords exist before painting.
-            if !(self.python_viewport.is_some() && !self.py_input_focused) {
-                self.ensure_trackpad_laser_initialized(engine);
-            }
+            self.ensure_trackpad_laser_initialized(engine);
         }
         let ctx = self.build_viewport_paint_ctx(
             vp_m,
@@ -2004,11 +1996,7 @@ impl TextApp {
 
     /// Selection + trackpad laser for [`xos.ui._text_render`] (fields stay crate-private otherwise).
     pub fn ui_peek_overlay(&self) -> (Option<usize>, Option<usize>, Option<(f32, f32)>) {
-        let laser = if self.python_viewport.is_some() && !self.py_input_focused {
-            None
-        } else {
-            self.trackpad_laser_x.zip(self.trackpad_laser_y)
-        };
+        let laser = self.trackpad_laser_x.zip(self.trackpad_laser_y);
         (self.selection_start, self.selection_end, laser)
     }
 

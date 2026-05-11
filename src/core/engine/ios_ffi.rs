@@ -317,6 +317,10 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             let height = ios_state.height;
             let mouse_x = ios_state.engine_state.mouse.x;
             let mouse_y = ios_state.engine_state.mouse.y;
+            let mouse_dx = ios_state.engine_state.mouse.dx;
+            let mouse_dy = ios_state.engine_state.mouse.dy;
+            let mouse_left = ios_state.engine_state.mouse.is_left_clicking;
+            let mouse_right = ios_state.engine_state.mouse.is_right_clicking;
             let safe_region = ios_state.engine_state.frame.safe_region_boundaries.clone();
             // Split borrows: get buffer and keyboard separately
             let (buffer, keyboard) = {
@@ -325,7 +329,18 @@ pub extern "C" fn xos_engine_tick() -> i32 {
                     &mut ios_state.engine_state.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
-            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+            keyboard.tick(
+                buffer,
+                width,
+                height,
+                mouse_x,
+                mouse_y,
+                mouse_dx,
+                mouse_dy,
+                mouse_left,
+                mouse_right,
+                &safe_region,
+            );
         }
 
         tick_f3_menu(&mut ios_state.engine_state);

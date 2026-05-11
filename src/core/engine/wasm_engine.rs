@@ -807,6 +807,10 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                 {
                     let mouse_x = state.engine_state.mouse.x;
                     let mouse_y = state.engine_state.mouse.y;
+                    let mouse_dx = state.engine_state.mouse.dx;
+                    let mouse_dy = state.engine_state.mouse.dy;
+                    let mouse_left = state.engine_state.mouse.is_left_clicking;
+                    let mouse_right = state.engine_state.mouse.is_right_clicking;
                     let safe_region = state.engine_state.frame.safe_region_boundaries.clone();
                     // Split borrows: get buffer and keyboard separately
                     let (buffer, keyboard) = {
@@ -815,7 +819,18 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                             &mut state.engine_state.keyboard.onscreen;
                         (&mut *buffer_ptr, &mut *keyboard_ptr)
                     };
-                    keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+                    keyboard.tick(
+                        buffer,
+                        width,
+                        height,
+                        mouse_x,
+                        mouse_y,
+                        mouse_dx,
+                        mouse_dy,
+                        mouse_left,
+                        mouse_right,
+                        &safe_region,
+                    );
                 }
 
                 tick_f3_menu(&mut state.engine_state);

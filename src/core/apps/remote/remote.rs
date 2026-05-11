@@ -7,6 +7,41 @@
 /// LAN remote stream width cap (height scales).
 pub(crate) const STREAM_MAX_W: u32 = 960;
 
+/// Decode pointer fields from a mesh JSON dict: accepts legacy `nx`/`ny`/`left`/`right` or
+/// `x`/`y`/`is_left_clicking`/`is_right_clicking` (Python `MouseState`-shaped payloads).
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    any(target_os = "windows", target_os = "macos")
+))]
+pub(crate) fn pointer_nx_ny_left_right_from_remote_payload(
+    payload: &serde_json::Value,
+) -> (f64, f64, bool, bool) {
+    let nx = payload
+        .get("nx")
+        .or_else(|| payload.get("x"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let ny = payload
+        .get("ny")
+        .or_else(|| payload.get("y"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let left = payload
+        .get("left")
+        .or_else(|| payload.get("is_left_clicking"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let right = payload
+        .get("right")
+        .or_else(|| payload.get("is_right_clicking"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    (nx, ny, left, right)
+}
+
 #[cfg(target_os = "windows")]
 mod win {
     use super::STREAM_MAX_W;
@@ -173,24 +208,13 @@ mod win {
         if vw <= 0 || vh <= 0 {
             return;
         }
-        let nx = payload
-            .get("nx")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
-        let ny = payload
-            .get("ny")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
+        let (nx, ny, left, right) =
+            super::pointer_nx_ny_left_right_from_remote_payload(payload);
         let x = (vx as f64 + nx * f64::from(vw)).round() as i32;
         let y = (vy as f64 + ny * f64::from(vh)).round() as i32;
         unsafe {
             let _ = SetCursorPos(x, y);
         }
-
-        let left = payload.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
-        let right = payload.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
 
         unsafe {
             if left && !*prev_left {
@@ -291,24 +315,13 @@ mod mac {
         if vw <= 0 || vh <= 0 {
             return;
         }
-        let nx = payload
-            .get("nx")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
-        let ny = payload
-            .get("ny")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
+        let (nx, ny, left, right) =
+            super::pointer_nx_ny_left_right_from_remote_payload(payload);
         let x = (vx as f64 + nx * f64::from(vw)).round() as i32;
         let y = (vy as f64 + ny * f64::from(vh)).round() as i32;
 
         let mut enigo = Enigo::new();
         enigo.mouse_move_to(x, y);
-
-        let left = payload.get("left").and_then(|v| v.as_bool()).unwrap_or(false);
-        let right = payload.get("right").and_then(|v| v.as_bool()).unwrap_or(false);
 
         if left && !*prev_left {
             enigo.mouse_down(MouseButton::Left);

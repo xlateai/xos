@@ -39,20 +39,17 @@ class RemoteViewerApp(xos.Application):
         self.keyboard.tick(self)
         self.video.y2 = self.keyboard.y1
 
-        # self.status.tick(self)
-        # self.status.render(self)
-
         packet = self.mesh.receive(id="frame", wait=False, latest_only=True)
         if packet:
-            frame = packet.frame
-            # print(frame.tensor)   # repr uses one Rust reduction pass; Tensor.min/max/mean are native too
-            self.video.set_frame(frame)
-            print(self.t)
-            # self.video.set_frame(frame.tensor)
+            self.video.set_frame(packet.frame)
 
         self.video.tick(self)
 
-        # print(self.t)
+        fit = self.video.last_fit
+        self.keyboard.mouse.sync_for_video_fit(fit)
+        is_in_frame = self.keyboard.mouse.is_in_video_fit(fit)
+        if self.keyboard.mouse.is_active and is_in_frame:
+            self.mesh.broadcast(id="mouse", mouse=dict(self.keyboard.mouse.state))
 
     def on_events(self):
         self.keyboard.on_events(self)

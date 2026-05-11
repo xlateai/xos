@@ -26,6 +26,10 @@ class RemoteSourceApp(xos.Application):
         self.mesh.broadcast(id="frame", frame=device_frame)
         # self.mesh.broadcast(id="frame", frame=device_frame)
 
+        mouse_packets = self.mesh.receive(id="mouse", wait=False, latest_only=False)
+        for packet in mouse_packets:
+            xos.mouse.control(packet.mouse)
+
 
 if __name__ == "__main__":
     RemoteSourceApp().run()

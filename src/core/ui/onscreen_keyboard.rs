@@ -83,6 +83,10 @@ pub struct OnScreenKeyboard {
     temp_trackpad_mode: bool,
     // Read-only mode: trackpad/selection utility surface without text entry keys.
     read_only_mode: bool,
+    /// Normalized screen cursor `[0,1]×[0,1]` for trackpad / remote “laser” when no `TextApp` owns one.
+    pub trackpad_spoof_nx: f32,
+    pub trackpad_spoof_ny: f32,
+    trackpad_spoof_last_px: Option<(f32, f32)>,
 }
 
 impl std::fmt::Debug for OnScreenKeyboard {
@@ -119,6 +123,9 @@ impl OnScreenKeyboard {
             trackpad_mode: false,
             temp_trackpad_mode: false,
             read_only_mode: false,
+            trackpad_spoof_nx: 0.5,
+            trackpad_spoof_ny: 0.5,
+            trackpad_spoof_last_px: None,
         };
 
         keyboard.layout_keys();
@@ -134,6 +141,10 @@ impl OnScreenKeyboard {
         height: u32,
         mouse_x: f32,
         mouse_y: f32,
+        mouse_dx: f32,
+        mouse_dy: f32,
+        mouse_left: bool,
+        mouse_right: bool,
         safe_region: &crate::engine::SafeRegionBoundingRectangle,
     ) {
         // Position keyboard partition just above bottom safe region
@@ -155,8 +166,21 @@ impl OnScreenKeyboard {
         // Update hover state
         self.update_hover(mouse_x, mouse_y, width as f32, height as f32);
 
+        self.update_trackpad_spoof_cursor(
+            mouse_x,
+            mouse_y,
+            mouse_dx,
+            mouse_dy,
+            mouse_left,
+            mouse_right,
+            width as f32,
+            height as f32,
+        );
+
         // Draw keyboard
         self.draw(buffer, width, height);
+
+        self.draw_trackpad_spoof_cursor(buffer, width, height);
 
         // Draw black area with green border below keyboard (in unsafe region)
         // Only draw if keyboard is visible
@@ -248,6 +272,7 @@ impl OnScreenKeyboard {
         self.release_keys();
         // Clear temporary trackpad mode
         self.temp_trackpad_mode = false;
+        self.trackpad_spoof_last_px = None;
     }
 
     /// Handle mouse down event - returns true if the keyboard handled the event
@@ -333,6 +358,131 @@ impl OnScreenKeyboard {
     pub fn is_trackpad_mode(&self) -> bool {
         // Trackpad mode is only active when keyboard is shown
         (self.trackpad_mode || self.temp_trackpad_mode) && !self.minimized
+    }
+
+    /// True when the finger is in the large trackpad pad (below the action row), not on a key.
+    pub fn pointer_in_trackpad_drag_surface(
+        &self,
+        mx: f32,
+        my: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        if self.minimized || self.keys.is_empty() {
+            return false;
+        }
+        let keyboard_left = self.data.left * width;
+        let keyboard_right = self.data.right * width;
+        let keyboard_top = self.data.top * height;
+        let keyboard_bottom = self.data.bottom * height;
+        let keyboard_height = keyboard_bottom - keyboard_top;
+        if mx < keyboard_left
+            || mx > keyboard_right
+            || my < keyboard_top
+            || my > keyboard_bottom
+        {
+            return false;
+        }
+        let first_key = &self.keys[0];
+        let action_row_bottom = keyboard_top + (first_key.y + first_key.height) * keyboard_height;
+        my > action_row_bottom
+    }
+
+    fn update_trackpad_spoof_cursor(
+        &mut self,
+        mx: f32,
+        my: f32,
+        dx: f32,
+        dy: f32,
+        left: bool,
+        _right: bool,
+        width: f32,
+        height: f32,
+    ) {
+        if !self.is_trackpad_mode() {
+            self.trackpad_spoof_last_px = None;
+            return;
+        }
+        let (_, top_norm, _, _) = self.top_edge_coordinates();
+        let keyboard_top_px = top_norm * height;
+        let in_drag_surface = self.pointer_in_trackpad_drag_surface(mx, my, width, height);
+
+        if in_drag_surface && left {
+            if self.trackpad_spoof_last_px.is_some() {
+                const SPEED: f32 = 2.0;
+                self.trackpad_spoof_nx = (self.trackpad_spoof_nx + dx * SPEED / width).clamp(0.0, 1.0);
+                self.trackpad_spoof_ny = (self.trackpad_spoof_ny + dy * SPEED / height).clamp(0.0, 1.0);
+            }
+            self.trackpad_spoof_last_px = Some((mx, my));
+        } else if left && my < keyboard_top_px {
+            self.trackpad_spoof_nx = (mx / width).clamp(0.0, 1.0);
+            self.trackpad_spoof_ny = (my / height).clamp(0.0, 1.0);
+            self.trackpad_spoof_last_px = None;
+        } else if !left {
+            self.trackpad_spoof_last_px = None;
+        }
+    }
+
+    /// Strip drag, or a click/drag in the frame above the keyboard while trackpad mode is on.
+    pub fn trackpad_spoof_is_active(
+        &self,
+        mx: f32,
+        my: f32,
+        left: bool,
+        right: bool,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        if !self.is_trackpad_mode() {
+            return false;
+        }
+        let (_, top_norm, _, _) = self.top_edge_coordinates();
+        let keyboard_top_px = top_norm * height;
+        let in_drag_surface = self.pointer_in_trackpad_drag_surface(mx, my, width, height);
+        (in_drag_surface && left) || (my < keyboard_top_px && (left || right))
+    }
+
+    fn draw_trackpad_spoof_cursor(&self, buffer: &mut [u8], width: u32, height: u32) {
+        if !self.is_trackpad_mode() {
+            return;
+        }
+        let w = width as f32;
+        let h = height as f32;
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let (_, top_norm, _, _) = self.top_edge_coordinates();
+        let keyboard_top_px = top_norm * h;
+        let lx = self.trackpad_spoof_nx * w;
+        let ly = self.trackpad_spoof_ny * h;
+        if ly >= keyboard_top_px - 1.0 {
+            return;
+        }
+        const R: f32 = 6.0;
+        let dot_x_i = lx.round() as i32;
+        let dot_y_i = ly.round() as i32;
+        let r_i = R.ceil() as i32;
+        let fw = width as i32;
+        let fh = height as i32;
+        let r_sq = R * R;
+        for dy in -r_i..=r_i {
+            for dx in -r_i..=r_i {
+                if ((dx * dx + dy * dy) as f32) > r_sq {
+                    continue;
+                }
+                let x = dot_x_i + dx;
+                let y = dot_y_i + dy;
+                if x >= 0 && x < fw && y >= 0 && y < fh {
+                    let idx = ((y as u32 * width + x as u32) * 4) as usize;
+                    if idx + 3 < buffer.len() {
+                        buffer[idx] = 255;
+                        buffer[idx + 1] = 0;
+                        buffer[idx + 2] = 0;
+                        buffer[idx + 3] = 255;
+                    }
+                }
+            }
+        }
     }
 
     pub fn set_read_only_mode(&mut self, enabled: bool) {

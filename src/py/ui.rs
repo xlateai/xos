@@ -891,10 +891,18 @@ fn onscreen_keyboard_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         let h = shape[0] as u32;
         let safe = state.frame.safe_region_boundaries.clone();
         let buf = state.frame.buffer_mut();
-        state
-            .keyboard
-            .onscreen
-            .tick(buf, w, h, state.mouse.x, state.mouse.y, &safe);
+        state.keyboard.onscreen.tick(
+            buf,
+            w,
+            h,
+            state.mouse.x,
+            state.mouse.y,
+            state.mouse.dx,
+            state.mouse.dy,
+            state.mouse.is_left_clicking,
+            state.mouse.is_right_clicking,
+            &safe,
+        );
     });
     if ran.is_none() {
         return Err(vm.new_runtime_error(
@@ -940,6 +948,66 @@ fn onscreen_keyboard_top_norm(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         Some(y) => Ok(vm.ctx.new_float(y as f64).into()),
         None => Err(vm.new_runtime_error(
             "_onscreen_keyboard_top_norm() must run during Application.tick() (engine TLS required)."
+                .to_string(),
+        )),
+    }
+}
+
+/// Trackpad spoof cursor + live buttons for `OnScreenKeyboard.mouse` (same tick as `_onscreen_keyboard_tick`).
+fn onscreen_keyboard_mouse_snapshot(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let _ = args;
+    match with_tick_engine_state_mut(|state| {
+        let k = &state.keyboard.onscreen;
+        let shape = state.frame.shape();
+        let w = shape[1].max(1) as f32;
+        let h = shape[0].max(1) as f32;
+        let mx = state.mouse.x;
+        let my = state.mouse.y;
+        let d = vm.ctx.new_dict();
+        let _ = d.set_item(
+            "screen_x",
+            vm.ctx.new_float(f64::from(k.trackpad_spoof_nx)).into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "screen_y",
+            vm.ctx.new_float(f64::from(k.trackpad_spoof_ny)).into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "is_active",
+            vm.ctx
+                .new_bool(k.trackpad_spoof_is_active(
+                    mx, my, state.mouse.is_left_clicking, state.mouse.is_right_clicking, w, h,
+                ))
+                .into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "dx",
+            vm.ctx.new_float(f64::from(state.mouse.dx)).into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "dy",
+            vm.ctx.new_float(f64::from(state.mouse.dy)).into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "is_left_clicking",
+            vm.ctx.new_bool(state.mouse.is_left_clicking).into(),
+            vm,
+        );
+        let _ = d.set_item(
+            "is_right_clicking",
+            vm.ctx.new_bool(state.mouse.is_right_clicking).into(),
+            vm,
+        );
+        d.into()
+    }) {
+        Some(obj) => Ok(obj),
+        None => Err(vm.new_runtime_error(
+            "_onscreen_keyboard_mouse_snapshot() must run during Application.tick() (engine TLS required)."
                 .to_string(),
         )),
     }
@@ -1050,6 +1118,13 @@ pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRe
         .set_attr(
             "_onscreen_keyboard_top_norm",
             vm.new_function("_onscreen_keyboard_top_norm", onscreen_keyboard_top_norm),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_onscreen_keyboard_mouse_snapshot",
+            vm.new_function("_onscreen_keyboard_mouse_snapshot", onscreen_keyboard_mouse_snapshot),
             vm,
         )
         .unwrap();
@@ -1259,11 +1334,60 @@ def _default_coordinate_system():
     return (_VIEWPORT_WIDTH, _VIEWPORT_HEIGHT, _VIEWPORT_WIDTH, _VIEWPORT_HEIGHT)
 
 
+class OnScreenKeyboardMouse:
+    """Trackpad spoof cursor in normalized screen space ``[0,1]²`` plus a wire-ready ``state`` dict."""
+
+    __slots__ = ("xy", "is_active", "state")
+
+    def __init__(self):
+        self.xy = (0.5, 0.5)
+        self.is_active = False
+        self.state = {}
+
+    def _apply_snap(self, snap):
+        self.xy = (float(snap["screen_x"]), float(snap["screen_y"]))
+        self.is_active = bool(snap["is_active"])
+        self.state = {
+            "x": 0.0,
+            "y": 0.0,
+            "dx": float(snap["dx"]),
+            "dy": float(snap["dy"]),
+            "is_left_clicking": bool(snap["is_left_clicking"]),
+            "is_right_clicking": bool(snap["is_right_clicking"]),
+        }
+
+    def sync_for_video_fit(self, video_last_fit):
+        """Map ``self.xy`` into ``VideoViewport.last_fit``; sets ``nx``/``ny``/``left``/``right`` for ``xos.mouse.control``."""
+        fx, fy, fw, fh = video_last_fit
+        sx, sy = self.xy
+        if fw > 0.0 and fh > 0.0:
+            vx = (sx - fx) / fw
+            vy = (sy - fy) / fh
+        else:
+            vx, vy = 0.0, 0.0
+        st = self.state
+        st["x"] = float(vx)
+        st["y"] = float(vy)
+        st["nx"] = float(vx)
+        st["ny"] = float(vy)
+        st["left"] = bool(st.get("is_left_clicking", False))
+        st["right"] = bool(st.get("is_right_clicking", False))
+        return st
+
+    def is_in_video_fit(self, video_last_fit):
+        fx, fy, fw, fh = video_last_fit
+        sx, sy = self.xy
+        if fw <= 0.0 or fh <= 0.0:
+            return False
+        return (fx <= sx <= fx + fw) and (fy <= sy <= fy + fh)
+
+
 class OnScreenKeyboard:
     def __init__(self):
         # Normalized Y of keyboard top (`[0,1]`), same as `Text.y1`/`y2`. Updated each `tick` after OSK layout.
         self.y1 = 1.0
         self._pending_visible = None
+        self.mouse = OnScreenKeyboardMouse()
 
     def show(self):
         """Show the on-screen keyboard (engine-backed). Safe from `__init__` before first tick."""
@@ -1301,6 +1425,10 @@ class OnScreenKeyboard:
         xos.ui._onscreen_keyboard_tick()
         try:
             self.y1 = float(xos.ui._onscreen_keyboard_top_norm())
+        except RuntimeError:
+            pass
+        try:
+            self.mouse._apply_snap(xos.ui._onscreen_keyboard_mouse_snapshot())
         except RuntimeError:
             pass
 

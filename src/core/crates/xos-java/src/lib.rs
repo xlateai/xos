@@ -207,6 +207,10 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
             let width = shape[1] as u32;
             let mouse_x = host.engine.mouse.x;
             let mouse_y = host.engine.mouse.y;
+            let mouse_dx = host.engine.mouse.dx;
+            let mouse_dy = host.engine.mouse.dy;
+            let mouse_left = host.engine.mouse.is_left_clicking;
+            let mouse_right = host.engine.mouse.is_right_clicking;
             let safe_region = host.engine.frame.safe_region_boundaries.clone();
             let (buffer, keyboard) = {
                 let buffer_ptr = host.engine.frame.buffer_mut() as *mut [u8];
@@ -214,7 +218,18 @@ pub extern "system" fn Java_ai_xlate_xos_XosNative_tick(mut env: JNIEnv, _class:
                     &mut host.engine.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };
-            keyboard.tick(buffer, width, height, mouse_x, mouse_y, &safe_region);
+            keyboard.tick(
+                buffer,
+                width,
+                height,
+                mouse_x,
+                mouse_y,
+                mouse_dx,
+                mouse_dy,
+                mouse_left,
+                mouse_right,
+                &safe_region,
+            );
         }
 
         tick_f3_menu(&mut host.engine);
