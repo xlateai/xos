@@ -82,7 +82,11 @@ class StudyApp(xos.Application):
         self._bootstrap_round()
 
         self.menu = menu.Menu()
-        self.magnifier = magnifier.Magnifier(self.vocab_display, DEFAULT_FONT_SIZE)
+        self.magnifier = magnifier.Magnifier(
+            self.vocab_display,
+            DEFAULT_FONT_SIZE,
+            keyboard=self.keyboard,
+        )
 
     def _headline(self, row):
         if not row:
@@ -153,7 +157,11 @@ class StudyApp(xos.Application):
         self.menu.render(self)
 
     def on_events(self):
-        self.text.on_events(self)
+        # While the magnifier is open, route input to it instead of the vocab /
+        # description / guess text widgets so pan/zoom + close-button clicks
+        # aren't fighting with text selection or scroll-to-scroll-content.
+        if not self.magnifier.is_open():
+            self.text.on_events(self)
         self.keyboard.on_events(self)
         self.menu.on_events(self)
         self.magnifier.on_events(self)
