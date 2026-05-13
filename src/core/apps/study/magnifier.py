@@ -11,13 +11,19 @@ Behavior:
     starts the size of the safe region.
   * While the magnifier is open the user can:
       - **Pan** the panel by left-click-dragging anywhere inside it.
-      - **Zoom** the panel via scroll wheel / trackpad (positive dy = zoom out,
-        negative dy = zoom in). The panel size is clamped to ``[0.15, 1.0]``
-        of the safe region in each axis.
-      - **Dismiss** the overlay via a dedicated Close button pinned to the
-        bottom-center of the safe region (clicks elsewhere never dismiss).
-  * The panel's bounding box is always renormalized + clamped to the safe
-    region every tick, so it cannot leave the screen no matter what
+      - **Zoom** the panel three ways, all clamped to the same range:
+          * ``+`` / ``−`` buttons in the safe-region bottom row (input-
+            independent, always available on touch-only devices).
+          * Scroll wheel / trackpad (``positive dy`` = zoom out, ``negative
+            dy`` = zoom in) when the platform delivers scroll events.
+        The character zoom is independent from the panel boundary, so it can
+        continue growing even when the panel itself is already full-screen.
+        The panel boundary remains clamped to the **viewport** edge (whole
+        screen, not just the safe region).
+      - **Dismiss** the overlay via the Close button in the same bottom row
+        (clicks elsewhere never dismiss).
+  * The panel's bounding box is always renormalized + clamped to the full
+    viewport every tick, so it cannot leave the screen no matter what
     transforms (pan or zoom) have been applied.
   * If a host-managed onscreen keyboard reference is supplied via the
     ``keyboard`` constructor argument, it is hidden whenever the magnifier
@@ -28,8 +34,12 @@ Coordinate conventions:
 
   * ``_panel_cx, _panel_cy`` — panel center in normalized viewport coords
     (same space as ``xos.ui.Text.x1`` etc.).
-  * ``_panel_size_norm`` — panel size as a fraction of the safe region
-    (1.0 = panel fills the entire safe region).
+  * ``_panel_scale`` — uniform scale applied to the *safe-region* width/height
+    to derive the panel size. ``1.0`` = panel matches the safe region (initial
+    state). Values ``> 1.0`` grow the panel beyond the safe region up to the
+    viewport edge; values ``< 1.0`` shrink it.
+  * ``_glyph_scale`` — independent multiplier applied to the rendered glyph
+    size inside the panel. This is what +/− and scroll modify.
 """
 
 import xos
@@ -43,24 +53,49 @@ HOVER_BUFFER_SCALE = 1.2
 # Cached so we don't reallocate the same constant rect tensor every tick.
 _FULL_FRAME_RECT = xos.tensor([0.0, 0.0, 1.0, 1.0], shape=(2, 2))
 
-# Close button geometry expressed in safe-region-local coords (renormalized
-# onto the viewport every tick via ``app.safe_region.renormalize``).
+# Bottom button row geometry expressed in safe-region-local coords (each
+# renormalized onto the viewport every tick via ``app.safe_region.renormalize``).
+# Layout: [ − ] [ Close ] [ + ] across the bottom of the safe region so users
+# always have an input-independent way to zoom regardless of whether their
+# platform emits scroll events.
+MINUS_BUTTON_LOCAL_VERTS = (0.06, 0.91, 0.24, 0.98)
 CLOSE_BUTTON_LOCAL_VERTS = (0.32, 0.91, 0.68, 0.98)
+PLUS_BUTTON_LOCAL_VERTS = (0.76, 0.91, 0.94, 0.98)
 CLOSE_BUTTON_COLOR = (220, 60, 60)
 CLOSE_BUTTON_ALPHA = 0.92
+ZOOM_BUTTON_COLOR = (60, 110, 220)
+ZOOM_BUTTON_ALPHA = 0.92
 CLOSE_LABEL_FONT_MULT = 0.7
+ZOOM_LABEL_FONT_MULT = 0.9
 
-# Panel size clamps (fraction of safe region per axis).
-PANEL_MIN_SIZE = 0.15
-PANEL_MAX_SIZE = 1.0
+# Multiplicative zoom step applied each time the +/− button fires.
+ZOOM_BUTTON_STEP = 1.35
+
+# Glyph/content zoom is independent from the on-screen panel bounds. The panel
+# still stays clamped to the viewport, but the character itself can zoom well
+# past the initial 8x size.
+GLYPH_MIN_SCALE = 0.05
+GLYPH_MAX_SCALE = 16.0
+
+# Minimum uniform scale applied to the safe-region footprint. Upper bound is
+# computed dynamically per tick so the panel can grow until *either* axis
+# touches the viewport edge (i.e. fills the screen).
+#
+# The lower bound is intentionally well below ``1 / ZOOM_FONT_SIZE_MULT``
+# (where the rendered glyph hits its base font size — i.e. the "character
+# edges" — at ``scale = 1/8 = 0.125``) so the user can zoom out past the
+# glyph's natural size if they want.
+PANEL_MIN_SCALE = 0.05
 
 # Scroll-to-zoom sensitivity by event unit. ``dy`` is scaled by these and then
 # subtracted from 1.0 to produce a per-event size multiplier; the result is
-# clamped to avoid pathological single-event jumps.
-SCROLL_STEP_LINE = 0.08
-SCROLL_STEP_PIXEL = 0.004
-SCROLL_FACTOR_MIN = 0.5
-SCROLL_FACTOR_MAX = 2.0
+# clamped to avoid pathological single-event jumps. Tuned aggressively so a
+# few scroll events traverse the full ``[PANEL_MIN_SCALE, scale_max]`` range
+# on platforms that emit fine-grained pixel deltas.
+SCROLL_STEP_LINE = 0.35
+SCROLL_STEP_PIXEL = 0.02
+SCROLL_FACTOR_MIN = 0.2
+SCROLL_FACTOR_MAX = 5.0
 
 
 class Magnifier:
@@ -81,10 +116,11 @@ class Magnifier:
         self.zoomed_chars = None
         self.hover_mask = None
 
-        # Panel transform state (set on first open via ``_reset_panel``).
+        # Panel transform state (refined on first open via ``_reset_panel``).
         self._panel_cx = 0.5
         self._panel_cy = 0.5
-        self._panel_size_norm = PANEL_MAX_SIZE
+        self._panel_scale = 1.0
+        self._glyph_scale = 1.0
 
         # Click / drag state machine.
         self._prev_left_clicking = False
@@ -98,6 +134,8 @@ class Magnifier:
         # and ``on_events`` read these so the close button stays in sync.
         self._panel_rect = (0.0, 0.0, 1.0, 1.0)
         self._close_rect = (0.0, 0.0, 0.0, 0.0)
+        self._minus_rect = (0.0, 0.0, 0.0, 0.0)
+        self._plus_rect = (0.0, 0.0, 0.0, 0.0)
 
         # Widgets are lazy-instantiated on first tick once ``app.safe_region``
         # is available.
@@ -105,16 +143,28 @@ class Magnifier:
         self._close_button = None
         self._close_bg = None
         self._close_label = None
+        # Zoom +/− are *not* ``xos.ui.button`` widgets — they fire from
+        # ``_tick_open`` on the mouse_down rising edge for snappier first-tap
+        # response. Only the visuals are real widgets.
+        self._minus_bg = None
+        self._minus_label = None
+        self._plus_bg = None
+        self._plus_label = None
 
     # ------------------------------------------------------------------ state
 
     def is_open(self):
         return self.zoomed_chars is not None
 
-    def open(self, chars):
-        """Open the zoom overlay with ``chars`` and reset pan/zoom to defaults."""
+    def open(self, chars, app=None):
+        """Open the zoom overlay with ``chars`` and reset pan/zoom to defaults.
+
+        ``app`` is optional; when supplied, the panel is recentered on the
+        current safe-region center so the initial open visually matches the
+        previous behavior (panel = safe region).
+        """
         self.zoomed_chars = chars
-        self._reset_panel()
+        self._reset_panel(app)
         self._drag_active = False
         self._drag_last_xy = None
         self._suppress_drag_this_press = False
@@ -126,10 +176,27 @@ class Magnifier:
         self._drag_last_xy = None
         self._suppress_drag_this_press = False
 
-    def _reset_panel(self):
-        self._panel_cx = 0.5
-        self._panel_cy = 0.5
-        self._panel_size_norm = PANEL_MAX_SIZE
+    def _reset_panel(self, app=None):
+        self._panel_scale = 1.0
+        self._glyph_scale = 1.0
+        if app is not None:
+            sx1 = float(app.safe_region.x1)
+            sy1 = float(app.safe_region.y1)
+            sx2 = float(app.safe_region.x2)
+            sy2 = float(app.safe_region.y2)
+            self._panel_cx = (sx1 + sx2) / 2.0
+            self._panel_cy = (sy1 + sy2) / 2.0
+        else:
+            self._panel_cx = 0.5
+            self._panel_cy = 0.5
+
+    def _zoom_in_step(self):
+        """Multiplicative zoom-in step driven by the ``+`` button."""
+        self._glyph_scale = min(GLYPH_MAX_SCALE, self._glyph_scale * ZOOM_BUTTON_STEP)
+
+    def _zoom_out_step(self):
+        """Multiplicative zoom-out step driven by the ``−`` button."""
+        self._glyph_scale = max(GLYPH_MIN_SCALE, self._glyph_scale / ZOOM_BUTTON_STEP)
 
     # ------------------------------------------------------------------ widgets
 
@@ -189,30 +256,90 @@ class Magnifier:
                 alignment=(0.5, 0.5),
                 spacing=(1.0, 1.0),
             )
+        # Zoom +/− buttons fire on tick-time ``mouse_down`` rising edges
+        # (see ``_tick_open``) so they respond instantly rather than waiting
+        # for the standard ``UiButton`` press/release pair — this matters in
+        # particular for the first tap right after the magnifier opens, where
+        # the OS may have only delivered ``mouse_up`` for the open-gesture.
+        if self._minus_bg is None:
+            mx1, my1, mx2, my2 = app.safe_region.renormalize(*MINUS_BUTTON_LOCAL_VERTS)
+            self._minus_bg = xos.ui.rect(
+                mx1, my1, mx2, my2, color=ZOOM_BUTTON_COLOR, alpha=ZOOM_BUTTON_ALPHA,
+            )
+            self._minus_label = xos.ui.text(
+                "−",
+                x1=mx1,
+                y1=my1,
+                x2=mx2,
+                y2=my2,
+                font=None,
+                color=xos.color.WHITE,
+                show_hitboxes=False,
+                show_baselines=False,
+                editable=False,
+                selectable=False,
+                scrollable=False,
+                show_cursor=False,
+                size=self.base_font_size * ZOOM_LABEL_FONT_MULT,
+                alignment=(0.5, 0.5),
+                spacing=(1.0, 1.0),
+            )
+        if self._plus_bg is None:
+            px1b, py1b, px2b, py2b = app.safe_region.renormalize(*PLUS_BUTTON_LOCAL_VERTS)
+            self._plus_bg = xos.ui.rect(
+                px1b, py1b, px2b, py2b, color=ZOOM_BUTTON_COLOR, alpha=ZOOM_BUTTON_ALPHA,
+            )
+            self._plus_label = xos.ui.text(
+                "+",
+                x1=px1b,
+                y1=py1b,
+                x2=px2b,
+                y2=py2b,
+                font=None,
+                color=xos.color.WHITE,
+                show_hitboxes=False,
+                show_baselines=False,
+                editable=False,
+                selectable=False,
+                scrollable=False,
+                show_cursor=False,
+                size=self.base_font_size * ZOOM_LABEL_FONT_MULT,
+                alignment=(0.5, 0.5),
+                spacing=(1.0, 1.0),
+            )
 
     # ------------------------------------------------------------------ geometry
 
     def _refresh_panel_rect(self, app):
-        """Recompute and store the clamped panel rect, then mirror it onto
-        ``_panel_cx/_panel_cy`` so subsequent ticks start from a valid pose.
+        """Recompute the clamped panel rect from ``_panel_scale``.
+
+        The panel is anchored to the safe-region width/height at ``scale=1.0``,
+        can grow uniformly past the safe region all the way until the smaller
+        axis touches the **viewport** edge, and can shrink down to
+        ``PANEL_MIN_SCALE`` of the safe-region footprint. The center
+        ``_panel_cx/_panel_cy`` is then clamped so the entire panel stays
+        inside the viewport ``[0,1]²``.
         """
-        sx1 = float(app.safe_region.x1)
-        sy1 = float(app.safe_region.y1)
-        sx2 = float(app.safe_region.x2)
-        sy2 = float(app.safe_region.y2)
-        sw = max(sx2 - sx1, 1e-6)
-        sh = max(sy2 - sy1, 1e-6)
+        sw = max(float(app.safe_region.width), 1e-6)
+        sh = max(float(app.safe_region.height), 1e-6)
 
-        size = max(PANEL_MIN_SIZE, min(PANEL_MAX_SIZE, float(self._panel_size_norm)))
-        self._panel_size_norm = size
+        # Largest uniform scale before either axis exceeds the viewport.
+        # ``max(...)`` here (not ``min(...)``) so the *smaller* safe-region
+        # axis is the one that ultimately fills the viewport — the larger
+        # axis hits ``1.0`` first and we clamp its panel dimension to 1.0.
+        scale_max = max(1.0 / sw, 1.0 / sh)
+        scale = max(PANEL_MIN_SCALE, min(scale_max, float(self._panel_scale)))
+        self._panel_scale = scale
 
-        pw = sw * size
-        ph = sh * size
-        cx_min = sx1 + pw / 2.0
-        cx_max = sx2 - pw / 2.0
-        cy_min = sy1 + ph / 2.0
-        cy_max = sy2 - ph / 2.0
-        # ``cx_min <= cx_max`` always holds because pw <= sw.
+        # Either axis may saturate at the viewport edge; clamp per-axis.
+        pw = min(1.0, sw * scale)
+        ph = min(1.0, sh * scale)
+
+        cx_min = pw / 2.0
+        cx_max = 1.0 - pw / 2.0
+        cy_min = ph / 2.0
+        cy_max = 1.0 - ph / 2.0
+        # ``cx_min <= cx_max`` always holds because pw <= 1.0.
         cx = min(max(float(self._panel_cx), cx_min), cx_max)
         cy = min(max(float(self._panel_cy), cy_min), cy_max)
         self._panel_cx = cx
@@ -225,6 +352,16 @@ class Magnifier:
     def _refresh_close_rect(self, app):
         rect = app.safe_region.renormalize(*CLOSE_BUTTON_LOCAL_VERTS)
         self._close_rect = rect
+        return rect
+
+    def _refresh_minus_rect(self, app):
+        rect = app.safe_region.renormalize(*MINUS_BUTTON_LOCAL_VERTS)
+        self._minus_rect = rect
+        return rect
+
+    def _refresh_plus_rect(self, app):
+        rect = app.safe_region.renormalize(*PLUS_BUTTON_LOCAL_VERTS)
+        self._plus_rect = rect
         return rect
 
     def _point_in_rect_px(self, app, mx, my, rect_norm):
@@ -319,7 +456,7 @@ class Magnifier:
             if len(indices) > 0:
                 chars = indices.index(str(self.target.text))
                 if chars and chars.strip() != "":
-                    self.open(chars)
+                    self.open(chars, app=app)
 
     def _tick_open(self, app, is_clicking, just_clicked, just_released):
         # Keep the keyboard hidden as long as the overlay is up.
@@ -328,14 +465,37 @@ class Magnifier:
 
         panel_rect = self._refresh_panel_rect(app)
         close_rect = self._refresh_close_rect(app)
+        minus_rect = self._refresh_minus_rect(app)
+        plus_rect = self._refresh_plus_rect(app)
 
-        mx = float(app.mouse["x"]) if "x" in app.mouse else -1.0
-        my = float(app.mouse["y"]) if "y" in app.mouse else -1.0
+        try:
+            mx = float(app.mouse["x"])
+            my = float(app.mouse["y"])
+        except (KeyError, TypeError, ValueError):
+            mx = -1.0
+            my = -1.0
+
+        in_close = self._point_in_rect_px(app, mx, my, close_rect)
+        in_minus = self._point_in_rect_px(app, mx, my, minus_rect)
+        in_plus = self._point_in_rect_px(app, mx, my, plus_rect)
 
         if just_clicked:
-            if self._point_in_rect_px(app, mx, my, close_rect):
-                # The close button consumes this gesture; ``UiButton``
-                # already handles the press/release pair via on_events.
+            if in_minus:
+                # Fire zoom-out immediately on press for instant feedback;
+                # don't start a drag.
+                self._zoom_out_step()
+                self._suppress_drag_this_press = True
+                self._drag_active = False
+                self._drag_last_xy = None
+            elif in_plus:
+                self._zoom_in_step()
+                self._suppress_drag_this_press = True
+                self._drag_active = False
+                self._drag_last_xy = None
+            elif in_close:
+                # Close button still uses release-based ``UiButton`` semantics
+                # (handled via on_events) so an accidental touch that slides
+                # off can cancel the dismiss.
                 self._suppress_drag_this_press = True
                 self._drag_active = False
                 self._drag_last_xy = None
@@ -377,42 +537,44 @@ class Magnifier:
         # (defensive; ``StudyApp`` always ticks first).
         panel_rect = self._refresh_panel_rect(app)
         close_rect = self._refresh_close_rect(app)
+        minus_rect = self._refresh_minus_rect(app)
+        plus_rect = self._refresh_plus_rect(app)
 
         xos.rasterizer.rects_filled(app.frame, _FULL_FRAME_RECT, ZOOM_BACKDROP_COLOR)
 
         px1, py1, px2, py2 = panel_rect
-        sx1 = float(app.safe_region.x1)
-        sy1 = float(app.safe_region.y1)
-        sx2 = float(app.safe_region.x2)
-        sy2 = float(app.safe_region.y2)
-        sw = max(sx2 - sx1, 1e-6)
-        sh = max(sy2 - sy1, 1e-6)
-        # Use the smaller axis ratio so the glyph never overflows the panel.
-        axis_ratio = min((px2 - px1) / sw, (py2 - py1) / sh)
         self._zoom_display.x1 = px1
         self._zoom_display.y1 = py1
         self._zoom_display.x2 = px2
         self._zoom_display.y2 = py2
-        self._zoom_display.size = self.zoom_font_size * max(axis_ratio, 0.05)
+        self._glyph_scale = max(GLYPH_MIN_SCALE, min(GLYPH_MAX_SCALE, self._glyph_scale))
+        self._zoom_display.size = self.zoom_font_size * self._glyph_scale
         self._zoom_display.text = self.zoomed_chars
         self._zoom_display.tick(app)
         self._zoom_display.render(app)
 
-        # Sync close button widget verts each frame so safe-region changes
-        # (e.g. on rotation) follow without rebuilding the widgets.
-        cx1, cy1, cx2, cy2 = close_rect
-        if self._close_bg is not None:
-            self._close_bg.verts = (cx1, cy1, cx2, cy2)
-            self._close_bg.render(app)
-        if self._close_button is not None:
-            self._close_button.verts = (cx1, cy1, cx2, cy2)
-        if self._close_label is not None:
-            self._close_label.x1 = cx1
-            self._close_label.y1 = cy1
-            self._close_label.x2 = cx2
-            self._close_label.y2 = cy2
-            self._close_label.tick(app)
-            self._close_label.render(app)
+        # Sync bottom-row button widget verts each frame so safe-region
+        # changes (e.g. on rotation) follow without rebuilding the widgets.
+        def _paint_button(bg, btn, label, rect):
+            x1, y1, x2, y2 = rect
+            if bg is not None:
+                bg.verts = (x1, y1, x2, y2)
+                bg.render(app)
+            if btn is not None:
+                btn.verts = (x1, y1, x2, y2)
+            if label is not None:
+                label.x1 = x1
+                label.y1 = y1
+                label.x2 = x2
+                label.y2 = y2
+                label.tick(app)
+                label.render(app)
+
+        # +/− are visual-only (no ``UiButton``); the click is handled in
+        # ``_tick_open`` on the mouse_down rising edge.
+        _paint_button(self._minus_bg, None, self._minus_label, minus_rect)
+        _paint_button(self._close_bg, self._close_button, self._close_label, close_rect)
+        _paint_button(self._plus_bg, None, self._plus_label, plus_rect)
 
     # ------------------------------------------------------------------ events
 
@@ -420,8 +582,8 @@ class Magnifier:
         if not self.is_open():
             return
 
-        # Forward to the close button so it can pair mouse_down + mouse_up
-        # within its own rect (the standard ``UiButton`` press semantics).
+        # Only the Close button uses ``UiButton`` press/release semantics;
+        # +/− fire on the mouse_down rising edge in ``_tick_open`` instead.
         if self._close_button is not None:
             try:
                 self._close_button.on_events(app)
@@ -444,7 +606,10 @@ class Magnifier:
         # Positive dy = scroll down = zoom out; negative dy = scroll up = zoom in.
         factor = 1.0 - dy * step
         factor = max(SCROLL_FACTOR_MIN, min(SCROLL_FACTOR_MAX, factor))
-        new_size = self._panel_size_norm * factor
-        self._panel_size_norm = max(PANEL_MIN_SIZE, min(PANEL_MAX_SIZE, new_size))
-        # Re-clamp center now that the size changed.
+        self._glyph_scale = max(
+            GLYPH_MIN_SCALE,
+            min(GLYPH_MAX_SCALE, self._glyph_scale * factor),
+        )
+        # Re-clamp the panel boundary too; glyph zoom is independent, but the
+        # magnifier box itself must remain fully on-screen.
         self._refresh_panel_rect(app)
