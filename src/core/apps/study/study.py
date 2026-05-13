@@ -2,13 +2,9 @@ import xos
 
 import study_data
 import menu
+import magnifier
 
 DEFAULT_FONT_SIZE = 52.0
-
-HOVER_HIGHLIGHT_COLOR = (*xos.color.CYAN, 0.55)
-ZOOM_BACKDROP_COLOR = (0, 0, 0, 0.88)
-ZOOM_FONT_SIZE = DEFAULT_FONT_SIZE * 8.0
-FULL_FRAME_RECT = xos.tensor([0.0, 0.0, 1.0, 1.0], shape=(2, 2))
 
 
 def _boxed_text(app, text, x1, y1, x2, y2, **kwargs):
@@ -86,26 +82,7 @@ class StudyApp(xos.Application):
         self._bootstrap_round()
 
         self.menu = menu.Menu()
-
-        self._prev_left_clicking = False
-        self._zoomed_chars = None
-
-        # Full-frame oversized text used to render the zoomed-in character(s).
-        self._zoom_display = _boxed_text(
-            self,
-            "",
-            0.0,
-            0.0,
-            1.0,
-            1.0,
-            editable=False,
-            selectable=False,
-            scrollable=False,
-            show_cursor=False,
-            size=ZOOM_FONT_SIZE,
-            alignment=(0.5, 0.5),
-            spacing=(1.0, 1.0),
-        )
+        self.magnifier = magnifier.Magnifier(self.vocab_display, DEFAULT_FONT_SIZE)
 
     def _headline(self, row):
         if not row:
@@ -141,27 +118,6 @@ class StudyApp(xos.Application):
         self._awaiting_guess = False
         self._clear_guess_native()
 
-    def _click_rising_edge(self):
-        try:
-            cur = bool(self.mouse["is_left_clicking"])
-        except (KeyError, TypeError):
-            cur = False
-        rising = cur and not self._prev_left_clicking
-        self._prev_left_clicking = cur
-        return rising
-
-    def _mouse_xy_norm(self):
-        try:
-            fw = float(self.frame["width"])
-            fh = float(self.frame["height"])
-            mx = float(self.mouse["x"])
-            my = float(self.mouse["y"])
-        except (KeyError, TypeError, ValueError):
-            return (-1.0, -1.0)
-        if fw <= 0.0 or fh <= 0.0:
-            return (-1.0, -1.0)
-        return (mx / fw, my / fh)
-
     def tick(self):
         # Sticky input focus: keep accepting keys even when tapping scrollable panes.
         self.guess_area.focused = True
@@ -176,26 +132,8 @@ class StudyApp(xos.Application):
         vocab_rect = xos.geom.rect.buffer(vocab_rect, 1.2)
         xos.rasterizer.rects_filled(self.frame, vocab_rect, (*xos.color.LIME, 0.78))
 
-        # Per-character hover + click-to-zoom via numpy-style boolean masks.
-        hitboxes = ts_vocab.hitboxes
-        mask = xos.geom.rect.check_point_in_hitboxes(hitboxes, self._mouse_xy_norm())
-
-        if self._zoomed_chars is None:
-            collided = hitboxes[mask]
-            if collided.shape[0] > 0:
-                hrect = xos.geom.rect.containing(collided)
-                hrect = xos.geom.rect.buffer(hrect, 1.2)
-                xos.rasterizer.rects_filled(self.frame, hrect, HOVER_HIGHLIGHT_COLOR)
-
-        if self._click_rising_edge():
-            if self._zoomed_chars is not None:
-                self._zoomed_chars = None
-            else:
-                indices = xos.arange(len(mask))[mask]
-                if len(indices) > 0:
-                    chars = indices.index(str(self.vocab_display.text))
-                    if chars and chars.strip() != "":
-                        self._zoomed_chars = chars
+        # Hover highlight goes behind the glyph; zoom overlay (in render below) goes on top.
+        self.magnifier.tick(self)
 
         raw = getattr(self.guess_area, "text", "")
         if "\n" in raw or "\r" in raw:
@@ -208,12 +146,7 @@ class StudyApp(xos.Application):
                 self._clear_guess_native()
 
         self.text.render(self)
-
-        if self._zoomed_chars is not None:
-            xos.rasterizer.rects_filled(self.frame, FULL_FRAME_RECT, ZOOM_BACKDROP_COLOR)
-            self._zoom_display.text = self._zoomed_chars
-            self._zoom_display.tick(self)
-            self._zoom_display.render(self)
+        self.magnifier.render(self)
 
         # TODO somehow make the tick render thing better? its decent though.
         self.menu.tick(self)
@@ -223,6 +156,7 @@ class StudyApp(xos.Application):
         self.text.on_events(self)
         self.keyboard.on_events(self)
         self.menu.on_events(self)
+        self.magnifier.on_events(self)
 
 
 def _first_line(s: str) -> str:

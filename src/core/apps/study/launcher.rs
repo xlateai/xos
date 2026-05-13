@@ -15,6 +15,7 @@ use crate::python_api::runtime::execute_python_code;
 const STUDY_APP_PY_EMBED: &str = include_str!("study.py");
 const STUDY_DATA_PY_EMBED: &str = include_str!("study_data.py");
 const MENU_PY_EMBED: &str = include_str!("menu.py");
+const MAGNIFIER_PY_EMBED: &str = include_str!("magnifier.py");
 
 /// Embed `study_data.py` for `exec` without `base64` (not in the RustPython stdlib snapshot).
 fn escape_python_string_literal(contents: &str) -> String {
@@ -39,7 +40,7 @@ fn escape_python_string_literal(contents: &str) -> String {
 
 fn study_app_source_and_logical_path() -> (String, String) {
     #[cfg(not(target_arch = "wasm32"))]
-    let (study_main, study_data, menu_src, logical_path) = {
+    let (study_main, study_data, menu_src, magnifier_src, logical_path) = {
         let study_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/core/apps/study");
         let path = study_dir.join("study.py");
 
@@ -47,6 +48,8 @@ fn study_app_source_and_logical_path() -> (String, String) {
             .unwrap_or_else(|_| STUDY_DATA_PY_EMBED.to_string());
         let menu_src = std::fs::read_to_string(study_dir.join("menu.py"))
             .unwrap_or_else(|_| MENU_PY_EMBED.to_string());
+        let magnifier_src = std::fs::read_to_string(study_dir.join("magnifier.py"))
+            .unwrap_or_else(|_| MAGNIFIER_PY_EMBED.to_string());
         let study_main =
             std::fs::read_to_string(&path).unwrap_or_else(|_| STUDY_APP_PY_EMBED.to_string());
         let logical_path = if path.is_file() {
@@ -55,19 +58,21 @@ fn study_app_source_and_logical_path() -> (String, String) {
             "study/study.py".to_string()
         };
 
-        (study_main, study_data, menu_src, logical_path)
+        (study_main, study_data, menu_src, magnifier_src, logical_path)
     };
 
     #[cfg(target_arch = "wasm32")]
-    let (study_main, study_data, menu_src, logical_path) = (
+    let (study_main, study_data, menu_src, magnifier_src, logical_path) = (
         STUDY_APP_PY_EMBED.to_string(),
         STUDY_DATA_PY_EMBED.to_string(),
         MENU_PY_EMBED.to_string(),
+        MAGNIFIER_PY_EMBED.to_string(),
         "study/study.py".to_string(),
     );
 
     let quoted_data = escape_python_string_literal(&study_data);
     let quoted_menu = escape_python_string_literal(&menu_src);
+    let quoted_magnifier = escape_python_string_literal(&magnifier_src);
     let prelude = format!(
         r#"import sys
 __study_data_src = {quoted_data}
@@ -80,9 +85,15 @@ __menu_mod = sys.__class__("menu")
 exec(compile(__menu_src, "menu.py", "exec"), __menu_mod.__dict__)
 sys.modules["menu"] = __menu_mod
 
+__magnifier_src = {quoted_magnifier}
+__magnifier_mod = sys.__class__("magnifier")
+exec(compile(__magnifier_src, "magnifier.py", "exec"), __magnifier_mod.__dict__)
+sys.modules["magnifier"] = __magnifier_mod
+
 "#,
         quoted_data = quoted_data,
         quoted_menu = quoted_menu,
+        quoted_magnifier = quoted_magnifier,
     );
 
     (format!("{prelude}{study_main}"), logical_path)
