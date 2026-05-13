@@ -23,7 +23,7 @@ def _boxed_text(app, text, x1, y1, x2, y2, **kwargs):
     return xos.ui.text(text, x1=x1, y1=y1, x2=x2, y2=y2, **base)
 
 
-class TextDemo(xos.Application):
+class StudyApp(xos.Application):
     def __init__(self):
         super().__init__()
 
@@ -231,4 +231,4 @@ def _first_line(s: str) -> str:
 
 
 if __name__ == "__main__":
-    TextDemo().run()
+    StudyApp().run()
