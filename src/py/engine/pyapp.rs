@@ -426,21 +426,46 @@ class Tensor:
         return self._wrap_vals(tuple(new_shape), flat)
 
     def _gather_rows(self, idx_tensor):
-        idx_flat = idx_tensor._data["_data"]
+        """Numpy-style fancy indexing along axis 0.
+
+        Accepts either:
+          * an integer index tensor (gather rows by position; supports negative indices), or
+          * a boolean mask tensor of length ``shape[0]`` (filter rows where mask is truthy).
+
+        Works for tensors of any rank ≥ 1; the trailing dimensions are preserved as a
+        contiguous block. Returns a freshly-allocated tensor of shape
+        ``(k,) + self.shape[1:]`` where ``k`` is the number of selected rows.
+        """
         shape = tuple(self.shape)
+        if not shape:
+            raise IndexError("cannot index a 0-d tensor")
         flat = self._data["_data"]
-        if len(shape) != 2:
-            raise NotImplementedError("gather only supports 2D tensors")
-        r, c = shape[0], shape[1]
+        idx_flat = idx_tensor._data["_data"]
+        idx_dtype = idx_tensor._data.get("dtype", "float32")
+        if idx_dtype == "bool":
+            if len(idx_flat) != shape[0]:
+                raise IndexError(
+                    "boolean mask length ({}) must equal tensor.shape[0] ({})".format(
+                        len(idx_flat), shape[0]
+                    )
+                )
+            rows = [i for i, v in enumerate(idx_flat) if int(v) != 0]
+        else:
+            rows = [int(v) for v in idx_flat]
+        inner_shape = shape[1:]
+        inner_size = 1
+        for s in inner_shape:
+            inner_size *= int(s)
+        n0 = int(shape[0])
         out = []
-        for ii in idx_flat:
-            i = int(ii)
-            if i < 0 or i >= r:
-                raise IndexError("index out of range")
-            base = i * c
-            for j in range(c):
-                out.append(flat[base + j])
-        return self._wrap_vals((len(idx_flat), c), out)
+        for i in rows:
+            if i < 0:
+                i += n0
+            if i < 0 or i >= n0:
+                raise IndexError("index {} out of range for axis 0 (size {})".format(i, n0))
+            base = i * inner_size
+            out.extend(flat[base : base + inner_size])
+        return self._wrap_vals((len(rows),) + inner_shape, out)
 
     def __setitem__(self, key, value):
         if isinstance(key, slice) and key == slice(None, None, None):
@@ -664,6 +689,17 @@ class Tensor:
         import xos
 
         return xos._tensor_max(self)
+
+    def index(self, text):
+        """Gather characters of ``text`` at the integer positions in this tensor.
+
+        Treats ``self`` as a flat sequence of indices. Negative indices wrap numpy-style.
+        Useful with boolean masks, e.g. ``xos.arange(n)[mask].index(s)`` to subset a
+        string by the positions where ``mask`` is truthy. Returns a new ``str``.
+        """
+        import xos
+
+        return xos._tensor_index_string(self, str(text))
 
     def mean(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
         """Arithmetic mean over the flat buffer (numpy-style ``axis=None`` default); reductions run in Rust."""

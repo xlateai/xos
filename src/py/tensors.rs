@@ -135,6 +135,35 @@ pub fn tensor_max(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_float(mx).into())
 }
 
+/// `_tensor_index_string(indices, text)` — gather characters of `text` at the integer
+/// positions in `indices` (treated as a flat sequence). Negative indices are wrapped
+/// `numpy`-style. Returns a new `str`.
+pub fn tensor_index_string(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    if args.args.len() != 2 {
+        return Err(vm.new_type_error(format!(
+            "_tensor_index_string() takes 2 arguments ({} given)",
+            args.args.len()
+        )));
+    }
+    let indices_flat = tensor_flat_data_list(&args.args[0], vm)?;
+    let text: String = args.args[1].clone().try_into_value(vm)?;
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len() as isize;
+    let mut out = String::with_capacity(indices_flat.len() * 4);
+    for v in indices_flat.iter() {
+        let raw = *v as isize;
+        let idx = if raw < 0 { raw + n } else { raw };
+        if idx < 0 || idx >= n {
+            return Err(vm.new_index_error(format!(
+                "index {} out of range for string of length {}",
+                raw, n
+            )));
+        }
+        out.push(chars[idx as usize]);
+    }
+    Ok(vm.ctx.new_str(out).into())
+}
+
 pub fn tensor_mean(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let obj = first_arg_tensor(&args, vm, "_tensor_mean")?;
     let (_, _, av) = tensor_min_max_mean_triplet(obj, vm)?;

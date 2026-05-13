@@ -1307,6 +1307,16 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         .unwrap();
     module
         .set_attr(
+            "_tensor_index_string",
+            vm.new_function(
+                "_tensor_index_string",
+                crate::python_api::tensors::tensor_index_string,
+            ),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
             "_tensor_mean",
             vm.new_function("_tensor_mean", crate::python_api::tensors::tensor_mean),
             vm,
