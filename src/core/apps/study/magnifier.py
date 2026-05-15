@@ -10,21 +10,24 @@ Behavior:
     character(s) on top of a darkened backdrop. The view is a panel that
     starts the size of the safe region.
   * While the magnifier is open the user can:
-      - **Pan** the panel by left-click-dragging anywhere inside it.
-      - **Zoom** the panel three ways, all clamped to the same range:
+      - **Pan the panel** (the magnifier window itself, glyph and all) by
+        left-click-dragging anywhere inside it. The panel — which contains
+        the centered, zoomed glyph — moves around the viewport with the
+        cursor, clamped so the whole panel always stays on-screen.
+      - **Zoom** the rendered character two ways:
           * ``+`` / ``−`` buttons in the safe-region bottom row (input-
             independent, always available on touch-only devices).
           * Scroll wheel / trackpad (``positive dy`` = zoom out, ``negative
             dy`` = zoom in) when the platform delivers scroll events.
-        The character zoom is independent from the panel boundary, so it can
-        continue growing even when the panel itself is already full-screen.
-        The panel boundary remains clamped to the **viewport** edge (whole
-        screen, not just the safe region).
+        Character zoom is independent of the panel — when the glyph grows
+        larger than the panel the engine clips it to the panel's rect, so
+        only the central region is visible (the user can zoom out to see
+        the whole character).
       - **Dismiss** the overlay via the Close button in the same bottom row
         (clicks elsewhere never dismiss).
-  * The panel's bounding box is always renormalized + clamped to the full
-    viewport every tick, so it cannot leave the screen no matter what
-    transforms (pan or zoom) have been applied.
+  * The panel starts at ``PANEL_DEFAULT_SCALE`` of the safe region — small
+    enough to leave headroom inside the viewport so dragging visibly moves
+    the magnifier — and is always clamped to the viewport ``[0,1]²``.
   * If a host-managed onscreen keyboard reference is supplied via the
     ``keyboard`` constructor argument, it is hidden whenever the magnifier
     opens (and again on any tick while open, so it stays hidden if something
@@ -52,6 +55,7 @@ HOVER_BUFFER_SCALE = 1.2
 
 # Cached so we don't reallocate the same constant rect tensor every tick.
 _FULL_FRAME_RECT = xos.tensor([0.0, 0.0, 1.0, 1.0], shape=(2, 2))
+
 
 # Bottom button row geometry expressed in safe-region-local coords (each
 # renormalized onto the viewport every tick via ``app.safe_region.renormalize``).
@@ -87,6 +91,11 @@ GLYPH_MAX_SCALE = 16.0
 # glyph's natural size if they want.
 PANEL_MIN_SCALE = 0.05
 
+# Starting size of the panel as a fraction of the safe region. Intentionally
+# < 1.0 so the panel has slack against the viewport edges and dragging it
+# visibly translates the magnifier window around the screen.
+PANEL_DEFAULT_SCALE = 0.7
+
 # Scroll-to-zoom sensitivity by event unit. ``dy`` is scaled by these and then
 # subtracted from 1.0 to produce a per-event size multiplier; the result is
 # clamped to avoid pathological single-event jumps. Tuned aggressively so a
@@ -119,7 +128,7 @@ class Magnifier:
         # Panel transform state (refined on first open via ``_reset_panel``).
         self._panel_cx = 0.5
         self._panel_cy = 0.5
-        self._panel_scale = 1.0
+        self._panel_scale = PANEL_DEFAULT_SCALE
         self._glyph_scale = 1.0
 
         # Click / drag state machine.
@@ -177,7 +186,7 @@ class Magnifier:
         self._suppress_drag_this_press = False
 
     def _reset_panel(self, app=None):
-        self._panel_scale = 1.0
+        self._panel_scale = PANEL_DEFAULT_SCALE
         self._glyph_scale = 1.0
         if app is not None:
             sx1 = float(app.safe_region.x1)
@@ -515,9 +524,13 @@ class Magnifier:
                 fw = fh = 0.0
             if fw > 0.0 and fh > 0.0:
                 last_x, last_y = self._drag_last_xy
+                # Drag translates the magnifier window itself (the panel and
+                # the glyph centered within it move together). The panel is
+                # smaller than the viewport so there's room for it to move;
+                # ``_refresh_panel_rect`` re-clamps after each step so the
+                # whole panel always stays fully on-screen.
                 self._panel_cx += (mx - last_x) / fw
                 self._panel_cy += (my - last_y) / fh
-                # Re-clamp so the panel stays fully on-screen.
                 panel_rect = self._refresh_panel_rect(app)
             self._drag_last_xy = (mx, my)
 
@@ -542,12 +555,32 @@ class Magnifier:
 
         xos.rasterizer.rects_filled(app.frame, _FULL_FRAME_RECT, ZOOM_BACKDROP_COLOR)
 
+        # The text widget clips drawing to its own ``(x1,y1,x2,y2)`` rect,
+        # which must stay in ``[0,1]²``. If we used the small panel rect
+        # directly the glyph would get cropped at the panel edge and the
+        # surrounding backdrop would bleed through as visible black bands.
+        # Instead, render into the *largest* rect that
+        #   (a) is centered on the panel center (so drag still translates
+        #       the glyph with the cursor), and
+        #   (b) fits inside the viewport ``[0,1]²``.
+        # That gives the glyph the full available viewport area to draw
+        # into, while the (smaller) panel rect remains the drag-clamp
+        # region that guarantees the cursor anchor stays on-screen.
         px1, py1, px2, py2 = panel_rect
-        self._zoom_display.x1 = px1
-        self._zoom_display.y1 = py1
-        self._zoom_display.x2 = px2
-        self._zoom_display.y2 = py2
+        panel_cx = (px1 + px2) / 2.0
+        panel_cy = (py1 + py2) / 2.0
+        half_w = max(1e-3, min(panel_cx, 1.0 - panel_cx))
+        half_h = max(1e-3, min(panel_cy, 1.0 - panel_cy))
+        glyph_rect_x1 = max(0.0, panel_cx - half_w)
+        glyph_rect_y1 = max(0.0, panel_cy - half_h)
+        glyph_rect_x2 = min(1.0, panel_cx + half_w)
+        glyph_rect_y2 = min(1.0, panel_cy + half_h)
+
         self._glyph_scale = max(GLYPH_MIN_SCALE, min(GLYPH_MAX_SCALE, self._glyph_scale))
+        self._zoom_display.x1 = glyph_rect_x1
+        self._zoom_display.y1 = glyph_rect_y1
+        self._zoom_display.x2 = glyph_rect_x2
+        self._zoom_display.y2 = glyph_rect_y2
         self._zoom_display.size = self.zoom_font_size * self._glyph_scale
         self._zoom_display.text = self.zoomed_chars
         self._zoom_display.tick(app)
