@@ -98,7 +98,9 @@ whisper = [
     "dep:ndarray",
     "dep:serde",
     "dep:serde_json",
-    "all-tokenizers",
+    # CT2 Whisper models ship `tokenizer.json` (HF), not SentencePiece `.spm` files.
+    "tokenizers",
+    "ruy",
 ]
 
 [lib]
