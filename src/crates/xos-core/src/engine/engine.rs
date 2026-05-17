@@ -246,6 +246,12 @@ impl FrameState {
         self.staging_slice_mut()
     }
 
+    /// CPU staging for Python tick context binding without syncing GPU→CPU first.
+    pub(crate) fn staging_slice_mut_for_tick(&mut self) -> &mut [u8] {
+        self.cpu_dirty = true;
+        self.staging_slice_mut()
+    }
+
     /// Get the frame shape `[height, width, 4]`
     pub fn shape(&self) -> Vec<usize> {
         vec![self.height as usize, self.width as usize, 4]

@@ -235,7 +235,6 @@ pub fn convolve_rgb_same(
     let alpha = BurnTensor::<3>::full([h, w, 1], 255.0, &device);
     let rgba = BurnTensor::<3>::cat(vec![out_hwc, alpha], 2);
     frame.set_burn_tensor(rgba);
-    frame.publish_gpu_to_staging();
     Ok(())
 }
 
@@ -289,8 +288,23 @@ pub fn convolve_depthwise_rgb_same(
     let alpha = BurnTensor::<3>::full([h, w, 1], 255.0, &device);
     let rgba = BurnTensor::<3>::cat(vec![out_hwc, alpha], 2);
     frame.set_burn_tensor(rgba);
-    frame.publish_gpu_to_staging();
     Ok(())
+}
+
+/// Fill the frame RGBA tensor on GPU (avoids CPU staging + re-upload before conv).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn uniform_fill_rgba(frame: &mut FrameState, low: f32, high: f32) {
+    use burn::tensor::Distribution;
+    let device = frame.device().clone();
+    let [h, w, _] = frame.tensor_dims();
+    let n = h * w * 4;
+    let flat = BurnTensor::<1>::random(
+        [n],
+        Distribution::Uniform(low as f64, high as f64),
+        &device,
+    );
+    let t = flat.reshape([h, w, 4]);
+    frame.set_burn_tensor(t);
 }
 
 /// Convert u8 RGBA slice to f32 tensor [h,w,4].

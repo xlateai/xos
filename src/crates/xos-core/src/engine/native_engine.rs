@@ -213,6 +213,7 @@ impl AppState {
                     self.engine_state.pending_step_ticks.saturating_sub(1);
                 tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 let _ = self.app.tick(&mut self.engine_state);
+                self.engine_state.frame.publish_gpu_to_staging();
                 self.capture_paused_base_frame();
             } else {
                 self.last_tick_instant = Some(Instant::now());
@@ -226,6 +227,9 @@ impl AppState {
             let _ = self.app.tick(&mut self.engine_state);
             self.capture_paused_base_frame();
         }
+
+        // One GPU→CPU sync per frame for display (pixels uploads this buffer to the window texture).
+        self.engine_state.frame.publish_gpu_to_staging();
 
         tick_frame_view_zoom(&mut self.engine_state);
         apply_frame_view_zoom(&mut self.engine_state);

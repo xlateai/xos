@@ -1260,7 +1260,8 @@ impl Application for PyApp {
             let shape = state.frame.shape();
             let width = shape[1];
             let height = shape[0];
-            let buffer = state.frame.buffer_mut();
+            // Bind CPU staging for rasterizer/text; do not pull GPU→CPU here (sync happens once before present).
+            let buffer = state.frame.staging_slice_mut_for_tick();
             crate::rasterizer::set_frame_buffer_context(buffer, width, height);
 
             // Apply __init__ framebuffer to the live display buffer (pixels mirror when windowed).
