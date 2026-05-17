@@ -160,6 +160,9 @@ enum Commands {
         /// Run `cargo clean` in the project root before building (full rebuild).
         #[arg(long)]
         clean: bool,
+        /// Dev build (`debug`) instead of optimized release (faster compile; slower binary).
+        #[arg(long)]
+        no_release: bool,
     },
     /// Execute Python scripts (`xpy` is a shortcut for this command).
     #[command(name = "py", visible_alias = "python")]
@@ -729,6 +732,7 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
 }
 
 fn main() {
+    xos::init_hooks();
     let mut original_args: Vec<String> = std::env::args().collect();
 
     let exe_stem = std::env::current_exe()
@@ -866,7 +870,12 @@ fn main() {
     }
 
     match cli.command {
-        Some(Commands::Compile { ios, wasm, clean }) => {
+        Some(Commands::Compile {
+            ios,
+            wasm,
+            clean,
+            no_release,
+        }) => {
             if ios && wasm {
                 eprintln!("❌ use either --ios or --wasm, not both");
                 std::process::exit(1);
@@ -874,12 +883,13 @@ fn main() {
             if let Err(e) = daemon::stop_daemon() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
+            let release = !no_release;
             let compile_ok = if ios {
-                compile::compile_ios_rust(clean)
+                compile::compile_ios_rust(clean, release)
             } else if wasm {
                 compile::compile_wasm(clean)
             } else {
-                compile::xos_compile_command(true, clean)
+                compile::xos_compile_command(true, clean, release)
             };
             if let Err(e) = daemon::maybe_ensure_daemon_running() {
                 eprintln!("❌ compile finished, but failed to enforce daemon state: {e}");
@@ -975,7 +985,8 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let script = root.join("src/core/commands/terminal/terminal.py");
+            let script = root
+                .join("src/crates/xos-core/commands/terminal/terminal.py");
             xos::apps::mesh::run_mesh_python_file(&script);
         }
         Some(Commands::Kill) => {
@@ -1016,7 +1027,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let script = root.join("src/core/commands/status/status.py");
+            let script = root.join("src/crates/xos-core/commands/status/status.py");
             if !script.exists() {
                 eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);

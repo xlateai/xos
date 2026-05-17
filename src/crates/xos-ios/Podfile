@@ -1,0 +1,66 @@
+platform :ios, '15.1'
+use_frameworks! :linkage => :static
+
+# If project doesn't exist, CocoaPods will create it
+# But we need at least a basic project structure
+project 'xos.xcodeproj'
+
+target 'xos' do
+  pod 'Xos', :path => '.'
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['SWIFT_VERSION'] = '5.9'
+    end
+  end
+  
+  # Add AudioToolbox + Rust static lib to the main **xos** app target.
+  # NOTE: do not use `installer.sandbox.project_path` — that points at `Pods/`, so
+  # `.../Pods/xos.xcodeproj` does not exist and this block was silently skipped.
+  podfile_path = installer.podfile.defined_in_file
+  if podfile_path.nil?
+    Pod::UI.warn 'xos iOS: Podfile path unknown; skipped app OTHER_LDFLAGS patch.'
+  else
+  main_project_path = File.join(File.dirname(podfile_path), 'xos.xcodeproj')
+  unless File.exist?(main_project_path)
+    Pod::UI.warn "xos iOS: could not find #{main_project_path} (expected next to the Podfile). " \
+                 'App OTHER_LDFLAGS (AudioToolbox, libxos) were not updated — run `pod install` from src/crates/xos-ios.'
+  else
+    require 'xcodeproj'
+    project = Xcodeproj::Project.open(main_project_path)
+    project.targets.each do |target|
+      if target.name == 'xos'
+        # Remove old Run Script if present (it ran before Swift/AppIntents, so it could not fix sign).
+        target.build_phases.to_a
+          .select { |p| p.respond_to?(:name) && p.name == 'Strip xattrs (codesign)' }
+          .each { |p| target.build_phases.delete(p) }
+        target.build_configurations.each do |config|
+          # Add AudioToolbox framework to linker flags
+          existing_flags = config.build_settings['OTHER_LDFLAGS'] || ['$(inherited)']
+          existing_flags = [existing_flags] unless existing_flags.is_a?(Array)
+          unless existing_flags.any? { |flag| flag.to_s.include?('AudioToolbox') }
+            existing_flags += ['-framework', 'AudioToolbox']
+          end
+          # Rust FFI lives in libs/libxos.a (see Xos.podspec preserve_paths). The app binary must
+          # force-load it: `-framework Xos` alone does not pull the archive through static linkage.
+          unless existing_flags.any? { |flag| flag.to_s.include?('libxos.a') }
+            existing_flags += ['-Wl,-force_load,$(SRCROOT)/libs/libxos.a']
+          end
+          config.build_settings['OTHER_LDFLAGS'] = existing_flags
+          # Set default app name (can be overridden via command line)
+          unless config.build_settings['XOS_DEFAULT_APP']
+            config.build_settings['XOS_DEFAULT_APP'] = 'blank'
+          end
+        end
+        # (codesign "resource fork" / xattr): a Run Script in the target runs *before* Xcode’s
+        # "Copy Swift Standard Libraries" and AppIntents steps, so stripping there is too early.
+        # `src/crates/xos-ios/launch-device.sh` retries: xattr on the final .app, then `codesign` again.
+      end
+    end
+    project.save
+  end
+  end
+end
+

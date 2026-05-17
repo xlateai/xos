@@ -1,0 +1,14 @@
+[package]
+name = "xos-tensor"
+version = "0.3.19-pre2"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+burn = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "ndarray", "autodiff"] }
+burn-backend = { version = "=0.21.0-pre.3" }
+burn-ndarray = { version = "=0.21.0-pre.3", default-features = false }
+
+[target.'cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))'.dependencies]
+burn = { version = "=0.21.0-pre.3", default-features = false, features = ["wgpu", "autotune"] }
+burn-wgpu = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
