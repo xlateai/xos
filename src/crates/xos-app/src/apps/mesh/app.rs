@@ -1,6 +1,5 @@
 //! `xos app mesh` entry: run adjacent `mesh.py` with mesh + terminal bindings.
 
-use xos_core::engine::{Application, EngineState};
 use xos_python::runtime::{execute_python_code, PrintCallback};
 use rustpython_vm::Interpreter;
 use std::fs;
@@ -8,19 +7,6 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::Arc;
-
-pub struct MeshApp;
-
-impl MeshApp {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Application for MeshApp {
-    fn setup(&mut self, _state: &mut EngineState) -> Result<(), String> { Ok(()) }
-    fn tick(&mut self, _state: &mut EngineState) {}
-}
 
 fn run_mesh_script(resolved_file_path: &Path) {
     let code = match fs::read_to_string(resolved_file_path) {

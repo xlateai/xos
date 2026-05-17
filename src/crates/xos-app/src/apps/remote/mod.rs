@@ -8,9 +8,7 @@
 //! background thread (see the `daemon_remote` module in the `xos` binary) and by Python
 //! `xos.mesh`.
 //!
-//! **`xos app remote`** loads `launcher.rs` + `remote.py`.
-
-pub mod launcher;
+//! **`xos app remote`** loads `src/apps/remote/remote.py` (see [`python_apps`]).
 pub(crate) mod monitors;
 pub(crate) mod monitor_stream;
 mod remote;

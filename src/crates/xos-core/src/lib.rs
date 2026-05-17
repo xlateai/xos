@@ -74,7 +74,13 @@ pub fn is_xos_project_root(path: &Path) -> bool {
 /// `.../target/{standard|ios|wasm}/{release|debug}/xos(.exe)`, returns the repo root.
 fn project_root_from_target_executable(exe: &Path) -> Option<PathBuf> {
     let file_name = exe.file_name()?.to_str()?;
-    if file_name != "xos" && file_name != "xos.exe" {
+    if file_name != "xos"
+        && file_name != "xos.exe"
+        && file_name != "xpy"
+        && file_name != "xpy.exe"
+        && file_name != "xrs"
+        && file_name != "xrs.exe"
+    {
         return None;
     }
     let profile_dir = exe.parent()?;

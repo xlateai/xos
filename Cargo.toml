@@ -6,7 +6,6 @@ description = "Python, cross-platform (+ios📱) with built-in viewports, audio 
 repository = "https://github.com/xlateai/xos"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
 license = "MIT"
-default-run = "xos"
 
 [dependencies]
 xos-core = { path = "src/crates/xos-core" }
@@ -16,25 +15,8 @@ xos-auth = { path = "src/crates/xos-auth" }
 xos-mesh = { path = "src/crates/xos-mesh" }
 xos-tensor = { path = "src/crates/xos-tensor" }
 xos-audio = { path = "src/crates/xos-audio" }
-clap = { version = "4.4.10", features = ["derive"] }
-dialoguer = "0.11"
-serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-tiny_http = "0.12"
 darling = "0.21.3"
 variadics_please = "1"
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-burn-fusion = { version = "=0.21.0-pre.3" }
-burn-ir = { version = "=0.21.0-pre.3" }
-burn-backend = { version = "=0.21.0-pre.3" }
-burn-autodiff = { version = "=0.21.0-pre.3", default-features = false }
-burn-ndarray = { version = "=0.21.0-pre.3", default-features = false }
-cubecl-common = { version = "=0.10.0-pre.3", features = ["hash"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
-base64 = "0.22"
-ctrlc = "3.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -53,21 +35,10 @@ silero_vad = ["whisper", "xos-core/silero_vad", "xos-app/silero_vad"]
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "xos"
-path = "src/main.rs"
-
-[[bin]]
-name = "xpy"
-path = "src/main.rs"
-
-[[bin]]
-name = "xrs"
-path = "src/main.rs"
-
 [workspace]
 members = [
   ".",
+  "src/crates/xos-cli",
   "src/crates/xos-core",
   "src/crates/xos-auth",
   "src/crates/xos-mesh",
