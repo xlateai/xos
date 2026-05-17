@@ -27,35 +27,15 @@ pub fn run_rs_app_by_name(name: &str, flags: AppLaunchFlags) {
 
 /// Launch a Python app from `src/apps/<name>/<name>.py` (`xos app <name>`).
 pub fn run_python_app_by_name(name: &str, flags: AppLaunchFlags) {
+    if flags.wasm || flags.react_native {
+        eprintln!("❌ python apps under src/apps/ do not support --wasm or --react-native yet");
+        std::process::exit(1);
+    }
     if flags.ios {
         crate::launch_ios_app(name);
         return;
     }
-    if let Some(app) = python_apps::boxed_python_app(name, &native_app_names()) {
-        if flags.wasm || flags.react_native {
-            eprintln!("❌ python apps under src/apps/ do not support --wasm or --react-native yet");
-            std::process::exit(1);
-        }
-        #[cfg(not(target_os = "ios"))]
-        {
-            use xos_core::engine::start_native;
-            if name == "overlay" {
-                let _ = xos_core::engine::start_overlay_native(app);
-            } else {
-                let _ = start_native(app);
-            }
-            return;
-        }
-        #[cfg(target_os = "ios")]
-        {
-            let _ = app;
-        }
-    }
-    eprintln!("❌ python app '{name}' not found under src/apps/{name}/{name}.py");
-    if let Ok(names) = list_python_app_names() {
-        eprintln!("   Available: {}", names.join(", "));
-    }
-    std::process::exit(1);
+    python_apps::run_python_app(name, &native_app_names());
 }
 
 pub fn list_python_app_names() -> Result<Vec<String>, String> {

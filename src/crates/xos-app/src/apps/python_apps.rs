@@ -199,6 +199,91 @@ fn find_descriptor(name: &str, reserved_names: &[&str]) -> Option<PythonAppDescr
         .find(|a| a.name == name)
 }
 
+fn make_app_interpreter() -> Interpreter {
+    Interpreter::with_init(Default::default(), |vm| {
+        vm.add_native_module(
+            "xos".to_owned(),
+            Box::new(xos_python::xos_module::make_module),
+        );
+    })
+}
+
+fn app_print_callback() -> Arc<dyn Fn(&str) + Send + Sync> {
+    Arc::new(|s: &str| {
+        print!("{s}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    })
+}
+
+const SCRIPT_ONLY_HINT: &str = "Note: no xos.Application was started — ran as a plain script. Subclass xos.Application and call .run() to open a window.";
+
+/// Execute `src/apps/<name>/<name>.py`. Opens a window when the script registers an
+/// `xos.Application` (via `.run()` or `__xos_app_instance__`); otherwise runs like `xos py`.
+pub fn run_python_app(name: &str, reserved_names: &[&str]) {
+    let Some(desc) = find_descriptor(name, reserved_names) else {
+        eprintln!("❌ python app '{name}' not found (expected src/apps/{name}/{name}.py)");
+        if let Ok(names) = python_app_names(reserved_names) {
+            if !names.is_empty() {
+                eprintln!("   Available: {}", names.join(", "));
+            }
+        }
+        std::process::exit(1);
+    };
+    run_python_app_from_descriptor(&desc);
+}
+
+pub fn run_python_app_from_descriptor(desc: &PythonAppDescriptor) {
+    let (code, fname) = match load_python_app_sources(desc) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("❌ Failed to load python app {:?}:\n{e}", desc.name);
+            std::process::exit(1);
+        }
+    };
+
+    let print_cb = app_print_callback();
+    let interpreter = make_app_interpreter();
+
+    let (run_result, output, app_instance, _) =
+        execute_python_code(&interpreter, &code, &fname, None, Some(print_cb), &[]);
+
+    if !output.is_empty() {
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+
+    if let Err(e) = run_result {
+        eprintln!("❌ Failed to run python app {:?} ({}):\n{e}", desc.name, fname);
+        std::process::exit(1);
+    }
+
+    let Some(app_inst) = app_instance else {
+        eprintln!("{SCRIPT_ONLY_HINT}");
+        return;
+    };
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        use xos_core::engine::{start_native, start_overlay_native};
+        let pyapp = PyApp::new(interpreter, app_inst);
+        let result = if desc.name == "overlay" {
+            start_overlay_native(Box::new(pyapp))
+        } else {
+            start_native(Box::new(pyapp))
+        };
+        if let Err(e) = result {
+            eprintln!("❌ Engine error: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (interpreter, app_inst);
+        eprintln!("❌ python app window launch is not supported on iOS from the CLI");
+        std::process::exit(1);
+    }
+}
+
 /// Build a [`PyApp`] from a discovered app name (reads from disk under `src/apps/`).
 pub fn boxed_python_app(name: &str, reserved_names: &[&str]) -> Option<Box<dyn Application>> {
     let desc = find_descriptor(name, reserved_names)?;
@@ -215,12 +300,7 @@ pub fn boxed_python_app_from_descriptor(desc: &PythonAppDescriptor) -> Option<Bo
     };
 
     let print_cb = Arc::new(|s: &str| xos_core::print(s));
-    let interpreter = Interpreter::with_init(Default::default(), |vm| {
-        vm.add_native_module(
-            "xos".to_owned(),
-            Box::new(xos_python::xos_module::make_module),
-        );
-    });
+    let interpreter = make_app_interpreter();
 
     let (run_result, _output, app_instance, _) =
         execute_python_code(&interpreter, &code, &fname, None, Some(print_cb), &[]);
@@ -233,14 +313,5 @@ pub fn boxed_python_app_from_descriptor(desc: &PythonAppDescriptor) -> Option<Bo
         return None;
     }
 
-    match app_instance {
-        Some(app_inst) => Some(Box::new(PyApp::new(interpreter, app_inst))),
-        None => {
-            xos_core::print(&format!(
-                "❌ {:?}: script did not register an xos.Application (call .run() at import or set __xos_app_instance__).",
-                desc.name
-            ));
-            None
-        }
-    }
+    app_instance.map(|app_inst| Box::new(PyApp::new(interpreter, app_inst)) as Box<dyn Application>)
 }
