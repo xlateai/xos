@@ -1,4 +1,3 @@
-pub mod launcher;
 pub mod readonly_embed;
 pub mod text;
 

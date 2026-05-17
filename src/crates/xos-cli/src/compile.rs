@@ -125,7 +125,7 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
 fn copy_bins_to_cargo_bin(project_root: &Path, release: bool, dest_dir: &Path) -> io::Result<()> {
     let profile_dir = standard_target_root(project_root).join(profile_dir_name(release));
     fs::create_dir_all(dest_dir)?;
-    for stem in ["xos", "xpy"] {
+    for stem in ["xos", "xpy", "xrs"] {
         let name = if cfg!(windows) {
             format!("{stem}.exe")
         } else {
@@ -168,13 +168,22 @@ fn run_cargo_build_verbose(project_root: &Path, release: bool) -> bool {
     if release {
         cmd.arg("--release");
     }
-    cmd.args(["-p", "xos", "--bins"]);
+    cmd.args([
+        "-p",
+        "xos-cli",
+        "--bin",
+        "xos",
+        "--bin",
+        "xpy",
+        "--bin",
+        "xrs",
+    ]);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// `cargo build -p xos --bins` with no compiler output — spinner line only.
+/// `cargo build -p xos-cli --bins` with no compiler output — spinner line only.
 fn run_cargo_build_quiet_spinner(project_root: &Path, release: bool) -> bool {
     let path_str = project_root.display().to_string();
     let profile_label = profile_dir_name(release);
@@ -188,7 +197,16 @@ fn run_cargo_build_quiet_spinner(project_root: &Path, release: bool) -> bool {
     if release {
         cargo_cmd.arg("--release");
     }
-    cargo_cmd.args(["-p", "xos", "--bins"]);
+    cargo_cmd.args([
+        "-p",
+        "xos-cli",
+        "--bin",
+        "xos",
+        "--bin",
+        "xpy",
+        "--bin",
+        "xrs",
+    ]);
     cargo_cmd.stdout(Stdio::null());
     cargo_cmd.stderr(Stdio::piped());
 

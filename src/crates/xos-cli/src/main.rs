@@ -1,10 +1,11 @@
-mod compile;
-mod daemon;
-
-#[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", target_os = "windows")))]
-mod daemon_remote;
-
 use clap::{CommandFactory, Parser, Subcommand};
+use xos::apps::{run_rs_app_command, RsAppCommands};
+use xos_cli::apps_cli::{self, app_command_index};
+use xos_cli::compile;
+#[cfg(not(target_arch = "wasm32"))]
+use xos_cli::daemon;
+#[cfg(all(not(target_arch = "wasm32"), any(target_os = "macos", target_os = "windows")))]
+use xos_cli::daemon_remote;
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,7 +23,6 @@ use std::time::{Duration, Instant};
 use tiny_http::{Method, Response, Server};
 #[cfg(not(target_arch = "wasm32"))]
 use uuid::Uuid;
-use xos::apps::{run_app_command, AppCommands};
 use xos::python_api::{
     parse_script_cli_flags, run_python_app, run_python_file, run_python_interactive,
 };
@@ -142,12 +142,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run/view Rust applications (`xrs` is a shortcut for this command).
-    #[command(name = "rs", visible_aliases = ["rust", "app"], subcommand_required = true)]
-    Rs {
-        #[command(subcommand)]
-        app: AppCommands,
-    },
     /// Compile rust changes.
     #[command(name = "compile", visible_alias = "build")]
     Compile {
@@ -215,6 +209,12 @@ enum Commands {
     Off,
     #[command(name = "daemon-internal", hide = true)]
     DaemonInternal,
+    /// Run native Rust windowed apps (`xrs` is a shortcut for this command).
+    #[command(name = "rs-app", visible_aliases = ["rs", "rust"])]
+    RsApp {
+        #[command(subcommand)]
+        app: RsAppCommands,
+    },
     /// Run public online relay server for mode="online".
     #[command(name = "relay")]
     Relay {
@@ -329,7 +329,7 @@ fn run_path_command(code: bool, data: bool, cli_exe: bool) {
 /// Second line for `xos -v` / `xpy -v`: full commit hash, optional colored dirty suffix, or a fixed message if no git tree.
 fn version_git_second_line(color_uncommitted: bool) -> String {
     let root = match xos::find_xos_project_root().ok().or_else(|| {
-        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         p.exists().then_some(p)
     }) {
         Some(p) => p,
@@ -733,6 +733,7 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
 
 fn main() {
     xos::init_hooks();
+    apps_cli::discover_and_warn();
     let mut original_args: Vec<String> = std::env::args().collect();
 
     let exe_stem = std::env::current_exe()
@@ -756,6 +757,7 @@ fn main() {
             let should_insert_py = !matches!(
                 first,
                 "py" | "python"
+                    | "rs-app"
                     | "rs"
                     | "rust"
                     | "app"
@@ -784,12 +786,12 @@ fn main() {
 
     if invoked_as_xrs {
         if original_args.len() == 1 {
-            original_args.push("rs".to_string());
+            original_args.push("rs-app".to_string());
         } else {
             let first = original_args[1].as_str();
             let should_insert_rs = !matches!(
                 first,
-                "rs" | "rust"
+                "rs-app" | "rs" | "rust"
                     | "app"
                     | "py"
                     | "python"
@@ -811,7 +813,7 @@ fn main() {
                     | "--version"
             );
             if should_insert_rs {
-                original_args.insert(1, "rs".to_string());
+                original_args.insert(1, "rs-app".to_string());
             }
         }
     }
@@ -824,14 +826,17 @@ fn main() {
         }
     }
 
-    // `xos code` → `xos rs coder` (same flags as `xos rs coder`, e.g. `--wasm`, `--ios`).
+    // `xos code` → `xos rs-app coder` (same flags as `xos rs-app coder`, e.g. `--wasm`, `--ios`).
     if original_args.len() >= 2 && original_args[1].eq_ignore_ascii_case("code") {
-        original_args[1] = "rs".to_string();
+        original_args[1] = "rs-app".to_string();
         original_args.insert(2, "coder".to_string());
     }
 
-    let cli = Cli::parse_from(original_args);
-    if cli.print_version {
+    // Global -v / --version before clap (app subcommands are parsed separately).
+    if original_args
+        .iter()
+        .any(|a| a == "-v" || a == "--version" || a == "-V")
+    {
         let bin_name = if invoked_as_xpy {
             "xpy"
         } else if invoked_as_xrs {
@@ -844,6 +849,18 @@ fn main() {
         return;
     }
 
+    if app_command_index(&original_args).is_some() {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = daemon::maybe_ensure_daemon_running() {
+            eprintln!("❌ failed to start xos daemon: {e}");
+            std::process::exit(1);
+        }
+        if apps_cli::try_run_python_app_command(&original_args) {
+            return;
+        }
+    }
+
+    let cli = Cli::parse_from(original_args);
     let resolved_python_file = match &cli.command {
         Some(Commands::Py {
             file: Some(file), ..
@@ -860,7 +877,7 @@ fn main() {
 
     let should_ensure_daemon = matches!(
         &cli.command,
-        Some(Commands::Rs { .. }) | Some(Commands::Py { .. }) | Some(Commands::Terminal)
+        Some(Commands::Py { .. }) | Some(Commands::Terminal) | Some(Commands::RsApp { .. })
     );
     if should_ensure_daemon {
         if let Err(e) = daemon::maybe_ensure_daemon_running() {
@@ -905,9 +922,6 @@ fn main() {
             cli_exe,
         }) => {
             run_path_command(code, data, cli_exe);
-        }
-        Some(Commands::Rs { app }) => {
-            run_app_command(app);
         }
         Some(Commands::Py { file, wasm, rest }) => {
             if let Some(file_path) = file {
@@ -1063,6 +1077,9 @@ fn main() {
                 eprintln!("❌ daemon error: {e}");
                 std::process::exit(1);
             }
+        }
+        Some(Commands::RsApp { app }) => {
+            run_rs_app_command(app);
         }
         Some(Commands::Relay {
             bind,

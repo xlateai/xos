@@ -933,8 +933,8 @@ pub extern "C" fn xos_list_applications_get_name(index: usize) -> *mut c_char {
         return ptr::null_mut();
     }
 
-    let app_name = apps[index];
-    match CString::new(app_name) {
+    let app_name = &apps[index];
+    match CString::new(app_name.as_str()) {
         Ok(c_str) => c_str.into_raw(),
         Err(_) => ptr::null_mut(),
     }

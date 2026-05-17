@@ -1,0 +1,35 @@
+[package]
+name = "xos-cli"
+version = "0.3.19-pre2"
+edition = "2021"
+license = "MIT"
+description = "CLI and compiler for xos"
+default-run = "xos"
+
+[dependencies]
+xos = { path = "../../.." }
+xos-core = { path = "../xos-core" }
+xos-app = { path = "../xos-app" }
+xos-python = { path = "../xos-python" }
+clap = { version = "4.4.10", features = ["derive"] }
+dialoguer = "0.11"
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tiny_http = "0.12"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+base64 = "0.22"
+ctrlc = "3.4"
+
+[[bin]]
+name = "xos"
+path = "src/main.rs"
+
+[[bin]]
+name = "xpy"
+path = "src/main.rs"
+
+[[bin]]
+name = "xrs"
+path = "src/main.rs"

@@ -1,4 +1,4 @@
-//! Dynamic Python UI launcher for externally supplied wasm `xpy` code.
+//! Wasm-only dynamic `xpy` app (URL query / `.xos/xpy/{id}` bundle).
 
 use std::sync::Arc;
 
@@ -105,7 +105,7 @@ pub fn boxed_xpy_app() -> Option<Box<dyn Application>> {
         execute_python_code(&interpreter, &code, &fname, None, Some(print_cb), &flags);
 
     if let Err(e) = run_result {
-        xos_core::print(&format!("❌ Failed to run xpy wasm source ({fname}):\n{e}"));
+        xos_core::print(&format!("❌ Failed to load xpy wasm ({fname}):\n{e}"));
         return None;
     }
 
@@ -113,7 +113,7 @@ pub fn boxed_xpy_app() -> Option<Box<dyn Application>> {
         Some(app_inst) => Some(Box::new(PyApp::new(interpreter, app_inst))),
         None => {
             xos_core::print(
-                "❌ xpy wasm: script did not register an xos.Application (call .run() at import or set __xos_app_instance__).",
+                "❌ xpy: script did not register an xos.Application (call .run() at import or set __xos_app_instance__).",
             );
             None
         }

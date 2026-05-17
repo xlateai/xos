@@ -11362,22 +11362,9 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 name = "xos"
 version = "0.3.19-pre2"
 dependencies = [
- "base64 0.22.1",
- "burn-autodiff",
- "burn-backend",
- "burn-fusion",
- "burn-ir",
- "burn-ndarray",
- "clap",
- "ctrlc",
- "cubecl-common",
  "darling 0.21.3",
- "dialoguer",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
- "serde_json",
- "tiny_http",
- "tokio",
  "uuid",
  "variadics_please",
  "wasm-bindgen",
@@ -11458,6 +11445,24 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "xos-cli"
+version = "0.3.19-pre2"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "ctrlc",
+ "dialoguer",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "uuid",
+ "xos",
+ "xos-app",
+ "xos-core",
+ "xos-python",
 ]
 
 [[package]]
