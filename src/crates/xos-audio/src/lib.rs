@@ -49,6 +49,8 @@ pub use speakers as output;
 
 // Re-export key types for convenience
 pub use microphone::{all_input_devices, default_input, print_input_devices, AudioListener};
+#[cfg(target_arch = "wasm32")]
+pub use microphone::ensure_web_microphone;
 pub use speakers::{all_output_devices, default_output, print_output_devices, AudioPlayer};
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -200,6 +202,26 @@ impl AudioDevice {
                 )
             }
         }
+    }
+}
+
+// ================================================================================================
+// LOGGING
+// ================================================================================================
+
+/// Platform-appropriate debug log (used by iOS FFI teardown paths in `speakers`).
+pub(crate) fn print(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(message));
+    }
+    #[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+    {
+        eprintln!("{message}");
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        println!("{message}");
     }
 }
 

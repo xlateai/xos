@@ -3,14 +3,14 @@ use rustpython_vm::PyObjectRef;
 use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
 
 /// xos.dialoguer.select(prompt, items, default=0) - Show selection dialog
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
 fn select(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Err(vm.new_runtime_error(
-        "dialoguer.select() is not available on iOS. Use xos.system.get_system_type() to detect iOS and skip selection.".to_string(),
+        "dialoguer.select() is not available on iOS or wasm (native desktop only).".to_string(),
     ))
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn select(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     // Parse arguments
     let prompt: String = if !args.args.is_empty() {

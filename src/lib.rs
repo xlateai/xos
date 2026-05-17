@@ -14,15 +14,15 @@ pub mod apps {
     pub use xos_app::apps::*;
 }
 
-pub use xos_app::{init_hooks, run_game, start};
+pub use xos_app::{init_hooks, run_game};
+#[cfg(not(target_arch = "wasm32"))]
+pub use xos_app::start;
 #[cfg(target_arch = "wasm32")]
 pub use xos_app::start_wasm;
 
+/// Browser entry (`xos-wasm` cdylib). Not used by the native CLI.
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(start)]
-pub fn wasm_start() -> Result<(), JsValue> {
+pub fn wasm_entry() -> Result<(), wasm_bindgen::JsValue> {
+    xos_app::init_hooks();
     xos_app::start_wasm()
 }

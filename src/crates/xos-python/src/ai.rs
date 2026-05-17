@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use burn::tensor::DType;
 #[cfg(all(not(target_arch = "wasm32"), feature = "whisper_burn"))]
 use burn_store::{BurnpackStore, ModuleStore};
-#[cfg(not(target_arch = "wasm32"))]
 use rustpython_vm::{
     builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine,
 };
@@ -320,6 +319,15 @@ fn whisper_load_payload(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     ))
 }
 
+#[cfg(target_arch = "wasm32")]
+fn whisper_forward_native(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    Err(to_py_err(
+        vm,
+        "Whisper native inference is unavailable in the wasm build (use native xos for transcription)",
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args;
     let model = parse_string_arg(av.first(), "tiny", vm)?;
@@ -358,6 +366,18 @@ fn whisper_forward_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.new_str(text).into())
 }
 
+#[cfg(target_arch = "wasm32")]
+fn whisper_forward_layer_by_layer_native(
+    _args: FuncArgs,
+    vm: &VirtualMachine,
+) -> PyResult {
+    Err(to_py_err(
+        vm,
+        "Whisper layer-by-layer inference is unavailable in the wasm build",
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn whisper_forward_layer_by_layer_native(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let av = args.args;
     let model = parse_string_arg(av.first(), "tiny", vm)?;

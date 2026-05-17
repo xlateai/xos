@@ -2,9 +2,13 @@
 // Using rustpython-vm instead of pyo3
 
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::Command;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{fs as std_fs, thread};
+#[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Response, Server};
+#[cfg(not(target_arch = "wasm32"))]
 use webbrowser;
 
 pub mod ai;
@@ -199,7 +203,8 @@ pub mod py_engine {
     }
 }
 
-// --- Tooling helpers ---
+// --- Tooling helpers (native host only; wasm cdylib does not embed a local static server) ---
+#[cfg(not(target_arch = "wasm32"))]
 fn build_wasm(app_name: &str) {
     let project_root = match find_xos_project_root() {
         Ok(p) => p,
@@ -234,6 +239,7 @@ fn build_wasm(app_name: &str) {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn xos_project_root_or_exit() -> PathBuf {
     match find_xos_project_root() {
         Ok(p) => p,
@@ -244,10 +250,12 @@ fn xos_project_root_or_exit() -> PathBuf {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
     project_root.join("target").join("wasm").join("main")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn react_native_static_dir(project_root: &Path) -> PathBuf {
     project_root
         .join("src")
@@ -257,10 +265,11 @@ fn react_native_static_dir(project_root: &Path) -> PathBuf {
         .join("static")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ensure_compiled_wasm_output(static_dir: &Path) {
     let index = static_dir.join("index.html");
-    let js = static_dir.join("pkg").join("xos.js");
-    let wasm = static_dir.join("pkg").join("xos_bg.wasm");
+    let js = static_dir.join("pkg").join("xos_wasm.js");
+    let wasm = static_dir.join("pkg").join("xos_wasm_bg.wasm");
     if index.is_file() && js.is_file() && wasm.is_file() {
         return;
     }
@@ -270,10 +279,12 @@ fn ensure_compiled_wasm_output(static_dir: &Path) {
     std::process::exit(1);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_browser(app_name: &str) {
     launch_browser_query(&format!("app={app_name}"));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_browser_query(query: &str) {
     let url = format!("http://localhost:8080/?{query}");
     thread::spawn(move || {
@@ -281,6 +292,7 @@ fn launch_browser_query(query: &str) {
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn percent_encode_query_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
@@ -297,6 +309,7 @@ fn percent_encode_query_component(value: &str) -> String {
     out
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn mime_type(path: &Path) -> &'static str {
     let extension = path.extension().and_then(|ext| ext.to_str());
     if extension == Some("html") {
@@ -312,6 +325,7 @@ fn mime_type(path: &Path) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn start_web_server(static_dir: PathBuf) {
     let index_path = static_dir.join("index.html");
     let server = Server::http("0.0.0.0:8080").unwrap();
@@ -327,8 +341,7 @@ fn start_web_server(static_dir: PathBuf) {
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
                 full_path
             } else {
-                eprintln!("❌ File not found: {}", full_path.display());
-                // fallback to index.html so SPA still loads
+                // Browsers probe favicons/touch icons; serve the wasm shell instead.
                 index_path.clone()
             }
         };
@@ -350,6 +363,7 @@ fn start_web_server(static_dir: PathBuf) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_expo() {
     let project_root = xos_project_root_or_exit();
     let mut cmd = Command::new("npx");
@@ -370,14 +384,46 @@ fn launch_expo() {
     }
 }
 
+/// Launch a Python script in the prebuilt wasm runtime (`app=xpy` + staged payload under `app_payloads/`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_python_wasm_source(filename: &str, source: &str, flags: &[String]) {
+    let project_root = xos_project_root_or_exit();
+    let static_dir = wasm_compile_output_dir(&project_root);
+    ensure_compiled_wasm_output(&static_dir);
+
+    let payload_id = format!("{:016x}", rand::random::<u64>());
+    let payload_dir = static_dir.join("app_payloads").join(&payload_id);
+    if let Err(e) = std_fs::create_dir_all(&payload_dir) {
+        eprintln!(
+            "❌ failed to create wasm app payload dir {}: {e}",
+            payload_dir.display()
+        );
+        std::process::exit(1);
+    }
+    if let Err(e) = std_fs::write(payload_dir.join("main.py"), source) {
+        eprintln!("❌ failed to write staged main.py: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = std_fs::write(payload_dir.join("flags.txt"), flags.join("\n")) {
+        eprintln!("❌ failed to write staged flags.txt: {e}");
+        std::process::exit(1);
+    }
+
+    let query = format!(
+        "app=xpy&xpy_id={}&filename={}",
+        percent_encode_query_component(&payload_id),
+        percent_encode_query_component(filename),
+    );
+    launch_browser_query(&query);
+    start_web_server(static_dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
     println!(
         "🕸️  Launching '{}' with xpy wasm mode...",
         file_path.display()
     );
-    let project_root = xos_project_root_or_exit();
-    let static_dir = wasm_compile_output_dir(&project_root);
-    ensure_compiled_wasm_output(&static_dir);
     let source = match std_fs::read_to_string(file_path) {
         Ok(source) => source,
         Err(e) => {
@@ -388,14 +434,7 @@ pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
             std::process::exit(1);
         }
     };
-    let query = format!(
-        "app=xpy&filename={}&code={}&xpy_flags={}",
-        percent_encode_query_component(&file_path.to_string_lossy()),
-        percent_encode_query_component(&source),
-        percent_encode_query_component(&flags.join("\n")),
-    );
-    launch_browser_query(&query);
-    start_web_server(static_dir);
+    run_python_wasm_source(&file_path.to_string_lossy(), &source, flags);
 }
 
 pub fn version() -> &'static str {
@@ -451,10 +490,11 @@ pub fn launch_ios_app(app_name: &str) {
             }
         };
 
-        let launch_script = project_root
+        let ios_dir = project_root
             .join("src")
-            .join("ios")
-            .join("launch-device.sh");
+            .join("crates")
+            .join("xos-ios");
+        let launch_script = ios_dir.join("launch-device.sh");
 
         if !launch_script.exists() {
             eprintln!(
@@ -467,11 +507,17 @@ pub fn launch_ios_app(app_name: &str) {
 
         println!("📱 Deploying app '{}' to iOS device...", app_name);
 
+        let bundled_python_apps = project_root
+            .join("target")
+            .join("ios")
+            .join("BundledPythonApps");
+
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
-        cmd.current_dir(project_root.join("src").join("ios"));
+        cmd.current_dir(&ios_dir);
         // Pass the app name via environment variable - this is used by the build system
         cmd.env("XOS_APP_NAME", app_name);
+        cmd.env("XOS_BUNDLED_PYTHON_APPS", &bundled_python_apps);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
 
@@ -483,9 +529,11 @@ pub fn launch_ios_app(app_name: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
 
 /// Internal CLI flags for `xos::run()` used by third-party apps
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
 #[command(name = "xos-app")]
 struct XosAppArgs {

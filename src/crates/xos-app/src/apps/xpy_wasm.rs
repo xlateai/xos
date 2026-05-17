@@ -55,7 +55,33 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+#[cfg(target_arch = "wasm32")]
+fn staged_py_from_window() -> Option<(String, String, Vec<String>)> {
+    let window = web_sys::window()?;
+    let code = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("__XOS_PYCODE__"))
+        .ok()?
+        .as_string()
+        .filter(|s| !s.is_empty())?;
+    let filename = query_param("filename").unwrap_or_else(|| "<xpy-staged>".to_string());
+    let flags_text = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("__XOS_PYFLAGS__"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    let flags = flags_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    Some((code, filename, flags))
+}
+
 fn xpy_source_and_flags() -> Result<(String, String, Vec<String>), String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(payload) = staged_py_from_window() {
+        return Ok(payload);
+    }
+
     if let Some(code) = query_param("code") {
         let filename = query_param("filename").unwrap_or_else(|| "<xpy-url>".to_string());
         let flags = query_param("xpy_flags")
@@ -73,7 +99,7 @@ fn xpy_source_and_flags() -> Result<(String, String, Vec<String>), String> {
     })?;
     let base = format!(".xos/xpy/{id}");
     let filename = format!("{base}/main.py");
-    let code = std::fs::read_to_string(&filename)?;
+    let code = std::fs::read_to_string(&filename).map_err(|e| e.to_string())?;
     let flags = std::fs::read_to_string(&format!("{base}/flags.txt"))
         .unwrap_or_default()
         .lines()
@@ -85,6 +111,7 @@ fn xpy_source_and_flags() -> Result<(String, String, Vec<String>), String> {
 }
 
 pub fn boxed_xpy_app() -> Option<Box<dyn Application>> {
+    crate::init_hooks();
     let print_cb = Arc::new(|s: &str| xos_core::print(s));
     let (code, fname, flags) = match xpy_source_and_flags() {
         Ok(payload) => payload,

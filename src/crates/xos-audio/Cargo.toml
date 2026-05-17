@@ -13,3 +13,25 @@ symphonia = { version = "0.5.4", default-features = false, features = ["aac", "a
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "macos"))'.dependencies]
 screencapturekit = { version = "1.5.4", features = ["macos_13_0"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+once_cell = "1.19"
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Navigator",
+  "MediaDevices",
+  "MediaStream",
+  "MediaStreamConstraints",
+  "MediaStreamAudioSourceNode",
+  "AudioContext",
+  "AudioNode",
+  "AudioDestinationNode",
+  "ScriptProcessorNode",
+  "AudioProcessingEvent",
+  "AudioBuffer",
+  "AudioContextState",
+  "console",
+] }

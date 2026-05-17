@@ -431,10 +431,33 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
 <body>
   <canvas id="xos-canvas" width="256" height="256"></canvas>
   <script type="module">
-    import init from "./pkg/xos.js";
-    init()
-      .then(() => console.log("xos wasm: initialized"))
-      .catch((error) => console.error("xos wasm: failed to initialize", error));
+    const params = new URLSearchParams(location.search);
+    const stagedId = params.get("xpy_id");
+    if (stagedId) {
+      try {
+        const base = `app_payloads/${encodeURIComponent(stagedId)}`;
+        const [codeResp, flagsResp] = await Promise.all([
+          fetch(`${base}/main.py`),
+          fetch(`${base}/flags.txt`),
+        ]);
+        if (!codeResp.ok) {
+          throw new Error(`main.py HTTP ${codeResp.status}`);
+        }
+        globalThis.__XOS_PYCODE__ = await codeResp.text();
+        globalThis.__XOS_PYFLAGS__ = flagsResp.ok ? await flagsResp.text() : "";
+      } catch (error) {
+        console.error("xos wasm: failed to load staged python app", error);
+        globalThis.__XOS_PYCODE__ = "";
+        globalThis.__XOS_PYFLAGS__ = "";
+      }
+    }
+    try {
+      const init = (await import("./pkg/xos_wasm.js")).default;
+      await init();
+      console.log("xos wasm: initialized");
+    } catch (error) {
+      console.error("xos wasm: failed to initialize", error);
+    }
     window.addEventListener("contextmenu", (event) => event.preventDefault());
   </script>
 </body>
@@ -605,6 +628,13 @@ pub fn compile_wasm(clean: bool) -> bool {
     eprintln!(
         "    Running wasm-pack with the same app-runtime build path used by `xos app --wasm`."
     );
+    eprintln!(
+        "    Artifact dir: {} (only one cargo build should use this at a time).",
+        wasm_target_dir.display()
+    );
+    eprintln!(
+        "    If this hangs on \"file lock\", cancel and run: pkill -f 'target/wasm.*cargo' ; pkill -f 'wasm-pack'"
+    );
 
     let output_dir = wasm_target_dir.join(WASM_MAIN_OUTPUT_DIR_NAME);
     let staging_dir = unique_wasm_staging_dir(&wasm_target_dir);
@@ -627,18 +657,23 @@ pub fn compile_wasm(clean: bool) -> bool {
         return false;
     }
 
+    // Build the `xos-wasm` cdylib crate (not the root `xos` rlib used by the native CLI).
+    let wasm_crate = project_root.join("src").join("crates").join("xos-wasm");
     let status = Command::new("wasm-pack")
         .current_dir(&project_root)
         .env("GAME_SELECTION", "ball")
         .env("CARGO_TARGET_DIR", &wasm_target_dir)
         .args([
             "build",
+            wasm_crate.to_str().expect("wasm crate path is valid UTF-8"),
             "--target",
             "web",
             "--out-dir",
             &pkg_dir.display().to_string(),
-            ".",
-            // "--verbose", // too many file paths
+            "--",
+            "-p",
+            "xos-wasm",
+            "--no-default-features",
         ])
         .status();
 

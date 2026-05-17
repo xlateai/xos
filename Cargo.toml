@@ -33,7 +33,7 @@ silero_vad = ["whisper", "xos-core/silero_vad", "xos-app/silero_vad"]
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [workspace]
 members = [
@@ -47,12 +47,13 @@ members = [
   "src/crates/xos-python",
   "src/crates/xos-app",
   "src/crates/xos-java",
+  "src/crates/xos-wasm",
 ]
 resolver = "2"
 
 # Bump release version here only — all workspace crates inherit via `*.workspace = true`.
 [workspace.package]
-version = "0.3.19-pre3"
+version = "0.3.19-pre4"
 edition = "2021"
 license = "MIT"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
@@ -75,4 +76,8 @@ strip = false
 [profile.release.package.variadics_please]
 strip = false
 [profile.release.package.darling_macro]
+strip = false
+[profile.release.package.cubecl-runtime]
+strip = false
+[profile.release.package.reqwest]
 strip = false
