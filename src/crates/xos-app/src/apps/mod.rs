@@ -32,6 +32,10 @@ pub fn run_python_app_by_name(name: &str, flags: AppLaunchFlags) {
         std::process::exit(1);
     }
     if flags.ios {
+        if let Err(e) = python_apps::stage_python_app_for_ios(name, &native_app_names()) {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
         crate::launch_ios_app(name);
         return;
     }

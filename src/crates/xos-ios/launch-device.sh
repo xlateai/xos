@@ -308,6 +308,19 @@ fi
 
 echo "✅ App built successfully: $APP_BUNDLE"
 
+# Python apps staged by `xos app <name> --ios` live here until copied into the bundle.
+if [ -d "$SCRIPT_DIR/BundledPythonApps" ]; then
+    echo "📦 Bundling staged Python apps..."
+    rm -rf "$APP_BUNDLE/BundledPythonApps"
+    if ! ditto "$SCRIPT_DIR/BundledPythonApps" "$APP_BUNDLE/BundledPythonApps"; then
+        echo "❌ Failed to copy BundledPythonApps into app bundle"
+        exit 1
+    fi
+    if command -v xattr &>/dev/null; then
+        xattr -cr "$APP_BUNDLE/BundledPythonApps" 2>/dev/null || true
+    fi
+fi
+
 # Install and launch using ios-deploy if available
 if command -v ios-deploy &> /dev/null; then
     echo "📲 Installing and launching app on device..."

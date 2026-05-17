@@ -490,10 +490,11 @@ pub fn launch_ios_app(app_name: &str) {
             }
         };
 
-        let launch_script = project_root
+        let ios_dir = project_root
             .join("src")
-            .join("ios")
-            .join("launch-device.sh");
+            .join("crates")
+            .join("xos-ios");
+        let launch_script = ios_dir.join("launch-device.sh");
 
         if !launch_script.exists() {
             eprintln!(
@@ -508,7 +509,7 @@ pub fn launch_ios_app(app_name: &str) {
 
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
-        cmd.current_dir(project_root.join("src").join("ios"));
+        cmd.current_dir(&ios_dir);
         // Pass the app name via environment variable - this is used by the build system
         cmd.env("XOS_APP_NAME", app_name);
         cmd.stdout(Stdio::inherit());

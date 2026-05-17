@@ -37,21 +37,86 @@ fn is_valid_app_name(name: &str) -> bool {
         && !name.starts_with('.')
 }
 
-/// Scan `src/apps/*/<name>.py`. Skips invalid folders with warnings; errors on duplicate names.
-pub fn discover_python_apps(
-    project_root: &Path,
+/// Staging directory for `xos app <name> --ios` (copied into the .app at deploy time).
+pub fn ios_bundled_apps_staging_dir(project_root: &Path) -> PathBuf {
+    project_root
+        .join("src")
+        .join("crates")
+        .join("xos-ios")
+        .join("BundledPythonApps")
+}
+
+#[cfg(target_os = "ios")]
+fn ios_device_bundled_apps_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = exe.parent()?;
+    let bundled = bundle.join("BundledPythonApps");
+    bundled.is_dir().then_some(bundled)
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Err(format!("copy_dir_all: not a directory: {}", src.display()));
+    }
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("failed to create {}: {e}", dst.display()))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("failed to read {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("failed to read dir entry: {e}"))?;
+        let ty = entry
+            .file_type()
+            .map_err(|e| format!("failed to read file type: {e}"))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to).map_err(|e| format!("failed to copy {}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Stage `src/apps/<name>/` for the next iOS device deploy (`xos app <name> --ios`).
+#[cfg(not(target_os = "ios"))]
+pub fn stage_python_app_for_ios(name: &str, reserved_names: &[&str]) -> Result<(), String> {
+    let root = find_xos_project_root().map_err(|e| e.to_string())?;
+    let desc = find_descriptor(name, reserved_names).ok_or_else(|| {
+        format!("python app '{name}' not found (expected src/apps/{name}/{name}.py)")
+    })?;
+    let dest_root = ios_bundled_apps_staging_dir(&root);
+    if dest_root.exists() {
+        std::fs::remove_dir_all(&dest_root)
+            .map_err(|e| format!("failed to clear {}: {e}", dest_root.display()))?;
+    }
+    let dest = dest_root.join(&desc.name);
+    copy_dir_all(&desc.app_dir, &dest)?;
+    println!(
+        "📦 Staged python app '{}' for iOS ({})",
+        desc.name,
+        dest.display()
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "ios")]
+pub fn stage_python_app_for_ios(_name: &str, _reserved_names: &[&str]) -> Result<(), String> {
+    Ok(())
+}
+
+/// Scan `apps_root/*/<name>.py`. Skips invalid folders with warnings; errors on duplicate names.
+pub fn discover_python_apps_in_dir(
+    apps_root: &Path,
     reserved_names: &[&str],
 ) -> Result<DiscoverResult, String> {
-    let root = apps_dir(project_root);
-    if !root.is_dir() {
+    if !apps_root.is_dir() {
         return Ok(DiscoverResult::default());
     }
 
     let mut result = DiscoverResult::default();
     let mut seen = std::collections::HashSet::new();
 
-    let mut entries: Vec<_> = std::fs::read_dir(&root)
-        .map_err(|e| format!("failed to read {}: {e}", root.display()))?
+    let mut entries: Vec<_> = std::fs::read_dir(apps_root)
+        .map_err(|e| format!("failed to read {}: {e}", apps_root.display()))?
         .filter_map(|e| e.ok())
         .collect();
     entries.sort_by_key(|e| e.file_name());
@@ -108,6 +173,14 @@ pub fn discover_python_apps(
 
     result.apps.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
+}
+
+/// Scan `src/apps/*/<name>.py` under a repository root.
+pub fn discover_python_apps(
+    project_root: &Path,
+    reserved_names: &[&str],
+) -> Result<DiscoverResult, String> {
+    discover_python_apps_in_dir(&apps_dir(project_root), reserved_names)
 }
 
 pub fn discover_python_apps_from_repo(reserved_names: &[&str]) -> Result<DiscoverResult, String> {
@@ -191,6 +264,16 @@ sys.modules["{stem}"] = __mod
 }
 
 fn find_descriptor(name: &str, reserved_names: &[&str]) -> Option<PythonAppDescriptor> {
+    #[cfg(target_os = "ios")]
+    {
+        if let Some(apps_root) = ios_device_bundled_apps_dir() {
+            if let Ok(discovered) = discover_python_apps_in_dir(&apps_root, reserved_names) {
+                if let Some(desc) = discovered.apps.into_iter().find(|a| a.name == name) {
+                    return Some(desc);
+                }
+            }
+        }
+    }
     let root = find_xos_project_root().ok()?;
     let discovered = discover_python_apps(&root, reserved_names).ok()?;
     discovered

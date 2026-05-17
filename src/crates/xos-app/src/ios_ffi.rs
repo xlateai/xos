@@ -166,6 +166,8 @@ fn setup_logging() {
 #[cfg(target_os = "ios")]
 #[no_mangle]
 pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u32) -> *mut c_char {
+    crate::init_hooks();
+
     let app_name_str = unsafe {
         if app_name.is_null() {
             return CString::new("app_name is null").unwrap().into_raw();
