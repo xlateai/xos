@@ -2,9 +2,11 @@ use crate::renderers::{ScalingMatrix, ScalingRenderer};
 use crate::{Error, Pixels, PixelsContext, SurfaceSize, SurfaceTexture, TextureError};
 
 /// A builder to help create customized pixel buffers.
-pub struct PixelsBuilder<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> {
+pub struct PixelsBuilder<'req, 'dev, 'win, W: wgpu::DisplayAndWindowHandle + 'win> {
     request_adapter_options: Option<wgpu::RequestAdapterOptions<'req, 'win>>,
     device_descriptor: Option<wgpu::DeviceDescriptor<'dev>>,
+    /// Called when no fixed [`device_descriptor`](Self::device_descriptor) was set (e.g. Burn shared device).
+    device_descriptor_fn: Option<fn(&wgpu::Adapter) -> wgpu::DeviceDescriptor<'static>>,
     backend: wgpu::Backends,
     width: u32,
     height: u32,
@@ -18,7 +20,7 @@ pub struct PixelsBuilder<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> {
     blend_state: wgpu::BlendState,
 }
 
-impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, 'win, W> {
+impl<'req, 'dev, 'win, W: wgpu::DisplayAndWindowHandle + 'win> PixelsBuilder<'req, 'dev, 'win, W> {
     /// Create a builder that can be finalized into a [`Pixels`] pixel buffer.
     ///
     /// # Examples
@@ -50,7 +52,8 @@ impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, '
         Self {
             request_adapter_options: None,
             device_descriptor: None,
-            backend: wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all),
+            device_descriptor_fn: None,
+            backend: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
             width,
             height,
             _pixel_aspect_ratio: 1.0,
@@ -76,6 +79,15 @@ impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, '
     /// Add options for requesting a [`wgpu::Device`].
     pub fn device_descriptor(mut self, device_descriptor: wgpu::DeviceDescriptor<'dev>) -> Self {
         self.device_descriptor = Some(device_descriptor);
+        self
+    }
+
+    /// Build the [`wgpu::DeviceDescriptor`] from the chosen adapter (used when features depend on the GPU).
+    pub fn device_descriptor_from_adapter(
+        mut self,
+        f: fn(&wgpu::Adapter) -> wgpu::DeviceDescriptor<'static>,
+    ) -> Self {
+        self.device_descriptor_fn = Some(f);
         self
     }
 
@@ -241,25 +253,26 @@ impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, '
     ///
     /// Returns an error when a [`wgpu::Adapter`] cannot be found.
     async fn build_impl(self) -> Result<Pixels<'win>, Error> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: self.backend,
-            ..Default::default()
-        });
+        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_desc.backends = self.backend;
+        let instance = wgpu::Instance::new(instance_desc);
 
         // TODO: Use `options.pixel_aspect_ratio` to stretch the scaled texture
-        let surface = instance.create_surface(self.surface_texture.window)?;
+        let surface_texture = self.surface_texture;
+        let surface = instance.create_surface(surface_texture.window)?;
         let compatible_surface = Some(&surface);
         let request_adapter_options = &self.request_adapter_options;
-        let adapter = match wgpu::util::initialize_adapter_from_env(&instance, compatible_surface) {
-            Some(adapter) => Some(adapter),
-            None => {
+        let adapter = match wgpu::util::initialize_adapter_from_env(&instance, compatible_surface).await
+        {
+            Ok(adapter) => adapter,
+            Err(_) => {
                 instance
                     .request_adapter(&request_adapter_options.as_ref().map_or_else(
                         || wgpu::RequestAdapterOptions {
                             compatible_surface,
                             force_fallback_adapter: false,
-                            power_preference:
-                                wgpu::util::power_preference_from_env().unwrap_or_default(),
+                            power_preference: wgpu::PowerPreference::from_env()
+                                .unwrap_or_default(),
                         },
                         |rao| wgpu::RequestAdapterOptions {
                             compatible_surface: rao.compatible_surface.or(compatible_surface),
@@ -268,19 +281,21 @@ impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, '
                         },
                     ))
                     .await
+                    .map_err(|_| Error::AdapterNotFound)?
             }
         };
 
-        let adapter = adapter.ok_or(Error::AdapterNotFound)?;
-
         let device_descriptor = self
             .device_descriptor
+            .or_else(|| self.device_descriptor_fn.map(|f| f(&adapter)))
             .unwrap_or_else(|| wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
-                ..wgpu::DeviceDescriptor::default()
+                ..Default::default()
             });
 
-        let (device, queue) = adapter.request_device(&device_descriptor, None).await?;
+        let (device, queue) = adapter.request_device(&device_descriptor).await?;
 
         let surface_capabilities = surface.get_capabilities(&adapter);
         let present_mode = self.present_mode;
@@ -294,7 +309,7 @@ impl<'req, 'dev, 'win, W: wgpu::WindowHandle + 'win> PixelsBuilder<'req, 'dev, '
         let render_texture_format = self.render_texture_format.unwrap_or(surface_texture_format);
 
         // Create the backing texture
-        let surface_size = self.surface_texture.size;
+        let surface_size = surface_texture.size;
         let clear_color = self.clear_color;
         let blend_state = self.blend_state;
         let (scaling_matrix_inverse, texture_extent, texture, scaling_renderer, pixels_buffer_size) =
@@ -534,7 +549,7 @@ const fn texture_format_size(texture_format: wgpu::TextureFormat) -> f32 {
         | Bgra8UnormSrgb
         | Rgb10a2Uint
         | Rgb10a2Unorm
-        | Rg11b10Float
+        | Rg11b10Ufloat
         | Depth32Float
         | Depth24Plus
         | Depth24PlusStencil8 => 4.0, // 32.0 / 8.0
@@ -630,5 +645,7 @@ const fn texture_format_size(texture_format: wgpu::TextureFormat) -> f32 {
         // The second plane consists of 16-bit BR components.
         // The resolution of the second plane is halved both vertically and horizontally.
         NV12 => 1.5, // (8.0 + 16.0 / 2.0 / 2.0) / 8.0
+
+        _ => 4.0,
     }
 }

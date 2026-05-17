@@ -142,6 +142,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             delta_time_seconds: 1.0 / 60.0,
             paused: false,
             pending_step_ticks: 0,
+            paused_frame_snapshot_pending: false,
             frame_view_zoom: 1.0,
             frame_view_zoom_target: 1.0,
             frame_view_zoom_velocity: 0.0,
@@ -776,12 +777,15 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                         state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
                     } else {
                         anim_state.last_tick_instant = Some(crate::time::Instant::now());
-                        if state.paused_base_frame.is_empty() {
+                        if state.paused_base_frame.is_empty()
+                            || state.engine_state.paused_frame_snapshot_pending
+                        {
                             let shape = state.engine_state.frame.shape();
                             state.paused_base_w = shape[1];
                             state.paused_base_h = shape[0];
                             state.paused_base_frame =
                                 state.engine_state.frame.buffer_mut().to_vec();
+                            state.engine_state.paused_frame_snapshot_pending = false;
                         }
                         if !state.paused_base_frame.is_empty()
                             && state.paused_base_w > 0
@@ -808,12 +812,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     }
                 } else {
                     tick_frame_delta(&mut state.engine_state, &mut anim_state.last_tick_instant);
-                    // Tick the app first
                     state.app.tick(&mut state.engine_state);
-                    let shape = state.engine_state.frame.shape();
-                    state.paused_base_w = shape[1];
-                    state.paused_base_h = shape[0];
-                    state.paused_base_frame = state.engine_state.frame.buffer_mut().to_vec();
                 }
 
                 tick_frame_view_zoom(&mut state.engine_state);

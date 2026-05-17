@@ -61,7 +61,7 @@ version = "1.0"
 version = "0.9"
 
 [dependencies.wgpu]
-version = "0.19"
+version = "29"
 
 [dev-dependencies.winit]
 version = "0.29"
@@ -70,5 +70,5 @@ version = "0.29"
 version = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.wgpu]
-version = "0.19"
+version = "29"
 features = ["webgl"]

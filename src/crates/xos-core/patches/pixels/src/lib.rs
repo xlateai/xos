@@ -43,7 +43,7 @@ mod renderers;
 
 /// A logical texture for a window surface.
 #[derive(Debug)]
-pub struct SurfaceTexture<W: wgpu::WindowHandle> {
+pub struct SurfaceTexture<W: wgpu::DisplayAndWindowHandle> {
     window: W,
     size: SurfaceSize,
 }
@@ -122,9 +122,6 @@ pub enum Error {
     /// Equivalent to [`wgpu::RequestDeviceError`]
     #[error("No wgpu::Device found.")]
     DeviceNotFound(#[from] wgpu::RequestDeviceError),
-    /// Equivalent to [`wgpu::SurfaceError`]
-    #[error("The GPU failed to acquire a surface frame.")]
-    Surface(#[from] wgpu::SurfaceError),
     /// Equivalent to [`wgpu::CreateSurfaceError`]
     #[error("Unable to create a surface.")]
     CreateSurface(#[from] wgpu::CreateSurfaceError),
@@ -150,7 +147,7 @@ pub enum TextureError {
     TextureHeight(u32),
 }
 
-impl<W: wgpu::WindowHandle> SurfaceTexture<W> {
+impl<W: wgpu::DisplayAndWindowHandle> SurfaceTexture<W> {
     /// Create a logical texture for a window surface.
     ///
     /// It is recommended (but not required) that the `width` and `height` are equivalent to the
@@ -232,7 +229,7 @@ impl<'win> Pixels<'win> {
     ///
     /// Panics when `width` or `height` are 0.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new<W: wgpu::WindowHandle + 'win>(
+    pub fn new<W: wgpu::DisplayAndWindowHandle + 'win>(
         width: u32,
         height: u32,
         surface_texture: SurfaceTexture<W>,
@@ -263,7 +260,7 @@ impl<'win> Pixels<'win> {
     /// # Panics
     ///
     /// Panics when `width` or `height` are 0.
-    pub async fn new_async<W: wgpu::WindowHandle + 'win>(
+    pub async fn new_async<W: wgpu::DisplayAndWindowHandle + 'win>(
         width: u32,
         height: u32,
         surface_texture: SurfaceTexture<W>,
@@ -523,13 +520,23 @@ impl<'win> Pixels<'win> {
             &PixelsContext,
         ) -> Result<(), DynError>,
     {
-        let frame = self.context.surface.get_current_texture().or_else(|_| {
-            // Reconfigure the surface and retry immediately on any error.
-            // See https://github.com/parasyte/pixels/issues/121
-            // See https://github.com/parasyte/pixels/issues/346
-            self.reconfigure_surface();
-            self.context.surface.get_current_texture()
-        })?;
+        let frame = match self.context.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(tex) | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
+                tex
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.reconfigure_surface();
+                match self.context.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(tex)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => tex,
+                    _ => return Ok(()),
+                }
+            }
+            wgpu::CurrentSurfaceTexture::Validation => return Ok(()),
+        };
         let mut encoder =
             self.context
                 .device
@@ -541,14 +548,14 @@ impl<'win> Pixels<'win> {
             let bytes_per_row = (self.context.texture_extent.width as f32
                 * self.context.texture_format_size) as u32;
             self.context.queue.write_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &self.context.texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                    origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 &self.pixels,
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(bytes_per_row),
                     rows_per_image: Some(self.context.texture_extent.height),

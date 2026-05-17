@@ -36,7 +36,7 @@ impl ScalingRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 1.0,
             compare: None,
@@ -134,30 +134,33 @@ impl ScalingRenderer {
         // Create pipeline
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pixels_scaling_renderer_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("pixels_scaling_renderer_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &module,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[vertex_buffer_layout],
+                compilation_options: Default::default(),
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: render_texture_format,
                     blend: Some(blend_state),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         // Create clipping rectangle
@@ -186,10 +189,12 @@ impl ScalingRenderer {
                     load: wgpu::LoadOp::Clear(self.clear_color),
                     store: wgpu::StoreOp::Store,
                 },
+                depth_slice: None,
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         rpass.set_pipeline(&self.render_pipeline);
         rpass.set_bind_group(0, &self.bind_group, &[]);

@@ -111,7 +111,7 @@ pub struct FrameState {
 impl FrameState {
     /// Create a new FrameState with given dimensions and safe region (opaque black).
     pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
-        Self::new_with_device(width, height, safe_region, WgpuDevice::default(), false) // gpu_present off until wgpu unified
+        Self::new_with_device(width, height, safe_region, WgpuDevice::default(), true)
     }
 
     /// Create frame state on a specific Burn device (use shared pixels device for GPU present).
@@ -152,6 +152,16 @@ impl FrameState {
     #[inline]
     pub fn is_gpu_dirty(&self) -> bool {
         self.gpu_dirty
+    }
+
+    #[inline]
+    pub(crate) fn is_cpu_dirty(&self) -> bool {
+        self.cpu_dirty
+    }
+
+    /// After a successful GPU blit to the display texture (CPU staging may be stale).
+    pub(crate) fn mark_gpu_presented(&mut self) {
+        self.gpu_dirty = false;
     }
 
     pub fn set_gpu_present_enabled(&mut self, enabled: bool) {
@@ -428,6 +438,8 @@ pub struct EngineState {
     pub paused: bool,
     /// Number of one-tick step requests queued while paused.
     pub pending_step_ticks: u32,
+    /// Set when entering pause; the host captures a frozen frame snapshot once.
+    pub paused_frame_snapshot_pending: bool,
     /// View zoom applied to the app-rendered frame before overlays (1.0 = full frame).
     pub frame_view_zoom: f32,
     /// Target view zoom used by smoothing.

@@ -562,7 +562,11 @@ pub fn f3_menu_handle_mouse_down(state: &mut EngineState) -> bool {
         && my <= geom.step_bottom;
     if on_button {
         f3_menu_boost_interaction_fade(state);
+        let entering_pause = !state.paused;
         state.paused = !state.paused;
+        if entering_pause {
+            state.paused_frame_snapshot_pending = true;
+        }
         state.f3_menu.scale_dragging = false;
         state.f3_menu.pointer_captured = true;
         return true;

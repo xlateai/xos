@@ -347,6 +347,7 @@ impl StandalonePreviewApp {
                     delta_time_seconds: 1.0 / 60.0,
                     paused: false,
                     pending_step_ticks: 0,
+                    paused_frame_snapshot_pending: false,
                     frame_view_zoom: 1.0,
                     frame_view_zoom_target: 1.0,
                     frame_view_zoom_velocity: 0.0,
