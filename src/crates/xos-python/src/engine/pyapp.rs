@@ -886,8 +886,11 @@ class Application:
         if headless is not None:
             self.headless = bool(headless)
 
-        # Empty standalone framebuffer before first tick() or run(); enables frame.clear etc. in __init__.
+        # Standalone framebuffer for __init__ drawing (uniform_fill, rasterizer, etc.).
         self._xos_init_standalone_frame()
+        # So xos.random.uniform_fill and friends can resolve the init buffer from __init__.
+        import builtins
+        builtins.__xos_app_instance__ = self
 
     def _xos_init_standalone_frame(self):
         """Build a CPU frame + rasterizer context for standalone use (before tick/run)."""
@@ -1033,22 +1036,75 @@ pub struct PyApp {
     app_instance: Option<PyObjectRef>,
     /// Number of `tick()` calls that have fully finished (starts at 0; incremented after each tick).
     ticks_completed: u64,
+    /// RGBA snapshot of the standalone framebuffer drawn during `Application.__init__`.
+    init_frame_snapshot: Option<(Vec<u8>, usize, usize)>,
+    init_viewport_id: Option<u64>,
+    init_blit_applied: bool,
 }
 
 impl PyApp {
     pub fn new(interpreter: Interpreter, app_instance: PyObjectRef) -> Self {
-        Self {
+        let mut app = Self {
             interpreter,
-            app_instance: Some(app_instance),
+            app_instance: Some(app_instance.clone()),
             ticks_completed: 0,
+            init_frame_snapshot: None,
+            init_viewport_id: None,
+            init_blit_applied: false,
+        };
+        // Snapshot __init__ framebuffer immediately after the script runs (before engine setup).
+        let viewport_id = app.interpreter.enter(|vm| {
+            crate::xos_module::python_app_viewport_id(vm, &app_instance)
+        });
+        if let Some(viewport_id) = viewport_id {
+            app.init_viewport_id = Some(viewport_id);
+            app.capture_init_frame_snapshot(viewport_id);
         }
+        app
+    }
+
+    fn capture_init_frame_snapshot(&mut self, viewport_id: u64) {
+        if !crate::xos_module::standalone_frame_was_drawn(viewport_id) {
+            return;
+        }
+        if let Some(snapshot) = crate::xos_module::snapshot_standalone_init_frame(viewport_id) {
+            self.init_frame_snapshot = Some(snapshot);
+        }
+    }
+
+    fn try_apply_init_frame_snapshot(&mut self, state: &mut EngineState) -> bool {
+        if self.init_blit_applied {
+            return false;
+        }
+        let shape = state.frame.shape();
+        let dest_h = shape[0];
+        let dest_w = shape[1];
+        let dest = state.frame.buffer_mut();
+
+        let applied = if let Some((src, src_w, src_h)) = self.init_frame_snapshot.as_ref() {
+            crate::xos_module::blit_rgba_init_to_buffer(src, *src_w, *src_h, dest, dest_w, dest_h)
+        } else if let Some(viewport_id) = self.init_viewport_id {
+            crate::xos_module::apply_standalone_init_to_engine_buffer(
+                viewport_id,
+                dest,
+                dest_w,
+                dest_h,
+            )
+        } else {
+            false
+        };
+
+        if applied {
+            self.init_blit_applied = true;
+        }
+        applied
     }
 }
 
 impl Application for PyApp {
     fn setup(&mut self, state: &mut EngineState) -> Result<(), String> {
         if let Some(ref app_instance) = self.app_instance {
-            self.interpreter.enter(|vm| {
+            let viewport_id = self.interpreter.enter(|vm| -> Result<Option<u64>, String> {
                 // Create Python frame object from engine state
                 let frame_dict = crate::engine::py_bindings::create_py_frame_state(
                     vm,
@@ -1127,8 +1183,16 @@ impl Application for PyApp {
                 sync_app_safe_region(vm, app_instance, &state.frame.safe_region_boundaries)
                     .map_err(|e| format!("Failed to sync safe_region: {:?}", e))?;
 
-                Ok(())
-            })
+                Ok(crate::xos_module::python_app_viewport_id(vm, app_instance))
+            })?;
+
+            // Refresh snapshot; display blit is deferred to tick() when the pixels buffer is active.
+            if let Some(viewport_id) = viewport_id {
+                self.init_viewport_id = Some(viewport_id);
+                self.capture_init_frame_snapshot(viewport_id);
+            }
+
+            Ok(())
         } else {
             Err("No Python app instance".to_string())
         }
@@ -1142,6 +1206,9 @@ impl Application for PyApp {
             let height = shape[0];
             let buffer = state.frame.buffer_mut();
             crate::rasterizer::set_frame_buffer_context(buffer, width, height);
+
+            // Apply __init__ framebuffer to the live display buffer (pixels mirror when windowed).
+            let _ = self.try_apply_init_frame_snapshot(state);
 
             let tick_index = self.ticks_completed;
             let mut tick_failed = false;

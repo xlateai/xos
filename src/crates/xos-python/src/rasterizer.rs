@@ -1468,7 +1468,14 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     Ok(vm.ctx.none())
 }
 
-fn blit_rgba_stretch(src: &[u8], sw: usize, sh: usize, dst: &mut [u8], dst_w: usize, dst_h: usize) {
+pub(crate) fn blit_rgba_stretch(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dst: &mut [u8],
+    dst_w: usize,
+    dst_h: usize,
+) {
     if src.len() != sw * sh * 4 {
         return;
     }
