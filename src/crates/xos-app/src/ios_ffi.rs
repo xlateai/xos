@@ -13,7 +13,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 #[cfg(target_os = "ios")]
 use std::sync::Arc;
 #[cfg(target_os = "ios")]
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 #[cfg(target_os = "ios")]
 use std::thread::{self, JoinHandle};
 #[cfg(target_os = "ios")]
@@ -25,6 +25,8 @@ use crate::apps;
 use xos_auth::load_node_identity;
 #[cfg(target_os = "ios")]
 use xos_core::engine::engine::CursorStyleSetter;
+#[cfg(target_os = "ios")]
+use xos_core::ios_log::log_to_ios;
 #[cfg(target_os = "ios")]
 use xos_core::engine::{
     apply_frame_view_zoom, f3_menu_handle_mouse_down, f3_menu_handle_mouse_move,
@@ -84,29 +86,6 @@ struct IosRemoteMeshState {
 // Unsafe Send implementation - safe because iOS FFI is called from main thread only
 #[cfg(target_os = "ios")]
 unsafe impl Send for IosEngineState {}
-
-// FFI function pointer for logging (set by Swift)
-#[cfg(target_os = "ios")]
-static LOG_CALLBACK: OnceLock<extern "C" fn(*const c_char)> = OnceLock::new();
-
-/// Set the logging callback function (called from Swift)
-#[cfg(target_os = "ios")]
-#[no_mangle]
-pub extern "C" fn xos_set_log_callback(callback: extern "C" fn(*const c_char)) {
-    let _ = LOG_CALLBACK.set(callback);
-}
-
-/// Helper function to log a message to Swift's console
-#[cfg(target_os = "ios")]
-pub fn log_to_ios(message: &str) {
-    if let Some(callback) = LOG_CALLBACK.get() {
-        if let Ok(c_str) = CString::new(message) {
-            callback(c_str.as_ptr());
-        }
-    }
-    // Note: We don't also print to stderr here to avoid duplicates
-    // The Swift console manager handles all logging
-}
 
 /// Custom writer that forwards to Swift's logging system (reserved for future `std` hookup).
 #[cfg(target_os = "ios")]
