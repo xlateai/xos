@@ -47,7 +47,11 @@ jobs:
         run: |
           set -euo pipefail
           crate_name=$(grep '^name =' Cargo.toml | head -n1 | cut -d '"' -f2)
-          current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          # Single source of truth: [workspace.package] version in root Cargo.toml
+          current_version=$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | grep '^version = ' | head -n1 | cut -d '"' -f2)
+          if [ -z "${current_version}" ]; then
+            current_version=$(grep '^version =' Cargo.toml | head -n1 | cut -d '"' -f2)
+          fi
           tag="v${current_version}"
           is_pre_release=false
           # Prerelease tags: -pre, -pre0, -pre1, -pre.rc1, … (anything containing "-pre";
