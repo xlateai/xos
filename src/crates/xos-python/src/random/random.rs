@@ -368,7 +368,12 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 
     crate::xos_module::with_frame_write_buffer(vm, Some(tensor_hint), |buffer| {
-        fill_buffer_uniform_random(buffer, low, high, vm)
+        fill_buffer_uniform_random(buffer, low, high, vm)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = crate::engine::py_engine_tls::with_tick_engine_state_mut(|state| {
+            state.frame.mark_cpu_staging_dirty();
+        });
+        Ok(())
     })?;
 
     // Return sentinel dict to signal that data is already in buffer

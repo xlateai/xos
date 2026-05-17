@@ -291,19 +291,17 @@ pub fn convolve_depthwise_rgb_same(
     Ok(())
 }
 
-/// Fill the frame RGBA tensor on GPU (avoids CPU staging + re-upload before conv).
+/// Fill the frame RGBA tensor on GPU (stays on GPU; no CPU staging touch).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn uniform_fill_rgba(frame: &mut FrameState, low: f32, high: f32) {
     use burn::tensor::Distribution;
     let device = frame.device().clone();
     let [h, w, _] = frame.tensor_dims();
-    let n = h * w * 4;
-    let flat = BurnTensor::<1>::random(
-        [n],
-        Distribution::Uniform(low as f64, high as f64),
-        &device,
-    );
-    let t = flat.reshape([h, w, 4]);
+    let lo = low as f64;
+    let hi = high as f64;
+    let rgb = BurnTensor::<3>::random([h, w, 3], Distribution::Uniform(lo, hi), &device);
+    let alpha = BurnTensor::<3>::full([h, w, 1], 255.0, &device);
+    let t = BurnTensor::<3>::cat(vec![rgb, alpha], 2);
     frame.set_burn_tensor(t);
 }
 

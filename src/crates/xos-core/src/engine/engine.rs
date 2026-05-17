@@ -181,6 +181,11 @@ impl FrameState {
         self.cpu_dirty = false;
     }
 
+    /// Mark that CPU staging / the pixels mirror was written (conv must re-upload before GPU ops).
+    pub fn mark_cpu_staging_dirty(&mut self) {
+        self.cpu_dirty = true;
+    }
+
     pub(crate) fn ensure_gpu_from_cpu(&mut self) {
         if self.cpu_dirty {
             let w = self.width as usize;
@@ -246,9 +251,11 @@ impl FrameState {
         self.staging_slice_mut()
     }
 
-    /// CPU staging for Python tick context binding without syncing GPU→CPU first.
+    /// CPU staging pointer for legacy rasterizer context during tick (does not mark CPU dirty).
+    ///
+    /// GPU conv / fill paths use the Burn tensor; only call [`Self::mark_cpu_staging_dirty`]
+    /// after actually writing this buffer.
     pub fn staging_slice_mut_for_tick(&mut self) -> &mut [u8] {
-        self.cpu_dirty = true;
         self.staging_slice_mut()
     }
 
