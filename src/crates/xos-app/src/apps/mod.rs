@@ -47,7 +47,7 @@ macro_rules! define_apps {
         pub enum AppCommands {
             $(
                 // Intentionally no `///` doc: the macro repeats one string for every variant and
-                // would spam `xos rs --help`. Subcommand names are `src/core/apps/<file>.rs`.
+                // would spam `xos rs --help`. Subcommand names are `src/crates/xos-app/src/apps/<file>.rs`.
                 #[command(name = stringify!($file), about = "")]
                 #[allow(non_camel_case_types)]
                 $Variant {
@@ -59,7 +59,7 @@ macro_rules! define_apps {
                     ios: bool,
                 },
             )*
-            // Python windowed UI: `src/core/apps/text/text.py` via [`maybe_python_cli_app`] (`get_app("text")`).
+            // Python windowed UI: `src/apps/text/text.py` via [`maybe_python_cli_app`] (`get_app("text")`).
             #[command(name = "text", about = "")]
             TextCli {
                 #[arg(long = "wasm", alias = "web")]

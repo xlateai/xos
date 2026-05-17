@@ -71,7 +71,9 @@ fn cache_path() -> Result<PathBuf, String> {
 fn bundled_paths() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(root) = crate::find_xos_project_root() {
-        v.push(root.join("src/core/ai/transcription/models/silero/silero_vad.onnx"));
+        v.push(
+            root.join("src/crates/xos-core/src/ai/transcription/models/silero/silero_vad.onnx"),
+        );
     }
     v
 }

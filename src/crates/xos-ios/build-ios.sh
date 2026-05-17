@@ -3,9 +3,9 @@ set -e
 
 echo "🦀 Building Rust library for iOS..."
 
-# Get absolute paths (script lives at src/ios/build-ios.sh → repo root is two levels up)
+# Get absolute paths (script lives at src/crates/xos-ios/build-ios.sh → repo root is three levels up)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # When Rust is invoked via `compile_ios_rust()`, `CARGO_TARGET_DIR` may be `.../target/ios`.

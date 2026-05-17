@@ -985,7 +985,8 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let script = root.join("src/core/commands/terminal/terminal.py");
+            let script = root
+                .join("src/crates/xos-core/commands/terminal/terminal.py");
             xos::apps::mesh::run_mesh_python_file(&script);
         }
         Some(Commands::Kill) => {
@@ -1026,7 +1027,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let script = root.join("src/core/commands/status/status.py");
+            let script = root.join("src/crates/xos-core/commands/status/status.py");
             if !script.exists() {
                 eprintln!("❌ status script not found: {}", script.display());
                 std::process::exit(1);

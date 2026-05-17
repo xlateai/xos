@@ -156,7 +156,7 @@ fn resolve_zip_bytes(entry: &Ct2ZipSource) -> Result<Vec<u8>, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             "CT2 download manifest entry has no zip_url and no google_drive_file_id — \
-             edit src/core/ai/transcription/ct2/whisper_ct2_download_links.json"
+             edit src/crates/xos-core/src/ai/transcription/ct2/whisper_ct2_download_links.json"
                 .to_string()
         })?;
 
@@ -351,7 +351,7 @@ pub(crate) fn ensure_ct2_artifacts(cache_folder_name: &str, out_dir: &Path) -> R
         .map_err(|e| format!("whisper_ct2_download_links.json: {e}"))?;
     let entry = manifest.get(cache_folder_name).ok_or_else(|| {
         format!(
-            "no entry '{cache_folder_name}' in src/core/ai/transcription/ct2/whisper_ct2_download_links.json — \
+            "no entry '{cache_folder_name}' in src/crates/xos-core/src/ai/transcription/ct2/whisper_ct2_download_links.json — \
              add a key with zip_url or google_drive_file_id"
         )
     })?;

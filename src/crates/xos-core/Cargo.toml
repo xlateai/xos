@@ -41,6 +41,7 @@ burn = { version = "=0.21.0-pre.3", default-features = false, features = ["wgpu"
 burn-wgpu = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
 burn-cubecl = { version = "=0.21.0-pre.3", optional = true }
 cubecl = { version = "=0.10.0-pre.3", features = ["stdlib"], optional = true }
+cubecl-common = { version = "=0.10.0-pre.3", features = ["hash"], optional = true }
 burn-store = { version = "=0.21.0-pre.3", optional = true, features = ["burnpack", "pytorch"] }
 ureq = { version = "2.12", optional = true }
 half = { version = "2", optional = true }
@@ -78,6 +79,6 @@ web-sys = { version = "0.3", features = ["console", "Window", "Document"] }
 [features]
 default = ["whisper", "whisper_ct2"]
 whisper = ["dep:ureq", "dep:half", "dep:hound", "dep:strum", "dep:strum_macros", "dep:log", "dep:mt19937"]
-whisper_burn = ["whisper", "dep:tokenizers", "dep:burn-store", "dep:burn-cubecl", "dep:cubecl"]
+whisper_burn = ["whisper", "dep:tokenizers", "dep:burn-store", "dep:burn-cubecl", "dep:cubecl", "dep:cubecl-common"]
 whisper_ct2 = ["dep:ct2rs", "dep:ureq", "dep:zip"]
 silero_vad = ["dep:ort", "dep:ureq", "whisper"]

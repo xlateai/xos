@@ -251,9 +251,9 @@ if [ $BUILD_STATUS -ne 0 ]; then
         echo "📋 Please set up code signing in Xcode:"
         echo ""
         echo "   You can open the workspace with:"
-        echo "      xed src/ios/"
+        echo "      xed src/crates/xos-ios/"
         echo "   Or:"
-        echo "      open src/ios/xos.xcworkspace"
+        echo "      open src/crates/xos-ios/xos.xcworkspace"
         echo ""
         echo "   In Xcode:"
         echo "   1. Select the 'xos' project in the left navigator"
@@ -274,7 +274,7 @@ if [ $BUILD_STATUS -ne 0 ]; then
             read -r response
             if [[ -z "$response" || "$response" =~ ^[Yy] ]]; then
                 echo "   Opening workspace in Xcode..."
-                xed src/ios/ 2>/dev/null || open src/ios/xos.xcworkspace 2>/dev/null
+                xed src/crates/xos-ios/ 2>/dev/null || open src/crates/xos-ios/xos.xcworkspace 2>/dev/null
             fi
         fi
         

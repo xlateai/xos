@@ -37,7 +37,7 @@ thread_local! {
     static WHISPER_MODEL_CACHE: RefCell<Option<CachedWhisperModel>> = const { RefCell::new(None) };
 }
 
-const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/burn";
+const MODELS_SUBDIR: &str = "src/crates/xos-core/src/ai/transcription/models/burn";
 
 /// User-facing model id from Python / CLI: `tiny`, `small`, `tiny-f16`, `small-f16`.
 pub(crate) struct WhisperModelArg {
@@ -481,7 +481,8 @@ fn resolve_models_root(model_key: &str) -> Result<PathBuf, String> {
             return Ok(bundled);
         }
         // Older checkout layout (still supported when developing from source).
-        let legacy_bundled = root.join("src/core/ai/transcription/models/fast-whisper-burn");
+        let legacy_bundled = root
+            .join("src/crates/xos-core/src/ai/transcription/models/fast-whisper-burn");
         if whisper_artifacts_present(&legacy_bundled, model_key) {
             return Ok(legacy_bundled);
         }

@@ -21,7 +21,8 @@ fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
 fn react_native_static_dir(project_root: &Path) -> PathBuf {
     project_root
         .join("src")
-        .join("core")
+        .join("crates")
+        .join("xos-core")
         .join("react-native-embedder")
         .join("static")
 }
@@ -42,7 +43,8 @@ fn build_wasm(app_name: &str) {
     let project_root = xos_project_root_or_exit();
     let out_dir = project_root
         .join("src")
-        .join("core")
+        .join("crates")
+        .join("xos-core")
         .join("react-native-embedder")
         .join("static")
         .join("pkg");
@@ -124,7 +126,8 @@ fn launch_expo() {
     cmd.current_dir(
         project_root
             .join("src")
-            .join("core")
+            .join("crates")
+            .join("xos-core")
             .join("react-native-embedder"),
     );
     let status = cmd

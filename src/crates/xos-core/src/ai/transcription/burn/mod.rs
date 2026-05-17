@@ -1,6 +1,6 @@
 //! Whisper via **Burn + WGPU** (in-tree `whisper_burn`). Artifacts live under
 //! `~/.xos/models/whisper/{tiny,small}-burn/` and optionally the repo bundle
-//! `src/core/ai/transcription/models/burn/`.
+//! `src/crates/xos-core/src/ai/transcription/models/burn/`.
 
 #[cfg(all(
     feature = "whisper_burn",

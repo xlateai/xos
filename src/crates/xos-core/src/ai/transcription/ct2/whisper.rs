@@ -21,7 +21,7 @@ use ct2rs::{Config, Whisper as Ct2Whisper};
 
 use super::super::sample;
 
-const MODELS_SUBDIR: &str = "src/core/ai/transcription/models/ct2";
+const MODELS_SUBDIR: &str = "src/crates/xos-core/src/ai/transcription/models/ct2";
 
 struct CachedCt2Model {
     key: String,
@@ -117,7 +117,7 @@ fn resolve_model_dir(size: Option<&str>) -> Result<PathBuf, String> {
             }
         }
         let legacy_bundled = root
-            .join("src/core/engine/audio/transcription/models")
+            .join("src/crates/xos-core/src/ai/transcription/models")
             .join("whisper-tiny-ct2");
         if super::whisper_ensure::model_ready(&legacy_bundled) {
             return Ok(legacy_bundled);

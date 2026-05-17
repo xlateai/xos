@@ -9,7 +9,7 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    cd /path/to/xos
    xos compile --ios
    # Or manually (from repository root):
-   ./src/ios/build-ios.sh
+   ./src/crates/xos-ios/build-ios.sh
    ```
 
 2. **Create Xcode project (if not exists):**
@@ -17,7 +17,7 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    **Option A: Using xcodegen (recommended):**
    ```bash
    brew install xcodegen
-   cd src/ios
+   cd src/crates/xos-ios
    ./create-xcode-project.sh
    ```
    
@@ -28,12 +28,12 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    - Product Name: `xos`
    - Interface: Storyboard
    - Language: Swift
-   - Save to the `src/ios/` directory
+   - Save to the `src/crates/xos-ios/` directory
    - Make sure the project is named `xos.xcodeproj`
 
 3. **Install CocoaPods dependencies:**
    ```bash
-   cd src/ios
+   cd src/crates/xos-ios
    pod install
    ```
 
@@ -54,7 +54,7 @@ This directory contains the iOS app for XOS, which runs the Rust engine natively
    
    **Option A: From command line (requires ios-deploy):**
    ```bash
-   cd src/ios
+   cd src/crates/xos-ios
    ./launch-device.sh
    # Or from xos root:
    xos app <app-name> --ios

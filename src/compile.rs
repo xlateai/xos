@@ -709,7 +709,11 @@ pub fn compile_ios_rust(clean: bool, release: bool) -> bool {
         return false;
     }
 
-    let script_path = project_root.join("src").join("ios").join("build-ios.sh");
+    let script_path = project_root
+        .join("src")
+        .join("crates")
+        .join("xos-ios")
+        .join("build-ios.sh");
 
     if !script_path.exists() {
         eprintln!("❌ build-ios.sh not found at: {}", script_path.display());
@@ -728,7 +732,7 @@ pub fn compile_ios_rust(clean: bool, release: bool) -> bool {
 
     let status = compile_cmd
         .status()
-        .expect("Failed to run src/ios/build-ios.sh");
+        .expect("Failed to run src/crates/xos-ios/build-ios.sh");
     if !status.success() {
         eprintln!("❌ iOS compile failed. Exiting.");
         return false;
@@ -744,10 +748,13 @@ pub fn compile_ios_swift() {
     println!("📦 Running pod install...");
 
     let project_root = find_project_root();
-    let ios_dir = project_root.join("src").join("ios");
+    let ios_dir = project_root.join("src").join("crates").join("xos-ios");
 
     if !ios_dir.exists() {
-        eprintln!("❌ src/ios directory not found at: {}", ios_dir.display());
+        eprintln!(
+            "❌ src/crates/xos-ios directory not found at: {}",
+            ios_dir.display()
+        );
         std::process::exit(1);
     }
 
@@ -790,7 +797,7 @@ pub fn compile_ios() {
     compile_ios_swift();
 
     println!("📱 Next steps:");
-    println!("   1. Open xos.xcworkspace in Xcode (or use: xed src/ios/)");
+    println!("   1. Open xos.xcworkspace in Xcode (or use: xed src/crates/xos-ios/)");
     println!("   2. Configure code signing in Xcode");
     println!("   3. Build and run on device or simulator");
 }

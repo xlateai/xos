@@ -54,7 +54,13 @@ pub fn is_xos_project_root(path: &Path) -> bool {
     {
         return true;
     }
-    if path.join("src").join("ios").join("build-ios.sh").exists() {
+    if path
+        .join("src")
+        .join("crates")
+        .join("xos-ios")
+        .join("build-ios.sh")
+        .exists()
+    {
         return true;
     }
     path.join("src")
@@ -198,7 +204,8 @@ fn build_wasm(app_name: &str) {
     };
     let out_dir = project_root
         .join("src")
-        .join("core")
+        .join("crates")
+        .join("xos-core")
         .join("react-native-embedder")
         .join("static")
         .join("pkg");
@@ -238,7 +245,8 @@ fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
 fn react_native_static_dir(project_root: &Path) -> PathBuf {
     project_root
         .join("src")
-        .join("core")
+        .join("crates")
+        .join("xos-core")
         .join("react-native-embedder")
         .join("static")
 }
@@ -343,7 +351,8 @@ fn launch_expo() {
     cmd.current_dir(
         project_root
             .join("src")
-            .join("core")
+            .join("crates")
+            .join("xos-core")
             .join("react-native-embedder"),
     );
 
@@ -446,7 +455,7 @@ pub fn launch_ios_app(app_name: &str) {
                 "❌ launch-device.sh not found at: {}",
                 launch_script.display()
             );
-            eprintln!("   Expected location: src/ios/launch-device.sh");
+            eprintln!("   Expected location: src/crates/xos-ios/launch-device.sh");
             std::process::exit(1);
         }
 

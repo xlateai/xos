@@ -26,7 +26,7 @@ post_install do |installer|
   main_project_path = File.join(File.dirname(podfile_path), 'xos.xcodeproj')
   unless File.exist?(main_project_path)
     Pod::UI.warn "xos iOS: could not find #{main_project_path} (expected next to the Podfile). " \
-                 'App OTHER_LDFLAGS (AudioToolbox, libxos) were not updated — run `pod install` from src/ios.'
+                 'App OTHER_LDFLAGS (AudioToolbox, libxos) were not updated — run `pod install` from src/crates/xos-ios.'
   else
     require 'xcodeproj'
     project = Xcodeproj::Project.open(main_project_path)
@@ -56,7 +56,7 @@ post_install do |installer|
         end
         # (codesign "resource fork" / xattr): a Run Script in the target runs *before* Xcode’s
         # "Copy Swift Standard Libraries" and AppIntents steps, so stripping there is too early.
-        # `src/ios/launch-device.sh` retries: xattr on the final .app, then `codesign` again.
+        # `src/crates/xos-ios/launch-device.sh` retries: xattr on the final .app, then `codesign` again.
       end
     end
     project.save

@@ -23,11 +23,13 @@ uuid = { version = "1", features = ["v4"] }
 tiny_http = "0.12"
 darling = "0.21.3"
 variadics_please = "1"
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 burn-fusion = { version = "=0.21.0-pre.3" }
 burn-ir = { version = "=0.21.0-pre.3" }
 burn-backend = { version = "=0.21.0-pre.3" }
 burn-autodiff = { version = "=0.21.0-pre.3", default-features = false }
 burn-ndarray = { version = "=0.21.0-pre.3", default-features = false }
+cubecl-common = { version = "=0.10.0-pre.3", features = ["hash"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
