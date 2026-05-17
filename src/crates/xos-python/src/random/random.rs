@@ -354,8 +354,26 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let low: f64 = parse_f64(&args_vec[1], vm)?;
     let high: f64 = parse_f64(&args_vec[2], vm)?;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if crate::engine::py_engine_tls::with_tick_engine_state_mut(|state| {
+            xos_core::burn_raster::uniform_fill_rgba(&mut state.frame, low as f32, high as f32);
+            true
+        }).is_some()
+        {
+            let sentinel = vm.ctx.new_dict();
+            sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+            return Ok(sentinel.into());
+        }
+    }
+
     crate::xos_module::with_frame_write_buffer(vm, Some(tensor_hint), |buffer| {
-        fill_buffer_uniform_random(buffer, low, high, vm)
+        fill_buffer_uniform_random(buffer, low, high, vm)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = crate::engine::py_engine_tls::with_tick_engine_state_mut(|state| {
+            state.frame.mark_cpu_staging_dirty();
+        });
+        Ok(())
     })?;
 
     // Return sentinel dict to signal that data is already in buffer

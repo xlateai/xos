@@ -102,6 +102,8 @@ pub struct FrameState {
     pixels_mirror: Option<(NonNull<u8>, usize)>,
     gpu_dirty: bool,
     cpu_dirty: bool,
+    /// When true, present via GPU blit once `pixels` and Burn share a `wgpu` version.
+    gpu_present_enabled: bool,
     /// Safe region bounding rectangle for UI elements
     pub safe_region_boundaries: SafeRegionBoundingRectangle,
 }
@@ -109,7 +111,17 @@ pub struct FrameState {
 impl FrameState {
     /// Create a new FrameState with given dimensions and safe region (opaque black).
     pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
-        let device = WgpuDevice::default();
+        Self::new_with_device(width, height, safe_region, WgpuDevice::default(), true)
+    }
+
+    /// Create frame state on a specific Burn device (use shared pixels device for GPU present).
+    pub fn new_with_device(
+        width: u32,
+        height: u32,
+        safe_region: SafeRegionBoundingRectangle,
+        device: WgpuDevice,
+        gpu_present_enabled: bool,
+    ) -> Self {
         let h = height as usize;
         let w = width as usize;
         let len = (width * height * 4) as usize;
@@ -127,8 +139,33 @@ impl FrameState {
             pixels_mirror: None,
             gpu_dirty: false,
             cpu_dirty: false,
+            gpu_present_enabled,
             safe_region_boundaries: safe_region,
         }
+    }
+
+    #[inline]
+    pub fn gpu_present_enabled(&self) -> bool {
+        self.gpu_present_enabled
+    }
+
+    #[inline]
+    pub fn is_gpu_dirty(&self) -> bool {
+        self.gpu_dirty
+    }
+
+    #[inline]
+    pub(crate) fn is_cpu_dirty(&self) -> bool {
+        self.cpu_dirty
+    }
+
+    /// After a successful GPU blit to the display texture (CPU staging may be stale).
+    pub(crate) fn mark_gpu_presented(&mut self) {
+        self.gpu_dirty = false;
+    }
+
+    pub fn set_gpu_present_enabled(&mut self, enabled: bool) {
+        self.gpu_present_enabled = enabled;
     }
 
     /// # Safety
@@ -181,6 +218,11 @@ impl FrameState {
         self.cpu_dirty = false;
     }
 
+    /// Mark that CPU staging / the pixels mirror was written (conv must re-upload before GPU ops).
+    pub fn mark_cpu_staging_dirty(&mut self) {
+        self.cpu_dirty = true;
+    }
+
     pub(crate) fn ensure_gpu_from_cpu(&mut self) {
         if self.cpu_dirty {
             let w = self.width as usize;
@@ -202,6 +244,14 @@ impl FrameState {
             chunk.copy_from_slice(&px);
         }
         self.cpu_dirty = true;
+    }
+
+    /// Copy the GPU frame tensor into CPU staging / the pixels mirror (for display after GPU ops).
+    pub fn publish_gpu_to_staging(&mut self) {
+        if self.gpu_dirty {
+            self.sync_tensor_to_cpu();
+            self.gpu_dirty = false;
+        }
     }
 
     fn sync_tensor_to_cpu(&mut self) {
@@ -238,6 +288,14 @@ impl FrameState {
         self.staging_slice_mut()
     }
 
+    /// CPU staging pointer for legacy rasterizer context during tick (does not mark CPU dirty).
+    ///
+    /// GPU conv / fill paths use the Burn tensor; only call [`Self::mark_cpu_staging_dirty`]
+    /// after actually writing this buffer.
+    pub fn staging_slice_mut_for_tick(&mut self) -> &mut [u8] {
+        self.staging_slice_mut()
+    }
+
     /// Get the frame shape `[height, width, 4]`
     pub fn shape(&self) -> Vec<usize> {
         vec![self.height as usize, self.width as usize, 4]
@@ -245,7 +303,9 @@ impl FrameState {
 
     /// Resize the frame (opaque black).
     pub fn resize(&mut self, width: u32, height: u32) {
-        *self = Self::new(width, height, self.safe_region_boundaries.clone());
+        let gpu_present = self.gpu_present_enabled;
+        let device = self.device.clone();
+        *self = Self::new_with_device(width, height, self.safe_region_boundaries.clone(), device, gpu_present);
     }
 
     /// Replace the inset used for layout / Python `safe_region` (e.g. host-driven safe area).
@@ -378,6 +438,8 @@ pub struct EngineState {
     pub paused: bool,
     /// Number of one-tick step requests queued while paused.
     pub pending_step_ticks: u32,
+    /// Set when entering pause; the host captures a frozen frame snapshot once.
+    pub paused_frame_snapshot_pending: bool,
     /// View zoom applied to the app-rendered frame before overlays (1.0 = full frame).
     pub frame_view_zoom: f32,
     /// Target view zoom used by smoothing.

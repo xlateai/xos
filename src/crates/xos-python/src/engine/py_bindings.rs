@@ -90,7 +90,11 @@ pub fn create_py_frame_state(vm: &VirtualMachine, frame: &mut FrameState) -> PyR
             .into(),
         vm,
     )?;
-    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item(
+        "device",
+        vm.ctx.new_str(xos_tensor::compute_device_label()).into(),
+        vm,
+    )?;
 
     // Create a Python list that directly wraps the buffer
     let py_buffer: Vec<PyObjectRef> = buffer.iter().map(|&b| vm.ctx.new_int(b).into()).collect();
@@ -156,6 +160,11 @@ pub fn update_py_frame_state(
     let height = shape[0];
     frame_dict.set_item("width", vm.ctx.new_int(width).into(), vm)?;
     frame_dict.set_item("height", vm.ctx.new_int(height).into(), vm)?;
+    tensor_dict.set_item(
+        "device",
+        vm.ctx.new_str(xos_tensor::compute_device_label()).into(),
+        vm,
+    )?;
 
     Ok(())
 }

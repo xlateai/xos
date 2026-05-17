@@ -189,19 +189,41 @@ impl AppState {
     }
 
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
+        let skip_cpu = crate::gpu_present::should_skip_cpu_upload(&self.engine_state.frame);
+        self.pixels.set_skip_cpu_texture_upload(skip_cpu);
+        if !skip_cpu {
+            self.engine_state.frame.publish_gpu_to_staging();
+        }
+
+        let mut gpu_blit = false;
         self.pixels.render_with(|encoder, render_target, context| {
-            crate::rasterizer::render_pending_gpu_passes(
-                &mut self.raster_cache,
-                encoder,
-                &context.device,
-                &context.queue,
-                &context.texture,
-                context.texture_extent,
-                context.texture_format,
-            );
+            if self.engine_state.frame.gpu_present_enabled() {
+                gpu_blit = crate::rasterizer::render_pending_gpu_passes(
+                    &mut self.raster_cache,
+                    &mut self.engine_state.frame,
+                    encoder,
+                    &context.device,
+                    &context.queue,
+                    &context.texture,
+                    context.texture_extent,
+                    context.texture_format,
+                );
+            }
+            if skip_cpu && !gpu_blit {
+                self.engine_state.frame.publish_gpu_to_staging();
+                crate::gpu_present::upload_staging_to_pixels_texture(
+                    context,
+                    self.engine_state.frame.data(),
+                );
+            }
             context.scaling_renderer.render(encoder, render_target);
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        })
+        })?;
+
+        if gpu_blit {
+            self.engine_state.frame.mark_gpu_presented();
+        }
+        Ok(())
     }
 
     fn tick_and_render_frame(&mut self) {
@@ -216,15 +238,17 @@ impl AppState {
                 self.capture_paused_base_frame();
             } else {
                 self.last_tick_instant = Some(Instant::now());
-                if self.paused_base_frame.is_empty() {
+                if self.paused_base_frame.is_empty()
+                    || self.engine_state.paused_frame_snapshot_pending
+                {
                     self.capture_paused_base_frame();
+                    self.engine_state.paused_frame_snapshot_pending = false;
                 }
                 self.restore_paused_base_frame();
             }
         } else {
             tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
             let _ = self.app.tick(&mut self.engine_state);
-            self.capture_paused_base_frame();
         }
 
         tick_frame_view_zoom(&mut self.engine_state);
@@ -240,14 +264,8 @@ impl AppState {
             let mouse_left = self.engine_state.mouse.is_left_clicking;
             let mouse_right = self.engine_state.mouse.is_right_clicking;
             let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
-            let (buffer, keyboard) = {
-                let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard =
-                    &mut self.engine_state.keyboard.onscreen;
-                (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
-            };
-            keyboard.tick(
-                buffer,
+
+            self.engine_state.keyboard.onscreen.tick_logic(
                 width,
                 height,
                 mouse_x,
@@ -258,6 +276,25 @@ impl AppState {
                 mouse_right,
                 &safe_region,
             );
+
+            if self.engine_state.keyboard.onscreen.needs_framebuffer_access() {
+                self.engine_state.keyboard.onscreen.tick_draw_gpu(
+                    &mut self.engine_state.frame,
+                    width,
+                    height,
+                    &safe_region,
+                );
+                if self.engine_state.keyboard.onscreen.is_shown() {
+                    self.engine_state
+                        .keyboard
+                        .onscreen
+                        .draw_key_labels(
+                            self.engine_state.frame.buffer_mut(),
+                            width,
+                            height,
+                        );
+                }
+            }
         }
 
         tick_f3_menu(&mut self.engine_state);
@@ -742,6 +779,7 @@ impl ApplicationHandler for AppStateWrapper {
             let surface_texture = SurfaceTexture::new(size.width, size.height, &window);
             let pixels = match PixelsBuilder::new(size.width, size.height, surface_texture)
                 .enable_vsync(false)
+                .device_descriptor_from_adapter(crate::gpu_present::shared_wgpu_device_descriptor)
                 .build()
             {
                 Ok(p) => unsafe { std::mem::transmute(p) }, // SAFETY: window outlives pixels
@@ -751,9 +789,16 @@ impl ApplicationHandler for AppStateWrapper {
                 }
             };
 
+            let burn_device = crate::gpu_present::burn_device_from_pixels(&pixels);
             let safe_region = SafeRegionBoundingRectangle::full_screen();
             let mut engine_state = EngineState {
-                frame: FrameState::new(size.width, size.height, safe_region),
+                frame: FrameState::new_with_device(
+                    size.width,
+                    size.height,
+                    safe_region,
+                    burn_device,
+                    true,
+                ),
                 mouse: MouseState {
                     x: 0.0,
                     y: 0.0,
@@ -772,6 +817,7 @@ impl ApplicationHandler for AppStateWrapper {
                 delta_time_seconds: 1.0 / 60.0,
                 paused: false,
                 pending_step_ticks: 0,
+                paused_frame_snapshot_pending: false,
                 frame_view_zoom: 1.0,
                 frame_view_zoom_target: 1.0,
                 frame_view_zoom_velocity: 0.0,
@@ -919,6 +965,7 @@ pub fn start_headless_native(
         delta_time_seconds: 1.0 / 60.0,
         paused: false,
         pending_step_ticks: 0,
+        paused_frame_snapshot_pending: false,
         frame_view_zoom: 1.0,
         frame_view_zoom_target: 1.0,
         frame_view_zoom_velocity: 0.0,

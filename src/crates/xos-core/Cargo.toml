@@ -37,10 +37,12 @@ dirs = "5"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 nokhwa = { version = "0.10.7", features = ["input-native"] }
-burn = { version = "=0.21.0-pre.3", default-features = false, features = ["wgpu", "autotune"] }
-burn-wgpu = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
-burn-cubecl = { version = "=0.21.0-pre.3", optional = true }
-cubecl = { version = "=0.10.0-pre.3", features = ["stdlib"], optional = true }
+burn = { version = "=0.21.0-pre.3", default-features = false, features = ["wgpu"] }
+burn-backend = { version = "=0.21.0-pre.3" }
+burn-cubecl = { version = "=0.21.0-pre.3", default-features = false, features = ["std"] }
+burn-wgpu = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "fusion", "metal"] }
+bytemuck = { version = "1.12", features = ["derive"] }
+cubecl = { version = "=0.10.0-pre.3", features = ["wgpu", "stdlib", "wgpu-msl"] }
 cubecl-common = { version = "=0.10.0-pre.3", features = ["hash"], optional = true }
 burn-store = { version = "=0.21.0-pre.3", optional = true, features = ["burnpack", "pytorch"] }
 ureq = { version = "2.12", optional = true }
@@ -111,6 +113,6 @@ web-sys = { version = "0.3", features = [
 [features]
 default = ["whisper", "whisper_ct2"]
 whisper = ["dep:ureq", "dep:half", "dep:hound", "dep:strum", "dep:strum_macros", "dep:log", "dep:mt19937"]
-whisper_burn = ["whisper", "dep:tokenizers", "dep:burn-store", "dep:burn-cubecl", "dep:cubecl", "dep:cubecl-common"]
+whisper_burn = ["whisper", "dep:tokenizers", "dep:burn-store", "dep:cubecl-common"]
 whisper_ct2 = ["dep:ct2rs", "dep:ureq", "dep:zip"]
 silero_vad = ["dep:ort", "dep:ureq", "whisper"]

@@ -23,15 +23,26 @@ pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
     burn_raster::fill_solid(frame, color);
 }
 
-/// Hook for future GPU passes after CPU upload; currently a no-op (Burn raster runs on the frame tensor).
+/// Blit the Burn frame tensor into the pixels backing texture (same wgpu device as Burn).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_pending_gpu_passes(
-    _cache: &mut RasterCache,
-    _encoder: &mut pixels::wgpu::CommandEncoder,
-    _device: &pixels::wgpu::Device,
-    _queue: &pixels::wgpu::Queue,
-    _inner_texture: &pixels::wgpu::Texture,
-    _extent: pixels::wgpu::Extent3d,
-    _texture_format: pixels::wgpu::TextureFormat,
-) {
+    cache: &mut RasterCache,
+    frame: &mut crate::engine::FrameState,
+    encoder: &mut pixels::wgpu::CommandEncoder,
+    device: &pixels::wgpu::Device,
+    queue: &pixels::wgpu::Queue,
+    inner_texture: &pixels::wgpu::Texture,
+    extent: pixels::wgpu::Extent3d,
+    texture_format: pixels::wgpu::TextureFormat,
+) -> bool {
+    crate::gpu_present::blit_frame_to_texture(
+        cache,
+        frame,
+        encoder,
+        device,
+        queue,
+        inner_texture,
+        texture_format,
+        extent,
+    )
 }

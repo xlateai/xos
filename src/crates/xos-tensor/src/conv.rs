@@ -12,18 +12,18 @@ use burn_backend::ops::ConvOptions;
 
 use super::{BurnTensor, WgpuDevice};
 
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 static WGPU_DEVICE: OnceLock<WgpuDevice> = OnceLock::new();
 
 #[inline]
 fn conv_device() -> WgpuDevice {
-    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         return WGPU_DEVICE
             .get_or_init(WgpuDevice::default)
             .clone();
     }
-    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     {
         WgpuDevice::default()
     }

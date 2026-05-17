@@ -63,6 +63,7 @@ repository = "https://github.com/xlateai/xos"
 gpu-allocator = { path = "src/crates/xos-core/patches/gpu-allocator" }
 sentencepiece-sys = { path = "src/crates/xos-core/patches/sentencepiece-sys" }
 ct2rs = { path = "src/crates/xos-core/patches/ct2rs" }
+pixels = { path = "src/crates/xos-core/patches/pixels" }
 
 # Windows MSVC + release: stripping proc-macro rlibs/DLLs breaks rustc's ability to load them
 # (E0463), which then breaks downstream crates (e.g. cubecl-ir / darling).
