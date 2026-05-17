@@ -1,11 +1,11 @@
 [package]
 name = "xos"
-version = "0.3.19-pre2"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Python, cross-platform (+ios📱) with built-in viewports, audio drivers, ai/ml/sci compute operations, graphics, text rasterization, and more- tensorized and accelerator ready. Let's see what you can build!"
-repository = "https://github.com/xlateai/xos"
-authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
-license = "MIT"
 
 [dependencies]
 xos-core = { path = "src/crates/xos-core" }
@@ -49,6 +49,14 @@ members = [
   "src/crates/xos-java",
 ]
 resolver = "2"
+
+# Bump release version here only — all workspace crates inherit via `*.workspace = true`.
+[workspace.package]
+version = "0.3.19-pre2"
+edition = "2021"
+license = "MIT"
+authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
+repository = "https://github.com/xlateai/xos"
 
 [patch.crates-io]
 gpu-allocator = { path = "src/crates/xos-core/patches/gpu-allocator" }
