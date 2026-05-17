@@ -384,17 +384,35 @@ fn launch_expo() {
     }
 }
 
-/// Launch a Python script in the prebuilt wasm runtime (`app=xpy` + URL-encoded source).
+/// Launch a Python script in the prebuilt wasm runtime (`app=xpy` + staged payload under `app_payloads/`).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_python_wasm_source(filename: &str, source: &str, flags: &[String]) {
     let project_root = xos_project_root_or_exit();
     let static_dir = wasm_compile_output_dir(&project_root);
     ensure_compiled_wasm_output(&static_dir);
+
+    let payload_id = format!("{:016x}", rand::random::<u64>());
+    let payload_dir = static_dir.join("app_payloads").join(&payload_id);
+    if let Err(e) = std_fs::create_dir_all(&payload_dir) {
+        eprintln!(
+            "❌ failed to create wasm app payload dir {}: {e}",
+            payload_dir.display()
+        );
+        std::process::exit(1);
+    }
+    if let Err(e) = std_fs::write(payload_dir.join("main.py"), source) {
+        eprintln!("❌ failed to write staged main.py: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = std_fs::write(payload_dir.join("flags.txt"), flags.join("\n")) {
+        eprintln!("❌ failed to write staged flags.txt: {e}");
+        std::process::exit(1);
+    }
+
     let query = format!(
-        "app=xpy&filename={}&code={}&xpy_flags={}",
+        "app=xpy&xpy_id={}&filename={}",
+        percent_encode_query_component(&payload_id),
         percent_encode_query_component(filename),
-        percent_encode_query_component(source),
-        percent_encode_query_component(&flags.join("\n")),
     );
     launch_browser_query(&query);
     start_web_server(static_dir);

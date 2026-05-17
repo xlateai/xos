@@ -1000,6 +1000,7 @@ mod wasm {
 
     impl AudioListener {
         pub fn new(_device: &AudioDevice, duration_secs: f32) -> Result<Self, String> {
+            ensure_web_microphone();
             BUFFER.with(|cell| {
                 *cell.borrow_mut() = Some(Arc::new(AudioBuffer::new(
                     (duration_secs * 44100.0) as usize,
