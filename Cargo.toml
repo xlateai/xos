@@ -52,7 +52,7 @@ resolver = "2"
 
 # Bump release version here only — all workspace crates inherit via `*.workspace = true`.
 [workspace.package]
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 edition = "2021"
 license = "MIT"
 authors = ["Dyllan McCreary <dyllan@xlate.ai>"]
