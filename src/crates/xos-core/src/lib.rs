@@ -507,11 +507,17 @@ pub fn launch_ios_app(app_name: &str) {
 
         println!("📱 Deploying app '{}' to iOS device...", app_name);
 
+        let bundled_python_apps = project_root
+            .join("target")
+            .join("ios")
+            .join("BundledPythonApps");
+
         let mut cmd = Command::new("bash");
         cmd.arg(&launch_script);
         cmd.current_dir(&ios_dir);
         // Pass the app name via environment variable - this is used by the build system
         cmd.env("XOS_APP_NAME", app_name);
+        cmd.env("XOS_BUNDLED_PYTHON_APPS", &bundled_python_apps);
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
 

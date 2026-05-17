@@ -26,6 +26,32 @@ if [ ! -f "xos.xcworkspace/contents.xcworkspacedata" ]; then
     exit 1
 fi
 
+PODS_XCCONFIG="Pods/Target Support Files/Pods-xos/Pods-xos.debug.xcconfig"
+if [ ! -f "$PODS_XCCONFIG" ]; then
+    echo "📦 CocoaPods config missing — running pod install..."
+    if [ -x "./pod-install.sh" ]; then
+        ./pod-install.sh || {
+            echo "❌ pod install failed. Try manually: cd $SCRIPT_DIR && ./pod-install.sh"
+            exit 1
+        }
+    elif command -v pod &>/dev/null; then
+        export LANG=en_US.UTF-8
+        export LC_ALL=en_US.UTF-8
+        pod install || {
+            echo "❌ pod install failed."
+            exit 1
+        }
+    else
+        echo "❌ CocoaPods not installed. Install with: brew install cocoapods"
+        echo "   Then: cd $SCRIPT_DIR && ./pod-install.sh"
+        exit 1
+    fi
+    if [ ! -f "$PODS_XCCONFIG" ]; then
+        echo "❌ pod install did not create $PODS_XCCONFIG"
+        exit 1
+    fi
+fi
+
 # Use xcodebuild to get the actual available destinations (most reliable)
 # This ensures we get the UDID format that xcodebuild actually recognizes
 echo "🔍 Detecting connected iOS device..."
@@ -308,11 +334,16 @@ fi
 
 echo "✅ App built successfully: $APP_BUNDLE"
 
-# Python apps staged by `xos app <name> --ios` live here until copied into the bundle.
-if [ -d "$SCRIPT_DIR/BundledPythonApps" ]; then
-    echo "📦 Bundling staged Python apps..."
+# Python apps staged by `xos app <name> --ios` under target/ios/BundledPythonApps (host only).
+BUNDLED_PYTHON_APPS="${XOS_BUNDLED_PYTHON_APPS:-}"
+if [ -z "$BUNDLED_PYTHON_APPS" ]; then
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+    BUNDLED_PYTHON_APPS="$PROJECT_ROOT/target/ios/BundledPythonApps"
+fi
+if [ -d "$BUNDLED_PYTHON_APPS" ]; then
+    echo "📦 Bundling staged Python apps from $BUNDLED_PYTHON_APPS..."
     rm -rf "$APP_BUNDLE/BundledPythonApps"
-    if ! ditto "$SCRIPT_DIR/BundledPythonApps" "$APP_BUNDLE/BundledPythonApps"; then
+    if ! ditto "$BUNDLED_PYTHON_APPS" "$APP_BUNDLE/BundledPythonApps"; then
         echo "❌ Failed to copy BundledPythonApps into app bundle"
         exit 1
     fi

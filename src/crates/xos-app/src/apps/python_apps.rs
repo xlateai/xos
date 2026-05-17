@@ -37,12 +37,11 @@ fn is_valid_app_name(name: &str) -> bool {
         && !name.starts_with('.')
 }
 
-/// Staging directory for `xos app <name> --ios` (copied into the .app at deploy time).
+/// Host-side staging for `xos app <name> --ios` under `target/ios/` (copied into the .app at deploy).
 pub fn ios_bundled_apps_staging_dir(project_root: &Path) -> PathBuf {
     project_root
-        .join("src")
-        .join("crates")
-        .join("xos-ios")
+        .join("target")
+        .join("ios")
         .join("BundledPythonApps")
 }
 
