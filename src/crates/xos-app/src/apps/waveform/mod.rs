@@ -75,7 +75,7 @@ impl Application for Waveform {
 
         #[cfg(all(not(target_os = "ios"), target_arch = "wasm32"))]
         {
-            audio::ensure_web_microphone();
+            audio::input::ensure_web_microphone();
             let device = input_devices.first().ok_or("No input devices available")?;
             xos_core::print(&format!("🔊 Using device: {} (allow mic if prompted)", device.name));
             let buffer_duration = 1.0;
