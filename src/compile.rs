@@ -1,4 +1,4 @@
-//! CLI compile helpers: `xos compile`, `xos compile --clean`, copying release binaries into Cargo `bin`, and iOS scripts.
+//! CLI compile helpers: `xos compile` (dev/debug by default), `xos compile --release`, `--ios`, `--wasm`.
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -16,11 +16,24 @@ pub fn standard_target_root(project_root: &Path) -> PathBuf {
     project_root.join("target").join("standard")
 }
 
-/// Release artifact for the `xos` binary (`target/standard/release/xos` or `.../xos.exe`).
-pub fn release_xos_executable(project_root: &Path) -> PathBuf {
+fn profile_dir_name(release: bool) -> &'static str {
+    if release {
+        "release"
+    } else {
+        "debug"
+    }
+}
+
+/// Built `xos` binary under `target/standard/{debug|release}/`.
+pub fn standard_xos_executable(project_root: &Path, release: bool) -> PathBuf {
     standard_target_root(project_root)
-        .join("release")
+        .join(profile_dir_name(release))
         .join(if cfg!(windows) { "xos.exe" } else { "xos" })
+}
+
+/// Release artifact (`target/standard/release/xos`).
+pub fn release_xos_executable(project_root: &Path) -> PathBuf {
+    standard_xos_executable(project_root, true)
 }
 
 /// Default Cargo `bin` directory (`xos`, `xpy` on PATH).
@@ -108,9 +121,9 @@ fn copy_file_replace_windows(src: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy freshly compiled `target/standard/release/{xos,xpy}` into the Cargo `bin` directory.
-fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::Result<()> {
-    let release = standard_target_root(project_root).join("release");
+/// Copy freshly compiled `target/standard/{debug|release}/{xos,xpy}` into the Cargo `bin` directory.
+fn copy_bins_to_cargo_bin(project_root: &Path, release: bool, dest_dir: &Path) -> io::Result<()> {
+    let profile_dir = standard_target_root(project_root).join(profile_dir_name(release));
     fs::create_dir_all(dest_dir)?;
     for stem in ["xos", "xpy"] {
         let name = if cfg!(windows) {
@@ -118,7 +131,7 @@ fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::R
         } else {
             stem.to_string()
         };
-        let from = release.join(&name);
+        let from = profile_dir.join(&name);
         if !from.is_file() {
             continue;
         }
@@ -128,12 +141,14 @@ fn copy_release_bins_to_cargo_bin(project_root: &Path, dest_dir: &Path) -> io::R
     Ok(())
 }
 
-fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
+fn warn_path_copy_failed(project_root: &Path, release: bool, err: &io::Error) {
     eprintln!();
-    eprintln!("⚠️  Release compile succeeded, but could not overwrite PATH binaries: {err}");
+    eprintln!("⚠️  Compile succeeded, but could not overwrite PATH binaries: {err}");
     eprintln!(
         "   Fresh binaries: {}",
-        standard_target_root(project_root).join("release").display()
+        standard_target_root(project_root)
+            .join(profile_dir_name(release))
+            .display()
     );
     eprintln!(
         "   Fix: close every running `xos` / `xpy` (and shells that started them), then run:"
@@ -142,29 +157,38 @@ fn warn_path_copy_failed(project_root: &Path, err: &io::Error) {
     eprintln!("   Or: cargo install --path {}", project_root.display());
 }
 
-fn run_cargo_release_verbose(project_root: &Path) -> bool {
+fn run_cargo_build_verbose(project_root: &Path, release: bool) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(project_root);
     cmd.env(
         "CARGO_TARGET_DIR",
         standard_target_root(project_root).as_os_str(),
     );
-    cmd.args(["build", "--release", "-p", "xos", "--bins"]);
+    cmd.arg("build");
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.args(["-p", "xos", "--bins"]);
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// `cargo build --release -p xos --bins` with no compiler output — spinner line only.
-fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
+/// `cargo build -p xos --bins` with no compiler output — spinner line only.
+fn run_cargo_build_quiet_spinner(project_root: &Path, release: bool) -> bool {
     let path_str = project_root.display().to_string();
+    let profile_label = profile_dir_name(release);
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd.current_dir(project_root);
     cargo_cmd.env(
         "CARGO_TARGET_DIR",
         standard_target_root(project_root).as_os_str(),
     );
-    cargo_cmd.args(["build", "--release", "-p", "xos", "--bins"]);
+    cargo_cmd.arg("build");
+    if release {
+        cargo_cmd.arg("--release");
+    }
+    cargo_cmd.args(["-p", "xos", "--bins"]);
     cargo_cmd.stdout(Stdio::null());
     cargo_cmd.stderr(Stdio::piped());
 
@@ -207,7 +231,11 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
             Ok(Some(status)) => {
                 let stderr_text = reader.join().unwrap_or_default();
                 if status.success() {
-                    print!("\r📁 Compiling xos in {}... ✓{}\n", path_str, " ".repeat(8));
+                    print!(
+                        "\r📁 Compiling xos ({profile_label}) in {}... ✓{}\n",
+                        path_str,
+                        " ".repeat(8)
+                    );
                     let _ = io::stdout().flush();
                     return true;
                 }
@@ -218,7 +246,10 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
             }
             Ok(None) => {
                 let ch = SPINNER[frame % SPINNER.len()];
-                print!("\r📁 Compiling xos in {}... {}", path_str, ch);
+                print!(
+                    "\r📁 Compiling xos ({profile_label}) in {}... {}",
+                    path_str, ch
+                );
                 let _ = io::stdout().flush();
                 frame += 1;
                 thread::sleep(Duration::from_millis(80));
@@ -232,23 +263,31 @@ fn run_cargo_release_quiet_spinner(project_root: &Path) -> bool {
     }
 }
 
-/// Compile release, then sync `target/standard/release` → Cargo `bin` (what `xos compile` does).
+/// Compile, then sync `target/standard/{debug|release}` → Cargo `bin` (what `xos compile` does).
 ///
 /// - `quiet == false`: show `cargo` and copy status on stdout (verbose CLI).
 /// - `quiet == true`: spinner only during compile; no copy banner; PATH warnings only if copy fails.
 ///
 /// `None` = `cargo build` failed. `Some(true)` = copy ok. `Some(false)` = compile ok, copy failed.
-fn run_release_compile_and_update_cargo_bin(project_root: &Path, quiet: bool) -> Option<bool> {
+fn run_compile_and_update_cargo_bin(
+    project_root: &Path,
+    release: bool,
+    quiet: bool,
+) -> Option<bool> {
     let path_str = project_root.display().to_string();
+    let profile_label = profile_dir_name(release);
 
     if !quiet {
-        println!("📁 Compiling xos in {}...", path_str);
+        println!(
+            "📁 Compiling xos ({profile_label}) in {}...",
+            path_str
+        );
     }
 
     let compile_ok = if quiet {
-        run_cargo_release_quiet_spinner(project_root)
+        run_cargo_build_quiet_spinner(project_root, release)
     } else {
-        run_cargo_release_verbose(project_root)
+        run_cargo_build_verbose(project_root, release)
     };
     if !compile_ok {
         return None;
@@ -259,10 +298,10 @@ fn run_release_compile_and_update_cargo_bin(project_root: &Path, quiet: bool) ->
     }
 
     let dest = PathBuf::from(cargo_bin_dir_hint());
-    match copy_release_bins_to_cargo_bin(project_root, &dest) {
+    match copy_bins_to_cargo_bin(project_root, release, &dest) {
         Ok(()) => Some(true),
         Err(e) => {
-            warn_path_copy_failed(project_root, &e);
+            warn_path_copy_failed(project_root, release, &e);
             Some(false)
         }
     }
@@ -625,33 +664,31 @@ pub fn compile_wasm(clean: bool) -> bool {
     true
 }
 
-/// Release compile then copy into Cargo `bin`. `verbose`: full `cargo` output; `!verbose`: spinner only.
+/// Compile then copy into Cargo `bin`. `release`: `--release` (default dev/debug). `verbose`: full `cargo` output.
 /// With `clean`, runs [`run_cargo_clean`] first.
-pub fn xos_compile_command(verbose: bool, clean: bool) -> bool {
+pub fn xos_compile_command(verbose: bool, clean: bool, release: bool) -> bool {
     let project_root = find_project_root();
     if clean && !run_cargo_clean(&project_root) {
         return false;
     }
-    if verbose {
-        // println!("🔨 Compiling xos CLI (release) and updating Cargo bin...");
-    }
-    match run_release_compile_and_update_cargo_bin(&project_root, !verbose) {
+    match run_compile_and_update_cargo_bin(&project_root, release, !verbose) {
         None => {
             eprintln!("❌ Compile failed. Exiting.");
             false
         }
         Some(path_updated) => {
             if verbose {
-                let out = release_xos_executable(&project_root);
+                let out = standard_xos_executable(&project_root, release);
+                let profile_label = profile_dir_name(release);
                 if path_updated {
                     println!(
-                        "✅ PATH updated. Main binary: {} (`{}`)",
+                        "✅ PATH updated ({profile_label}). Main binary: {} (`{}`)",
                         out.display(),
                         cargo_bin_dir_hint()
                     );
                 } else {
                     println!(
-                        "✅ Release compile OK: {} (see warning above about PATH)",
+                        "✅ Compile OK ({profile_label}): {} (see warning above about PATH)",
                         out.display()
                     );
                 }
@@ -661,9 +698,10 @@ pub fn xos_compile_command(verbose: bool, clean: bool) -> bool {
     }
 }
 
-/// `clean`: run `cargo clean` in the repo root before the iOS build script.
-pub fn compile_ios_rust(clean: bool) -> bool {
-    println!("🦀 Compiling Rust library for iOS...");
+/// `clean`: run `cargo clean` before the iOS build script. `release`: pass `--release` to rustc.
+pub fn compile_ios_rust(clean: bool, release: bool) -> bool {
+    let profile_label = profile_dir_name(release);
+    println!("🦀 Compiling Rust library for iOS ({profile_label})...");
 
     let project_root = find_project_root();
     let ios_target_dir = project_root.join("target").join("ios");
@@ -684,6 +722,7 @@ pub fn compile_ios_rust(clean: bool) -> bool {
     // Keep iOS artifacts isolated so `xos compile --ios` can run concurrently
     // with non-iOS builds without contending on Cargo's target-dir lock.
     compile_cmd.env("CARGO_TARGET_DIR", ios_target_dir);
+    compile_cmd.env("XOS_BUILD_RELEASE", if release { "1" } else { "0" });
     compile_cmd.stdout(Stdio::inherit());
     compile_cmd.stderr(Stdio::inherit());
 
@@ -745,7 +784,7 @@ pub fn compile_ios_swift() {
 /// Rust static lib + `pod install` + next-step hints. For Rust-only, use [`compile_ios_rust`].
 #[allow(dead_code)]
 pub fn compile_ios() {
-    if !compile_ios_rust(false) {
+    if !compile_ios_rust(false, true) {
         std::process::exit(1);
     }
     compile_ios_swift();

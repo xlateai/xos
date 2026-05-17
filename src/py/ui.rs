@@ -1,6 +1,12 @@
 use crate::apps::text::TextApp;
+use crate::apps::whiteboard::kernel::WhiteboardWidget;
 use crate::python_api::engine::py_engine_tls::{
     with_callback_engine_state_mut, with_tick_engine_state_mut,
+};
+use crate::python_api::python_whiteboard::{
+    alloc_widget_id as alloc_whiteboard_id, dispatch_whiteboard_widget_from_app,
+    insert_widget as insert_whiteboard_widget, render_whiteboard_widget, sync_embed_norm_rect,
+    tick_whiteboard_widget,
 };
 use crate::python_api::python_text::{
     alloc_widget_id, collect_native_text_widget_render_state, dispatch_text_widget_from_app,
@@ -55,6 +61,24 @@ fn getattr_required(
 ) -> PyResult<PyObjectRef> {
     vm.get_attribute_opt(obj.clone(), name)?
         .ok_or_else(|| vm.new_attribute_error(format!("missing attribute '{}'", name)))
+}
+
+fn parse_py_rgb_tuple(
+    vm: &VirtualMachine,
+    obj: PyObjectRef,
+    name: &str,
+) -> PyResult<(u8, u8, u8)> {
+    let color_tuple = obj
+        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+        .ok_or_else(|| vm.new_type_error(format!("{name} must be a tuple (r, g, b)",)))?;
+    let color_items = color_tuple.as_slice();
+    if color_items.len() < 3 {
+        return Err(vm.new_type_error(format!("{name} must be (r, g, b)",)));
+    }
+    let r: i32 = color_items[0].clone().try_into_value(vm)?;
+    let g: i32 = color_items[1].clone().try_into_value(vm)?;
+    let b: i32 = color_items[2].clone().try_into_value(vm)?;
+    Ok((r.clamp(0, 255) as u8, g.clamp(0, 255) as u8, b.clamp(0, 255) as u8))
 }
 
 fn py_number_to_f64(
@@ -1084,6 +1108,153 @@ fn text_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     }
 }
 
+fn whiteboard_widget_register(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 2 {
+        return Err(vm.new_type_error(
+            "_whiteboard_register requires (whiteboard_ui, app)".to_string(),
+        ));
+    }
+    let board_py = av[0].clone();
+    let app_py = av[1].clone();
+
+    let _ = frame_wh_from_app(vm, app_py.clone())?;
+
+    let x1 = py_number_to_f64(getattr_required(vm, board_py.clone(), "x1")?, vm, "x1")? as f32;
+    let y1 = py_number_to_f64(getattr_required(vm, board_py.clone(), "y1")?, vm, "y1")? as f32;
+    let x2 = py_number_to_f64(getattr_required(vm, board_py.clone(), "x2")?, vm, "x2")? as f32;
+    let y2 = py_number_to_f64(getattr_required(vm, board_py.clone(), "y2")?, vm, "y2")? as f32;
+
+    if !(0.0..=1.0).contains(&x1)
+        || !(0.0..=1.0).contains(&y1)
+        || !(0.0..=1.0).contains(&x2)
+        || !(0.0..=1.0).contains(&y2)
+    {
+        return Err(vm.new_value_error(
+            "whiteboard rect x1, y1, x2, y2 must be normalized in [0.0, 1.0]".to_string(),
+        ));
+    }
+    if !(x2 > x1 && y2 > y1) {
+        return Err(vm.new_value_error(
+            "whiteboard rect must satisfy x2 > x1 and y2 > y1".to_string(),
+        ));
+    }
+
+    let color_obj = getattr_required(vm, board_py.clone(), "color")?;
+    let draw_color = parse_py_rgb_tuple(vm, color_obj, "color")?;
+    let thickness = if let Some(v) = vm.get_attribute_opt(board_py.clone(), "thickness")? {
+        py_number_to_f64(v, vm, "thickness")? as f32
+    } else {
+        2.0
+    };
+    let editable = read_bool_prop(vm, board_py.clone(), "editable", true)?;
+    let scrollable_x = read_bool_prop(vm, board_py.clone(), "scrollable_x", true)?;
+    let scrollable_y = read_bool_prop(vm, board_py.clone(), "scrollable_y", true)?;
+    let zoomable = read_bool_prop(vm, board_py.clone(), "zoomable", true)?;
+
+    let board = WhiteboardWidget::new(
+        draw_color,
+        thickness,
+        editable,
+        scrollable_x,
+        scrollable_y,
+        zoomable,
+        (x1, y1, x2, y2),
+    );
+
+    let id = alloc_whiteboard_id();
+    insert_whiteboard_widget(id, board);
+    Ok(vm.ctx.new_int(id as usize).into())
+}
+
+fn whiteboard_widget_sync_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 5 {
+        return Err(vm.new_type_error(
+            "_whiteboard_sync_norm_rect requires (native_id, x1, y1, x2, y2)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let x1 = py_number_to_f64(av[1].clone(), vm, "x1")? as f32;
+    let y1 = py_number_to_f64(av[2].clone(), vm, "y1")? as f32;
+    let x2 = py_number_to_f64(av[3].clone(), vm, "x2")? as f32;
+    let y2 = py_number_to_f64(av[4].clone(), vm, "y2")? as f32;
+    let ran = with_tick_engine_state_mut(|state| {
+        sync_embed_norm_rect(id as u64, state, x1, y1, x2, y2)
+    });
+    match ran {
+        None => Err(vm.new_runtime_error(
+            "_whiteboard_sync_norm_rect must run during Application.tick (engine TLS not set)"
+                .to_string(),
+        )),
+        Some(Err(msg)) => Err(vm.new_value_error(msg.to_string())),
+        Some(Ok(())) => Ok(vm.ctx.none()),
+    }
+}
+
+fn whiteboard_widget_tick(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 7 {
+        return Err(vm.new_type_error(
+            "_whiteboard_tick requires (native_id, color, thickness, editable, scrollable_x, scrollable_y, zoomable)"
+                .to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let draw_color = parse_py_rgb_tuple(vm, av[1].clone(), "color")?;
+    let thickness = py_number_to_f64(av[2].clone(), vm, "thickness")? as f32;
+    let editable = av[3].clone().try_into_value(vm)?;
+    let scrollable_x = av[4].clone().try_into_value(vm)?;
+    let scrollable_y = av[5].clone().try_into_value(vm)?;
+    let zoomable = av[6].clone().try_into_value(vm)?;
+    let ran = with_tick_engine_state_mut(|state| {
+        tick_whiteboard_widget(
+            id as u64,
+            state,
+            draw_color,
+            thickness,
+            editable,
+            scrollable_x,
+            scrollable_y,
+            zoomable,
+        );
+    });
+    if ran.is_none() {
+        return Err(vm.new_runtime_error(
+            "_whiteboard_tick must run during Application.tick (engine TLS not set)".to_string(),
+        ));
+    }
+    Ok(vm.ctx.none())
+}
+
+fn whiteboard_widget_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 1 {
+        return Err(vm.new_type_error("_whiteboard_render requires (native_id,)".to_string()));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let ran = with_tick_engine_state_mut(|state| render_whiteboard_widget(id as u64, state));
+    if ran.is_none() {
+        return Err(vm.new_runtime_error(
+            "_whiteboard_render must run during Application.tick (engine TLS not set)".to_string(),
+        ));
+    }
+    Ok(vm.ctx.none())
+}
+
+fn whiteboard_widget_dispatch(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let av = args.args.as_slice();
+    if av.len() != 2 {
+        return Err(vm.new_type_error(
+            "_whiteboard_dispatch requires (native_id, app)".to_string(),
+        ));
+    }
+    let id: usize = av[0].clone().try_into_value(vm)?;
+    let app_py = av[1].clone();
+    dispatch_whiteboard_widget_from_app(vm, id as u64, app_py)?;
+    Ok(vm.ctx.none())
+}
+
 pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRef<PyModule> {
     let module = vm.new_module("xos.ui", vm.ctx.new_dict(), None);
     module
@@ -1233,6 +1404,41 @@ pub fn make_ui_module(vm: &VirtualMachine, coordinates: PyRef<PyModule>) -> PyRe
         .set_attr(
             "_text_peek_scroll",
             vm.new_function("_text_peek_scroll", text_peek_scroll),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_whiteboard_register",
+            vm.new_function("_whiteboard_register", whiteboard_widget_register),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_whiteboard_sync_norm_rect",
+            vm.new_function("_whiteboard_sync_norm_rect", whiteboard_widget_sync_norm_rect),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_whiteboard_tick",
+            vm.new_function("_whiteboard_tick", whiteboard_widget_tick),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_whiteboard_render",
+            vm.new_function("_whiteboard_render", whiteboard_widget_render),
+            vm,
+        )
+        .unwrap();
+    module
+        .set_attr(
+            "_whiteboard_dispatch",
+            vm.new_function("_whiteboard_dispatch", whiteboard_widget_dispatch),
             vm,
         )
         .unwrap();
@@ -2452,6 +2658,108 @@ def onscreen_keyboard():
     }
     if let Ok(ui_btn) = scope.globals.get_item("UiButton", vm) {
         module.set_attr("UiButton", ui_btn, vm).unwrap();
+    }
+
+    let wb_scope = vm.new_scope_with_builtins();
+    let py_whiteboard_code = r#"
+class Whiteboard:
+    def __init__(
+        self,
+        x1=0.0,
+        y1=0.0,
+        x2=1.0,
+        y2=1.0,
+        color=(255, 255, 255),
+        thickness=2.0,
+        editable=True,
+        scrollable_x=True,
+        scrollable_y=True,
+        zoomable=True,
+        **kwargs,
+    ):
+        kwargs.pop("coordinate_system", None)
+        if kwargs:
+            bad = ", ".join(sorted(kwargs.keys()))
+            raise TypeError("whiteboard() got unexpected keyword arguments: " + bad)
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+        self.color = color
+        self.thickness = float(thickness)
+        self.editable = bool(editable)
+        self.scrollable_x = bool(scrollable_x)
+        self.scrollable_y = bool(scrollable_y)
+        self.zoomable = bool(zoomable)
+        self._native_id = None
+
+    def tick(self, app):
+        import xos
+        if self._native_id is None:
+            self._native_id = int(xos.ui._whiteboard_register(self, app))
+        nid = int(self._native_id)
+        xos.ui._whiteboard_sync_norm_rect(
+            nid, float(self.x1), float(self.y1), float(self.x2), float(self.y2)
+        )
+        xos.ui._whiteboard_tick(
+            nid,
+            self.color,
+            float(self.thickness),
+            bool(self.editable),
+            bool(self.scrollable_x),
+            bool(self.scrollable_y),
+            bool(self.zoomable),
+        )
+
+    def render(self, app=None):
+        import xos
+        nid = getattr(self, "_native_id", None)
+        if nid is None:
+            return
+        xos.ui._whiteboard_render(int(nid))
+
+    def on_events(self, app):
+        import xos
+        nid = getattr(self, "_native_id", None)
+        if nid is None:
+            self._native_id = int(xos.ui._whiteboard_register(self, app))
+            nid = self._native_id
+        xos.ui._whiteboard_dispatch(int(nid), app)
+
+
+def whiteboard(
+    x1=0.0,
+    y1=0.0,
+    x2=1.0,
+    y2=1.0,
+    color=(255, 255, 255),
+    thickness=2.0,
+    editable=True,
+    scrollable_x=True,
+    scrollable_y=True,
+    zoomable=True,
+    **kwargs,
+):
+    return Whiteboard(
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
+        color=color,
+        thickness=thickness,
+        editable=editable,
+        scrollable_x=scrollable_x,
+        scrollable_y=scrollable_y,
+        zoomable=zoomable,
+        **kwargs,
+    )
+"#;
+    let _ = vm.run_code_string(wb_scope.clone(), py_whiteboard_code, "<xos_ui_whiteboard>".to_string());
+    if let Ok(wb_cls) = wb_scope.globals.get_item("Whiteboard", vm) {
+        module.set_attr("Whiteboard", wb_cls, vm).unwrap();
+    }
+    if let Ok(wb_fn) = wb_scope.globals.get_item("whiteboard", vm) {
+        module.set_attr("whiteboard", wb_fn, vm).unwrap();
     }
 
     module

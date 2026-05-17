@@ -160,6 +160,9 @@ enum Commands {
         /// Run `cargo clean` in the project root before building (full rebuild).
         #[arg(long)]
         clean: bool,
+        /// Optimized release build (slower). Default is dev (`debug`) for fast local iteration.
+        #[arg(long)]
+        release: bool,
     },
     /// Execute Python scripts (`xpy` is a shortcut for this command).
     #[command(name = "py", visible_alias = "python")]
@@ -866,7 +869,12 @@ fn main() {
     }
 
     match cli.command {
-        Some(Commands::Compile { ios, wasm, clean }) => {
+        Some(Commands::Compile {
+            ios,
+            wasm,
+            clean,
+            release,
+        }) => {
             if ios && wasm {
                 eprintln!("❌ use either --ios or --wasm, not both");
                 std::process::exit(1);
@@ -875,11 +883,11 @@ fn main() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
             let compile_ok = if ios {
-                compile::compile_ios_rust(clean)
+                compile::compile_ios_rust(clean, release)
             } else if wasm {
                 compile::compile_wasm(clean)
             } else {
-                compile::xos_compile_command(true, clean)
+                compile::xos_compile_command(true, clean, release)
             };
             if let Err(e) = daemon::maybe_ensure_daemon_running() {
                 eprintln!("❌ compile finished, but failed to enforce daemon state: {e}");

@@ -20,6 +20,7 @@ pub mod nn;
 pub mod ops;
 pub mod path;
 pub mod python_text;
+pub mod python_whiteboard;
 pub mod random;
 pub mod rasterizer;
 pub mod regex;

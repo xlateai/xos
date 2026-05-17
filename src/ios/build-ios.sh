@@ -28,27 +28,34 @@ mkdir -p "$OUTPUT_DIR"
 # The deployment target must match what's specified in the Xos.podspec file
 export IPHONEOS_DEPLOYMENT_TARGET=15.1
 
+# Profile: dev (debug) by default for fast iteration; `xos compile --ios --release` sets XOS_BUILD_RELEASE=1.
+PROFILE="debug"
+RELEASE_FLAG=""
+if [ "${XOS_BUILD_RELEASE:-0}" = "1" ]; then
+    PROFILE="release"
+    RELEASE_FLAG="--release"
+fi
+
 # Build for iOS device (arm64)
 # This cross-compiles the Rust code for iOS devices (not simulators)
 # - target: aarch64-apple-ios (64-bit ARM architecture used by modern iPhones/iPads)
-# - release: Optimized build for production
 # - --lib: Build as a library (not an executable)
 # - --crate-type staticlib: Produce a static library (.a file) that can be linked into Swift code
 # - link-arg: Sets minimum iOS version for the linker
-echo "🔨 Building for iOS device (aarch64-apple-ios)..."
+echo "🔨 Building for iOS device (aarch64-apple-ios, profile=$PROFILE)..."
 # No default features: omit desktop-only stacks (e.g. Silero/ORT, Burn/WGPU). Enable CT2 Whisper
 # so `xos.audio.transcription` and `xos.ai.whisper` (backend=ct2) match desktop cache under ~/.xos.
-cargo rustc --target aarch64-apple-ios --release --lib --crate-type staticlib --no-default-features --features "whisper,whisper_ct2" -- -C link-arg=-miphoneos-version-min=15.1
+cargo rustc --target aarch64-apple-ios $RELEASE_FLAG --lib --crate-type staticlib --no-default-features --features "whisper,whisper_ct2" -- -C link-arg=-miphoneos-version-min=15.1
 
 # Verify the build succeeded by checking for the output file (use absolute path; cwd must be repo root)
-LIB_XOS_A="$TARGET_ROOT/aarch64-apple-ios/release/libxos.a"
+LIB_XOS_A="$TARGET_ROOT/aarch64-apple-ios/$PROFILE/libxos.a"
 if [ ! -f "$LIB_XOS_A" ]; then
     echo "❌ Error: libxos.a not found after build"
     echo "   Expected: $LIB_XOS_A"
     echo "   PROJECT_ROOT=$PROJECT_ROOT"
     echo "   TARGET_ROOT=$TARGET_ROOT"
-    echo "   Listing release dir:"
-    ls -la "$TARGET_ROOT/aarch64-apple-ios/release/" 2>/dev/null || echo "   (missing)"
+    echo "   Listing $PROFILE dir:"
+    ls -la "$TARGET_ROOT/aarch64-apple-ios/$PROFILE/" 2>/dev/null || echo "   (missing)"
     exit 1
 fi
 

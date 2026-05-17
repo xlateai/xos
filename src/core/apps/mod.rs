@@ -2,6 +2,8 @@ use crate::engine::Application;
 
 /// Python UI entry (`study::launcher`, `study.py`) for `xos app study`.
 pub mod study;
+/// Python UI entry (`whiteboard::launcher`, `whiteboard.py`) for `xos app whiteboard`.
+pub mod whiteboard;
 /// Text editor engine ([`text::TextApp`]) + Python UI entry (`text::launcher`, `text.py`).
 pub mod text;
 /// LAN remote viewer (`remote/launcher.rs`, `remote.py`) + desktop capture helpers (`remote/remote.rs`).
@@ -17,6 +19,7 @@ pub(crate) fn maybe_python_cli_app(name: &str) -> Option<Box<dyn Application>> {
     match name {
         "text" => text::launcher::boxed_text_demo_app(),
         "study" => study::launcher::boxed_study_app(),
+        "whiteboard" => whiteboard::launcher::boxed_whiteboard_app(),
         "remote" => remote::launcher::boxed_remote_app(),
         _ => None,
     }
@@ -84,6 +87,15 @@ macro_rules! define_apps {
                 #[arg(long)]
                 ios: bool,
             },
+            #[command(name = "whiteboard", about = "")]
+            WhiteboardCli {
+                #[arg(long = "wasm", alias = "web")]
+                wasm: bool,
+                #[arg(long = "react-native")]
+                react_native: bool,
+                #[arg(long)]
+                ios: bool,
+            },
         }
 
         pub fn run_app_command(app: AppCommands) {
@@ -118,6 +130,13 @@ macro_rules! define_apps {
                         $crate::run_game("remote", wasm, react_native);
                     }
                 }
+                AppCommands::WhiteboardCli { wasm, react_native, ios } => {
+                    if ios {
+                        $crate::launch_ios_app("whiteboard");
+                    } else {
+                        $crate::run_game("whiteboard", wasm, react_native);
+                    }
+                }
             }
         }
 
@@ -140,7 +159,7 @@ macro_rules! define_apps {
                     stringify!($file),
                 )*
             ];
-            for extra in ["text", "study", "remote"] {
+            for extra in ["text", "study", "remote", "whiteboard"] {
                 if !names.iter().any(|n| *n == extra) {
                     names.push(extra);
                 }
@@ -158,7 +177,6 @@ define_apps! {
     Ball => ball::BallGame,
     Tracers => tracers::TracersApp,
     Camera => camera::CameraApp,
-    Whiteboard => whiteboard::Whiteboard,
     Blank => blank::BlankApp,
     Crash => crash::CrashApp,
     Waveform => waveform::Waveform,
