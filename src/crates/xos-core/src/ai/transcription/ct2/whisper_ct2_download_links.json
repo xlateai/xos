@@ -1,0 +1,11 @@
+{
+  "tiny-ct2": {
+    "zip_url": "https://huggingface.co/nollied/whisper-ct2-models/resolve/main/whisper-tiny-ct2.zip?download=true"
+  },
+  "small-ct2": {
+    "zip_url": "https://huggingface.co/nollied/whisper-ct2-models/resolve/main/whisper-small-ct2.zip?download=true"
+  },
+  "base-ct2": {
+    "zip_url": "https://huggingface.co/nollied/whisper-ct2-models/resolve/main/whisper-base-ct2.zip?download=true"
+  }
+}

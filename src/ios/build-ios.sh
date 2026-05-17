@@ -28,12 +28,12 @@ mkdir -p "$OUTPUT_DIR"
 # The deployment target must match what's specified in the Xos.podspec file
 export IPHONEOS_DEPLOYMENT_TARGET=15.1
 
-# Profile: dev (debug) by default for fast iteration; `xos compile --ios --release` sets XOS_BUILD_RELEASE=1.
-PROFILE="debug"
-RELEASE_FLAG=""
-if [ "${XOS_BUILD_RELEASE:-0}" = "1" ]; then
-    PROFILE="release"
-    RELEASE_FLAG="--release"
+# Profile: release by default; `xos compile --ios --no-release` sets XOS_BUILD_RELEASE=0.
+PROFILE="release"
+RELEASE_FLAG="--release"
+if [ "${XOS_BUILD_RELEASE:-1}" = "0" ]; then
+    PROFILE="debug"
+    RELEASE_FLAG=""
 fi
 
 # Build for iOS device (arm64)

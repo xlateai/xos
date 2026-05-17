@@ -1,0 +1,15 @@
+[package]
+name = "xos-audio"
+version = "0.3.19-pre2"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+hound = "3.5.1"
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), any(target_os = "macos", target_os = "windows")))'.dependencies]
+cpal = "0.16.0"
+symphonia = { version = "0.5.4", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), target_os = "macos"))'.dependencies]
+screencapturekit = { version = "1.5.4", features = ["macos_13_0"] }

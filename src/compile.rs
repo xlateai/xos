@@ -1,4 +1,4 @@
-//! CLI compile helpers: `xos compile` (dev/debug by default), `xos compile --release`, `--ios`, `--wasm`.
+//! CLI compile helpers: `xos compile` (release by default), `xos compile --no-release`, `--ios`, `--wasm`.
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
@@ -664,7 +664,7 @@ pub fn compile_wasm(clean: bool) -> bool {
     true
 }
 
-/// Compile then copy into Cargo `bin`. `release`: `--release` (default dev/debug). `verbose`: full `cargo` output.
+/// Compile then copy into Cargo `bin`. `release`: `--release` (default true; use `--no-release` for debug). `verbose`: full `cargo` output.
 /// With `clean`, runs [`run_cargo_clean`] first.
 pub fn xos_compile_command(verbose: bool, clean: bool, release: bool) -> bool {
     let project_root = find_project_root();

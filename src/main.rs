@@ -160,9 +160,9 @@ enum Commands {
         /// Run `cargo clean` in the project root before building (full rebuild).
         #[arg(long)]
         clean: bool,
-        /// Optimized release build (slower). Default is dev (`debug`) for fast local iteration.
+        /// Dev build (`debug`) instead of optimized release (faster compile; slower binary).
         #[arg(long)]
-        release: bool,
+        no_release: bool,
     },
     /// Execute Python scripts (`xpy` is a shortcut for this command).
     #[command(name = "py", visible_alias = "python")]
@@ -732,6 +732,7 @@ fn run_relay_server(bind: &str, port: u16, no_metrics: bool, metrics_interval_ms
 }
 
 fn main() {
+    xos::init_hooks();
     let mut original_args: Vec<String> = std::env::args().collect();
 
     let exe_stem = std::env::current_exe()
@@ -873,7 +874,7 @@ fn main() {
             ios,
             wasm,
             clean,
-            release,
+            no_release,
         }) => {
             if ios && wasm {
                 eprintln!("❌ use either --ios or --wasm, not both");
@@ -882,6 +883,7 @@ fn main() {
             if let Err(e) = daemon::stop_daemon() {
                 eprintln!("⚠️ failed to stop daemon before compile: {e}");
             }
+            let release = !no_release;
             let compile_ok = if ios {
                 compile::compile_ios_rust(clean, release)
             } else if wasm {

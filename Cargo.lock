@@ -1734,16 +1734,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console_error_panic_hook"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
-dependencies = [
- "cfg-if 1.0.4",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7385,15 +7375,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_pcg"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b48ac3f7ffaab7fac4d2376632268aa5f89abdb55f7ebf8f4d11fffccb2320f7"
-dependencies = [
- "rand_core 0.9.5",
-]
-
-[[package]]
 name = "range-alloc"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7717,15 +7698,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "ringbuf"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a"
-dependencies = [
- "crossbeam-utils",
 ]
 
 [[package]]
@@ -11390,43 +11362,115 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 name = "xos"
 version = "0.3.19-pre2"
 dependencies = [
- "aes-gcm",
- "argon2",
- "base64 0.22.1",
- "burn",
  "burn-autodiff",
  "burn-backend",
- "burn-cubecl",
  "burn-fusion",
  "burn-ir",
  "burn-ndarray",
+ "clap",
+ "darling 0.21.3",
+ "dialoguer",
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "uuid",
+ "variadics_please",
+ "wasm-bindgen",
+ "xos-app",
+ "xos-audio",
+ "xos-auth",
+ "xos-core",
+ "xos-mesh",
+ "xos-python",
+ "xos-tensor",
+]
+
+[[package]]
+name = "xos-app"
+version = "0.3.19-pre2"
+dependencies = [
+ "clap",
+ "cpal",
+ "ct2rs",
+ "delaunator",
+ "enigo",
+ "fontdue",
+ "image 0.25.10",
+ "include_dir",
+ "nokhwa",
+ "once_cell",
+ "ort",
+ "pixels",
+ "regex",
+ "rfd",
+ "rustpython-vm",
+ "screencapturekit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "winit",
+ "xcap",
+ "xos-audio",
+ "xos-auth",
+ "xos-core",
+ "xos-mesh",
+ "xos-python",
+ "xos-tensor",
+]
+
+[[package]]
+name = "xos-audio"
+version = "0.3.19-pre2"
+dependencies = [
+ "cpal",
+ "hound",
+ "screencapturekit",
+ "symphonia",
+]
+
+[[package]]
+name = "xos-auth"
+version = "0.3.19-pre2"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "base64 0.22.1",
+ "dirs 5.0.1",
+ "getrandom 0.3.4",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "xos-core"
+version = "0.3.19-pre2"
+dependencies = [
+ "burn",
+ "burn-cubecl",
  "burn-store",
  "burn-wgpu",
  "clap",
- "console_error_panic_hook",
- "cpal",
- "csv",
  "ct2rs",
  "ctrlc",
  "cubecl",
- "darling 0.21.3",
  "delaunator",
- "dialoguer",
  "dirs 5.0.1",
- "enigo",
  "fontdue",
  "getrandom 0.3.4",
- "getrandom 0.4.2",
  "half 2.7.1",
- "hkdf",
  "hound",
  "image 0.25.10",
- "include_dir",
  "js-sys",
  "libc",
  "log",
  "metal 0.32.0",
- "mp3lame-encoder",
  "mt19937",
  "nokhwa",
  "objc",
@@ -11434,40 +11478,27 @@ dependencies = [
  "ort",
  "pixels",
  "rand 0.9.4",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rand_pcg",
  "rayon",
  "regex",
  "reqwest",
- "rfd",
- "ringbuf",
- "rsa",
  "rustpython-vm",
- "screencapturekit",
  "serde",
  "serde_json",
- "sha2",
  "strum 0.28.0",
  "strum_macros 0.28.0",
- "symphonia",
  "tiny_http",
  "tokenizers",
  "tokio",
  "ureq 2.12.1",
- "uuid",
- "variadics_please",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "webbrowser",
- "winapi",
  "winit",
- "x25519-dalek",
- "xcap",
+ "xos-audio",
+ "xos-auth",
+ "xos-mesh",
+ "xos-tensor",
  "zip 2.4.2",
- "zune-core 0.4.12",
- "zune-jpeg 0.4.21",
 ]
 
 [[package]]
@@ -11476,6 +11507,78 @@ version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
  "xos",
+]
+
+[[package]]
+name = "xos-mesh"
+version = "0.3.19-pre2"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "hkdf",
+ "image 0.25.10",
+ "reqwest",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+ "x25519-dalek",
+ "xos-auth",
+]
+
+[[package]]
+name = "xos-python"
+version = "0.3.19-pre2"
+dependencies = [
+ "base64 0.22.1",
+ "burn",
+ "burn-autodiff",
+ "burn-backend",
+ "burn-ndarray",
+ "burn-store",
+ "burn-wgpu",
+ "csv",
+ "ct2rs",
+ "dialoguer",
+ "fontdue",
+ "image 0.25.10",
+ "include_dir",
+ "libc",
+ "metal 0.32.0",
+ "mp3lame-encoder",
+ "objc",
+ "once_cell",
+ "pixels",
+ "rand 0.9.4",
+ "rayon",
+ "regex",
+ "rustpython-vm",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "ureq 2.12.1",
+ "winit",
+ "xos-audio",
+ "xos-auth",
+ "xos-core",
+ "xos-mesh",
+ "xos-tensor",
+ "zip 2.4.2",
+ "zune-core 0.4.12",
+ "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "xos-tensor"
+version = "0.3.19-pre2"
+dependencies = [
+ "burn",
+ "burn-backend",
+ "burn-ndarray",
+ "burn-wgpu",
 ]
 
 [[package]]
