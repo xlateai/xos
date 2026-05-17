@@ -1,0 +1,15 @@
+[package]
+name = "xos-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebAssembly cdylib entry for xos (used by wasm-pack; native CLI uses the root `xos` rlib)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+xos = { path = "../../..", default-features = false }
+wasm-bindgen = "0.2"
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4.2", features = ["wasm_js"] }

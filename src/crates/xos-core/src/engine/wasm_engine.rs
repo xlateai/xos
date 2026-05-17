@@ -87,6 +87,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
     use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
     console_error_panic_hook::set_once();
+    xos_audio::input::ensure_web_microphone();
 
     let window = web_sys::window().expect("no global window exists");
     let document = window.document().expect("should have a document");
@@ -295,6 +296,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
         let canvas_clone = canvas.clone();
         let down_callback = Closure::wrap(Box::new(move |event: MouseEvent| {
             event.prevent_default();
+            xos_audio::input::ensure_web_microphone();
             unsafe {
                 let state = &mut *state_ptr_clone;
                 let scale = canvas_backing_scale(&canvas_clone);

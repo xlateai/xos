@@ -431,7 +431,7 @@ fn write_wasm_index_html(output_dir: &Path) -> io::Result<()> {
 <body>
   <canvas id="xos-canvas" width="256" height="256"></canvas>
   <script type="module">
-    import init from "./pkg/xos.js";
+    import init from "./pkg/xos_wasm.js";
     init()
       .then(() => console.log("xos wasm: initialized"))
       .catch((error) => console.error("xos wasm: failed to initialize", error));
@@ -634,18 +634,22 @@ pub fn compile_wasm(clean: bool) -> bool {
         return false;
     }
 
+    // Build the `xos-wasm` cdylib crate (not the root `xos` rlib used by the native CLI).
+    let wasm_crate = project_root.join("src").join("crates").join("xos-wasm");
     let status = Command::new("wasm-pack")
         .current_dir(&project_root)
         .env("GAME_SELECTION", "ball")
         .env("CARGO_TARGET_DIR", &wasm_target_dir)
         .args([
             "build",
+            wasm_crate.to_str().expect("wasm crate path is valid UTF-8"),
             "--target",
             "web",
             "--out-dir",
             &pkg_dir.display().to_string(),
-            ".",
             "--",
+            "-p",
+            "xos-wasm",
             "--no-default-features",
         ])
         .status();

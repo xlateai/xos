@@ -268,8 +268,8 @@ fn react_native_static_dir(project_root: &Path) -> PathBuf {
 #[cfg(not(target_arch = "wasm32"))]
 fn ensure_compiled_wasm_output(static_dir: &Path) {
     let index = static_dir.join("index.html");
-    let js = static_dir.join("pkg").join("xos.js");
-    let wasm = static_dir.join("pkg").join("xos_bg.wasm");
+    let js = static_dir.join("pkg").join("xos_wasm.js");
+    let wasm = static_dir.join("pkg").join("xos_wasm_bg.wasm");
     if index.is_file() && js.is_file() && wasm.is_file() {
         return;
     }
@@ -341,8 +341,7 @@ fn start_web_server(static_dir: PathBuf) {
             if std::fs::metadata(&full_path).map_or(false, |m| m.is_file()) {
                 full_path
             } else {
-                eprintln!("❌ File not found: {}", full_path.display());
-                // fallback to index.html so SPA still loads
+                // Browsers probe favicons/touch icons; serve the wasm shell instead.
                 index_path.clone()
             }
         };
@@ -385,15 +384,28 @@ fn launch_expo() {
     }
 }
 
+/// Launch a Python script in the prebuilt wasm runtime (`app=xpy` + URL-encoded source).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_python_wasm_source(filename: &str, source: &str, flags: &[String]) {
+    let project_root = xos_project_root_or_exit();
+    let static_dir = wasm_compile_output_dir(&project_root);
+    ensure_compiled_wasm_output(&static_dir);
+    let query = format!(
+        "app=xpy&filename={}&code={}&xpy_flags={}",
+        percent_encode_query_component(filename),
+        percent_encode_query_component(source),
+        percent_encode_query_component(&flags.join("\n")),
+    );
+    launch_browser_query(&query);
+    start_web_server(static_dir);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
     println!(
         "🕸️  Launching '{}' with xpy wasm mode...",
         file_path.display()
     );
-    let project_root = xos_project_root_or_exit();
-    let static_dir = wasm_compile_output_dir(&project_root);
-    ensure_compiled_wasm_output(&static_dir);
     let source = match std_fs::read_to_string(file_path) {
         Ok(source) => source,
         Err(e) => {
@@ -404,14 +416,7 @@ pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
             std::process::exit(1);
         }
     };
-    let query = format!(
-        "app=xpy&filename={}&code={}&xpy_flags={}",
-        percent_encode_query_component(&file_path.to_string_lossy()),
-        percent_encode_query_component(&source),
-        percent_encode_query_component(&flags.join("\n")),
-    );
-    launch_browser_query(&query);
-    start_web_server(static_dir);
+    run_python_wasm_source(&file_path.to_string_lossy(), &source, flags);
 }
 
 pub fn version() -> &'static str {

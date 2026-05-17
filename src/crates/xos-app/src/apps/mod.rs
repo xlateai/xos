@@ -27,13 +27,26 @@ pub fn run_rs_app_by_name(name: &str, flags: AppLaunchFlags) {
 
 /// Launch a Python app from `src/apps/<name>/<name>.py` (`xos app <name>`).
 pub fn run_python_app_by_name(name: &str, flags: AppLaunchFlags) {
-    if flags.wasm || flags.react_native {
-        eprintln!("❌ python apps under src/apps/ do not support --wasm or --react-native yet");
+    if flags.react_native {
+        eprintln!("❌ python apps under src/apps/ do not support --react-native yet");
         std::process::exit(1);
     }
     if flags.ios {
         crate::launch_ios_app(name);
         return;
+    }
+    if flags.wasm {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            python_apps::launch_python_app_wasm(name, &native_app_names(), &[]);
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = name;
+            eprintln!("❌ launch python apps from the native `xos` CLI with `--wasm`");
+            std::process::exit(1);
+        }
     }
     python_apps::run_python_app(name, &native_app_names());
 }

@@ -60,7 +60,8 @@ pub fn print_python_app_help() {
     println!("Usage:");
     println!("  xos app              list discovered apps");
     println!("  xos app <name>       run an app");
-    println!("  xos app <name> --ios run on iOS device build\n");
+    println!("  xos app <name> --wasm  run in browser (requires `xos compile --wasm`)");
+    println!("  xos app <name> --ios   run on iOS device build\n");
     match apps::list_python_app_names() {
         Ok(names) if names.is_empty() => {
             println!("No python apps found (add src/apps/<name>/<name>.py).");

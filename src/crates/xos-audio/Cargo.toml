@@ -32,5 +32,6 @@ web-sys = { version = "0.3", features = [
   "ScriptProcessorNode",
   "AudioProcessingEvent",
   "AudioBuffer",
+  "AudioContextState",
   "console",
 ] }

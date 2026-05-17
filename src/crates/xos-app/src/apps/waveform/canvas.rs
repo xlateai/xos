@@ -47,6 +47,21 @@ impl WaveformCanvas {
         }
     }
 
+    fn draw_idle_baseline(&self, buffer: &mut [u8], width: u32, height: u32) {
+        let mid = height as f32 * 0.5;
+        let color = (90, 110, 140);
+        self.draw_horizontal_line(buffer, width, height, mid, BASELINE_LENGTH, color, LINE_THICKNESS);
+        self.draw_horizontal_line(
+            buffer,
+            width,
+            height,
+            mid,
+            BASELINE_LENGTH * 0.35,
+            (60, 72, 96),
+            LINE_THICKNESS * 0.75,
+        );
+    }
+
     fn draw_horizontal_line(
         &self,
         buffer: &mut [u8],
@@ -91,10 +106,12 @@ impl WaveformCanvas {
 
         let all_samples = listener.get_samples_by_channel();
         if all_samples.is_empty() {
+            self.draw_idle_baseline(buffer, width, height);
             return;
         }
         let samples = &all_samples[0];
         if samples.is_empty() {
+            self.draw_idle_baseline(buffer, width, height);
             return;
         }
 

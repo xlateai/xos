@@ -1057,6 +1057,9 @@ mod wasm {
         let stream: MediaStream = stream_val.dyn_into()?;
 
         let context = AudioContext::new()?;
+        if context.state() == web_sys::AudioContextState::Suspended {
+            wasm_bindgen_futures::JsFuture::from(context.resume()?).await?;
+        }
         let source = context.create_media_stream_source(&stream)?;
         let processor = context.create_script_processor_with_buffer_size(1024)?;
 
@@ -1108,10 +1111,15 @@ mod wasm {
     pub fn default_input() -> Option<AudioDevice> {
         all_input_devices().into_iter().next()
     }
+
+    /// Start (or retry) browser mic capture. Safe to call from setup and after user gestures.
+    pub fn ensure_web_microphone() {
+        let _ = all_input_devices();
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{all_input_devices, default_input, AudioListener};
+pub use wasm::{all_input_devices, default_input, ensure_web_microphone, AudioListener};
 
 // ================================================================================================
 // CONVENIENCE FUNCTIONS

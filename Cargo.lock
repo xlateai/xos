@@ -11628,6 +11628,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xos-wasm"
+version = "0.3.19-pre3"
+dependencies = [
+ "getrandom 0.3.4",
+ "getrandom 0.4.2",
+ "wasm-bindgen",
+ "xos",
+]
+
+[[package]]
 name = "xxhash-rust"
 version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

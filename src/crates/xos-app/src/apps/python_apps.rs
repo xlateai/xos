@@ -228,6 +228,29 @@ fn print_script_only_hint() {
     }
 }
 
+/// Launch `src/apps/<name>/<name>.py` in the browser wasm runtime (`xos app <name> --wasm`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn launch_python_app_wasm(name: &str, reserved_names: &[&str], flags: &[String]) {
+    let Some(desc) = find_descriptor(name, reserved_names) else {
+        eprintln!("❌ python app '{name}' not found (expected src/apps/{name}/{name}.py)");
+        if let Ok(names) = python_app_names(reserved_names) {
+            if !names.is_empty() {
+                eprintln!("   Available: {}", names.join(", "));
+            }
+        }
+        std::process::exit(1);
+    };
+    let (code, fname) = match load_python_app_sources(&desc) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("❌ Failed to load python app {:?}:\n{e}", desc.name);
+            std::process::exit(1);
+        }
+    };
+    println!("🕸️  Launching python app '{}' in wasm mode...", desc.name);
+    xos_core::run_python_wasm_source(&fname, &code, flags);
+}
+
 /// Execute `src/apps/<name>/<name>.py`. Opens a window when the script registers an
 /// `xos.Application` (via `.run()` or `__xos_app_instance__`); otherwise runs like `xos py`.
 pub fn run_python_app(name: &str, reserved_names: &[&str]) {
