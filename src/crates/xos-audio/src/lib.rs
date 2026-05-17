@@ -204,6 +204,26 @@ impl AudioDevice {
 }
 
 // ================================================================================================
+// LOGGING
+// ================================================================================================
+
+/// Platform-appropriate debug log (used by iOS FFI teardown paths in `speakers`).
+pub(crate) fn print(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(message));
+    }
+    #[cfg(all(not(target_arch = "wasm32"), target_os = "ios"))]
+    {
+        eprintln!("{message}");
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
+    {
+        println!("{message}");
+    }
+}
+
+// ================================================================================================
 // CONVENIENCE FUNCTIONS
 // ================================================================================================
 
