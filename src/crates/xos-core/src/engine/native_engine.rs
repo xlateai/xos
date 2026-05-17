@@ -171,6 +171,23 @@ impl AppState {
         }
     }
 
+    /// Point `EngineState::frame` writes at the live `pixels` surface buffer (windowed native).
+    fn bind_pixels_mirror(&mut self) -> bool {
+        let expected_len = (self.size.width as usize)
+            .saturating_mul(self.size.height as usize)
+            .saturating_mul(4);
+        let frame = self.pixels.frame_mut();
+        if frame.len() != expected_len {
+            return false;
+        }
+        unsafe {
+            self.engine_state
+                .frame
+                .set_pixels_mirror_buffer(frame.as_mut_ptr(), frame.len());
+        }
+        true
+    }
+
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
         self.pixels.render_with(|encoder, render_target, context| {
             crate::rasterizer::render_pending_gpu_passes(
@@ -188,19 +205,7 @@ impl AppState {
     }
 
     fn tick_and_render_frame(&mut self) {
-        let expected_len = (self.size.width * self.size.height * 4) as usize;
-        let mut mirror_ok = false;
-        {
-            let f = self.pixels.frame_mut();
-            if f.len() == expected_len {
-                unsafe {
-                    self.engine_state
-                        .frame
-                        .set_pixels_mirror_buffer(f.as_mut_ptr(), f.len());
-                }
-                mirror_ok = true;
-            }
-        }
+        let mirror_ok = self.bind_pixels_mirror();
 
         if self.engine_state.paused {
             if self.engine_state.pending_step_ticks > 0 {
@@ -305,7 +310,8 @@ impl ApplicationHandler for AppState {
                         .resize_surface(self.size.width, self.size.height);
                     self.engine_state
                         .resize_frame(self.size.width, self.size.height);
-                    // Notify app of screen size change
+                    // Route resize draws (e.g. uniform_fill) to the display buffer, not cpu_staging.
+                    let _ = self.bind_pixels_mirror();
                     let _ = self.app.on_screen_size_change(
                         &mut self.engine_state,
                         self.size.width,
@@ -332,6 +338,7 @@ impl ApplicationHandler for AppState {
                         .resize_surface(self.size.width, self.size.height);
                     self.engine_state
                         .resize_frame(self.size.width, self.size.height);
+                    let _ = self.bind_pixels_mirror();
                     let _ = self.app.on_screen_size_change(
                         &mut self.engine_state,
                         self.size.width,
@@ -354,7 +361,7 @@ impl ApplicationHandler for AppState {
                         .resize_surface(self.size.width, self.size.height);
                     self.engine_state
                         .resize_frame(self.size.width, self.size.height);
-                    // Notify app of screen size change
+                    let _ = self.bind_pixels_mirror();
                     let _ = self.app.on_screen_size_change(
                         &mut self.engine_state,
                         self.size.width,

@@ -20,6 +20,11 @@ class TVApp(xos.Application):
         # xos.ops.convolve(self.frame.tensor, self.kernel, inplace=True)
         pass
 
+    def on_screen_size_change(self, width, height):
+        self.randomize_frame()
+        self.randomize_kernel()
+        print(width, height)
+
     def on_events(self):
         pass
 
