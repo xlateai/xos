@@ -1,4 +1,4 @@
-use crate::ai::transcription::{
+use xos_core::ai::transcription::{
     transcribe_waveform_once_with_language, TranscriptionEngine, WhisperBackend,
 };
 use crate::apps::text::TranscriptTextView;

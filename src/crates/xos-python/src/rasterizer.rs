@@ -235,14 +235,22 @@ fn py_number_to_f32(
 }
 
 // Thread-safe wrapper for raw pointer
-pub(crate) struct FrameBufferPtr(pub(crate) *mut u8);
+pub struct FrameBufferPtr(*mut u8);
+
+impl FrameBufferPtr {
+    #[inline]
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.0
+    }
+}
+
 unsafe impl Send for FrameBufferPtr {}
 unsafe impl Sync for FrameBufferPtr {}
 
 // Global pointer to the current frame buffer (set during tick)
-pub(crate) static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
-pub(crate) static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
-pub(crate) static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
+pub static CURRENT_FRAME_BUFFER: Mutex<Option<FrameBufferPtr>> = Mutex::new(None);
+pub static CURRENT_FRAME_WIDTH: Mutex<usize> = Mutex::new(0);
+pub static CURRENT_FRAME_HEIGHT: Mutex<usize> = Mutex::new(0);
 
 // Global font for text rasterization (lazy loaded)
 static GLOBAL_FONT: Mutex<Option<Font>> = Mutex::new(None);
@@ -309,7 +317,7 @@ fn circles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -418,7 +426,7 @@ fn triangles_py(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -547,7 +555,7 @@ fn lines(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -683,7 +691,7 @@ fn lines_batched(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -808,7 +816,7 @@ fn clear(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -848,7 +856,7 @@ fn fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -900,7 +908,7 @@ fn fill_buffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -979,7 +987,7 @@ fn rects_filled(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -1255,7 +1263,7 @@ fn rectangles(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
@@ -1367,7 +1375,7 @@ fn text(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -1637,7 +1645,7 @@ fn frame_blit_aspect_fit_norm_rect(args: FuncArgs, vm: &VirtualMachine) -> PyRes
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let nw = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let nh = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     let nw_u32 = u32::try_from(nw).unwrap_or(u32::MAX);
@@ -1689,7 +1697,7 @@ fn blur_framebuffer(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {
@@ -1728,7 +1736,7 @@ fn frame_in_frame(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let dst_w = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let dst_h = *CURRENT_FRAME_HEIGHT.lock().unwrap();
     let buffer_ptr = buffer_ptr_opt.ok_or_else(|| {

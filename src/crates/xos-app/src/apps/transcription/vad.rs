@@ -4,7 +4,7 @@
 //! [`super::transcribe::TranscribeApp`]. For full **Silero** probability, use a desktop build
 //! (default features include `silero_vad` + `ort`).
 
-use crate::ai::transcription::{TranscriptionEngine, WhisperBackend};
+use xos_core::ai::transcription::{TranscriptionEngine, WhisperBackend};
 use xos_core::engine::audio;
 use xos_core::engine::{Application, EngineState};
 use xos_core::rasterizer::fill;
@@ -38,7 +38,7 @@ fn vad_binary_threshold() -> f32 {
         not(target_os = "ios")
     ))]
     {
-        return crate::ai::transcription::SILERO_VAD_SPEECH_THRESHOLD;
+        return xos_core::ai::transcription::SILERO_VAD_SPEECH_THRESHOLD;
     }
     #[cfg(not(all(
         feature = "silero_vad",

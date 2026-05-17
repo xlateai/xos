@@ -108,7 +108,7 @@ pub fn run_mesh_python_file(file_path: &Path) {
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 pub fn run_mesh_app() {
-    let root = match crate::find_xos_project_root() {
+    let root = match xos_core::find_xos_project_root() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("❌ {e}");

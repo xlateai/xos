@@ -3,7 +3,7 @@ use xos_core::rasterizer::fill;
 use delaunator::{triangulate, Point};
 use std::collections::HashMap;
 
-use crate::random::{randint, uniform_range};
+use xos_core::random::{randint, uniform_range};
 
 const VIEW_MARGIN: f64 = 512.0;
 const SPAWN_PADDING: f64 = 128.0;

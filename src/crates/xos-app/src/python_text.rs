@@ -4,12 +4,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use rustpython_vm::builtins::PyDict;
 use rustpython_vm::{PyObjectRef, PyResult, VirtualMachine};
 
 use crate::apps::text::text::TextApp;
-use xos_core::engine::keyboard::shortcuts::ShortcutAction;
-use xos_core::engine::{Application, EngineState, ScrollWheelUnit};
+use xos_core::engine::{Application, EngineState};
 use xos_core::ui::text::{collect_ui_text_render_state, UiTextRenderState};
 
 /// Monotonic id assignment for [`Text`] handles (Python-visible as `_native_id`).

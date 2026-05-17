@@ -372,10 +372,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     })?;
 
     let buffer_len = width * height * 4;
-    // Access the inner pointer through pattern matching or deref
-    let ptr = match buffer_ptr {
-        crate::rasterizer::FrameBufferPtr(p) => *p,
-    };
+    let ptr = buffer_ptr.as_ptr();
     let buffer = unsafe { std::slice::from_raw_parts_mut(ptr, buffer_len) };
     drop(buffer_guard);
 

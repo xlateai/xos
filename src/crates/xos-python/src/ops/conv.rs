@@ -128,7 +128,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *crate::rasterizer::CURRENT_FRAME_WIDTH
         .lock()
         .unwrap();
@@ -344,7 +344,7 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *crate::rasterizer::CURRENT_FRAME_WIDTH
         .lock()
         .unwrap();

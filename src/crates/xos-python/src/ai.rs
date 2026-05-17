@@ -6,7 +6,6 @@ use burn::tensor::DType;
 #[cfg(all(not(target_arch = "wasm32"), feature = "whisper_burn"))]
 use burn_store::{BurnpackStore, ModuleStore};
 #[cfg(not(target_arch = "wasm32"))]
-use rustpython_vm::AsObject;
 use rustpython_vm::{
     builtins::PyModule, function::FuncArgs, PyObjectRef, PyRef, PyResult, VirtualMachine,
 };

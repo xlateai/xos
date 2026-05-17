@@ -763,7 +763,7 @@ fn frame_clear(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let width = *crate::rasterizer::CURRENT_FRAME_WIDTH
         .lock()
         .unwrap();

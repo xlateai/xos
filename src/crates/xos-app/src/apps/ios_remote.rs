@@ -183,7 +183,7 @@ impl Application for IosRemoteApp {
                     use base64::{engine::general_purpose::STANDARD as B64, Engine};
                     if let Ok(bytes) = B64.decode(jpeg_b64.as_bytes()) {
                         if let Ok((sw_u, sh_u, raw_dec)) =
-                            crate::json_codec::decode_mesh_jpeg_bytes_best_effort(
+                            xos_python::decode_mesh_jpeg_bytes_best_effort(
                                 &bytes,
                             )
                         {

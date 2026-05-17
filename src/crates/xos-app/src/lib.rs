@@ -9,7 +9,9 @@ pub mod python_ui;
 pub mod ios_ffi;
 
 pub use game_runner::run_game;
-pub use start::{start, start_wasm};
+pub use start::start;
+#[cfg(target_arch = "wasm32")]
+pub use start::start_wasm;
 pub use xos_core::launch_ios_app;
 
 static HOOKS: std::sync::Once = std::sync::Once::new();

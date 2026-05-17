@@ -73,8 +73,8 @@ fn xpy_source_and_flags() -> Result<(String, String, Vec<String>), String> {
     })?;
     let base = format!(".xos/xpy/{id}");
     let filename = format!("{base}/main.py");
-    let code = crate::fs::read_to_string(&filename)?;
-    let flags = crate::fs::read_to_string(&format!("{base}/flags.txt"))
+    let code = std::fs::read_to_string(&filename)?;
+    let flags = std::fs::read_to_string(&format!("{base}/flags.txt"))
         .unwrap_or_default()
         .lines()
         .map(str::trim)

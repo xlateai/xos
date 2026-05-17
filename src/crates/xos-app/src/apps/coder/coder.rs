@@ -2042,7 +2042,7 @@ impl Application for CoderApp {
                             }
                             
                             // Create Python frame object from engine state
-                            let frame_dict = xos_core::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
+                            let frame_dict = xos_python::engine::py_bindings::create_py_frame_state(vm, &mut state.frame)
                                 .map_err(|e| { eprintln!("Failed to create frame object: {:?}", e); () })?;
                             
                             if let Ok(wrapper_class) = vm.builtins.get_attr("Frame", vm) {
@@ -2100,12 +2100,12 @@ impl Application for CoderApp {
                         let width = shape[1];
                         let height = shape[0];
                         let buffer = state.frame.buffer_mut();
-                        xos_core::rasterizer::set_frame_buffer_context(buffer, width, height);
+                        xos_python::rasterizer::set_frame_buffer_context(buffer, width, height);
                         
                         self.interpreter.enter(|vm| {
                             // Update frame data before calling tick
                             if let Ok(Some(frame_obj)) = vm.get_attribute_opt(app_instance.clone(), "frame") {
-                                let _ = xos_core::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
+                                let _ = xos_python::engine::py_bindings::update_py_frame_state(vm, frame_obj.clone(), &mut state.frame);
                                 
                                 // Update mouse data
                                 let mouse_dict = vm.ctx.new_dict();
@@ -2134,7 +2134,7 @@ impl Application for CoderApp {
                         });
                         
                         // Clear the frame buffer context after tick
-                        xos_core::rasterizer::clear_frame_buffer_context();
+                        xos_python::rasterizer::clear_frame_buffer_context();
                         self.viewport_ticks_completed = self.viewport_ticks_completed.saturating_add(1);
                     }
                 } else {

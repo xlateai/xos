@@ -180,7 +180,7 @@ fn paint_button_immediate(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 
@@ -386,7 +386,7 @@ fn text_render(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|ptr| ptr.0);
+        .map(|ptr| ptr.as_ptr());
     let canvas_width = *CURRENT_FRAME_WIDTH.lock().unwrap();
     let canvas_height = *CURRENT_FRAME_HEIGHT.lock().unwrap();
 

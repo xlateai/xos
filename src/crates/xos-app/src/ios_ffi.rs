@@ -202,7 +202,7 @@ pub extern "C" fn xos_engine_init(app_name: *const c_char, width: u32, height: u
             style: CursorStyleSetter::new(),
         },
         keyboard: KeyboardState {
-            onscreen: crate::ui::onscreen_keyboard::OnScreenKeyboard::new(),
+            onscreen: xos_core::ui::onscreen_keyboard::OnScreenKeyboard::new(),
             modifiers: KeyboardModifiers::default(),
         },
         f3_menu: F3Menu::new(),
@@ -325,7 +325,7 @@ pub extern "C" fn xos_engine_tick() -> i32 {
             // Split borrows: get buffer and keyboard separately
             let (buffer, keyboard) = {
                 let buffer_ptr = ios_state.engine_state.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard =
+                let keyboard_ptr: *mut xos_core::ui::onscreen_keyboard::OnScreenKeyboard =
                     &mut ios_state.engine_state.keyboard.onscreen;
                 (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
             };

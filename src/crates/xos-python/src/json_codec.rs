@@ -50,7 +50,7 @@ pub(crate) fn decode_mesh_jpeg_to_rgba(jpeg: &[u8]) -> Result<(usize, usize, Vec
 
 /// Prefer [`decode_mesh_jpeg_to_rgba`]; fall back to `image` for exotic JPEGs.
 #[inline]
-pub(crate) fn decode_mesh_jpeg_bytes_best_effort(
+pub fn decode_mesh_jpeg_bytes_best_effort(
     jpeg: &[u8],
 ) -> Result<(usize, usize, Vec<u8>), String> {
     match decode_mesh_jpeg_to_rgba(jpeg) {
