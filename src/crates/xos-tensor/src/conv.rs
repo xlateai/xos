@@ -5,10 +5,29 @@
 //! **`input` / `kernel` take `Vec<f32>`** so callers move owned buffers into [`TensorData`] without an
 //! extra `slice::to_vec()` copy. If you only have `&[f32]`, call `.to_vec()` once at the call site.
 
+use std::sync::OnceLock;
+
 use burn::tensor::TensorData;
 use burn_backend::ops::ConvOptions;
 
 use super::{BurnTensor, WgpuDevice};
+
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+static WGPU_DEVICE: OnceLock<WgpuDevice> = OnceLock::new();
+
+#[inline]
+fn conv_device() -> WgpuDevice {
+    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+    {
+        return WGPU_DEVICE
+            .get_or_init(WgpuDevice::default)
+            .clone();
+    }
+    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    {
+        WgpuDevice::default()
+    }
+}
 
 /// Perform 2D convolution using Burn
 /// - input: NCHW [batch, in_c, h, w]
@@ -28,7 +47,7 @@ pub fn conv2d(
     stride: [usize; 2],
     padding: [usize; 2],
 ) {
-    let device = WgpuDevice::default();
+    let device = conv_device();
 
     let x = BurnTensor::<4>::from_data(
         TensorData::new(input, [batch, in_channels, in_h, in_w]),
@@ -70,7 +89,7 @@ pub fn depthwise_conv2d(
     stride: [usize; 2],
     padding: [usize; 2],
 ) {
-    let device = WgpuDevice::default();
+    let device = conv_device();
 
     let x = BurnTensor::<4>::from_data(
         TensorData::new(input, [batch, channels, in_h, in_w]),
