@@ -25,6 +25,8 @@ pub mod random;
 pub mod rasterizer;
 pub mod regex;
 pub mod runtime;
+#[cfg(not(target_arch = "wasm32"))]
+mod repl;
 pub(crate) mod staged_native_python_app;
 pub mod sensors;
 pub mod system;
