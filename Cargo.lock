@@ -11362,12 +11362,14 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 name = "xos"
 version = "0.3.19-pre2"
 dependencies = [
+ "base64 0.22.1",
  "burn-autodiff",
  "burn-backend",
  "burn-fusion",
  "burn-ir",
  "burn-ndarray",
  "clap",
+ "ctrlc",
  "darling 0.21.3",
  "dialoguer",
  "getrandom 0.3.4",
