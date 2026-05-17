@@ -1,4 +1,6 @@
-use rustpython_vm::{builtins::PyModule, function::FuncArgs, PyRef, PyResult, VirtualMachine};
+use rustpython_vm::{
+    builtins::PyModule, function::FuncArgs, AsObject, PyRef, PyResult, VirtualMachine,
+};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{LazyLock, Mutex};
@@ -20,6 +22,52 @@ use winit::{
 
 static STANDALONE_FRAME_BUFFERS: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static STANDALONE_FRAME_DIMS: LazyLock<Mutex<HashMap<u64, (usize, usize)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static STANDALONE_FRAME_DRAWN: LazyLock<Mutex<HashMap<u64, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn mark_standalone_frame_drawn(viewport_id: u64) {
+    if let Ok(mut drawn) = STANDALONE_FRAME_DRAWN.lock() {
+        drawn.insert(viewport_id, true);
+    }
+}
+
+pub(crate) fn standalone_frame_was_drawn(viewport_id: u64) -> bool {
+    STANDALONE_FRAME_DRAWN
+        .lock()
+        .ok()
+        .and_then(|d| d.get(&viewport_id).copied())
+        .unwrap_or(false)
+}
+
+pub(crate) fn standalone_frame_dims(viewport_id: u64) -> Option<(usize, usize)> {
+    STANDALONE_FRAME_DIMS
+        .lock()
+        .ok()
+        .and_then(|dims| dims.get(&viewport_id).copied())
+}
+
+/// Stretch-blit RGBA bytes into a destination framebuffer.
+pub(crate) fn blit_rgba_init_to_buffer(
+    src: &[u8],
+    src_w: usize,
+    src_h: usize,
+    dest: &mut [u8],
+    dest_w: usize,
+    dest_h: usize,
+) -> bool {
+    let required = dest_w.saturating_mul(dest_h).saturating_mul(4);
+    if dest.len() != required || src.len() != src_w.saturating_mul(src_h).saturating_mul(4) {
+        return false;
+    }
+    if src_w == dest_w && src_h == dest_h {
+        dest.copy_from_slice(src);
+    } else {
+        crate::rasterizer::blit_rgba_stretch(src, src_w, src_h, dest, dest_w, dest_h);
+    }
+    true
+}
 
 pub(crate) fn standalone_frame_buffer_copy(viewport_id: u64) -> Option<Vec<u8>> {
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -34,6 +82,144 @@ pub(crate) fn standalone_frame_buffer_copy(viewport_id: u64) -> Option<Vec<u8>> 
             .ok()
             .and_then(|m| m.get(&viewport_id).cloned())
     }
+}
+
+/// Stretch-blit a standalone init framebuffer into the engine framebuffer (e.g. after `__init__`).
+pub(crate) fn apply_standalone_init_to_engine_buffer(
+    viewport_id: u64,
+    dest: &mut [u8],
+    dest_w: usize,
+    dest_h: usize,
+) -> bool {
+    let required = dest_w.saturating_mul(dest_h).saturating_mul(4);
+    if dest.len() != required {
+        return false;
+    }
+    let (src_w, src_h) = match STANDALONE_FRAME_DIMS
+        .lock()
+        .ok()
+        .and_then(|dims| dims.get(&viewport_id).copied())
+    {
+        Some(dims) => dims,
+        None => return false,
+    };
+    let src = match STANDALONE_FRAME_BUFFERS
+        .lock()
+        .ok()
+        .and_then(|buffers| buffers.get(&viewport_id).cloned())
+    {
+        Some(buf) => buf,
+        None => return false,
+    };
+    blit_rgba_init_to_buffer(&src, src_w, src_h, dest, dest_w, dest_h)
+}
+
+pub(crate) fn snapshot_standalone_init_frame(viewport_id: u64) -> Option<(Vec<u8>, usize, usize)> {
+    let (src_w, src_h) = standalone_frame_dims(viewport_id)?;
+    let src = standalone_frame_buffer_copy(viewport_id)?;
+    if src.len() != src_w.saturating_mul(src_h).saturating_mul(4) {
+        return None;
+    }
+    Some((src, src_w, src_h))
+}
+
+pub(crate) fn python_app_viewport_id(
+    vm: &VirtualMachine,
+    app_instance: &rustpython_vm::PyObjectRef,
+) -> Option<u64> {
+    let vid_obj = vm
+        .get_attribute_opt(app_instance.clone(), "_xos_viewport_id")
+        .ok()??;
+    vid_obj
+        .clone()
+        .try_into_value::<i64>(vm)
+        .ok()
+        .map(|v| v.max(0) as u64)
+}
+
+fn extract_tensor_viewport_id(
+    obj: &rustpython_vm::PyObjectRef,
+    vm: &VirtualMachine,
+) -> Option<u64> {
+    use rustpython_vm::builtins::PyDict;
+    let mut cur = obj.clone();
+    for _ in 0..12 {
+        if let Some(dict) = cur.downcast_ref::<PyDict>() {
+            if let Ok(vid_obj) = dict.get_item("_xos_viewport_id", vm) {
+                if let Ok(vid) = vid_obj.try_into_value::<i64>(vm) {
+                    return Some(vid.max(0) as u64);
+                }
+            }
+        }
+        // Unwrap xos.Tensor / xos.Frame wrappers (`_data` holds the backing dict).
+        if let Ok(Some(attr)) = vm.get_attribute_opt(cur.clone(), "_data") {
+            cur = attr;
+            continue;
+        }
+        if let Ok(Some(attr)) = vm.get_attribute_opt(cur.clone(), "tensor") {
+            cur = attr;
+            continue;
+        }
+        break;
+    }
+    None
+}
+
+fn builtin_app_viewport_id(vm: &VirtualMachine) -> Option<u64> {
+    let app = vm
+        .get_attribute_opt(vm.builtins.as_object().to_owned(), "__xos_app_instance__")
+        .ok()
+        .flatten()?;
+    python_app_viewport_id(vm, &app)
+}
+
+/// Run `f` on the active tick framebuffer, or on a standalone init buffer when called from `__init__`.
+pub(crate) fn with_frame_write_buffer<R>(
+    vm: &VirtualMachine,
+    tensor_hint: Option<&rustpython_vm::PyObjectRef>,
+    f: impl FnOnce(&mut [u8]) -> PyResult<R>,
+) -> PyResult<R> {
+    {
+        let buffer_guard = crate::rasterizer::CURRENT_FRAME_BUFFER
+            .lock()
+            .map_err(|_| vm.new_runtime_error("frame buffer context lock poisoned".to_string()))?;
+        let width = *crate::rasterizer::CURRENT_FRAME_WIDTH
+            .lock()
+            .map_err(|_| vm.new_runtime_error("frame buffer context lock poisoned".to_string()))?;
+        let height = *crate::rasterizer::CURRENT_FRAME_HEIGHT
+            .lock()
+            .map_err(|_| vm.new_runtime_error("frame buffer context lock poisoned".to_string()))?;
+        if let Some(buffer_ptr) = buffer_guard.as_ref() {
+            let buffer_len = width.saturating_mul(height).saturating_mul(4);
+            let ptr = buffer_ptr.as_ptr();
+            let buffer = unsafe { std::slice::from_raw_parts_mut(ptr, buffer_len) };
+            return f(buffer);
+        }
+    }
+
+    let viewport_id = tensor_hint
+        .and_then(|t| extract_tensor_viewport_id(t, vm))
+        .or_else(|| builtin_app_viewport_id(vm))
+        .ok_or_else(|| {
+            vm.new_runtime_error(
+                "No frame buffer context set. uniform_fill must be called during tick() \
+or from Application.__init__() after super().__init__().".to_string(),
+            )
+        })?;
+
+    let mut buffers = STANDALONE_FRAME_BUFFERS.lock().map_err(|_| {
+        vm.new_runtime_error("standalone frame buffer lock poisoned".to_string())
+    })?;
+    let buf = buffers.get_mut(&viewport_id).ok_or_else(|| {
+        vm.new_runtime_error(
+            "No standalone init framebuffer for this app. Call super().__init__() first.".to_string(),
+        )
+    })?;
+    let out = f(buf.as_mut_slice());
+    if out.is_ok() {
+        mark_standalone_frame_drawn(viewport_id);
+    }
+    out
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
@@ -564,6 +750,14 @@ fn get_mouse(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 /// xos.print() - alias to builtin print (no longer needed, kept for compatibility)
 /// We'll set this to builtins.print in make_module instead
 
+/// xos.clear() - clear the terminal screen (ANSI erase + home cursor).
+fn xos_clear(_args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[2J\x1b[H");
+    let _ = out.flush();
+    Ok(vm.ctx.none())
+}
+
 /// xos.sleep() - sleep for a number of seconds
 /// NOTE: This blocks the main thread, so it's not recommended for use in the coder app
 /// For periodic updates, use a viewport app with tick() instead
@@ -823,6 +1017,10 @@ fn frame_begin_standalone(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             buf.resize(required, 0);
         }
         crate::rasterizer::set_frame_buffer_context(buf.as_mut_slice(), width, height);
+        STANDALONE_FRAME_DIMS
+            .lock()
+            .map_err(|_| vm.new_runtime_error("standalone frame dims lock poisoned".to_string()))?
+            .insert(viewport_id, (width, height));
     }
 
     let tensor_dict = vm.ctx.new_dict();
@@ -1098,6 +1296,9 @@ pub fn make_module(vm: &VirtualMachine) -> PyRef<PyModule> {
         module.set_attr("print", builtin_print, vm).unwrap();
     }
 
+    module
+        .set_attr("clear", vm.new_function("clear", xos_clear), vm)
+        .unwrap();
     module
         .set_attr("sleep", vm.new_function("sleep", xos_sleep), vm)
         .unwrap();

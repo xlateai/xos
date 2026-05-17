@@ -145,6 +145,18 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
 
+    // Metal fast path: in-place 3×3 on RGBA framebuffer (macOS / iOS).
+    // Kernel is K×K×3 (27 floats): index (ky, kx, in_c) = (ky * K + kx) * 3 + in_c.
+    if inplace && stride == 1 && kernel_size == 3 && kernel.len() == 27 {
+        let mut kernel_hwc = [0.0f32; 27];
+        kernel_hwc.copy_from_slice(&kernel);
+        if super::conv_metal::try_convolve_rgba_3x3_inplace(buffer, width, height, &kernel_hwc) {
+            let sentinel = vm.ctx.new_dict();
+            sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+            return Ok(sentinel.into());
+        }
+    }
+
     // Convert u8 RGBA buffer to f32 RGB channels (batch=1, channels=3)
     let mut input_f32 = vec![0.0f32; width * height * 3];
     for i in 0..(width * height) {

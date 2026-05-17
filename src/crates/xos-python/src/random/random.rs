@@ -350,33 +350,26 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         )));
     }
 
-    let _array_dict = &args_vec[0]; // Array dict (not used, we access buffer directly)
+    let tensor_hint = &args_vec[0];
     let low: f64 = parse_f64(&args_vec[1], vm)?;
     let high: f64 = parse_f64(&args_vec[2], vm)?;
 
-    // Get the frame buffer from global context
-    let buffer_guard = crate::rasterizer::CURRENT_FRAME_BUFFER
-        .lock()
-        .unwrap();
-    let width = *crate::rasterizer::CURRENT_FRAME_WIDTH
-        .lock()
-        .unwrap();
-    let height = *crate::rasterizer::CURRENT_FRAME_HEIGHT
-        .lock()
-        .unwrap();
-
-    let buffer_ptr = buffer_guard.as_ref().ok_or_else(|| {
-        vm.new_runtime_error(
-            "No frame buffer context set. uniform_fill must be called during tick().".to_string(),
-        )
+    crate::xos_module::with_frame_write_buffer(vm, Some(tensor_hint), |buffer| {
+        fill_buffer_uniform_random(buffer, low, high, vm)
     })?;
 
-    let buffer_len = width * height * 4;
-    let ptr = buffer_ptr.as_ptr();
-    let buffer = unsafe { std::slice::from_raw_parts_mut(ptr, buffer_len) };
-    drop(buffer_guard);
+    // Return sentinel dict to signal that data is already in buffer
+    let sentinel = vm.ctx.new_dict();
+    sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+    Ok(sentinel.into())
+}
 
-    // Fill buffer directly with random values
+fn fill_buffer_uniform_random(
+    buffer: &mut [u8],
+    low: f64,
+    high: f64,
+    _vm: &VirtualMachine,
+) -> PyResult<()> {
     #[cfg(target_arch = "wasm32")]
     {
         for pixel in buffer.iter_mut() {
@@ -384,38 +377,31 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             let value = low + random * (high - low);
             *pixel = value.clamp(0.0, 255.0) as u8;
         }
+        return Ok(());
     }
 
     // Metal GPU path for iOS/macOS - 10x+ faster than CPU
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         if try_fill_random_metal(buffer, low, high) {
-            // Successfully filled on GPU - return immediately
-            let sentinel = vm.ctx.new_dict();
-            sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
-            return Ok(sentinel.into());
+            return Ok(());
         }
         // If Metal fails, fall through to CPU path
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // OPTIMIZATION 1: Parallel CPU generation using rayon
-        // OPTIMIZATION 2: Generate u64s and split into bytes for 8x fewer RNG calls
         use rand::Rng;
         use rayon::prelude::*;
 
         let scale = (high - low) / 255.0;
         let offset = low;
 
-        // Split buffer into chunks for parallel processing
-        // Use chunk size that's multiple of 8 for u64 efficiency
-        const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks for good cache locality
+        const CHUNK_SIZE: usize = 64 * 1024;
 
         buffer.par_chunks_mut(CHUNK_SIZE).for_each(|chunk| {
             let mut rng = rand::rng();
 
-            // Process 8 bytes at a time using u64
             let chunks = chunk.len() / 8;
             let remainder = chunk.len() % 8;
 
@@ -430,7 +416,6 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
                 }
             }
 
-            // Handle remaining bytes
             if remainder > 0 {
                 let random_u64: u64 = rng.random();
                 let bytes = random_u64.to_le_bytes();
@@ -444,10 +429,7 @@ fn uniform_fill(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         });
     }
 
-    // Return sentinel dict to signal that data is already in buffer
-    let sentinel = vm.ctx.new_dict();
-    sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
-    Ok(sentinel.into())
+    Ok(())
 }
 
 /// xos.random.randint(a, b) -> int in the inclusive range [a, b]
