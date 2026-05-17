@@ -102,6 +102,8 @@ pub struct FrameState {
     pixels_mirror: Option<(NonNull<u8>, usize)>,
     gpu_dirty: bool,
     cpu_dirty: bool,
+    /// When true, present via GPU blit once `pixels` and Burn share a `wgpu` version.
+    gpu_present_enabled: bool,
     /// Safe region bounding rectangle for UI elements
     pub safe_region_boundaries: SafeRegionBoundingRectangle,
 }
@@ -109,7 +111,17 @@ pub struct FrameState {
 impl FrameState {
     /// Create a new FrameState with given dimensions and safe region (opaque black).
     pub fn new(width: u32, height: u32, safe_region: SafeRegionBoundingRectangle) -> Self {
-        let device = WgpuDevice::default();
+        Self::new_with_device(width, height, safe_region, WgpuDevice::default(), false) // gpu_present off until wgpu unified
+    }
+
+    /// Create frame state on a specific Burn device (use shared pixels device for GPU present).
+    pub fn new_with_device(
+        width: u32,
+        height: u32,
+        safe_region: SafeRegionBoundingRectangle,
+        device: WgpuDevice,
+        gpu_present_enabled: bool,
+    ) -> Self {
         let h = height as usize;
         let w = width as usize;
         let len = (width * height * 4) as usize;
@@ -127,8 +139,23 @@ impl FrameState {
             pixels_mirror: None,
             gpu_dirty: false,
             cpu_dirty: false,
+            gpu_present_enabled,
             safe_region_boundaries: safe_region,
         }
+    }
+
+    #[inline]
+    pub fn gpu_present_enabled(&self) -> bool {
+        self.gpu_present_enabled
+    }
+
+    #[inline]
+    pub fn is_gpu_dirty(&self) -> bool {
+        self.gpu_dirty
+    }
+
+    pub fn set_gpu_present_enabled(&mut self, enabled: bool) {
+        self.gpu_present_enabled = enabled;
     }
 
     /// # Safety
@@ -266,7 +293,9 @@ impl FrameState {
 
     /// Resize the frame (opaque black).
     pub fn resize(&mut self, width: u32, height: u32) {
-        *self = Self::new(width, height, self.safe_region_boundaries.clone());
+        let gpu_present = self.gpu_present_enabled;
+        let device = self.device.clone();
+        *self = Self::new_with_device(width, height, self.safe_region_boundaries.clone(), device, gpu_present);
     }
 
     /// Replace the inset used for layout / Python `safe_region` (e.g. host-driven safe area).

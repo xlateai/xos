@@ -1,15 +1,15 @@
-//! Opaque GPU resource cache for post-upload raster passes. Extend with new backends via
-//! `Box<dyn Any>` payloads (see `render_pending_gpu_passes` in `mod.rs`).
+//! GPU presentation pipeline cache (see [`crate::gpu_present`] and `render_pending_gpu_passes`).
 
-/// Reserved for future GPU post-pass state (currently unused; Burn raster runs on the frame tensor).
+use crate::gpu_present::GpuPresentCache;
+
+/// Per-window GPU blit pipeline and params buffer.
 pub struct RasterCache {
-    #[allow(dead_code)]
-    pub(crate) inner: Option<Box<dyn std::any::Any + Send>>,
+    pub(crate) gpu_present: Option<GpuPresentCache>,
 }
 
 impl RasterCache {
     pub fn new() -> Self {
-        Self { inner: None }
+        Self { gpu_present: None }
     }
 }
 

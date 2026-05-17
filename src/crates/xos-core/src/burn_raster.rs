@@ -291,6 +291,52 @@ pub fn convolve_depthwise_rgb_same(
     Ok(())
 }
 
+/// Filled disk in pixel space (GPU).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fill_circle(
+    frame: &mut FrameState,
+    frame_width: usize,
+    frame_height: usize,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    color: (u8, u8, u8, u8),
+) {
+    if frame_width == 0 || frame_height == 0 || radius <= 0.0 {
+        return;
+    }
+    let h = frame_height;
+    let w = frame_width;
+    let device = frame.device().clone();
+    frame.ensure_gpu_from_cpu();
+    let mut t = frame.burn_tensor().clone();
+
+    let y = BurnTensorAny::<XosBackend, 1, Int>::arange(0..h as i64, &device).float();
+    let x = BurnTensorAny::<XosBackend, 1, Int>::arange(0..w as i64, &device).float();
+    let [yy, xx] = meshgrid(&[y, x], GridOptions::default());
+    let px = xx.clone() + 0.5;
+    let py = yy.clone() + 0.5;
+    let dx = px - cx;
+    let dy = py - cy;
+    let r2 = radius * radius;
+    let mask = dx
+        .clone()
+        .mul(dx)
+        .add(dy.clone().mul(dy))
+        .lower_elem(r2);
+
+    let c = [
+        color.0 as f32,
+        color.1 as f32,
+        color.2 as f32,
+        color.3 as f32,
+    ];
+    let color_plane = rgba_tensor(&device, h, w, c);
+    let mask4 = mask.unsqueeze_dim::<3>(2).expand([h, w, 4]);
+    t = t.mask_where(mask4, color_plane);
+    frame.set_burn_tensor(t);
+}
+
 /// Fill the frame RGBA tensor on GPU (stays on GPU; no CPU staging touch).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn uniform_fill_rgba(frame: &mut FrameState, low: f32, high: f32) {

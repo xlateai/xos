@@ -23,18 +23,26 @@ pub fn fill(frame: &mut FrameState, color: (u8, u8, u8, u8)) {
     burn_raster::fill_solid(frame, color);
 }
 
-/// Present the Burn frame tensor to the pixels backing texture when possible.
-///
-/// Today `pixels` still uploads its CPU `Vec<u8>` before this hook runs; true zero-copy needs a
-/// shared [`burn_wgpu::WgpuSetup`] with `pixels` and skipping that upload (see `gpu_present` plan).
+/// Blit the Burn frame tensor into the pixels backing texture (same wgpu device as Burn).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_pending_gpu_passes(
-    _cache: &mut RasterCache,
-    _encoder: &mut pixels::wgpu::CommandEncoder,
-    _device: &pixels::wgpu::Device,
-    _queue: &pixels::wgpu::Queue,
-    _inner_texture: &pixels::wgpu::Texture,
-    _extent: pixels::wgpu::Extent3d,
-    _texture_format: pixels::wgpu::TextureFormat,
-) {
+    cache: &mut RasterCache,
+    frame: &mut crate::engine::FrameState,
+    encoder: &mut pixels::wgpu::CommandEncoder,
+    device: &pixels::wgpu::Device,
+    queue: &pixels::wgpu::Queue,
+    inner_texture: &pixels::wgpu::Texture,
+    extent: pixels::wgpu::Extent3d,
+    texture_format: pixels::wgpu::TextureFormat,
+) -> bool {
+    crate::gpu_present::blit_frame_to_texture(
+        cache,
+        frame,
+        encoder,
+        device,
+        queue,
+        inner_texture,
+        texture_format,
+        extent,
+    )
 }

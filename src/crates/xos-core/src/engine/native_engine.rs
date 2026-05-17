@@ -189,9 +189,12 @@ impl AppState {
     }
 
     fn render_pixels(&mut self) -> Result<(), pixels::Error> {
+        self.pixels.set_skip_cpu_texture_upload(false);
+        self.engine_state.frame.publish_gpu_to_staging();
         self.pixels.render_with(|encoder, render_target, context| {
-            crate::rasterizer::render_pending_gpu_passes(
+            let _ = crate::rasterizer::render_pending_gpu_passes(
                 &mut self.raster_cache,
+                &mut self.engine_state.frame,
                 encoder,
                 &context.device,
                 &context.queue,
@@ -213,7 +216,6 @@ impl AppState {
                     self.engine_state.pending_step_ticks.saturating_sub(1);
                 tick_frame_delta(&mut self.engine_state, &mut self.last_tick_instant);
                 let _ = self.app.tick(&mut self.engine_state);
-                self.engine_state.frame.publish_gpu_to_staging();
                 self.capture_paused_base_frame();
             } else {
                 self.last_tick_instant = Some(Instant::now());
@@ -228,9 +230,6 @@ impl AppState {
             self.capture_paused_base_frame();
         }
 
-        // One GPU→CPU sync per frame for display (pixels uploads this buffer to the window texture).
-        self.engine_state.frame.publish_gpu_to_staging();
-
         tick_frame_view_zoom(&mut self.engine_state);
         apply_frame_view_zoom(&mut self.engine_state);
 
@@ -244,14 +243,8 @@ impl AppState {
             let mouse_left = self.engine_state.mouse.is_left_clicking;
             let mouse_right = self.engine_state.mouse.is_right_clicking;
             let safe_region = self.engine_state.frame.safe_region_boundaries.clone();
-            let (buffer, keyboard) = {
-                let buffer_ptr = self.engine_state.frame.buffer_mut() as *mut [u8];
-                let keyboard_ptr: *mut crate::ui::onscreen_keyboard::OnScreenKeyboard =
-                    &mut self.engine_state.keyboard.onscreen;
-                (unsafe { &mut *buffer_ptr }, unsafe { &mut *keyboard_ptr })
-            };
-            keyboard.tick(
-                buffer,
+
+            self.engine_state.keyboard.onscreen.tick_logic(
                 width,
                 height,
                 mouse_x,
@@ -262,6 +255,25 @@ impl AppState {
                 mouse_right,
                 &safe_region,
             );
+
+            if self.engine_state.keyboard.onscreen.needs_framebuffer_access() {
+                self.engine_state.keyboard.onscreen.tick_draw_gpu(
+                    &mut self.engine_state.frame,
+                    width,
+                    height,
+                    &safe_region,
+                );
+                if self.engine_state.keyboard.onscreen.is_shown() {
+                    self.engine_state
+                        .keyboard
+                        .onscreen
+                        .draw_key_labels(
+                            self.engine_state.frame.buffer_mut(),
+                            width,
+                            height,
+                        );
+                }
+            }
         }
 
         tick_f3_menu(&mut self.engine_state);

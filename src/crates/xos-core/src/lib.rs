@@ -14,6 +14,8 @@ use webbrowser;
 pub mod ai;
 pub mod blank_app;
 pub mod burn_raster;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gpu_present;
 pub mod coder_log;
 pub mod engine;
 pub mod fs;
