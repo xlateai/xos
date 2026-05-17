@@ -18,6 +18,7 @@ class TVApp(xos.Application):
     def tick(self):
         # convolution tv will convolve the random frame
         xos.ops.convolve(self.frame.tensor, self.kernel, inplace=True)
+        print(self.frame.tensor.device)
 
     def on_screen_size_change(self, width, height):
         self.randomize_frame()

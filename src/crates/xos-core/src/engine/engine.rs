@@ -204,6 +204,14 @@ impl FrameState {
         self.cpu_dirty = true;
     }
 
+    /// Copy the GPU frame tensor into CPU staging / the pixels mirror (for display after GPU ops).
+    pub fn publish_gpu_to_staging(&mut self) {
+        if self.gpu_dirty {
+            self.sync_tensor_to_cpu();
+            self.gpu_dirty = false;
+        }
+    }
+
     fn sync_tensor_to_cpu(&mut self) {
         let h = self.height as usize;
         let w = self.width as usize;

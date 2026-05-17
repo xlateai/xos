@@ -587,15 +587,71 @@ class Tensor:
     def dtype(self):
         return self._data.get('dtype', 'unknown')
 
-    def to(self, dtype):
-        """Return a new tensor converted to ``dtype`` using flat elementwise casting."""
+    @property
+    def device(self):
+        return self._data.get('device', 'cpu')
+
+    _DEVICE_NAMES = frozenset({"cpu", "gpu", "wasm"})
+    _DEVICE_ALIASES = {
+        "cuda": "gpu",
+        "mps": "gpu",
+        "metal": "gpu",
+        "wgpu": "gpu",
+    }
+
+    def _normalize_device(self, dev):
+        if hasattr(dev, "type"):
+            dev = dev.type
+        d = str(dev).strip().lower()
+        return self._DEVICE_ALIASES.get(d, d)
+
+    def _is_device_target(self, name):
+        return name in self._DEVICE_NAMES or name in self._DEVICE_ALIASES
+
+    def _to_device(self, device):
+        if "_data" not in self._data:
+            raise TypeError("tensor has no element data for to()")
+        dev = self._normalize_device(device)
+        if dev not in self._DEVICE_NAMES:
+            raise ValueError(f"unsupported device for to(): {device}")
+        data = self._data["_data"]
+        if not isinstance(data, list):
+            raise TypeError("tensor has no element data for to()")
+        return Tensor({
+            "shape": tuple(self.shape),
+            "dtype": self.dtype,
+            "device": dev,
+            "_data": list(data),
+        })
+
+    def to(self, target=None, *, dtype=None, device=None):
+        """Cast ``dtype`` and/or set ``device`` (metadata; compute still uses the active backend)."""
         if "_data" not in self._data or not isinstance(self._data["_data"], list):
             raise TypeError("tensor has no element data for to()")
 
-        if isinstance(dtype, str):
-            target = dtype.strip().lower()
-        elif hasattr(dtype, "name"):
-            target = str(dtype.name).strip().lower()
+        if device is not None:
+            out = self._to_device(device)
+            if dtype is None and target is None:
+                return out
+            base = out
+        else:
+            base = self
+
+        if target is None and dtype is None:
+            if device is not None:
+                return base
+            raise TypeError("to() requires a dtype or device")
+
+        if dtype is not None:
+            target = dtype
+        elif isinstance(target, str):
+            target = target.strip().lower()
+            if self._is_device_target(target):
+                return base._to_device(target)
+        elif hasattr(target, "type"):
+            return base._to_device(target)
+        elif hasattr(target, "name"):
+            target = str(target.name).strip().lower()
         else:
             raise TypeError("dtype must be a dtype object or string")
 
@@ -610,7 +666,7 @@ class Tensor:
         }
         target = alias.get(target, target)
 
-        src = self._data["_data"]
+        src = base._data["_data"]
         if target == "uint8":
             out = []
             for v in src:
@@ -628,9 +684,9 @@ class Tensor:
             raise ValueError(f"unsupported dtype for to(): {target}")
 
         return Tensor({
-            "shape": tuple(self.shape),
+            "shape": tuple(base.shape),
             "dtype": target,
-            "device": self._data.get("device", "cpu"),
+            "device": base._data.get("device", "cpu"),
             "_data": out,
         })
     
@@ -790,7 +846,7 @@ class Frame:
     
     @property
     def tensor(self):
-        """CPU RGBA frame tensor (``xos.Tensor``) with slice assignment."""
+        """RGBA frame tensor (``xos.Tensor``); compute uses GPU on native via Burn/WGPU."""
         return self._tensor
     
     def get_width(self):

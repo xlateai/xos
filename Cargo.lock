@@ -11494,6 +11494,7 @@ name = "xos-core"
 version = "0.3.19-pre4"
 dependencies = [
  "burn",
+ "burn-backend",
  "burn-cubecl",
  "burn-store",
  "burn-wgpu",

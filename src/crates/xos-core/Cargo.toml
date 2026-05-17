@@ -38,6 +38,7 @@ dirs = "5"
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 nokhwa = { version = "0.10.7", features = ["input-native"] }
 burn = { version = "=0.21.0-pre.3", default-features = false, features = ["wgpu", "autotune"] }
+burn-backend = { version = "=0.21.0-pre.3" }
 burn-wgpu = { version = "=0.21.0-pre.3", default-features = false, features = ["std", "autotune"] }
 burn-cubecl = { version = "=0.21.0-pre.3", optional = true }
 cubecl = { version = "=0.10.0-pre.3", features = ["stdlib"], optional = true }

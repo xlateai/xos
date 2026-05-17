@@ -1,6 +1,68 @@
 use xos_tensor::conv::{conv2d, depthwise_conv2d};
 use rustpython_vm::{function::FuncArgs, PyObjectRef, PyResult, VirtualMachine};
 
+fn direct_fill_sentinel(vm: &VirtualMachine) -> PyResult {
+    let sentinel = vm.ctx.new_dict();
+    sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
+    Ok(sentinel.into())
+}
+
+/// HWC `[ky, kx, in_c]` (K×K×3) → NCHW `[out_c, in_c, kh, kw]`.
+fn kernel_hwc_to_nchw(kernel: &[f32], kernel_size: usize) -> Vec<f32> {
+    let mut kernel_nchw = vec![0.0f32; 3 * 3 * kernel_size * kernel_size];
+    for out_c in 0..3 {
+        for in_c in 0..3 {
+            for ky in 0..kernel_size {
+                for kx in 0..kernel_size {
+                    let src_idx = (ky * kernel_size + kx) * 3 + in_c;
+                    let dst_idx = ((out_c * 3 + in_c) * kernel_size + ky) * kernel_size + kx;
+                    kernel_nchw[dst_idx] = kernel[src_idx];
+                }
+            }
+        }
+    }
+    kernel_nchw
+}
+
+/// When `Application.tick()` is active, convolve on [`FrameState`]'s GPU tensor (no per-frame CPU↔GPU vec path).
+#[cfg(not(target_arch = "wasm32"))]
+fn try_convolve_on_frame_gpu(
+    kernel_nchw: &[f32],
+    kernel_size: usize,
+    stride: [usize; 2],
+) -> bool {
+    crate::engine::py_engine_tls::with_tick_engine_state_mut(|state| {
+        xos_core::burn_raster::convolve_rgb_same(
+            &mut state.frame,
+            kernel_nchw.to_vec(),
+            kernel_size,
+            kernel_size,
+            stride,
+        )
+        .is_ok()
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn try_convolve_depthwise_on_frame_gpu(
+    kernel: Vec<f32>,
+    kernel_size: usize,
+    stride: [usize; 2],
+) -> bool {
+    crate::engine::py_engine_tls::with_tick_engine_state_mut(|state| {
+        xos_core::burn_raster::convolve_depthwise_rgb_same(
+            &mut state.frame,
+            kernel,
+            kernel_size,
+            kernel_size,
+            stride,
+        )
+        .is_ok()
+    })
+    .unwrap_or(false)
+}
+
 /// Extract the underlying data list from an array/tensor (handles xos.Tensor, dict, or list)
 fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Option<PyObjectRef>> {
     // Tensor: get_attr("_data") returns the inner dict; dict["_data"] is the list
@@ -48,7 +110,7 @@ fn get_array_data_list(obj: &PyObjectRef, vm: &VirtualMachine) -> PyResult<Optio
 }
 
 /// xos.ops.convolve(image, kernel, padding="same")
-/// Fast 2D convolution operation using tensor backend
+/// 2D convolution via Burn (WGPU on native, NdArray on wasm).
 ///
 /// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 3D array [height, width, channels] - e.g., KxKx3 for RGB
@@ -123,6 +185,36 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 
     drop(kernel_vec);
 
+    let kernel_nchw = kernel_hwc_to_nchw(&kernel, kernel_size);
+    let stride_pair = [stride, stride];
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if try_convolve_on_frame_gpu(&kernel_nchw, kernel_size, stride_pair) {
+        if inplace {
+            return direct_fill_sentinel(vm);
+        }
+        let buffer_ptr_opt = crate::rasterizer::CURRENT_FRAME_BUFFER
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|ptr| ptr.as_ptr());
+        let width = *crate::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap();
+        let height = *crate::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap();
+        if let Some(buffer_ptr) = buffer_ptr_opt {
+            let buffer =
+                unsafe { std::slice::from_raw_parts(buffer_ptr, width * height * 4) };
+            let mut output_rgb = vec![0.0f32; width * height * 3];
+            for i in 0..(width * height) {
+                let src = i * 4;
+                let dst = i * 3;
+                output_rgb[dst] = buffer[src] as f32;
+                output_rgb[dst + 1] = buffer[src + 1] as f32;
+                output_rgb[dst + 2] = buffer[src + 2] as f32;
+            }
+            return wrap_output_tensor(vm, width, height, &output_rgb);
+        }
+    }
+
     // Get the frame buffer from global context
     let buffer_ptr_opt = crate::rasterizer::CURRENT_FRAME_BUFFER
         .lock()
@@ -145,18 +237,6 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     let buffer_len = width * height * 4;
     let buffer = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
 
-    // Metal fast path: in-place 3×3 on RGBA framebuffer (macOS / iOS).
-    // Kernel is K×K×3 (27 floats): index (ky, kx, in_c) = (ky * K + kx) * 3 + in_c.
-    if inplace && stride == 1 && kernel_size == 3 && kernel.len() == 27 {
-        let mut kernel_hwc = [0.0f32; 27];
-        kernel_hwc.copy_from_slice(&kernel);
-        if super::conv_metal::try_convolve_rgba_3x3_inplace(buffer, width, height, &kernel_hwc) {
-            let sentinel = vm.ctx.new_dict();
-            sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
-            return Ok(sentinel.into());
-        }
-    }
-
     // Convert u8 RGBA buffer to f32 RGB channels (batch=1, channels=3)
     let mut input_f32 = vec![0.0f32; width * height * 3];
     for i in 0..(width * height) {
@@ -176,24 +256,6 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             for c in 0..3 {
                 let dst_idx = (c * height + y) * width + x;
                 input_nchw[dst_idx] = input_f32[src_idx + c];
-            }
-        }
-    }
-
-    // Reorganize kernel from [ky, kx, channel] to [out_channel, in_channel, ky, kx]
-    // For RGB conv: kernel is [KxKx3] where each RGB output depends on all RGB inputs
-    // Output format: [3, 3, K, K] = [out_c=3, in_c=3, kh=K, kw=K]
-    let mut kernel_nchw = vec![0.0f32; 3 * 3 * kernel_size * kernel_size];
-    for out_c in 0..3 {
-        for in_c in 0..3 {
-            for ky in 0..kernel_size {
-                for kx in 0..kernel_size {
-                    // Old format: [ky, kx, channel_triplet] = [(ky*K + kx)*3 + channel]
-                    let src_idx = (ky * kernel_size + kx) * 3 + in_c;
-                    // New format: [out_c, in_c, ky, kx]
-                    let dst_idx = ((out_c * 3 + in_c) * kernel_size + ky) * kernel_size + kx;
-                    kernel_nchw[dst_idx] = kernel[src_idx];
-                }
             }
         }
     }
@@ -249,12 +311,18 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             }
         }
 
-        let sentinel = vm.ctx.new_dict();
-        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
-        return Ok(sentinel.into());
+        return direct_fill_sentinel(vm);
     }
 
-    // Return output as tensor wrapper so callers can use tensor APIs like .to(...)
+    wrap_output_tensor(vm, width, height, &output_rgb)
+}
+
+fn wrap_output_tensor(
+    vm: &VirtualMachine,
+    width: usize,
+    height: usize,
+    output_rgb: &[f32],
+) -> PyResult {
     let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb
         .iter()
         .map(|&v| vm.ctx.new_float(v as f64).into())
@@ -273,7 +341,11 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
         vm,
     )?;
     tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
+    tensor_dict.set_item(
+        "device",
+        vm.ctx.new_str(xos_tensor::compute_device_label()).into(),
+        vm,
+    )?;
     tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
 
     if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
@@ -286,7 +358,7 @@ pub fn convolve(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
 }
 
 /// xos.ops.convolve_depthwise(image, kernel, padding="same")
-/// Fast 2D depthwise convolution - each channel processed independently using tensor backend
+/// Depthwise 2D convolution via Burn (WGPU on native, NdArray on wasm).
 ///
 /// - image: frame.tensor (read from current frame buffer context)
 /// - kernel: 2D array [height, width] = KxK values (applied to each channel separately)
@@ -350,6 +422,35 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
     kernel.iter_mut().for_each(|x| *x /= norm);
 
     drop(kernel_vec);
+
+    let stride_pair = [stride, stride];
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if try_convolve_depthwise_on_frame_gpu(kernel.clone(), kernel_size, stride_pair) {
+        if inplace {
+            return direct_fill_sentinel(vm);
+        }
+        let buffer_ptr_opt = crate::rasterizer::CURRENT_FRAME_BUFFER
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|ptr| ptr.as_ptr());
+        let width = *crate::rasterizer::CURRENT_FRAME_WIDTH.lock().unwrap();
+        let height = *crate::rasterizer::CURRENT_FRAME_HEIGHT.lock().unwrap();
+        if let Some(buffer_ptr) = buffer_ptr_opt {
+            let buffer =
+                unsafe { std::slice::from_raw_parts(buffer_ptr, width * height * 4) };
+            let mut output_rgb = vec![0.0f32; width * height * 3];
+            for i in 0..(width * height) {
+                let src = i * 4;
+                let dst = i * 3;
+                output_rgb[dst] = buffer[src] as f32;
+                output_rgb[dst + 1] = buffer[src + 1] as f32;
+                output_rgb[dst + 2] = buffer[src + 2] as f32;
+            }
+            return wrap_output_tensor(vm, width, height, &output_rgb);
+        }
+    }
 
     // Get the frame buffer from global context
     let buffer_ptr_opt = crate::rasterizer::CURRENT_FRAME_BUFFER
@@ -457,37 +558,8 @@ pub fn convolve_depthwise(args: FuncArgs, vm: &VirtualMachine) -> PyResult {
             }
         }
 
-        let sentinel = vm.ctx.new_dict();
-        sentinel.set_item("_direct_fill", vm.ctx.new_bool(true).into(), vm)?;
-        return Ok(sentinel.into());
+        return direct_fill_sentinel(vm);
     }
 
-    let py_list: Vec<rustpython_vm::PyObjectRef> = output_rgb
-        .iter()
-        .map(|&v| vm.ctx.new_float(v as f64).into())
-        .collect();
-
-    let tensor_dict = vm.ctx.new_dict();
-    tensor_dict.set_item(
-        "shape",
-        vm.ctx
-            .new_tuple(vec![
-                vm.ctx.new_int(height).into(),
-                vm.ctx.new_int(width).into(),
-                vm.ctx.new_int(3).into(),
-            ])
-            .into(),
-        vm,
-    )?;
-    tensor_dict.set_item("dtype", vm.ctx.new_str("float32").into(), vm)?;
-    tensor_dict.set_item("device", vm.ctx.new_str("cpu").into(), vm)?;
-    tensor_dict.set_item("_data", vm.ctx.new_list(py_list).into(), vm)?;
-
-    if let Ok(wrapper_class) = vm.builtins.get_attr("Tensor", vm) {
-        if let Ok(wrapped) = wrapper_class.call((tensor_dict.clone(),), vm) {
-            return Ok(wrapped);
-        }
-    }
-
-    Ok(tensor_dict.into())
+    wrap_output_tensor(vm, width, height, &output_rgb)
 }

@@ -1,5 +1,4 @@
 mod conv;
-mod conv_metal;
 mod shift;
 
 use rustpython_vm::{builtins::PyModule, PyRef, VirtualMachine};
