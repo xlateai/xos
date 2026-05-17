@@ -247,7 +247,7 @@ impl FrameState {
     }
 
     /// CPU staging for Python tick context binding without syncing GPU→CPU first.
-    pub(crate) fn staging_slice_mut_for_tick(&mut self) -> &mut [u8] {
+    pub fn staging_slice_mut_for_tick(&mut self) -> &mut [u8] {
         self.cpu_dirty = true;
         self.staging_slice_mut()
     }
