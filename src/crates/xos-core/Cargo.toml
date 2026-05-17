@@ -60,6 +60,7 @@ metal = "0.32.0"
 objc = "0.2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
+ringbuf = "0.3"
 ct2rs = { version = "0.9.18", optional = true, default-features = false, features = ["whisper", "ruy"] }
 ureq = { version = "2.12", optional = true }
 zip = { version = "2.2", optional = true, default-features = false, features = ["deflate"] }
