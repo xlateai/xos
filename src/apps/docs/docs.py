@@ -4,9 +4,10 @@ import xos
 
 # Minecraft-style & codes (see xos.print_color / xos.colorize)
 C_MODULE = "&a"   # green (lime-ish)
-C_CONST = "&8"    # dark gray
+C_CONST = "&7"    # light gray (ALL_CAPS constants)
 C_CLASS = "&9"    # blue
 C_FUNC = "&d"     # light purple
+C_METHOD = "&8"   # gray (class methods)
 C_BRANCH = "&8"
 C_RESET = "&r"
 
@@ -19,6 +20,16 @@ _FUNCTION_TYPENAMES = (
     "builtin_method",
     "classmethod",
     "staticmethod",
+    "method_descriptor",
+    "wrapper_descriptor",
+)
+
+_SKIP_CLASS_MEMBER_TYPES = (
+    "type",
+    "module",
+    "getset_descriptor",
+    "member_descriptor",
+    "property",
 )
 
 
@@ -40,6 +51,37 @@ def _is_constant_name(name):
 
 def _typename(obj):
     return type(obj).__name__
+
+
+def _is_callable_member(obj):
+    tn = _typename(obj)
+    if tn in _SKIP_CLASS_MEMBER_TYPES:
+        return False
+    if tn in _FUNCTION_TYPENAMES:
+        return True
+    return callable(obj)
+
+
+def _class_method_names(cls):
+    names = []
+    for name in sorted(dir(cls), key=str.lower):
+        if not _is_public(name):
+            continue
+        try:
+            obj = getattr(cls, name)
+        except Exception:
+            continue
+        if _is_callable_member(obj):
+            names.append(name)
+    return names
+
+
+def _render_class_methods(cls, prefix):
+    methods = _class_method_names(cls)
+    for index, mname in enumerate(methods):
+        last = index == len(methods) - 1
+        branch = "└── " if last else "├── "
+        _out(prefix + branch + C_METHOD + mname + "()" + C_RESET)
 
 
 def _classify(name, obj):
@@ -104,18 +146,22 @@ def _render_children(mod, prefix, visited):
         branch = "└── " if last else "├── "
         _out(prefix + branch + _styled(kind, name))
 
+        child_prefix = prefix + ("    " if last else "│   ")
+
+        if kind == "class":
+            _render_class_methods(obj, child_prefix)
+            continue
+
         if kind != "module":
             continue
 
         sub = obj
         sub_id = id(sub)
         if sub_id in visited:
-            cont = "    " if last else "│   "
-            _out(prefix + cont + "└── " + C_BRANCH + "(cycle)" + C_RESET)
+            _out(child_prefix + "└── " + C_BRANCH + "(cycle)" + C_RESET)
             continue
 
         visited.add(sub_id)
-        child_prefix = prefix + ("    " if last else "│   ")
         _render_children(sub, child_prefix, visited)
 
 
