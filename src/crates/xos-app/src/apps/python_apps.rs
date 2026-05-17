@@ -215,7 +215,18 @@ fn app_print_callback() -> Arc<dyn Fn(&str) + Send + Sync> {
     })
 }
 
-const SCRIPT_ONLY_HINT: &str = "Note: no xos.Application was started — ran as a plain script. Subclass xos.Application and call .run() to open a window.";
+fn print_script_only_hint() {
+    use std::io::IsTerminal;
+    const PLAIN: &str = "tip: get a window by defining a subclass of xos.Application and calling .run()";
+    if std::io::stderr().is_terminal() {
+        // dim gray body, soft yellow "tip", mint on API symbols
+        eprintln!(
+            "\x1b[2;38;5;245m\x1b[38;5;220mtip\x1b[2;38;5;245m: get a window by defining a subclass of \x1b[38;5;109mxos.Application\x1b[2;38;5;245m and calling \x1b[38;5;109m.run()\x1b[0m"
+        );
+    } else {
+        eprintln!("{PLAIN}");
+    }
+}
 
 /// Execute `src/apps/<name>/<name>.py`. Opens a window when the script registers an
 /// `xos.Application` (via `.run()` or `__xos_app_instance__`); otherwise runs like `xos py`.
@@ -257,7 +268,7 @@ pub fn run_python_app_from_descriptor(desc: &PythonAppDescriptor) {
     }
 
     let Some(app_inst) = app_instance else {
-        eprintln!("{SCRIPT_ONLY_HINT}");
+        print_script_only_hint();
         return;
     };
 
