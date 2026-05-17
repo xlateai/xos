@@ -3,7 +3,7 @@
 ///! with centralized logging and error handling
 use rustpython_vm::{builtins::PyBaseExceptionRef, AsObject, Interpreter, VirtualMachine};
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -56,6 +56,16 @@ pub fn parse_script_cli_flags(rest: &[String]) -> Vec<String> {
 /// Callback type for capturing print output
 pub type PrintCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// How Python source is compiled before execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PythonRunMode {
+    /// `exec` — scripts and multiline cells (no implicit expression printing).
+    #[default]
+    Exec,
+    /// `single` — REPL cells; last expression uses `sys.displayhook` (prints non-`None`).
+    Single,
+}
+
 /// Format a Python exception with traceback (like standard Python)
 pub fn format_python_exception(vm: &VirtualMachine, py_exc: &PyBaseExceptionRef) -> String {
     let mut buf = String::new();
@@ -82,6 +92,31 @@ pub fn execute_python_code(
     persistent_scope: Option<rustpython_vm::scope::Scope>,
     print_callback: Option<PrintCallback>,
     script_flags: &[String],
+) -> (
+    Result<(), String>,
+    String,
+    Option<rustpython_vm::PyObjectRef>,
+    Option<rustpython_vm::scope::Scope>,
+) {
+    execute_python_code_with_mode(
+        interpreter,
+        code,
+        filename,
+        persistent_scope,
+        print_callback,
+        script_flags,
+        PythonRunMode::Exec,
+    )
+}
+
+pub fn execute_python_code_with_mode(
+    interpreter: &Interpreter,
+    code: &str,
+    filename: &str,
+    persistent_scope: Option<rustpython_vm::scope::Scope>,
+    print_callback: Option<PrintCallback>,
+    script_flags: &[String],
+    run_mode: PythonRunMode,
 ) -> (
     Result<(), String>,
     String,
@@ -230,7 +265,14 @@ builtins.__import__ = __xos_import__
         }
 
         // Run the code
-        let exec_result = vm.run_code_string(scope.clone(), code, filename.to_string());
+        let compile_mode = match run_mode {
+            PythonRunMode::Exec => rustpython_vm::compiler::Mode::Exec,
+            PythonRunMode::Single => rustpython_vm::compiler::Mode::Single,
+        };
+        let exec_result = match vm.compile(code, compile_mode, filename.to_string()) {
+            Ok(code_obj) => vm.run_code_obj(code_obj, scope.clone()),
+            Err(err) => Err(vm.new_syntax_error(&err, Some(code))),
+        };
 
         // Restore original print
         let restore_code = r#"
@@ -313,9 +355,8 @@ pub fn run_python_file(file_path: &PathBuf, script_flags: &[String]) {
     }
 }
 
-/// Run an interactive Python console
+/// Run an interactive Python console (`xpy` / `xos py` with no script).
 pub fn run_python_interactive() {
-    // Create interpreter with xos module
     let interpreter = Interpreter::with_init(Default::default(), |vm| {
         vm.add_native_module(
             "xos".to_owned(),
@@ -323,100 +364,14 @@ pub fn run_python_interactive() {
         );
     });
 
-    // Persistent scope
-    let mut persistent_scope: Option<rustpython_vm::scope::Scope> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::repl::run(&interpreter);
 
-    let stdin = io::stdin();
-    let mut code_buffer = String::new();
-    let mut continuation = false;
-
-    loop {
-        // Print prompt
-        if continuation {
-            print!("... ");
-        } else {
-            print!("🐍 > ");
-        }
-        io::stdout().flush().unwrap();
-
-        // Read line
-        let mut line = String::new();
-        match stdin.lock().read_line(&mut line) {
-            Ok(0) => {
-                // EOF (Ctrl+D on Unix, Ctrl+Z+Enter on Windows)
-                break;
-            }
-            Ok(_) => {
-                let trimmed = line.trim_end();
-
-                // Check for exit commands
-                if trimmed == "exit()" || trimmed == "quit()" {
-                    break;
-                }
-
-                // Skip empty lines unless we're in continuation mode
-                if trimmed.is_empty() && !continuation {
-                    continue;
-                }
-
-                // Add line to buffer
-                if continuation {
-                    code_buffer.push_str(&line);
-                } else {
-                    code_buffer = line.clone();
-                }
-
-                let code_to_try = code_buffer.trim_end();
-
-                // Try to execute
-                let (result, output, _, new_scope) = execute_python_code(
-                    &interpreter,
-                    code_to_try,
-                    "<stdin>",
-                    persistent_scope.clone(),
-                    None,
-                    &[],
-                );
-
-                persistent_scope = new_scope;
-
-                // Print output
-                if !output.is_empty() {
-                    print!("{}", output);
-                }
-
-                match result {
-                    Ok(_) => {
-                        continuation = false;
-                        code_buffer.clear();
-                    }
-                    Err(error_msg) => {
-                        // Check if this is a continuation case (incomplete statement)
-                        let is_incomplete = error_msg.contains("unexpected EOF")
-                            || error_msg.contains("incomplete")
-                            || error_msg.contains("EOL")
-                            || (error_msg.contains("SyntaxError") && error_msg.contains("EOF"))
-                            || (code_to_try.trim().ends_with(':') && !code_to_try.contains('\n'));
-
-                        if is_incomplete {
-                            continuation = true;
-                        } else {
-                            eprintln!("{}", error_msg);
-                            continuation = false;
-                            code_buffer.clear();
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                if e.kind() == io::ErrorKind::Interrupted {
-                    // Single Ctrl+C exits interactive mode immediately.
-                    break;
-                }
-                eprintln!("Error reading input: {}", e);
-                break;
-            }
-        }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = interpreter;
+        eprintln!("❌ interactive python is not available on wasm");
+        std::process::exit(1);
     }
 }
 
