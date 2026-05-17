@@ -14,7 +14,9 @@ pub mod apps {
     pub use xos_app::apps::*;
 }
 
-pub use xos_app::{init_hooks, run_game, start};
+pub use xos_app::{init_hooks, run_game};
+#[cfg(not(target_arch = "wasm32"))]
+pub use xos_app::start;
 #[cfg(target_arch = "wasm32")]
 pub use xos_app::start_wasm;
 

@@ -4,7 +4,7 @@ pub use canvas::WaveformCanvas;
 
 use xos_core::engine::audio;
 use xos_core::engine::{Application, EngineState};
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 use dialoguer::Select;
 
 pub struct Waveform {
@@ -50,7 +50,7 @@ impl Application for Waveform {
             }
         }
 
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
         {
             let device_names: Vec<String> = input_devices
                 .iter()
@@ -66,6 +66,17 @@ impl Application for Waveform {
                 .get(selection)
                 .ok_or("Selected device not found")?;
             xos_core::print(&format!("🔊 Selected device: {}", device.name));
+            let buffer_duration = 1.0;
+            let listener = audio::AudioListener::new(device, buffer_duration)?;
+            listener.record()?;
+            self.listener = Some(listener);
+            Ok(())
+        }
+
+        #[cfg(all(not(target_os = "ios"), target_arch = "wasm32"))]
+        {
+            let device = input_devices.first().ok_or("No input devices available")?;
+            xos_core::print(&format!("🔊 Using device: {}", device.name));
             let buffer_duration = 1.0;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;

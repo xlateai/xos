@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod game_runner;
 mod start;
 
@@ -8,7 +9,13 @@ pub mod python_ui;
 #[cfg(target_os = "ios")]
 pub mod ios_ffi;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use game_runner::run_game;
+#[cfg(target_arch = "wasm32")]
+pub fn run_game(_game: &str, _wasm: bool, _react_native: bool) {
+    // Browser entry is `start_wasm`; native-only helpers live in `game_runner`.
+}
+#[cfg(not(target_arch = "wasm32"))]
 pub use start::start;
 #[cfg(target_arch = "wasm32")]
 pub use start::start_wasm;

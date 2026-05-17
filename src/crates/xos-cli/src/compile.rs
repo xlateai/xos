@@ -605,6 +605,13 @@ pub fn compile_wasm(clean: bool) -> bool {
     eprintln!(
         "    Running wasm-pack with the same app-runtime build path used by `xos app --wasm`."
     );
+    eprintln!(
+        "    Artifact dir: {} (only one cargo build should use this at a time).",
+        wasm_target_dir.display()
+    );
+    eprintln!(
+        "    If this hangs on \"file lock\", cancel and run: pkill -f 'target/wasm.*cargo' ; pkill -f 'wasm-pack'"
+    );
 
     let output_dir = wasm_target_dir.join(WASM_MAIN_OUTPUT_DIR_NAME);
     let staging_dir = unique_wasm_staging_dir(&wasm_target_dir);
@@ -638,7 +645,8 @@ pub fn compile_wasm(clean: bool) -> bool {
             "--out-dir",
             &pkg_dir.display().to_string(),
             ".",
-            // "--verbose", // too many file paths
+            "--",
+            "--no-default-features",
         ])
         .status();
 

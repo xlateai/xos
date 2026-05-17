@@ -981,7 +981,9 @@ mod wasm {
     use once_cell::unsync::OnceCell;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
-    use web_sys::{window, AudioContext, AudioProcessingEvent, MediaStream};
+    use web_sys::{
+        window, AudioContext, AudioProcessingEvent, MediaStream, MediaStreamConstraints,
+    };
 
     thread_local! {
         static BUFFER: std::cell::RefCell<Option<Arc<AudioBuffer>>> = std::cell::RefCell::new(None);
@@ -1046,14 +1048,13 @@ mod wasm {
         let navigator = window.navigator();
         let media_devices = navigator.media_devices()?;
 
-        let constraints = js_sys::Object::new();
-        js_sys::Reflect::set(&constraints, &JsValue::from_str("audio"), &JsValue::TRUE)?;
+        let constraints = MediaStreamConstraints::new();
+        constraints.set_audio_bool(true);
 
-        let stream_promise =
-            media_devices.get_user_media_with_constraints(constraints.unchecked_ref())?;
+        let stream_promise = media_devices.get_user_media_with_constraints(&constraints)?;
 
-        let stream = wasm_bindgen_futures::JsFuture::from(stream_promise).await?;
-        let stream: MediaStream = stream.dyn_into()?;
+        let stream_val = wasm_bindgen_futures::JsFuture::from(stream_promise).await?;
+        let stream: MediaStream = stream_val.dyn_into()?;
 
         let context = AudioContext::new()?;
         let source = context.create_media_stream_source(&stream)?;

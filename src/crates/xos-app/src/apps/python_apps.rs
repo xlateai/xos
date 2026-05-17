@@ -272,7 +272,7 @@ pub fn run_python_app_from_descriptor(desc: &PythonAppDescriptor) {
         return;
     };
 
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
     {
         use xos_core::engine::{start_native, start_overlay_native};
         let pyapp = PyApp::new(interpreter, app_inst);
@@ -287,10 +287,10 @@ pub fn run_python_app_from_descriptor(desc: &PythonAppDescriptor) {
         }
     }
 
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
     {
         let _ = (interpreter, app_inst);
-        eprintln!("❌ python app window launch is not supported on iOS from the CLI");
+        eprintln!("❌ python app window launch is not supported on iOS or wasm from the CLI");
         std::process::exit(1);
     }
 }

@@ -17,6 +17,16 @@ use super::{
 use crate::engine::keyboard::shortcuts::detect_shortcut;
 
 #[cfg(target_arch = "wasm32")]
+fn canvas_as_html(canvas: &web_sys::HtmlCanvasElement) -> &web_sys::HtmlElement {
+    canvas.unchecked_ref()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn canvas_as_element(canvas: &web_sys::HtmlCanvasElement) -> &web_sys::Element {
+    canvas.unchecked_ref()
+}
+
+#[cfg(target_arch = "wasm32")]
 fn viewport_metrics(window: &web_sys::Window) -> Result<(f64, f64, f32, u32, u32), JsValue> {
     // Canvas2D uploads are the hot path on wasm. Full device DPR on large/retina
     // windows can mean 8-16M pixels copied every frame, which makes Python text
@@ -47,14 +57,14 @@ fn set_canvas_viewport(
 ) {
     canvas.set_width(width);
     canvas.set_height(height);
-    let style = canvas.style();
+    let style = canvas_as_html(canvas).style();
     let _ = style.set_property("width", &format!("{css_width}px"));
     let _ = style.set_property("height", &format!("{css_height}px"));
 }
 
 #[cfg(target_arch = "wasm32")]
 fn canvas_backing_scale(canvas: &web_sys::HtmlCanvasElement) -> f32 {
-    let rect = canvas.get_bounding_client_rect();
+    let rect = canvas_as_element(canvas).get_bounding_client_rect();
     let css_width = rect.width().max(1.0) as f32;
     canvas.width() as f32 / css_width
 }
@@ -66,7 +76,7 @@ fn set_mouse_from_client_point(
     client_x: f64,
     client_y: f64,
 ) {
-    let rect = canvas.get_bounding_client_rect();
+    let rect = canvas_as_element(canvas).get_bounding_client_rect();
     let scale = canvas_backing_scale(canvas) as f64;
     state.mouse.x = ((client_x - rect.left()) * scale) as f32;
     state.mouse.y = ((client_y - rect.top()) * scale) as f32;
@@ -195,7 +205,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
                     shape[1] as f32,
                     shape[0] as f32,
                 );
-                canvas_clone
+                canvas_as_html(&canvas_clone)
                     .style()
                     .set_property("cursor", "grabbing")
                     .unwrap();
@@ -220,9 +230,15 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             };
             if state.command_held && state.shift_held && state.engine_state.frame_view_zoom > 1.001
             {
-                canvas_clone.style().set_property("cursor", "grab").unwrap();
+                canvas_as_html(&canvas_clone)
+                    .style()
+                    .set_property("cursor", "grab")
+                    .unwrap();
             } else {
-                canvas_clone.style().set_property("cursor", style).unwrap();
+                canvas_as_html(&canvas_clone)
+                    .style()
+                    .set_property("cursor", style)
+                    .unwrap();
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback(
@@ -443,7 +459,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 if let Some(touch) = event.touches().get(0) {
-                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let rect = canvas_as_element(&canvas_clone).get_bounding_client_rect();
                     let scale = canvas_backing_scale(&canvas_clone) as f64;
                     let x = (touch.client_x() as f64 - rect.left()) * scale;
                     let y = (touch.client_y() as f64 - rect.top()) * scale;
@@ -487,7 +503,7 @@ pub fn run_web(app: Box<dyn Application>) -> Result<(), JsValue> {
             unsafe {
                 let state = &mut *state_ptr_clone;
                 if let Some(touch) = event.touches().get(0) {
-                    let rect = canvas_clone.get_bounding_client_rect(); // ✅ use cloned version
+                    let rect = canvas_as_element(&canvas_clone).get_bounding_client_rect();
                     let scale = canvas_backing_scale(&canvas_clone) as f64;
                     let x = (touch.client_x() as f64 - rect.left()) * scale;
                     let y = (touch.client_y() as f64 - rect.top()) * scale;

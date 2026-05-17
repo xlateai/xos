@@ -9,7 +9,7 @@ use xos_core::engine::audio;
 use xos_core::engine::{Application, EngineState};
 use xos_core::rasterizer::fill;
 use xos_core::rasterizer::text::{fonts, text_rasterization::TextRasterizer};
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 use dialoguer::Select;
 use std::io::{self, Write};
 
@@ -438,7 +438,7 @@ impl Application for VadApp {
             Ok(())
         }
 
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
         {
             let names: Vec<String> = input_devices.iter().map(|d| d.input_menu_label()).collect();
             let selection = Select::new()
@@ -463,6 +463,24 @@ impl Application for VadApp {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             )))]
+            let buffer_duration = 3.0_f32;
+            let listener = audio::AudioListener::new(device, buffer_duration)?;
+            listener.record()?;
+            println!(
+                "vad: input {} @ {} Hz",
+                device.name,
+                listener.buffer().sample_rate()
+            );
+            let _ = io::stdout().flush();
+            self.engine
+                .set_device_hint(device.name.as_str(), listener.buffer().sample_rate());
+            self.listener = Some(listener);
+            Ok(())
+        }
+
+        #[cfg(all(not(target_os = "ios"), target_arch = "wasm32"))]
+        {
+            let device = input_devices.first().ok_or("No input devices available")?;
             let buffer_duration = 3.0_f32;
             let listener = audio::AudioListener::new(device, buffer_duration)?;
             listener.record()?;

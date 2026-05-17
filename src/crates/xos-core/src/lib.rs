@@ -2,9 +2,13 @@
 // Using rustpython-vm instead of pyo3
 
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::Command;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{fs as std_fs, thread};
+#[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Response, Server};
+#[cfg(not(target_arch = "wasm32"))]
 use webbrowser;
 
 pub mod ai;
@@ -199,7 +203,8 @@ pub mod py_engine {
     }
 }
 
-// --- Tooling helpers ---
+// --- Tooling helpers (native host only; wasm cdylib does not embed a local static server) ---
+#[cfg(not(target_arch = "wasm32"))]
 fn build_wasm(app_name: &str) {
     let project_root = match find_xos_project_root() {
         Ok(p) => p,
@@ -234,6 +239,7 @@ fn build_wasm(app_name: &str) {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn xos_project_root_or_exit() -> PathBuf {
     match find_xos_project_root() {
         Ok(p) => p,
@@ -244,10 +250,12 @@ fn xos_project_root_or_exit() -> PathBuf {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn wasm_compile_output_dir(project_root: &Path) -> PathBuf {
     project_root.join("target").join("wasm").join("main")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn react_native_static_dir(project_root: &Path) -> PathBuf {
     project_root
         .join("src")
@@ -257,6 +265,7 @@ fn react_native_static_dir(project_root: &Path) -> PathBuf {
         .join("static")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ensure_compiled_wasm_output(static_dir: &Path) {
     let index = static_dir.join("index.html");
     let js = static_dir.join("pkg").join("xos.js");
@@ -270,10 +279,12 @@ fn ensure_compiled_wasm_output(static_dir: &Path) {
     std::process::exit(1);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_browser(app_name: &str) {
     launch_browser_query(&format!("app={app_name}"));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_browser_query(query: &str) {
     let url = format!("http://localhost:8080/?{query}");
     thread::spawn(move || {
@@ -281,6 +292,7 @@ fn launch_browser_query(query: &str) {
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn percent_encode_query_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
@@ -297,6 +309,7 @@ fn percent_encode_query_component(value: &str) -> String {
     out
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn mime_type(path: &Path) -> &'static str {
     let extension = path.extension().and_then(|ext| ext.to_str());
     if extension == Some("html") {
@@ -312,6 +325,7 @@ fn mime_type(path: &Path) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn start_web_server(static_dir: PathBuf) {
     let index_path = static_dir.join("index.html");
     let server = Server::http("0.0.0.0:8080").unwrap();
@@ -350,6 +364,7 @@ fn start_web_server(static_dir: PathBuf) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_expo() {
     let project_root = xos_project_root_or_exit();
     let mut cmd = Command::new("npx");
@@ -370,6 +385,7 @@ fn launch_expo() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_python_wasm_file(file_path: &Path, flags: &[String]) {
     println!(
         "🕸️  Launching '{}' with xpy wasm mode...",
@@ -483,9 +499,11 @@ pub fn launch_ios_app(app_name: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
 
 /// Internal CLI flags for `xos::run()` used by third-party apps
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
 #[command(name = "xos-app")]
 struct XosAppArgs {

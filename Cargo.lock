@@ -1734,6 +1734,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if 1.0.4",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11360,7 +11370,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xos"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "darling 0.21.3",
  "getrandom 0.3.4",
@@ -11379,7 +11389,7 @@ dependencies = [
 
 [[package]]
 name = "xos-app"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -11422,17 +11432,22 @@ dependencies = [
 
 [[package]]
 name = "xos-audio"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "cpal",
  "hound",
+ "js-sys",
+ "once_cell",
  "screencapturekit",
  "symphonia",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
 name = "xos-auth"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -11449,7 +11464,7 @@ dependencies = [
 
 [[package]]
 name = "xos-cli"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -11467,13 +11482,14 @@ dependencies = [
 
 [[package]]
 name = "xos-core"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "burn",
  "burn-cubecl",
  "burn-store",
  "burn-wgpu",
  "clap",
+ "console_error_panic_hook",
  "ct2rs",
  "ctrlc",
  "cubecl",
@@ -11509,6 +11525,7 @@ dependencies = [
  "tokio",
  "ureq 2.12.1",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "webbrowser",
  "winit",
@@ -11521,7 +11538,7 @@ dependencies = [
 
 [[package]]
 name = "xos-java"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "jni 0.21.1",
  "xos",
@@ -11529,7 +11546,7 @@ dependencies = [
 
 [[package]]
 name = "xos-mesh"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -11549,7 +11566,7 @@ dependencies = [
 
 [[package]]
 name = "xos-python"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "base64 0.22.1",
  "burn",
@@ -11564,6 +11581,7 @@ dependencies = [
  "fontdue",
  "image 0.25.10",
  "include_dir",
+ "js-sys",
  "libc",
  "metal 0.32.0",
  "mp3lame-encoder",
@@ -11591,7 +11609,7 @@ dependencies = [
 
 [[package]]
 name = "xos-tensor"
-version = "0.3.19-pre2"
+version = "0.3.19-pre3"
 dependencies = [
  "burn",
  "burn-backend",
